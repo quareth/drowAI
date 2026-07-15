@@ -121,11 +121,11 @@ names must follow [RELEASING.md](RELEASING.md).
   must not remain enabled if its results are routinely ignored.
 - Repository credentials and publishing permissions follow least privilege.
 
-GitHub Discussions is the support channel for installation, usage, and design
-questions and must be enabled while [SUPPORT.md](SUPPORT.md) directs users
-there. If the channel changes, repository settings, `SUPPORT.md`, and issue
-template contact links must be updated together. Bugs remain in Issues;
-vulnerability details remain private.
+GitHub Issues are reserved for reproducible defects and focused feature
+proposals submitted through the configured forms. Vulnerability details remain
+private and follow [SECURITY.md](SECURITY.md). If a community discussion channel
+is introduced later, its repository setting and issue-template contact link
+must be updated together.
 
 ## Issue and Pull Request Triage
 

@@ -3,6 +3,3 @@ contact_links:
   - name: Security vulnerability
     url: https://github.com/quareth/drowAI/security/policy
     about: Report suspected vulnerabilities privately; never open a public issue.
-  - name: Setup and usage questions
-    url: https://github.com/quareth/drowAI/discussions
-    about: Ask installation and usage questions in GitHub Discussions.

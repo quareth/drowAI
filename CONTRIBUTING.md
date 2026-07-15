@@ -49,6 +49,12 @@ call sites before changing architecture or documentation.
 Keep changes focused and use the smallest relevant validation command. Common
 checks include:
 
+The historical test surface is still being audited. Read the
+[test-suite maturity notice](docs/testing/TEST_STRATEGY.md#current-test-suite-maturity)
+and use the documented curated gates as release evidence; a test outside those
+gates must be investigated before it is classified as broken, flaky,
+duplicated, or legacy.
+
 ```bash
 python -m pytest backend/tests -k <pattern>
 python -m pytest tests -k <pattern>

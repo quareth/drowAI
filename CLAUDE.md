@@ -200,8 +200,6 @@ work in their scope:
   changelog finalization, validation, and release procedure.
 - `SECURITY.md`: supported versions, private vulnerability reporting,
   disclosure, and security-release handling.
-- `SUPPORT.md`: support channels, required diagnostic information, and
-  supported request scope.
 
 Apply these rules when changing the repository:
 
