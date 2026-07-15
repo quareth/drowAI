@@ -4,6 +4,22 @@
 
 This document defines how DrowAI turns a large historical test surface into understandable release evidence. The goal is not to run every test in every pull request. The goal is to know which product risk each test covers, which environment it requires, and which failures block a pull request, `main`, a nightly run, or a public release.
 
+## Current Test-Suite Maturity
+
+> **Important:** DrowAI contains a large historical test surface that is still
+> being audited. The generated inventory currently records 1,089 test files;
+> 1,042 are `untriaged`, 24 contain trusted CI selections, 17 are candidate E2E
+> coverage, five are curated manual coverage, and one is environment-dependent.
+> Only the documented curated gates currently represent release evidence. The
+> repository does not claim that every historical test passes as one aggregate
+> suite.
+
+An `untriaged` test is not automatically broken or obsolete. It may provide
+useful coverage, require an environment that is not available in the required
+gate, duplicate newer coverage, exercise a disconnected legacy path, or need
+repair. Investigate and record evidence before classifying, skipping, or
+removing it.
+
 The generated inventory is the source of truth for the version-controlled and non-ignored working-tree test-file list:
 
 - [`generated/test-inventory-summary.md`](generated/test-inventory-summary.md) contains counts and current evidence status.
