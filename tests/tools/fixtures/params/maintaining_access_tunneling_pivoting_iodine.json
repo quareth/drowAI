@@ -1,0 +1,47 @@
+{
+  "tool_id": "maintaining_access.tunneling_pivoting.iodine",
+  "test_cases": {
+    "minimal": {
+      "description": "Client mode with minimal settings",
+      "params": {
+        "target": "unused",
+        "top_domain": "tunnel.example.com",
+        "server": "8.8.8.8"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Server mode with password and MTU",
+      "params": {
+        "target": "unused",
+        "mode": "server",
+        "top_domain": "tunnel.example.com",
+        "server": "8.8.8.8",
+        "server_ip": "10.0.0.1",
+        "password": "secret",
+        "mtu": 1200,
+        "foreground": true
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": [
+      {
+        "name": "missing_top_domain",
+        "params": {
+          "target": "unused",
+          "server": "8.8.8.8"
+        },
+        "expected_error": "required"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^iodine"
+    ],
+    "full": [
+      "^iodined"
+    ]
+  }
+}

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Program Execution Workflow"
+  short_description: "Run all remaining program phases until complete"
+  default_prompt: "Use $program-execution-workflow to process every remaining phase under doc_root in one run until program_complete or hard_stop. Do not stop after one phase."

@@ -1,0 +1,88 @@
+
+**CRITICAL - CURRENT INTENT (HIGHEST PRIORITY):**
+The agent's current decision is: "run ip addr"
+Propose candidate tools that can accomplish THIS INTENT, not the brief's resolved intent.
+You are a candidate generator: the builder will commit the final batch.
+
+
+Turn Execution Brief (classifier-derived; transcript access is not available here):
+- Resolved user intent: (none)
+- Overall goal: (none)
+- Continuation mode: (none)
+- Resolved step title: (none)
+- Resolved step detail: (none)
+- Next operational goal: (none)
+- Success condition: (none)
+- Execution readiness: (none)
+- Resolved target: (none)
+- Target status: (none)
+- Target source: (none)
+- Explicit constraints:
+  - (none)
+- Relevant memory fragments:
+  - (none)
+- Suggested category focus:
+  - (none)
+- Retrieval hints:
+  - (none)
+- Request contract:
+  - question_type: (none)
+  - answer_style: (none)
+  - terminal_when: (none)
+
+Available Tools:
+- nmap.scan: scan ports
+
+Task Context:
+- Target: 10.0.0.1
+- Phase: phase3
+- Constraints: {"max_tool_calls": 3}
+Relevant Prior Findings:
+- [fresh] port_open 10.0.0.1:80/tcp (service=http)
+
+
+You are a candidate generator. Select at most 3 candidate tools from Available Tools.
+Candidate tools are not a mandatory execution list. The native tool-call builder may ignore weak candidates and commit only the concrete calls that directly advance this iteration.
+Select candidate tools only when they are directly required by the current action, next operational goal, or success condition. Do not select tools for possible future steps, speculative troubleshooting, theoretical support work, or tools that might become useful after this action completes. If a tool cannot be traced to one of those explicit requirements, leave it out.
+The final committed batch must contain between 1 and 1 concrete native tool call(s).
+
+Choose execution_strategy for the final committed batch:
+- Use "parallel" when multiple complete concrete calls can run at the same time.
+- Use "sequential" when multiple complete concrete calls should run one by one in a specific order.
+- Use "sequential" for the current iteration when only one concrete call should be committed now.
+- Do not choose a multi-call strategy for calls whose parameters depend on another call's output from the same batch.
+- Strategy is partly an efficiency decision: when the current goal already provides several complete, safe, relevant calls within the batch limit, avoid forcing unnecessary single-call iterations.
+- The final batch may repeat the same selected tool with different concrete parameters when the active directive requires or benefits from separate runs.
+
+Prefer specialized tools over generic shell execution when both can accomplish the same immediate objective.
+If the current task or tool intent requires a capability that none of the Available Tools can satisfy, and no listed tool is a reasonable substitute, return "unavailable_capability" as the only selected tool.
+Do not use "unavailable_capability" for bad parameters, target/network failures, missing binaries after execution, or retryable tool errors.
+Return strict JSON with only this shape:
+{"selected_tools":["<tool id from Available Tools or unavailable_capability>"],"execution_strategy":"parallel" | "sequential","reasoning":"brief selection rationale for logs only"}
+
+<examples>
+Pattern: parallel, same tool
+- Required work: same operation over multiple already-known parameter sets.
+- Correct: return the relevant tool id once in selected_tools and use "parallel".
+- Incorrect: use "sequential" only because the repeated calls would use the same tool id.
+
+Pattern: parallel, different tools
+- Required work: multiple independent operations using different tools.
+- Correct: return the relevant tool ids and use "parallel".
+- Incorrect: use "sequential" only because the tools are from different categories.
+
+Pattern: sequential, same tool
+- Required work: same operation over multiple already-known parameter sets in a specified order.
+- Correct: return the relevant tool id once in selected_tools and use "sequential".
+- Incorrect: treat later calls as output-dependent when their parameters are already known.
+
+Pattern: sequential, different tools
+- Required work: multiple already-known operations with different tools in a specified order.
+- Correct: return the relevant tool ids and use "sequential".
+- Incorrect: omit later tools when their parameters are already known and the ordered batch fits within the batch limit.
+
+Pattern: dependency, not batchable
+- Required work: perform one operation, then decide the next operation from its output.
+- Correct: return only the tool for the first concrete call and use "sequential".
+- Incorrect: plan a final batch containing calls with placeholder, guessed, or result-dependent parameters.
+</examples>

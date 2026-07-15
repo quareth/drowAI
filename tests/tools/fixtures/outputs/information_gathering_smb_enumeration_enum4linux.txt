@@ -1,0 +1,81 @@
+Starting enum4linux v0.9.1 on Mon Jan 15 10:30:00 2024
+
+ =========================================( Target Information )=========================================
+
+Target ........... 192.168.1.100
+RID Range ........ 500-550,1000-1050
+Username ......... ''
+Password ......... ''
+Known Usernames .. administrator, guest, krbtgt, domain admins, root, bin, none
+
+
+ ============================( Enumerating Workgroup/Domain on 192.168.1.100 )============================
+
+[+] Got domain/workgroup name: WORKGROUP
+
+
+ ================================( Nbtstat Information for 192.168.1.100 )================================
+
+Looking up status of 192.168.1.100
+        SERVER          <00> -         B <ACTIVE>  Workstation Service
+        SERVER          <03> -         B <ACTIVE>  Messenger Service
+        SERVER          <20> -         B <ACTIVE>  File Server Service
+        WORKGROUP       <00> - <GROUP> B <ACTIVE>  Domain/Workgroup Name
+        WORKGROUP       <1e> - <GROUP> B <ACTIVE>  Browser Service Elections
+
+        MAC Address = 00-11-22-33-44-55
+
+
+ ===================================( Session Check on 192.168.1.100 )===================================
+
+[+] Server 192.168.1.100 allows sessions using username '', password ''
+
+
+ ================================( Getting domain SID for 192.168.1.100 )================================
+
+Domain Name: WORKGROUP
+Domain Sid: S-1-5-21-3623811015-3361044348-30300820
+
+[+] Host is part of a workgroup (not a domain)
+
+
+ ===================================( OS information on 192.168.1.100 )===================================
+
+[E] Can't get OS info with smbclient
+
+
+[+] Got OS info for 192.168.1.100 from srvinfo:
+        SERVER         Wk Sv PrQ Unx NT SNT Samba 4.15.13-Ubuntu
+        platform_id     :       500
+        os version      :       6.1
+        server type     :       0x809a03
+
+
+ =======================================( Users on 192.168.1.100 )=======================================
+
+index: 0x1 RID: 0x3e8 acb: 0x00000010 Account: admin   Name: Admin User   Desc:
+index: 0x2 RID: 0x3e9 acb: 0x00000010 Account: user1   Name: User One     Desc:
+index: 0x3 RID: 0x3ea acb: 0x00000010 Account: guest   Name: Guest        Desc: Built-in account
+
+user:[admin] rid:[0x3e8]
+user:[user1] rid:[0x3e9]
+user:[guest] rid:[0x3ea]
+
+
+ =================================( Share Enumeration on 192.168.1.100 )=================================
+
+        Sharename       Type      Comment
+        ---------       ----      -------
+        print$          Disk      Printer Drivers
+        IPC$            IPC       IPC Service (Samba 4.15.13-Ubuntu)
+        public          Disk      Public Files
+        admin$          Disk      Admin Share
+
+[+] Attempting to map shares on 192.168.1.100
+
+//192.168.1.100/print$  Mapping: DENIED Listing: N/A Writing: N/A
+//192.168.1.100/IPC$    Mapping: OK Listing: DENIED Writing: N/A
+//192.168.1.100/public  Mapping: OK Listing: OK Writing: N/A
+//192.168.1.100/admin$  Mapping: DENIED Listing: N/A Writing: N/A
+
+enum4linux complete on Mon Jan 15 10:32:00 2024

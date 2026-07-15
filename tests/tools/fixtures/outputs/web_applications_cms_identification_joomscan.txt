@@ -1,0 +1,82 @@
+    ____  _____  _____  __  __  ___   ___    __    _  _
+   (_  _)(  _  )(  _  )(  \/  )/ __) / __)  /__\  ( \( )
+  .-_)(   )(_)(  )(_)(  )    ( \__ \( (__  /(__)\  )  (
+  \____) (_____)(_____)(_/\/\_)(___/ \___)(__)(__)(_)\_)
+                        (1337.today)
+
+    --=[OWASP JoomScan
+    +---++---==[Version : 0.0.7
+    +---++---==[Update Date : [2018/09/23]
+    +---++---==[Authors : Mohammad Reza Espargham , Ali Razmjoo
+    --=[Code name : Arjun
+    @OWASP_JoomScan , @reaboratory , @Ali_Razmjo0
+
+Processing http://example.com ...
+
+[+] FireWall Detector
+[++] Firewall not detected
+
+[+] Detecting Joomla Version
+[++] Joomla 4.4.0
+
+[+] Core Joomla Vulnerability
+[++] Target Joomla core is not vulnerable
+
+[+] Checking Directory Listing
+[++] directory has directory listing :
+http://example.com/administrator/components
+http://example.com/administrator/modules
+http://example.com/administrator/templates
+http://example.com/images/banners
+
+[+] Checking apache info/status files
+[++] Readable info/status files are not found
+
+[+] admin finder
+[++] Admin page : http://example.com/administrator/
+
+[+] Checking robots.txt existing
+[++] robots.txt is found
+path : http://example.com/robots.txt
+
+Interesting path found from robots.txt
+http://example.com/administrator/
+http://example.com/bin/
+http://example.com/cache/
+http://example.com/cli/
+http://example.com/components/
+http://example.com/includes/
+http://example.com/installation/
+http://example.com/language/
+http://example.com/layouts/
+http://example.com/libraries/
+http://example.com/logs/
+http://example.com/modules/
+http://example.com/plugins/
+http://example.com/tmp/
+
+[+] Finding common backup files name
+[++] Backup files are not found
+
+[+] Finding common log files name
+[++] error log is not found
+
+[+] Checking sensitive config.php.x file
+[++] Readable config files are not found
+
+[+] Enumeration component
+[++] components found :
+com_ajax
+com_content
+com_contact
+com_finder
+com_mailto
+com_media
+com_newsfeeds
+com_search
+com_users
+com_wrapper
+
+Your Report : reports/example.com/
+
+Done!

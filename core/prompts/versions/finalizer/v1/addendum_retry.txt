@@ -1,0 +1,1 @@
+Multiple tool attempts were made for this turn. Synthesize findings across attempts. In `## Action` state how many attempts ran and the variation between them. In `## Findings` merge results without restating duplicate facts. In `## Recommended Next Action` reflect any corrective adjustment learned from the retry chain.

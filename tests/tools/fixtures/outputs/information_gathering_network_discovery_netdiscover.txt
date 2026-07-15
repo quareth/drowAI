@@ -1,0 +1,16 @@
+ Currently scanning: 192.168.1.0/24   |   Screen View: Unique Hosts
+
+ 8 Captured ARP Req/Rep packets, from 8 hosts.   Total size: 480
+ _____________________________________________________________________________
+   IP            At MAC Address     Count     Len  MAC Vendor / Hostname
+ -----------------------------------------------------------------------------
+ 192.168.1.1     00:11:22:33:44:55      1      60  Cisco Systems, Inc
+ 192.168.1.5     00:11:22:33:44:56      1      60  Dell Inc.
+ 192.168.1.10    00:11:22:33:44:57      1      60  Hewlett Packard
+ 192.168.1.15    00:11:22:33:44:58      1      60  Intel Corporate
+ 192.168.1.25    00:11:22:33:44:59      1      60  VMware, Inc.
+ 192.168.1.100   00:11:22:33:44:5a      1      60  Apple, Inc.
+ 192.168.1.200   00:11:22:33:44:5b      1      60  Samsung Electronics Co.,Ltd
+ 192.168.1.254   00:11:22:33:44:5c      1      60  Cisco Systems, Inc
+
+-- Active Scan Completed --

@@ -1,0 +1,53 @@
+DirBuster 1.0-RC1 - Report
+===========================
+
+Target URL: http://example.com/
+Wordlist: /usr/share/dirbuster/wordlists/directory-list-2.3-medium.txt
+Total Requests: 220546
+Total Unique Dirs Found: 45
+Total Unique Files Found: 67
+
+Directories Found:
+------------------
+http://example.com/admin/
+http://example.com/api/
+http://example.com/backup/
+http://example.com/config/
+http://example.com/css/
+http://example.com/data/
+http://example.com/docs/
+http://example.com/images/
+http://example.com/includes/
+http://example.com/js/
+http://example.com/lib/
+http://example.com/logs/
+http://example.com/media/
+http://example.com/plugins/
+http://example.com/scripts/
+http://example.com/temp/
+http://example.com/templates/
+http://example.com/themes/
+http://example.com/tmp/
+http://example.com/uploads/
+http://example.com/vendor/
+
+Files Found:
+------------
+http://example.com/index.php (200)
+http://example.com/robots.txt (200)
+http://example.com/sitemap.xml (200)
+http://example.com/.htaccess (403)
+http://example.com/config.php (403)
+http://example.com/wp-config.php (403)
+http://example.com/admin/index.php (200)
+http://example.com/admin/login.php (200)
+http://example.com/api/index.php (200)
+http://example.com/backup/db.sql.bak (200) [!] Interesting
+http://example.com/config/database.yml (200) [!] Interesting
+
+Scan Statistics:
+----------------
+Start Time: 2024-01-15 10:00:00
+End Time: 2024-01-15 10:45:30
+Duration: 45 minutes 30 seconds
+Requests/Second: 80.7

@@ -1,0 +1,86 @@
+_______________________________________________________________
+         __          _______   _____
+         \ \        / /  __ \ / ____|
+          \ \  /\  / /| |__) | (___   ___  __ _ _ __ ®
+           \ \/  \/ / |  ___/ \___ \ / __|/ _` | '_ \
+            \  /\  /  | |     ____) | (__| (_| | | | |
+             \/  \/   |_|    |_____/ \___|\__,_|_| |_|
+
+         WordPress Security Scanner by the WPScan Team
+                         Version 3.8.25
+
+[+] URL: http://example.com/ [93.184.216.34]
+[+] Started: Mon Jan 15 10:30:00 2024
+
+Interesting Finding(s):
+
+[+] Headers
+ | Interesting Entry: Server: nginx/1.18.0
+ | Interesting Entry: X-Powered-By: PHP/8.1.0
+
+[+] XML-RPC seems to be enabled: http://example.com/xmlrpc.php
+ | Found By: Direct Access (Aggressive Detection)
+ | References:
+ |  - http://codex.wordpress.org/XML-RPC_Pingback_API
+
+[+] WordPress readme found: http://example.com/readme.html
+ | Found By: Direct Access (Aggressive Detection)
+
+[+] The external WP-Cron seems to be enabled: http://example.com/wp-cron.php
+ | Found By: Direct Access (Aggressive Detection)
+
+[+] WordPress version 6.4.2 identified (Latest)
+ | Found By: Rss Generator (Passive Detection)
+
+[+] WordPress theme in use: twentytwentyfour
+ | Location: http://example.com/wp-content/themes/twentytwentyfour/
+ | Latest Version: 1.0
+ | The version could not be determined.
+
+[+] Enumerating All Plugins (via Passive Methods)
+
+[i] Plugin(s) Identified:
+
+[+] contact-form-7
+ | Location: http://example.com/wp-content/plugins/contact-form-7/
+ | Latest Version: 5.8.4
+ | Last Updated: 2024-01-10
+ |
+ | [!] The version is out of date, the latest version is 5.8.4
+ |
+ | Version: 5.8.3 (100% confidence)
+
+[+] woocommerce
+ | Location: http://example.com/wp-content/plugins/woocommerce/
+ | Latest Version: 8.5.0
+ | Last Updated: 2024-01-12
+ |
+ | [!] The version is out of date, the latest version is 8.5.0
+ | [!] 2 vulnerabilities identified:
+ |
+ | [!] Title: WooCommerce < 8.5.0 - SQL Injection
+ |     Fixed in: 8.5.0
+ |     References:
+ |      - https://wpscan.com/vulnerability/xxxxx
+ |      - https://cve.mitre.org/cgi-bin/cvename.cgi?name=CVE-2024-XXXX
+ |
+ | Version: 8.4.0 (80% confidence)
+
+[+] Enumerating Users (via Passive and Aggressive Methods)
+ Brute Forcing Author IDs - Time: 00:00:01 <=> (10 / 10) 100.00% Time: 00:00:01
+
+[i] User(s) Identified:
+
+[+] admin
+ | Found By: Author Posts - Author Pattern (Passive Detection)
+
+[+] editor
+ | Found By: Author Id Brute Forcing - Author Pattern (Aggressive Detection)
+
+[+] Finished: Mon Jan 15 10:31:30 2024
+[+] Requests Done: 1523
+[+] Cached Requests: 35
+[+] Data Sent: 452.3 KB
+[+] Data Received: 2.1 MB
+[+] Memory used: 268.234 MB
+[+] Elapsed time: 00:01:30

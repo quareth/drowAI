@@ -1,0 +1,11 @@
+detect:
+  cli: "masscan"
+extract:
+  - field: port
+    regex: "(\\d+)/tcp"
+chunk:
+  - group_by: [port]
+  - max_tokens: 800
+summarize:
+  template: "{count} open ports detected"
+

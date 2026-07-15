@@ -1,0 +1,36 @@
+{
+  "intent_brief": {
+    "blocking_reason": null,
+    "continuation_mode": "new_request",
+    "execution_readiness": "ready",
+    "explicit_constraints": [
+      "No UDP",
+      "Low-noise only"
+    ],
+    "next_operational_goal": "Run nmap service scan",
+    "overall_goal": "Map externally reachable services",
+    "relevant_memory_fragments": [
+      "host alive from previous discovery"
+    ],
+    "request_contract": {
+      "answer_style": "normal",
+      "question_type": "multi_step",
+      "terminal_when": "all_steps_done"
+    },
+    "resolved_step_detail": "Start with TCP scan",
+    "resolved_step_title": "Discovery",
+    "resolved_target": "10.0.0.5",
+    "resolved_user_intent": "Enumerate exposed services on 10.0.0.5",
+    "retrieval_hints": [
+      "nmap",
+      "service banners"
+    ],
+    "success_condition": "List open ports and service names",
+    "target_source": "explicit_current_message",
+    "target_status": "resolved"
+  },
+  "selected_tool": "nmap.scan",
+  "tool_params": {
+    "target": "10.0.0.5"
+  }
+}

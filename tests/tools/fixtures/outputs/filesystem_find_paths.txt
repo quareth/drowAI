@@ -1,0 +1,2 @@
+/workspace/reports/summary.txt
+/workspace/logs/app.log

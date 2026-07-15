@@ -1,0 +1,106 @@
+name: E2E local-runtime certification
+
+on:
+  schedule:
+    - cron: "30 2 * * *"
+  workflow_dispatch:
+    inputs:
+      release_certification:
+        description: Run as the explicit release-certification check
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-runtime-local-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  runtime-local-canary:
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && !inputs.release_certification)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CI: "true"
+      DEBUG: "true"
+      E2E_DETERMINISTIC_MODE: "false"
+      E2E_RUNTIME_LOCAL_MODE: "true"
+      TASK_RUNTIME_PLACEMENT_MODE_DEFAULT: local
+      E2E_CI_TIER: runtime-local-canary
+      E2E_CI_ARTIFACT_ROOT: e2e/output/ci-artifacts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Install Node dependencies
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Build supported local runtime image
+        run: python scripts/build_runtime_image.py --arch amd64
+      - name: Run local-Docker UI canary
+        run: npm run test:e2e:runtime:local
+      - name: Upload local-runtime failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-runtime-local-failure-${{ github.run_attempt }}
+          path: |
+            e2e/output/playwright/
+            e2e/output/playwright-report/
+            e2e/output/ci-artifacts/
+          if-no-files-found: warn
+          retention-days: 7
+
+  runtime-local-release-certification:
+    if: github.event_name == 'workflow_dispatch' && inputs.release_certification
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      CI: "true"
+      DEBUG: "true"
+      E2E_DETERMINISTIC_MODE: "false"
+      E2E_RUNTIME_LOCAL_MODE: "true"
+      TASK_RUNTIME_PLACEMENT_MODE_DEFAULT: local
+      E2E_CI_TIER: release-certification
+      E2E_CI_ARTIFACT_ROOT: e2e/output/ci-artifacts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements-dev.txt
+      - name: Install Node dependencies
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Build supported local runtime image
+        run: python scripts/build_runtime_image.py --arch amd64
+      - name: Run explicit local-runtime release certification
+        run: npm run test:e2e:runtime:local
+      - name: Upload release-certification failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-release-certification-failure-${{ github.run_attempt }}
+          path: |
+            e2e/output/playwright/
+            e2e/output/playwright-report/
+            e2e/output/ci-artifacts/
+          if-no-files-found: warn
+          retention-days: 7

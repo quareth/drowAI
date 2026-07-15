@@ -1,0 +1,33 @@
+[*] Recon-ng v5.1.2
+
+[recon-ng][default] > use recon/domains-hosts/brute_hosts
+[recon-ng][default][brute_hosts] > set SOURCE example.com
+SOURCE => example.com
+[recon-ng][default][brute_hosts] > run
+
+-----------
+EXAMPLE.COM
+-----------
+[*] www.example.com => 93.184.216.34
+[*] mail.example.com => 93.184.216.35
+[*] api.example.com => 93.184.216.36
+[*] ftp.example.com => 93.184.216.37
+[*] admin.example.com => 93.184.216.38
+
+-------
+SUMMARY
+-------
+[*] 5 total (5 new) hosts found.
+
+[recon-ng][default][brute_hosts] > show hosts
++-------+-------------------+----------------+-------------+
+| rowid | host              | ip_address     | source      |
++-------+-------------------+----------------+-------------+
+| 1     | www.example.com   | 93.184.216.34  | brute_hosts |
+| 2     | mail.example.com  | 93.184.216.35  | brute_hosts |
+| 3     | api.example.com   | 93.184.216.36  | brute_hosts |
+| 4     | ftp.example.com   | 93.184.216.37  | brute_hosts |
+| 5     | admin.example.com | 93.184.216.38  | brute_hosts |
++-------+-------------------+----------------+-------------+
+
+[*] 5 rows returned

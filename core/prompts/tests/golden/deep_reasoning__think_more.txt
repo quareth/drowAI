@@ -1,0 +1,36 @@
+Think deeply about the current situation and decide what to do next.
+
+## Current Focus
+Enumerate services on 10.0.0.1
+
+## Current Plan
+1. Run nmap scan
+2. Enumerate SMB if open
+
+## Todo List
+[0] ☐ Identify open ports [pending]
+[1] ☐ Check SMB [pending]
+
+## Your Task
+1. Analyze what we've learned so far
+2. Determine if the plan needs updating based on new information
+3. Identify the most important next step
+4. Surface key observations to remember
+
+**Guiding Questions**:
+- What have we discovered?
+- Does this change our approach?
+- What's the logical next step?
+- Are we making progress toward the goal?
+
+**Required Response Format**:
+```json
+{
+  "reasoning": "Your detailed analysis of the situation",
+  "updated_plan": ["step 1", "step 2", ...],  // Updated plan if needed, or keep current plan
+  "next_goal": "The immediate next objective",
+  "key_observations": ["observation 1", "observation 2", ...]  // Key facts to remember
+}
+```
+
+Provide your analysis as valid JSON.

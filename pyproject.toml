@@ -1,0 +1,92 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "drowai"
+version = "0.1.0"
+description = "Pre-v1 platform for task-isolated AI security workflows"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = [
+    "alembic==1.16.2",
+    "anthropic==0.116.0",
+    "asyncpg==0.30.0",
+    "bcrypt==4.0.1",
+    "cryptography==42.0.8",
+    "docker==7.1.0",
+    "fastapi==0.115.13",
+    "greenlet==3.2.3",
+    "jsonschema==4.25.0",
+    "langgraph==1.2.9",
+    "langgraph-checkpoint==4.1.1",
+    "langgraph-checkpoint-postgres==3.1.0",
+    "langgraph-checkpoint-sqlite==3.1.0",
+    "openai==2.45.0",
+    "passlib[bcrypt]==1.7.4",
+    "pgvector==0.4.2",
+    "psutil==7.2.2",
+    "psycopg2-binary==2.9.10",
+    "pydantic==2.11.7",
+    "python-dotenv==1.1.0",
+    "python-jose[cryptography]==3.5.0",
+    "python-multipart==0.0.20",
+    "redis==5.2.1",
+    "requests==2.32.4",
+    "sqlalchemy==2.0.41",
+    "tiktoken==0.6.0",
+    "uvicorn[standard]==0.34.3",
+    "websockets==15.0.1",
+]
+
+[project.optional-dependencies]
+test = [
+    "pytest-asyncio==0.23.8",
+]
+
+[project.scripts]
+drowai-runner = "drowai_runner.app:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+    "agent*",
+    "backend*",
+    "core*",
+    "deploy*",
+    "drowai_runner*",
+    "kali_executor*",
+    "runtime_shared*",
+]
+exclude = ["*.tests", "*.tests.*"]
+
+[tool.setuptools.package-data]
+core = [
+    "prompts/versions/*/*.txt",
+    "prompts/versions/*/*/*.txt",
+    "prompts/versions/*/*/*.md",
+    "runbooks/builtin/tool_runbooks/*/RUNBOOK.md",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "auto"
+markers = [
+    "emission: tests for unified event emission and legacy helper migration",
+    "integration: integration tests that run graph flows",
+    "slow: tests that run actual graph flows (may take longer)",
+    "regression_layer1: prompt/history/payload contract regression checks",
+    "regression_layer2: graph routing and topology regression checks",
+    "regression_layer3: deterministic branch/history/tool/hitl scenario checks",
+    "regression_layer4: replay signature golden regression checks",
+    "regression_quick: PR quick-gate subset for fast confidence",
+    "regression_main: main-branch full LangGraph regression suite",
+    "regression_nightly: nightly expanded LangGraph regression suite",
+    "execution_plane_non_dind_regression: non-DinD production-target checks for lifecycle, workspace/file-comm, VPN API, workspace-only mounts, and image-internal runtime path behavior",
+]
+
+[tool.drowai.packaging]
+runtime_manifest = "runtime/manifests/runtime-package-manifest.md"
+runtime_image_tag = "drowai-runtime-local:latest"
+runtime_image_dockerfile = "runtime/image/Dockerfile"

@@ -1,0 +1,72 @@
+{
+  "commandline": [
+    "ffuf",
+    "-w",
+    "/usr/share/seclists/Discovery/Web-Content/common.txt",
+    "-u",
+    "https://example.com/data/FUZZ",
+    "-o",
+    "artifacts/ffuf_fuzzer_1700000000.json",
+    "-of",
+    "json"
+  ],
+  "time": {
+    "start": 1700000000,
+    "end": 1700000010
+  },
+  "config": {
+    "threads": 40
+  },
+  "results": [
+    {
+      "input": {
+        "FUZZ": "42"
+      },
+      "position": 43,
+      "status": 200,
+      "length": 512,
+      "words": 44,
+      "lines": 12,
+      "url": "https://example.com/data/42"
+    }
+  ]
+}
+
+        /'___\  /'___\           /'___\
+       /\ \__/ /\ \__/  __  __  /\ \__/
+       \ \ ,__\\ \ ,__\/\ \/\ \ \ \ ,__\
+        \ \ \_/ \ \ \_/\ \ \_\ \ \ \ \_/
+         \ \_\   \ \_\  \ \____/  \ \_\
+          \/_/    \/_/   \/___/    \/_/
+
+       v2.1.0-dev
+________________________________________________
+
+ :: Method           : GET
+ :: URL              : http://example.com/FUZZ
+ :: Wordlist         : FUZZ: /usr/share/seclists/Discovery/Web-Content/common.txt
+ :: Follow redirects : false
+ :: Calibration      : false
+ :: Timeout          : 10
+ :: Threads          : 40
+ :: Matcher          : Response status: 200,204,301,302,307,401,403,405,500
+________________________________________________
+
+admin                   [Status: 301, Size: 316, Words: 20, Lines: 10, Duration: 45ms]
+api                     [Status: 301, Size: 314, Words: 20, Lines: 10, Duration: 42ms]
+backup                  [Status: 301, Size: 317, Words: 20, Lines: 10, Duration: 43ms]
+config                  [Status: 403, Size: 283, Words: 20, Lines: 10, Duration: 41ms]
+css                     [Status: 301, Size: 314, Words: 20, Lines: 10, Duration: 44ms]
+data                    [Status: 301, Size: 315, Words: 20, Lines: 10, Duration: 42ms]
+images                  [Status: 301, Size: 317, Words: 20, Lines: 10, Duration: 45ms]
+includes                [Status: 301, Size: 319, Words: 20, Lines: 10, Duration: 43ms]
+index.php               [Status: 200, Size: 5678, Words: 456, Lines: 120, Duration: 89ms]
+js                      [Status: 301, Size: 313, Words: 20, Lines: 10, Duration: 41ms]
+login                   [Status: 302, Size: 0, Words: 1, Lines: 1, Duration: 67ms]
+logout                  [Status: 302, Size: 0, Words: 1, Lines: 1, Duration: 65ms]
+robots.txt              [Status: 200, Size: 125, Words: 12, Lines: 8, Duration: 38ms]
+server-status           [Status: 403, Size: 283, Words: 20, Lines: 10, Duration: 40ms]
+sitemap.xml             [Status: 200, Size: 2048, Words: 89, Lines: 45, Duration: 52ms]
+tmp                     [Status: 301, Size: 314, Words: 20, Lines: 10, Duration: 44ms]
+uploads                 [Status: 301, Size: 318, Words: 20, Lines: 10, Duration: 46ms]
+:: Progress: [4712/4712] :: Job [1/1] :: 245 req/sec :: Duration: [0:00:19] :: Errors: 0 ::

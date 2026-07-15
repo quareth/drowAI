@@ -1,0 +1,48 @@
+{
+  "tool_id": "sniffing_spoofing.spoofing_poisoning.arpspoof",
+  "test_cases": {
+    "minimal": {
+      "description": "Basic arpspoof execution",
+      "params": {
+        "target": "192.168.1.1",
+        "interface": "eth0"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Full arpspoof options",
+      "params": {
+        "target": "192.168.1.1",
+        "interface": "eth0",
+        "gateway_ip": "192.168.1.1",
+        "target_ip": "192.168.1.50",
+        "cache_mode": "both",
+        "bidirectional": true,
+        "verbose": true,
+        "extra_args": [
+          "-n"
+        ]
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": [
+      {
+        "name": "missing_target",
+        "params": {
+          "interface": "eth0"
+        },
+        "expected_error": "required"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^arpspoof"
+    ],
+    "full": [
+      "^arpspoof",
+      "-r"
+    ]
+  }
+}

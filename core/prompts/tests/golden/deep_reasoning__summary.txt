@@ -1,0 +1,17 @@
+Summarize the following tool execution result for follow-up reasoning.
+
+**Tool**: nmap.scan
+
+**Output**:
+80/tcp open http
+
+
+**Errors** (if any):
+None
+
+**Task**: Extract key findings, important observations, and suggest next steps.
+
+Provide a concise summary focusing on:
+1. What was discovered
+2. Notable findings or anomalies
+3. Suggested follow-up actions

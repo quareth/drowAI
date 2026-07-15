@@ -1,0 +1,45 @@
+{
+  "tool_id": "maintaining_access.web_backdoors.weevely",
+  "test_cases": {
+    "minimal": {
+      "description": "Generate a new web shell",
+      "params": {
+        "target": "unused",
+        "mode": "generate",
+        "password": "testpass",
+        "output_path": "artifacts/weevely.php"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Connect and run a command",
+      "params": {
+        "target": "unused",
+        "mode": "connect",
+        "password": "testpass",
+        "output_path": "artifacts/weevely.php",
+        "url": "http://example.com/shell.php",
+        "command": "id"
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": [
+      {
+        "name": "missing_required",
+        "params": {
+          "target": "unused"
+        },
+        "expected_error": "required"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^weevely"
+    ],
+    "full": [
+      "^weevely"
+    ]
+  }
+}

@@ -1,0 +1,42 @@
+
+ ___  ___  __   __     __      __         __   ___
+|__  |__  |__) |__) | /  `    /  \ \_/ | |  \ |__
+|    |___ |  \ |  \ | \__,    \__/ / \ | |__/ |___
+by Ben "epi" Risher 🤓                 ver: 2.10.1
+───────────────────────────┬──────────────────────
+ 🎯  Target Url            │ http://example.com
+ 🚀  Threads               │ 50
+ 📖  Wordlist              │ /usr/share/seclists/Discovery/Web-Content/raft-medium-directories.txt
+ 👌  Status Codes          │ [200, 204, 301, 302, 307, 308, 401, 403, 405, 500]
+ 💥  Timeout (secs)        │ 7
+ 🦡  User-Agent            │ feroxbuster/2.10.1
+ 💉  Config File           │ /etc/feroxbuster/ferox-config.toml
+ 🔎  Extract Links         │ true
+ 🏁  HTTP methods          │ [GET]
+ 🔃  Recursion Depth       │ 4
+───────────────────────────┴──────────────────────
+ 🏁  Press [ENTER] to use the Scan Management Menu™
+──────────────────────────────────────────────────
+200      GET       15l       63w      1234c http://example.com/
+301      GET        9l       28w      316c http://example.com/admin => http://example.com/admin/
+200      GET       45l      187w     3456c http://example.com/admin/
+301      GET        9l       28w      314c http://example.com/api => http://example.com/api/
+200      GET       12l       48w      456c http://example.com/api/
+200      GET        5l       10w      125c http://example.com/robots.txt
+301      GET        9l       28w      317c http://example.com/backup => http://example.com/backup/
+403      GET        9l       28w      283c http://example.com/backup/
+301      GET        9l       28w      314c http://example.com/css => http://example.com/css/
+301      GET        9l       28w      313c http://example.com/js => http://example.com/js/
+301      GET        9l       28w      317c http://example.com/images => http://example.com/images/
+200      GET      120l      456w     5678c http://example.com/login.php
+302      GET        0l        0w        0c http://example.com/logout.php => http://example.com/
+200      GET       89l      312w     4567c http://example.com/register.php
+301      GET        9l       28w      318c http://example.com/uploads => http://example.com/uploads/
+403      GET        9l       28w      283c http://example.com/uploads/
+200      GET       25l       89w     2048c http://example.com/sitemap.xml
+403      GET        9l       28w      283c http://example.com/.htaccess
+403      GET        9l       28w      283c http://example.com/.htpasswd
+[####################] - 2m    180000/180000  0s      found:19      errors:0
+[####################] - 2m     30000/30000   250/s   http://example.com/
+[####################] - 2m     30000/30000   248/s   http://example.com/admin/
+[####################] - 2m     30000/30000   251/s   http://example.com/api/

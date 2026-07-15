@@ -1,0 +1,128 @@
+{
+  "tool_id": "web_applications.web_application_fuzzers.ffuf",
+  "test_cases": {
+    "minimal": {
+      "description": "Minimal valid ffuf request fuzzing configuration",
+      "params": {
+        "target": "https://example.com/data/FUZZ",
+        "wordlist": "/usr/share/seclists/Discovery/Web-Content/common.txt"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Named multi-wordlist fuzzing with request body, headers, and calibration",
+      "params": {
+        "target": "https://example.com/api?PARAM=VALUE",
+        "method": "POST",
+        "headers": [
+          "Host: FUZZ.example.com",
+          "Content-Type: application/json"
+        ],
+        "cookies": "session=VALUE",
+        "data": "{\"param\":\"PARAM\",\"value\":\"VALUE\"}",
+        "basic_auth": {
+          "user": "admin",
+          "password": "password"
+        },
+        "wordlists": [
+          {
+            "path": "/usr/share/seclists/Discovery/Web-Content/burp-parameter-names.txt",
+            "keyword": "PARAM"
+          },
+          {
+            "path": "/usr/share/seclists/Discovery/Web-Content/common.txt",
+            "keyword": "VALUE"
+          }
+        ],
+        "extensions": ".json,.bak",
+        "combo_mode": "pitchfork",
+        "ignore_wordlist_comments": true,
+        "follow_redirects": true,
+        "http2": true,
+        "ignore_body": true,
+        "proxy": "http://127.0.0.1:8080",
+        "replay_proxy": "http://127.0.0.1:8081",
+        "ignore_tls": true,
+        "threads": 20,
+        "delay": "0.1",
+        "rate": 25,
+        "request_timeout": 20,
+        "job_max_time": 180,
+        "match_status": "all",
+        "match_regex": "VALUE",
+        "filter_status": "404",
+        "filter_size": "0",
+        "matcher_mode": "and",
+        "filter_mode": "or",
+        "auto_calibrate": true,
+        "auto_calibrate_per_host": true,
+        "auto_calibrate_strings": [
+          "notreal1",
+          "notreal2"
+        ],
+        "auto_calibrate_strategies": [
+          "basic",
+          "advanced"
+        ],
+        "auto_calibrate_keyword": "VALUE",
+        "stop_on_errors": true
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [
+      {
+        "description": "Inline numeric IDs for endpoint enumeration without shell tricks",
+        "params": {
+          "target": "https://example.com/data/FUZZ",
+          "inline_wordlist": [
+            "0",
+            "1",
+            "2",
+            "3"
+          ]
+        },
+        "expected_valid": true
+      },
+      {
+        "description": "Native ffuf input command for advanced generation",
+        "params": {
+          "target": "https://example.com/data/FUZZ",
+          "input_cmd": "seq 0 10",
+          "input_num": 11,
+          "input_shell": "/bin/sh"
+        },
+        "expected_valid": true
+      }
+    ],
+    "invalid": [
+      {
+        "description": "Missing FUZZ or declared keyword should fail fast",
+        "params": {
+          "target": "https://example.com/data/123",
+          "wordlist": "/usr/share/seclists/Discovery/Web-Content/common.txt"
+        },
+        "expected_valid": false
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "-w",
+      "/usr/share/seclists/Discovery/Web-Content/common.txt",
+      "-u",
+      "https://example.com/data/FUZZ"
+    ],
+    "full": [
+      "-X",
+      "POST",
+      "-mode",
+      "pitchfork",
+      "-mr",
+      "VALUE",
+      "-fc",
+      "404",
+      "-ac",
+      "-ach"
+    ]
+  }
+}

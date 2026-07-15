@@ -1,0 +1,108 @@
+{
+  "tool_id": "web_applications.web_crawlers.ffuf",
+  "test_cases": {
+    "minimal": {
+      "description": "Minimal valid crawler configuration",
+      "params": {
+        "target": "https://example.com/FUZZ",
+        "wordlist": "/usr/share/wordlists/dirb/common.txt"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Crawler configuration with recursion, filters, and auth",
+      "params": {
+        "target": "https://example.com/FUZZ",
+        "wordlist": "/usr/share/seclists/Discovery/Web-Content/common.txt",
+        "headers": [
+          "Authorization: Bearer test-token",
+          "X-Env: qa"
+        ],
+        "cookies": "SESSION=abc123",
+        "basic_auth": {
+          "user": "admin",
+          "password": "password"
+        },
+        "extensions": ".php,.bak",
+        "dirsearch_compat": true,
+        "ignore_wordlist_comments": true,
+        "follow_redirects": true,
+        "http2": true,
+        "ignore_body": true,
+        "proxy": "http://127.0.0.1:8080",
+        "replay_proxy": "http://127.0.0.1:8081",
+        "ignore_tls": true,
+        "recursion": true,
+        "recursion_depth": 2,
+        "recursion_strategy": "greedy",
+        "threads": 25,
+        "delay": "0.1-0.2",
+        "rate": 50,
+        "request_timeout": 15,
+        "job_max_time": 120,
+        "job_max_time_per_recursion": 60,
+        "match_status": "200,204,301,302,307,401,403",
+        "filter_size": "0",
+        "matcher_mode": "or",
+        "filter_mode": "and",
+        "auto_calibrate": true,
+        "auto_calibrate_per_host": true,
+        "auto_calibrate_strings": [
+          "thisshouldnotexist"
+        ],
+        "auto_calibrate_strategies": [
+          "basic"
+        ],
+        "auto_calibrate_keyword": "FUZZ",
+        "stop_on_403": true,
+        "silent": true
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [
+      {
+        "description": "Safe inline wordlist for numeric path discovery",
+        "params": {
+          "target": "https://example.com/FUZZ",
+          "inline_wordlist": [
+            "0",
+            "1",
+            "2"
+          ]
+        },
+        "expected_valid": true
+      }
+    ],
+    "invalid": [
+      {
+        "description": "Crawler target must end with FUZZ",
+        "params": {
+          "target": "https://example.com/admin",
+          "wordlist": "/usr/share/wordlists/dirb/common.txt"
+        },
+        "expected_valid": false
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "-w",
+      "/usr/share/wordlists/dirb/common.txt",
+      "-u",
+      "https://example.com/FUZZ",
+      "-noninteractive"
+    ],
+    "full": [
+      "-s",
+      "-recursion",
+      "-recursion-depth",
+      "2",
+      "-recursion-strategy",
+      "greedy",
+      "-D",
+      "-r",
+      "-http2",
+      "-k"
+    ]
+  }
+}

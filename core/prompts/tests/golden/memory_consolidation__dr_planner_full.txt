@@ -1,0 +1,89 @@
+Create a minimal execution plan for the current user turn using the classifier-derived brief below.
+
+**Targets**: 10.0.0.5
+
+DR Planner Input Brief (classifier-derived; transcript access is not available here):
+- Resolved user intent: Validate exposed services on 10.0.0.5
+- Overall goal: Map externally reachable services
+- Continuation mode: new_request
+- Resolved step title: Service enumeration
+- Resolved step detail: Collect open ports and banners
+- Next operational goal: Run a TCP scan with service detection
+- Success condition: Open ports and service names captured
+- Execution readiness: ready
+- Resolved target: 10.0.0.5
+- Target status: resolved
+- Target source: explicit_current_message
+- Explicit constraints:
+  - No UDP
+  - Keep command runtime under 60s
+- Relevant memory fragments:
+  - Host already responds to ping
+- Retrieval hints:
+  - nmap scan
+  - service banners
+- Request contract:
+  - question_type: multi_step
+  - answer_style: normal
+  - terminal_when: all_steps_done
+
+Use this classifier-derived brief to decide what to plan.- nmap
+- sslscan- no exploitation
+
+**Your Task**:
+1. Decide whether planning is blocked by missing mandatory user inputs.
+2. If not blocked, break the request into the minimum number of execution objectives needed to complete the user's request.
+3. Identify the first goal to pursue when planning is ready.
+
+**Additional Guidance For This Turn**:
+- Use the classifier-derived brief as the main source of current-turn intent, goal, constraints, and readiness.
+- Use targets, clarified inputs, available tools, network context, and scope constraints to shape the plan.
+- If targets are not pre-specified, include the minimum necessary target-discovery objective before target-specific execution.
+- If a target-selection step is required, keep it at the objective level rather than describing the randomization or selection mechanics.
+- Keep the plan objective-level rather than command-level.
+- Do not include exact commands, flags, file names, shell pipelines, variable assignments, or parsing instructions in `plan` or `todo_list`.
+
+**Good step style**:
+- "Discover live hosts on the current Docker network."
+- "Select one responsive host at random."
+- "Check whether port 5432 is open on the selected host."
+- "Fingerprint the exposed HTTP service."
+
+**Bad step style**:
+- "Run arp-scan on 172.17.0.0/16, save output to live.txt, grep IPs, then shuf one host."
+- "Execute `nmap -n -p 5432 --open -sV $target`."
+- "Write results to a file and parse them before continuing."
+- "Use tool X with parameter Y unless it fails, then use tool Z."
+
+**Required Response Format**:
+```json
+{
+  "mode": "plan_ready" | "clarify_required",
+  "plan": ["Step 1: ...", "Step 2: ..."],
+  "todo_list": ["Todo 1", "Todo 2"],
+  "first_goal": "Immediate execution objective",
+  "clarify_request": {
+    "required_blockers": [
+      {
+        "slot": "string",
+        "question": "string",
+        "input_type": "select",
+        "options": ["option1", "option2"]
+      }
+    ]
+  }
+}
+```
+
+For `mode: "plan_ready"`:
+- `plan` and `first_goal` are required
+- `clarify_request.required_blockers` must be empty or omitted
+- `plan` should contain only minimal execution objectives
+- `todo_list` should be shorter than `plan`
+
+For `mode: "clarify_required"`:
+- `clarify_request.required_blockers` is required with 1-2 items
+- each blocker must include `input_type: "select"` and 1-4 options
+- `plan` may be empty
+
+Provide your plan as valid JSON.

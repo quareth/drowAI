@@ -1,0 +1,4 @@
+jpeg: 12 files written
+png: 3 files written
+pdf: 1 files written
+bytes processed: 104857600

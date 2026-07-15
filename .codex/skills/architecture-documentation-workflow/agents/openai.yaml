@@ -1,0 +1,4 @@
+interface:
+  display_name: "Architecture Documentation"
+  short_description: "Discover and document repo architecture"
+  default_prompt: "Use $architecture-documentation-workflow to discover architecture components and generate reviewed docs."

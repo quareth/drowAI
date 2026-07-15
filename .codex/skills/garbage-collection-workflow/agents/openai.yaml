@@ -1,0 +1,4 @@
+interface:
+  display_name: "Garbage Collection"
+  short_description: "Incremental dead-code cleanup with one PR per iteration"
+  default_prompt: "Use $garbage-collection-workflow to run garbage collection from .codex/agents/cleanup-state.md."

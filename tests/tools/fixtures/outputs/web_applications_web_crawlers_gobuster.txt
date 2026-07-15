@@ -1,0 +1,39 @@
+===============================================================
+Gobuster v3.6
+by OJ Reeves (@TheColonial) & Christian Mehlmauer (@firefart)
+===============================================================
+[+] Url:                     http://example.com
+[+] Method:                  GET
+[+] Threads:                 10
+[+] Wordlist:                /usr/share/wordlists/dirb/common.txt
+[+] Negative Status codes:   404
+[+] User Agent:              gobuster/3.6
+[+] Timeout:                 10s
+===============================================================
+Starting gobuster in directory enumeration mode
+===============================================================
+/.htaccess            (Status: 403) [Size: 283]
+/.htpasswd            (Status: 403) [Size: 283]
+/admin                (Status: 301) [Size: 316] [--> http://example.com/admin/]
+/api                  (Status: 301) [Size: 314] [--> http://example.com/api/]
+/backup               (Status: 301) [Size: 317] [--> http://example.com/backup/]
+/cgi-bin              (Status: 403) [Size: 283]
+/config               (Status: 301) [Size: 317] [--> http://example.com/config/]
+/css                  (Status: 301) [Size: 314] [--> http://example.com/css/]
+/data                 (Status: 301) [Size: 315] [--> http://example.com/data/]
+/images               (Status: 301) [Size: 317] [--> http://example.com/images/]
+/includes             (Status: 301) [Size: 319] [--> http://example.com/includes/]
+/index.html           (Status: 200) [Size: 1234]
+/index.php            (Status: 200) [Size: 5678]
+/js                   (Status: 301) [Size: 313] [--> http://example.com/js/]
+/login                (Status: 302) [Size: 0] [--> /login.php]
+/logout               (Status: 302) [Size: 0] [--> /]
+/robots.txt           (Status: 200) [Size: 125]
+/server-status        (Status: 403) [Size: 283]
+/sitemap.xml          (Status: 200) [Size: 2048]
+/tmp                  (Status: 301) [Size: 314] [--> http://example.com/tmp/]
+/uploads              (Status: 301) [Size: 318] [--> http://example.com/uploads/]
+Progress: 4612 / 4614 (99.96%)
+===============================================================
+Finished
+===============================================================

@@ -1,0 +1,42 @@
+{
+  "tool_id": "maintaining_access.os_backdoors.cymothoa",
+  "test_cases": {
+    "minimal": {
+      "description": "Process ID and shellcode number",
+      "params": {
+        "target": "localhost",
+        "process_id": 1234,
+        "shellcode_num": 1
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "All optional fields populated",
+      "params": {
+        "target": "localhost",
+        "process_id": 2222,
+        "shellcode_num": 2,
+        "port": 4444
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": [
+      {
+        "name": "missing_required",
+        "params": {
+          "target": "localhost"
+        },
+        "expected_error": "required"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^cymothoa"
+    ],
+    "full": [
+      "^cymothoa"
+    ]
+  }
+}

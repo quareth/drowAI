@@ -1,0 +1,4 @@
+Scalpel 2.0
+Processing file: /path/to/disk.img
+8 files carved
+1048576 bytes processed

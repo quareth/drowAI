@@ -1,0 +1,29 @@
+[
+  {
+    "_source": {
+      "layers": {
+        "frame": {
+          "frame.number": "1",
+          "frame.time_epoch": "1781431200.000000000",
+          "frame.time": "Jun 14, 2026 10:00:00.000000000 UTC",
+          "frame.protocols": "eth:ip:udp:dns",
+          "frame.len": "86"
+        },
+        "ip": {
+          "ip.src": "192.0.2.10",
+          "ip.dst": "198.51.100.53"
+        },
+        "udp": {
+          "udp.srcport": "53123",
+          "udp.dstport": "53"
+        },
+        "dns": {
+          "dns.qry.name": "www.example.test",
+          "dns.qry.type": "1",
+          "dns.a": "198.51.100.10",
+          "dns.flags.rcode": "0"
+        }
+      }
+    }
+  }
+]

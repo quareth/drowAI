@@ -1,0 +1,4 @@
+interface:
+  display_name: "Implementation Guide Review Loop"
+  short_description: "Run guide reviewer/fixer loop"
+  default_prompt: "Use $implementation-guide-review-loop to review and fix the current implementation guide until blocker findings are resolved."

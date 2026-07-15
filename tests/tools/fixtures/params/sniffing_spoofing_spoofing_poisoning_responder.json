@@ -1,0 +1,49 @@
+{
+  "tool_id": "sniffing_spoofing.spoofing_poisoning.responder",
+  "test_cases": {
+    "minimal": {
+      "description": "Basic responder execution",
+      "params": {
+        "target": "unused",
+        "interface": "eth0"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Full responder options",
+      "params": {
+        "target": "unused",
+        "interface": "eth0",
+        "analyze": true,
+        "wpad": true,
+        "wredir": true,
+        "dhcp": true,
+        "fingerprint": true,
+        "verbose": true,
+        "extra_args": [
+          "-v"
+        ]
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": [
+      {
+        "name": "missing_interface",
+        "params": {
+          "target": "unused"
+        },
+        "expected_error": "required"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^responder"
+    ],
+    "full": [
+      "^responder",
+      "-A"
+    ]
+  }
+}

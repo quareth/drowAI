@@ -1,0 +1,26 @@
+192.168.1.1 is alive
+192.168.1.2 is alive
+192.168.1.5 is alive
+192.168.1.10 is alive
+192.168.1.15 is alive
+192.168.1.20 is unreachable
+192.168.1.25 is alive
+192.168.1.100 is alive
+192.168.1.150 is unreachable
+192.168.1.200 is alive
+192.168.1.254 is alive
+
+       8 targets
+       8 alive
+       2 unreachable
+       0 unknown addresses
+
+       0 timeouts (waiting for response)
+       9 ICMP Echos sent
+       8 ICMP Echo Replies received
+       0 other ICMP received
+
+ 0.07 ms (min round trip time)
+ 1.23 ms (avg round trip time)
+ 5.47 ms (max round trip time)
+       0.120 sec (elapsed real time)

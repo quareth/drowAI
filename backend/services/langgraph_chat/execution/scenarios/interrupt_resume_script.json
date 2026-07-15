@@ -1,0 +1,234 @@
+{
+  "scenario": "interrupt_resume",
+  "initial_events": [
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "reasoning_start",
+        "content": "reasoning_start",
+        "conversation_id": "conv-e2e-hitl",
+        "turn_id": "turn-e2e-hitl-1",
+        "metadata": {
+          "task_id": 1
+        }
+      }
+    },
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "reasoning_delta",
+        "content": "need approval",
+        "conversation_id": "conv-e2e-hitl",
+        "turn_id": "turn-e2e-hitl-1",
+        "metadata": {
+          "task_id": 1
+        }
+      }
+    },
+    {
+      "mode": "values",
+      "chunk": {
+        "__interrupt__": [
+          {
+            "type": "tool_approval",
+            "tool_id": "workspace.read",
+            "tool_name": "Workspace Read",
+            "parameters": {
+              "path": "/workspace"
+            },
+            "description": "Read deterministic task-local workspace metadata.",
+            "risk_level": "low",
+            "items": [],
+            "tool_batch_id": "deterministic-approval-batch"
+          }
+        ],
+        "facts": {},
+        "trace": {}
+      }
+    }
+  ],
+  "plan_review_events": [
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "reasoning_start",
+        "content": "reasoning_start",
+        "metadata": {}
+      }
+    },
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "reasoning_delta",
+        "content": "plan ready for review",
+        "metadata": {}
+      }
+    },
+    {
+      "mode": "values",
+      "chunk": {
+        "__interrupt__": [
+          {
+            "type": "plan_review",
+            "goal": "Validate deterministic task-local scope",
+            "plan_steps": ["Inspect scoped metadata", "Record deterministic result"],
+            "todo_list": [
+              {"id": "step-1", "text": "Inspect scoped metadata", "status": "pending"},
+              {"id": "step-2", "text": "Record deterministic result", "status": "pending"}
+            ],
+            "reasoning": "The plan requires explicit owner review."
+          }
+        ],
+        "facts": {},
+        "trace": {}
+      }
+    }
+  ],
+  "clarify_events": [
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "reasoning_start",
+        "content": "reasoning_start",
+        "metadata": {}
+      }
+    },
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "reasoning_delta",
+        "content": "clarification required",
+        "metadata": {}
+      }
+    },
+    {
+      "mode": "values",
+      "chunk": {
+        "__interrupt__": [
+          {
+            "type": "clarify_request",
+            "questions": [
+              {
+                "question_id": "assessment-position",
+                "input_type": "select",
+                "label": "Assessment position",
+                "options": ["Internal", "External"],
+                "required": true
+              }
+            ],
+            "context_metadata": {"scenario": "deterministic_e2e"}
+          }
+        ],
+        "facts": {},
+        "trace": {}
+      }
+    }
+  ],
+  "resume_events": [
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "tool_start",
+        "content": "tool_start",
+        "conversation_id": "conv-e2e-hitl",
+        "turn_id": "turn-e2e-hitl-1",
+        "metadata": {
+          "task_id": 1
+        }
+      }
+    },
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "tool_end",
+        "content": "tool_end",
+        "conversation_id": "conv-e2e-hitl",
+        "turn_id": "turn-e2e-hitl-1",
+        "metadata": {
+          "task_id": 1
+        }
+      }
+    },
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "message_start",
+        "content": "message_start",
+        "conversation_id": "conv-e2e-hitl",
+        "turn_id": "turn-e2e-hitl-1",
+        "metadata": {
+          "task_id": 1
+        }
+      }
+    },
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "message_delta",
+        "content": "Approved and resumed.",
+        "conversation_id": "conv-e2e-hitl",
+        "turn_id": "turn-e2e-hitl-1",
+        "metadata": {
+          "task_id": 1
+        }
+      }
+    },
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "section_end",
+        "content": "section_end",
+        "conversation_id": "conv-e2e-hitl",
+        "turn_id": "turn-e2e-hitl-1",
+        "metadata": {
+          "task_id": 1
+        }
+      }
+    },
+    {
+      "mode": "values",
+      "chunk": {
+        "facts": {},
+        "trace": {
+          "final_text": "Approved and resumed."
+        }
+      }
+    }
+  ],
+  "reject_events": [
+    {
+      "mode": "custom",
+      "chunk": {"type": "message_start", "content": "message_start", "metadata": {}}
+    },
+    {
+      "mode": "custom",
+      "chunk": {"type": "message_delta", "content": "Plan rejected.", "metadata": {}}
+    },
+    {
+      "mode": "custom",
+      "chunk": {"type": "section_end", "content": "section_end", "metadata": {}}
+    },
+    {
+      "mode": "values",
+      "chunk": {"facts": {}, "trace": {"final_text": "Plan rejected."}}
+    }
+  ],
+  "clarify_resume_events": [
+    {
+      "mode": "custom",
+      "chunk": {"type": "message_start", "content": "message_start", "metadata": {}}
+    },
+    {
+      "mode": "custom",
+      "chunk": {"type": "message_delta", "content": "Clarification accepted.", "metadata": {}}
+    },
+    {
+      "mode": "custom",
+      "chunk": {"type": "section_end", "content": "section_end", "metadata": {}}
+    },
+    {
+      "mode": "values",
+      "chunk": {"facts": {}, "trace": {"final_text": "Clarification accepted."}}
+    }
+  ]
+}

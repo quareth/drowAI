@@ -1,0 +1,55 @@
+{
+  "tool_id": "sniffing_spoofing.spoofing_poisoning.ettercap",
+  "test_cases": {
+    "minimal": {
+      "description": "Basic ettercap poisoning",
+      "params": {
+        "target": "192.168.1.10",
+        "interface": "eth0",
+        "mitm_method": "arp:remote"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Full ettercap options",
+      "params": {
+        "target": "192.168.1.10",
+        "interface": "eth0",
+        "mitm_method": "arp:remote",
+        "target1": "192.168.1.10",
+        "target2": "192.168.1.1",
+        "plugins": [
+          "dns_spoof"
+        ],
+        "output_file": "ettercap.pcap",
+        "log_file": "ettercap.log",
+        "quiet": true,
+        "one_way": true,
+        "extra_args": [
+          "-u"
+        ]
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": [
+      {
+        "name": "missing_target",
+        "params": {
+          "interface": "eth0"
+        },
+        "expected_error": "required"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^ettercap",
+      "-T"
+    ],
+    "full": [
+      "^ettercap",
+      "-T"
+    ]
+  }
+}

@@ -1,0 +1,4 @@
+Connected to 8.8.8.8
+Tunnel established
+DNS query count: 5
+2048 bytes transferred

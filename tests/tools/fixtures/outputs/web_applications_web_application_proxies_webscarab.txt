@@ -1,0 +1,38 @@
+WebScarab Lite 2.0 - Session Report
+===================================
+
+Session: example.com_scan
+Target: http://example.com
+Duration: 00:30:00
+
+Conversations Captured:
+-----------------------
+
+ID  Method  URL                         Status  Size
+1   GET     http://example.com/         200     5678
+2   GET     http://example.com/css/     200     1234
+3   GET     http://example.com/js/      200     2345
+4   POST    http://example.com/login    302     0
+5   GET     http://example.com/dashboard 200    7890
+6   GET     http://example.com/api/     200     456
+7   POST    http://example.com/api/data 201     123
+
+Analysis Results:
+-----------------
+
+Session Management:
+  [!] Session cookie without Secure flag
+  [!] Session cookie without HttpOnly flag
+
+Authentication:
+  [*] Login form detected at /login
+  [!] Credentials transmitted over HTTP
+
+Injection Points:
+  [!] Parameter 'id' in /products susceptible to injection
+  [!] Parameter 'search' in /search susceptible to XSS
+
+Total Conversations: 156
+Unique URLs: 45
+Parameters Found: 23
+Potential Issues: 5

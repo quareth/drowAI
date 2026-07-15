@@ -1,0 +1,60 @@
+Current Turn Input:
+
+Turn Execution Brief (classifier-derived; transcript access is not available here):
+- Resolved user intent: Validate exposed services on 10.0.0.5
+- Overall goal: Map externally reachable services
+- Continuation mode: new_request
+- Resolved step title: Service enumeration
+- Resolved step detail: Collect open ports and banners
+- Next operational goal: Run a TCP scan with service detection
+- Success condition: Open ports and service names captured
+- Execution readiness: ready
+- Resolved target: 10.0.0.5
+- Target status: resolved
+- Target source: explicit_current_message
+- Explicit constraints:
+  - No UDP
+  - Keep command runtime under 60s
+- Relevant memory fragments:
+  - Host already responds to ping
+- Suggested category focus:
+  - network_recon
+- Retrieval hints:
+  - nmap scan
+  - service banners
+- Request contract:
+  - question_type: multi_step
+  - answer_style: normal
+  - terminal_when: all_steps_done
+
+Candidate Tools: ["nmap.scan"]
+
+Selector Decision (advisory scheduling hint; Candidate Tools are not a mandatory execution list):
+- Requested execution strategy: "sequential"
+- Target: 10.0.0.5
+
+**CRITICAL - POST-TOOL REASONING DIRECTIVE (HIGHEST PRIORITY):**
+The agent just decided: "run nmap -sV -p- 10.0.0.5"
+This directive defines the pending work for this iteration and narrows the original Turn Execution Brief.
+Commit only calls required by this directive/current goal; do not recommit successful current-turn work from Working Memory unless the directive explicitly asks for a rerun.
+You MUST configure the tool to match this directive, NOT repeat previous scan types.
+IGNORE the plan steps below - they are outdated. Follow this directive EXACTLY.
+
+
+**PREVIOUS TOOL EXECUTED**: nmap.scan
+**Output Summary**: 443/tcp open https
+
+**Current Goal**: Service enumeration
+**Background Plan with Progress Indicators** (for context only - follow the DIRECTIVE above instead):
+  1. Run nmap -sV -p- 10.0.0.5 [in_progress]
+  2. Enumerate TLS settings [pending]
+
+Task Context:
+- Phase: phase3
+- Constraints: {"max_tool_calls": 3}
+Relevant Prior Findings:
+- [fresh] port_open 10.0.0.5:443/tcp (service=https)
+- [fresh] service_banner nginx/1.22
+Working Memory Snapshot:
+active target 10.0.0.5
+

@@ -1,0 +1,3 @@
+Checking `wted'... not infected
+Checking `basename'... INFECTED
+Checking `ls'... WARNING

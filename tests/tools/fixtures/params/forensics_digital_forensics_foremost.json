@@ -1,0 +1,32 @@
+{
+  "tool_id": "forensics.digital_forensics.foremost",
+  "test_cases": {
+    "minimal": {
+      "description": "Carve with defaults",
+      "params": {
+        "target": "/path/to/disk.img",
+        "output_directory": "/tmp/foremost_out"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Carve JPEGs with timestamps",
+      "params": {
+        "target": "/path/to/disk.img",
+        "output_directory": "/tmp/foremost_out",
+        "file_types": ["jpeg"],
+        "config_file": "/etc/foremost.conf",
+        "quick_mode": true,
+        "use_timestamps": true,
+        "verbose": true
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": []
+  },
+  "expected_command_patterns": {
+    "minimal": [],
+    "full": []
+  }
+}

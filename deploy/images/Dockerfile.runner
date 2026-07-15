@@ -1,0 +1,30 @@
+# DrowAI managed runner image for execution-site and standalone deployments.
+# Spawns per-task Kali containers via the host Docker socket.
+
+FROM python:3.11-slim-bookworm
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    DROWAI_RUNNER_ROOT=/var/lib/drowai \
+    DROWAI_RUNNER_HOST_BIND_ROOT=/var/lib/drowai \
+    DROWAI_RUNNER_DEV_MODE=false
+
+WORKDIR /app
+
+COPY deploy/images/runner-requirements.txt /tmp/runner-requirements.txt
+RUN pip install --no-cache-dir -r /tmp/runner-requirements.txt
+
+COPY drowai_runner /app/drowai_runner
+COPY runtime_shared /app/runtime_shared
+COPY deploy/images/runner-entrypoint.sh /usr/local/bin/drowai-runner-entrypoint
+
+RUN chmod +x /usr/local/bin/drowai-runner-entrypoint \
+    && mkdir -p /var/lib/drowai
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD python -m drowai_runner health || exit 1
+
+ENTRYPOINT ["/usr/local/bin/drowai-runner-entrypoint"]

@@ -1,0 +1,4 @@
+# Contributor and CI dependencies. Production images install requirements.txt.
+-r requirements.txt
+
+pytest-asyncio==0.23.8

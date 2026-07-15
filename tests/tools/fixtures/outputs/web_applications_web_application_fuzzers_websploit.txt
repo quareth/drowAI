@@ -1,0 +1,37 @@
+
+ _       __     __    _____       __      _ __
+| |     / /__  / /_  / ___/____  / /___  (_) /_
+| | /| / / _ \/ __ \ \__ \/ __ \/ / __ \/ / __/
+| |/ |/ /  __/ /_/ /___/ / /_/ / / /_/ / / /_
+|__/|__/\___/_.___//____/ .___/_/\____/_/\__/
+                       /_/
+
+WebSploit Framework 4.0.4
+
+[*] Target: http://example.com
+
+wsf > use web/dir_scanner
+wsf:Dir_Scanner > set TARGET http://example.com
+wsf:Dir_Scanner > run
+
+[*] Scanning directories...
+[+] Found: http://example.com/admin/
+[+] Found: http://example.com/backup/
+[+] Found: http://example.com/config/
+[+] Found: http://example.com/logs/
+[+] Found: http://example.com/uploads/
+
+wsf > use web/wmap
+wsf:Wmap > set TARGET http://example.com
+wsf:Wmap > run
+
+[*] Running web vulnerability scan...
+[!] SQL Injection found: /products.php?id=1
+[!] XSS found: /search.php?q=test
+[!] Directory Listing: /images/
+
+Summary:
+--------
+Directories Found: 5
+Vulnerabilities: 3
+Scan Duration: 120 seconds

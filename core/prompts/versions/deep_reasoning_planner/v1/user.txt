@@ -1,0 +1,63 @@
+Create a systematic penetration testing plan for the current user turn, using the classifier-derived brief below.
+
+**Targets**: {targets_str}{brief_section}{clarified_inputs_section}{network_discovery_section}{tools_constraint}{scope_constraints}
+
+**Your Task**:
+1. Decide whether planning is blocked by missing mandatory user inputs.
+2. If not blocked, break down the request into the minimum number of concrete, actionable steps:
+   - Split steps only when a new tool, target, or decision point is required
+   - Combine tightly coupled actions into a single step when it stays clear
+3. Identify the first goal to pursue when planning is ready.
+
+**Guidelines**:
+- Be specific and actionable
+- Only include steps that directly address the user's explicit request
+- Do NOT add "nice to have" steps beyond what was asked
+- Do NOT add administrative/compliance preconditions (authorization paperwork, legal disclaimers) unless explicitly requested
+- Every plan step must describe a resolvable objective, not an open-ended activity
+- A valid step must be terminable by positive evidence, conclusive negative evidence, repeated non-progress, or supersession by a better path
+- Avoid phrasing verification steps as positive-only outcomes; the step should be satisfiable by conclusive negative evidence too
+- Avoid meta steps like "record/report findings" unless explicitly requested
+- If the request can be satisfied in fewer steps, use fewer steps
+- Stay minimal - complete the request, nothing more
+- Consider scope and safety
+- Only use tools that are available (if listed above)
+- Return `mode: "clarify_required"` only for **hard blockers** that prevent correct execution
+- A hard blocker must be mandatory, non-inferable from context, and unresolved
+- Ask at most 1-2 blocker questions
+- Ask a blocker question only if its answer will directly contribute to task progress
+- Never ask optional preference questions
+- Clarify blockers must be multiple-choice only: use `input_type: "select"` and provide 1-4 concrete options
+- Do not use freeform text blockers
+- If blockers are inferable/resolved, return `mode: "plan_ready"` and provide a plan
+
+**Required Response Format**:
+```json
+{{
+  "mode": "plan_ready" | "clarify_required",
+  "plan": ["Step 1: Detailed description", "Step 2: ..."],
+  "todo_list": ["Todo item 1", "Todo item 2"],
+  "first_goal": "The immediate objective to start with",
+  "clarify_request": {{
+    "required_blockers": [
+      {{
+        "slot": "string",
+        "question": "string",
+        "input_type": "select",
+        "options": ["option1", "option2"]
+      }}
+    ]
+  }}
+}}
+```
+
+For `mode: "plan_ready"`:
+- `plan` and `first_goal` are required
+- `clarify_request.required_blockers` must be empty or omitted
+
+For `mode: "clarify_required"`:
+- `clarify_request.required_blockers` is required with 1-2 items
+- each blocker must include `input_type: "select"` and 1-4 options
+- `plan` may be empty
+
+Provide your plan as valid JSON.

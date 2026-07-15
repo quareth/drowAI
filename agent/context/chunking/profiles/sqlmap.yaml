@@ -1,0 +1,11 @@
+detect:
+  cli: "sqlmap"
+extract:
+  - field: target
+    regex: "target:\\s*(\\S+)"
+chunk:
+  - group_by: [target]
+  - max_tokens: 800
+summarize:
+  template: "{count} SQLi indicators for {entity}"
+

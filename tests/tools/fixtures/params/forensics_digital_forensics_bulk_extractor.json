@@ -1,0 +1,31 @@
+{
+  "tool_id": "forensics.digital_forensics.bulk_extractor",
+  "test_cases": {
+    "minimal": {
+      "description": "Default extraction to output directory",
+      "params": {
+        "target": "/path/to/disk.img",
+        "output_directory": "/tmp/bulk_out"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Enable and disable scanners",
+      "params": {
+        "target": "/path/to/disk.img",
+        "output_directory": "/tmp/bulk_out",
+        "enable_scanners": ["email", "url"],
+        "disable_scanners": ["credit_card"],
+        "threads": 8,
+        "verbose": true
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": []
+  },
+  "expected_command_patterns": {
+    "minimal": [],
+    "full": []
+  }
+}

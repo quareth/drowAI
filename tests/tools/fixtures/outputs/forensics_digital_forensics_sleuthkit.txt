@@ -1,0 +1,8 @@
+mmls 4.12.1
+
+DOS Partition Table
+Offset Sector: 0
+Units are in 512-byte sectors
+
+00: 0000000000 0000002047 (0000002048) Primary Table (#0)
+01: 0000002048 0002097151 (0002095104) NTFS / exFAT (0x07)

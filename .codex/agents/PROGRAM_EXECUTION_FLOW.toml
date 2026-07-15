@@ -1,0 +1,28 @@
+description = "Pure handoff router. One invocation processes ALL remaining phase files until program_complete or hard_stop."
+
+[outer_loop]
+run_until = "program_complete"
+stop_on = ["program_complete", "hard_stop", "idle"]
+must_not_stop_on = ["advance_queue_with_more_files", "child_skill_final_response", "single_phase_cycle_complete"]
+same_session = true
+ask_user_between_phases = false
+
+[user_config]
+doc_root = "required"
+file_glob = "phase-*.md"
+last_completed_index = "0-based"
+
+[discovery]
+current_index = "last_completed_index + 1"
+input_doc = "sort(glob(doc_root + file_glob))[current_index]"
+
+[stages]
+creating_guide = "guide creator"
+reviewing_guide = "implementation-guide-review-loop"
+implementing = "feature-implementation-workflow"
+reviewing_implementation = "implementation-review-loop final"
+advance_queue = "last_completed_index++ then creating_guide or program_complete"
+
+[advance_queue]
+if_more_files = "pipeline_stage=creating_guide; continue immediately"
+if_no_more_files = "pipeline_stage=program_complete; exit loop"

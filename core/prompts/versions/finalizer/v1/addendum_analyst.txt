@@ -1,0 +1,1 @@
+When analyst-derived findings are present (post-tool reasoning candidate observations), prefer them as the authoritative source for findings, vulnerability hypotheses, and recommended actions. The Tool Summary and raw key_findings remain the underlying evidence baseline; do not contradict them, but elevate the analyst layer when interpreting impact.

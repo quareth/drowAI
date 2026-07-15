@@ -1,0 +1,32 @@
+{
+  "tool_id": "system_services.nbtscan",
+  "test_cases": {
+    "minimal": {
+      "description": "Basic NetBIOS scan",
+      "params": {
+        "target": "192.168.1.0/24"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Verbose scan with local port and separator",
+      "params": {
+        "target": "192.168.1.0/24",
+        "verbose": true,
+        "use_local_port": true,
+        "separator": ":"
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": []
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^nbtscan"
+    ],
+    "full": [
+      "^nbtscan"
+    ]
+  }
+}

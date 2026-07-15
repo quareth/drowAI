@@ -1,0 +1,45 @@
+{intent_brief_block}
+
+Candidate Tools: {selected_tools}
+{next_tool_hint}
+{previous_tool_context}
+{plan_context}
+
+Task Context:
+- Target: {target}
+- Phase: {phase}
+- Constraints: {constraints}
+{relevant_findings_section}{referenced_prior_turns_block}{working_memory_snapshot_block}
+{artifact_parameter_policy}
+
+You are the execution committer. Commit between 1 and {max_committed_tools_per_batch} concrete tool
+calls for this iteration by returning the structured-output envelope below.
+Each committed call must have complete, validated parameters; do NOT use placeholder or
+result-dependent values such as "${{previous.output}}" or "use result from first tool".
+If a follow-up only makes sense after a prior call's result, record it under
+``deferred_followups`` instead of committing it now.
+
+Return the envelope shape exactly as follows (do NOT emit OpenAI tool-call objects).
+``parameters`` MUST be a JSON-encoded string (the JSON object serialized as
+text), not an inline object — this is required by the structured-output schema.
+{{
+  "tool_calls": [
+    {{ "tool_id": "<tool id from Candidate Tools>", "parameters": "{{\"key\":\"value\"}}", "intent": "<one-line purpose>" }}
+  ],
+  "execution_strategy": "sequential" | "parallel",
+  "deferred_followups": ["<step that depends on a result from this batch>"],
+  "selection_rationale": "<why this subset advances the goal>"
+}}
+
+IMPORTANT - Commit rules:
+- If a POST-TOOL REASONING DIRECTIVE is present, treat it as the highest-priority narrowed pending work for this iteration; use the Turn Execution Brief only for non-conflicting background constraints.
+- If no POST-TOOL REASONING DIRECTIVE is present, honor the Turn Execution Brief above as the sole source of current-turn user intent and constraints.
+- Pick only candidates that advance the CURRENT in-progress step (or nearest pending step); ignore weak candidates.
+- Each ``tool_id`` must come from the Candidate Tools list above.
+- If a previous attempt failed (see Previous Tool Executed), use CORRECTED parameters that address the prior failure.
+- For shell.exec, configure only the immediate objective; do not embed future contingencies in one command.
+- Do NOT add optional parameters the active directive or brief's resolved intent or explicit constraints do not mention.
+- Do NOT assume or guess parameter values.
+- Preserve the active directive/brief explicit constraints exactly (target, explicit tool semantics, and ports).
+- If the active directive/brief explicit constraints specify port(s), include them in tool parameters (do not silently broaden/narrow).
+- Choose ``execution_strategy = "parallel"`` only when every committed call is independent of the others' results.

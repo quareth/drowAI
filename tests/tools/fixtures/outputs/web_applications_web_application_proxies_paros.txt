@@ -1,0 +1,51 @@
+Paros Proxy 3.2.13 - Scan Report
+================================
+
+Target: http://example.com
+Scan Started: 2024-01-15 10:00:00
+Scan Completed: 2024-01-15 10:30:00
+
+Spider Results:
+---------------
+URLs Discovered: 89
+Forms Found: 12
+Parameters: 45
+
+Alert Summary:
+--------------
+
+HIGH Risk:
+  SQL Injection
+    URL: http://example.com/products.php
+    Parameter: id
+    Evidence: SQL error in response
+    Risk: High
+    Confidence: High
+
+  Cross Site Scripting
+    URL: http://example.com/search
+    Parameter: q
+    Evidence: Unfiltered input reflected
+    Risk: High
+    Confidence: Medium
+
+MEDIUM Risk:
+  X-Frame-Options Header Not Set
+    URL: http://example.com
+    Risk: Medium
+    Confidence: High
+
+  Cookie No HttpOnly Flag
+    URL: http://example.com/login
+    Cookie: JSESSIONID
+    Risk: Medium
+    Confidence: High
+
+LOW Risk:
+  Information Disclosure
+    URL: http://example.com/
+    Header: Server: Apache/2.4.54
+    Risk: Low
+    Confidence: High
+
+Total: High: 2, Medium: 2, Low: 1

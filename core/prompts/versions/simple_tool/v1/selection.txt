@@ -1,0 +1,10 @@
+Consider the following tool catalog and pick the best option for the turn.
+
+Tool catalog:
+{catalog_lines}
+
+Candidate tool IDs: {tool_candidates}
+
+State which tool you are selecting, justify the choice with one or two sentences,
+and list the arguments you intend to supply. If additional user confirmation is
+required, mention the questions you will ask.

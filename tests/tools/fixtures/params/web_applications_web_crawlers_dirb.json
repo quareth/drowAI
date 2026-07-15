@@ -1,0 +1,62 @@
+{
+  "tool_id": "web_applications.web_crawlers.dirb",
+  "test_cases": {
+    "minimal": {
+      "description": "Required fields only",
+      "params": {
+        "target": "http://example.com",
+        "wordlist": "/usr/share/wordlists/dirb/common.txt"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "All optional fields populated",
+      "params": {
+        "target": "http://example.com",
+        "wordlist": "/usr/share/wordlists/dirb/common.txt",
+        "threads": 10,
+        "timeout": 300,
+        "username": "admin",
+        "password": "password123",
+        "headers": "Authorization: Bearer token123",
+        "cookies": "SESSION=abc123",
+        "user_agent": "Mozilla/5.0",
+        "proxy": "http://127.0.0.1:8080"
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [
+      {
+        "name": "min_threads",
+        "params": {
+          "target": "http://example.com",
+          "wordlist": "/usr/share/wordlists/dirb/common.txt",
+          "threads": 1
+        },
+        "expected_valid": true
+      },
+      {
+        "name": "max_threads",
+        "params": {
+          "target": "http://example.com",
+          "wordlist": "/usr/share/wordlists/dirb/common.txt",
+          "threads": 100
+        },
+        "expected_valid": true
+      }
+    ],
+    "invalid": [
+      {
+        "name": "missing_wordlist",
+        "params": {
+          "target": "http://example.com"
+        },
+        "expected_error": "required"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": ["^dirb", "http://example.com", "/usr/share/wordlists/dirb/common.txt"],
+    "full": ["^dirb", "http://example.com"]
+  }
+}

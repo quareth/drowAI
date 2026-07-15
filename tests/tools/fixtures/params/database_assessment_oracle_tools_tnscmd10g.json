@@ -1,0 +1,49 @@
+{
+  "tool_id": "database_assessment.oracle_tools.tnscmd10g",
+  "test_cases": {
+    "minimal": {
+      "description": "Basic ping command",
+      "params": {
+        "target": "unused",
+        "host": "192.168.1.100"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Version check with custom port",
+      "params": {
+        "target": "unused",
+        "host": "192.168.1.100",
+        "command": "version",
+        "port": 1521,
+        "timeout": 60
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": [
+      {
+        "name": "invalid_port",
+        "params": {
+          "target": "unused",
+          "host": "192.168.1.100",
+          "port": 70000
+        },
+        "expected_error": "less than or equal"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^tnscmd10g",
+      "ping",
+      "-h"
+    ],
+    "full": [
+      "^tnscmd10g",
+      "version",
+      "-h",
+      "-p"
+    ]
+  }
+}

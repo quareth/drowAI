@@ -1,0 +1,4 @@
+interface:
+  display_name: "Implementation Review Loop"
+  short_description: "Run reviewer and fixer loop"
+  default_prompt: "Use $implementation-review-loop to review and fix the current implementation scope."

@@ -1,0 +1,181 @@
+{
+  "branch_deep_reasoning": {
+    "branch": "deep_reasoning",
+    "event_type_sequence": [
+      "assistant_final"
+    ],
+    "interrupt_flags": {
+      "interrupted": false
+    },
+    "key_decisions": [
+      "branch_selected"
+    ],
+    "node_path_signature": "facade->deep_reasoning->result",
+    "terminal_status": "completed"
+  },
+  "branch_normal_chat": {
+    "branch": "normal_chat",
+    "event_type_sequence": [
+      "assistant_final"
+    ],
+    "interrupt_flags": {
+      "interrupted": false
+    },
+    "key_decisions": [
+      "branch_selected"
+    ],
+    "node_path_signature": "facade->normal_chat->result",
+    "terminal_status": "completed"
+  },
+  "branch_simple_tool": {
+    "branch": "simple_tool_execution",
+    "event_type_sequence": [
+      "tool_start",
+      "tool_delta",
+      "tool_end",
+      "assistant_final"
+    ],
+    "interrupt_flags": {
+      "interrupted": false
+    },
+    "key_decisions": [
+      "branch_selected"
+    ],
+    "node_path_signature": "facade->simple_tool_execution->result",
+    "terminal_status": "completed"
+  },
+  "history_empty": {
+    "branch": "normal_chat",
+    "event_type_sequence": [
+      "assistant_final"
+    ],
+    "interrupt_flags": {
+      "interrupted": false
+    },
+    "key_decisions": [
+      "history_empty"
+    ],
+    "node_path_signature": "metadata->planner_prompt->history",
+    "terminal_status": "completed"
+  },
+  "history_short": {
+    "branch": "normal_chat",
+    "event_type_sequence": [
+      "assistant_final"
+    ],
+    "interrupt_flags": {
+      "interrupted": false
+    },
+    "key_decisions": [
+      "history_present"
+    ],
+    "node_path_signature": "metadata->planner_prompt->history",
+    "terminal_status": "completed"
+  },
+  "history_truncated": {
+    "branch": "normal_chat",
+    "event_type_sequence": [
+      "assistant_final"
+    ],
+    "interrupt_flags": {
+      "interrupted": false
+    },
+    "key_decisions": [
+      "history_present"
+    ],
+    "node_path_signature": "metadata->planner_prompt->history",
+    "terminal_status": "completed"
+  },
+  "hitl_resume_approve": {
+    "branch": "simple_tool_execution",
+    "event_type_sequence": [
+      "interrupt_pending",
+      "resume_complete"
+    ],
+    "interrupt_flags": {
+      "interrupted": true
+    },
+    "key_decisions": [
+      "approve",
+      "no_checkpoint"
+    ],
+    "node_path_signature": "hitl:approve:graph-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "terminal_status": "completed"
+  },
+  "hitl_resume_edit": {
+    "branch": "normal_chat",
+    "event_type_sequence": [
+      "resume_complete"
+    ],
+    "interrupt_flags": {
+      "interrupted": false
+    },
+    "key_decisions": [
+      "edit",
+      "no_checkpoint"
+    ],
+    "node_path_signature": "hitl:edit:graph-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "terminal_status": "completed"
+  },
+  "hitl_resume_skip": {
+    "branch": "simple_tool_execution",
+    "event_type_sequence": [
+      "interrupt_pending",
+      "resume_complete"
+    ],
+    "interrupt_flags": {
+      "interrupted": true
+    },
+    "key_decisions": [
+      "skip",
+      "checkpoint"
+    ],
+    "node_path_signature": "hitl:skip:graph-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "terminal_status": "completed"
+  },
+  "tool_failure_malformed": {
+    "branch": "simple_tool_execution",
+    "event_type_sequence": [
+      "assistant_final"
+    ],
+    "interrupt_flags": {
+      "interrupted": false
+    },
+    "key_decisions": [
+      "finalize"
+    ],
+    "node_path_signature": "simple_tool:format_results|deep:finalize",
+    "terminal_status": "completed"
+  },
+  "tool_retry_call_tool": {
+    "branch": "simple_tool_execution",
+    "event_type_sequence": [
+      "tool_start",
+      "tool_delta",
+      "tool_end",
+      "assistant_final"
+    ],
+    "interrupt_flags": {
+      "interrupted": false
+    },
+    "key_decisions": [
+      "call_tool"
+    ],
+    "node_path_signature": "simple_tool:select_tool_categories|deep:select_categories",
+    "terminal_status": "completed"
+  },
+  "tool_success_finalize": {
+    "branch": "simple_tool_execution",
+    "event_type_sequence": [
+      "assistant_final"
+    ],
+    "interrupt_flags": {
+      "interrupted": false
+    },
+    "key_decisions": [
+      "finalize"
+    ],
+    "node_path_signature": "simple_tool:format_results|deep:finalize",
+    "terminal_status": "completed"
+  }
+}

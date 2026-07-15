@@ -1,0 +1,43 @@
+*******************************************************************
+*  _   _                                            _             *
+* | |_| |__   ___    /\  /\__ _ _ ____   _____  ___| |_ ___ _ __  *
+* | __| '_ \ / _ \  / /_/ / _` | '__\ \ / / _ \/ __| __/ _ \ '__| *
+* | |_| | | |  __/ / __  / (_| | |   \ V /  __/\__ \ ||  __/ |    *
+*  \__|_| |_|\___| \/ /_/ \__,_|_|    \_/ \___||___/\__\___|_|    *
+*                                                                 *
+* theHarvester 4.0.0                                              *
+*******************************************************************
+
+[*] Target: example.com
+
+[*] Searching Google...
+[*] Searching Bing...
+[*] Searching LinkedIn...
+[*] Searching Twitter...
+
+[*] Hosts found:
+------------------
+www.example.com:93.184.216.34
+mail.example.com:93.184.216.35
+api.example.com:93.184.216.36
+
+[*] Emails found:
+------------------
+admin@example.com
+support@example.com
+info@example.com
+
+[*] LinkedIn Users:
+------------------
+John Doe - CEO at Example Inc
+Jane Smith - CTO at Example Inc
+
+[*] IPs found:
+------------------
+93.184.216.34
+93.184.216.35
+93.184.216.36
+
+[*] Total hosts: 3
+[*] Total emails: 3
+[*] Total users: 2

@@ -1,0 +1,10 @@
+## Instructions
+
+Produce the response now, following the four-section structure from the system prompt:
+
+1. ## Action
+2. ## Findings
+3. ## Impact
+4. ## Recommended Next Action
+
+Render each as a level-2 markdown heading exactly as written above. Stay grounded in the supplied sections. Do not restate facts the prior assistant turn already conveyed; advance the engagement. If a canonical prior-turn context block is present, treat it as authoritative and do not claim exact quotes unless that block supports them. If a retry-history block is present, reflect it in `## Action` but do not narrate the full chain. If an active-decision or effective-goal block is present, use it as the anchor for `## Recommended Next Action`.

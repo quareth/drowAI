@@ -1,0 +1,81 @@
+# DrowAI Runner Site package compose (flat layout, no include).
+# Run from package root:
+#   docker compose --project-directory . -f compose.yml up -d
+
+name: drowai-runner-site
+
+services:
+  runner-enrollment:
+    image: ${DROWAI_RUNNER_IMAGE:-drowai/runner:local}
+    build:
+      context: .
+      dockerfile: deploy/images/Dockerfile.runner
+      network: ${DROWAI_DOCKER_BUILD_NETWORK:-host}
+    entrypoint:
+      - sh
+      - -lc
+    command:
+      - |
+        set -e
+        mkdir -p /var/lib/drowai/config /var/lib/drowai/credentials
+        credential=/var/lib/drowai/credentials/runner.secret
+        if [ -s "$$credential" ] && [ -s "$${credential}.runner_id" ] && [ -s "$${credential}.tenant_id" ]; then
+          echo "Stored runner credentials found; keeping existing active runner config."
+          exit 0
+        fi
+        if [ -s /package-config/enrollment.toml ]; then
+          tmp=/var/lib/drowai/config/.enrollment.toml.tmp
+          cp /package-config/enrollment.toml "$$tmp"
+          chmod 600 "$$tmp"
+          mv "$$tmp" /var/lib/drowai/config/enrollment.toml
+          echo "Published packaged runner enrollment to /var/lib/drowai/config/enrollment.toml."
+        else
+          echo "No packaged enrollment found; runner-config service can create one."
+        fi
+    volumes:
+      - /var/lib/drowai:/var/lib/drowai
+      - ./config:/package-config:ro
+
+  runner-config:
+    image: ${DROWAI_RUNNER_IMAGE:-drowai/runner:local}
+    build:
+      context: .
+      dockerfile: deploy/images/Dockerfile.runner
+      network: ${DROWAI_DOCKER_BUILD_NETWORK:-host}
+    profiles:
+      - configure
+    command:
+      - configure
+      - --config
+      - /var/lib/drowai/config/enrollment.toml
+    stdin_open: true
+    tty: true
+    volumes:
+      - /var/lib/drowai:/var/lib/drowai
+
+  runner:
+    image: ${DROWAI_RUNNER_IMAGE:-drowai/runner:local}
+    build:
+      context: .
+      dockerfile: deploy/images/Dockerfile.runner
+      network: ${DROWAI_DOCKER_BUILD_NETWORK:-host}
+    container_name: drowai-runner
+    restart: unless-stopped
+    depends_on:
+      runner-enrollment:
+        condition: service_completed_successfully
+    volumes:
+      - /var/lib/drowai:/var/lib/drowai
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      DROWAI_RUNNER_CONFIG: /var/lib/drowai/config/enrollment.toml
+      DROWAI_RUNNER_ROOT: /var/lib/drowai
+      DROWAI_RUNNER_HOST_BIND_ROOT: /var/lib/drowai
+      DROWAI_RUNNER_DEV_MODE: "false"
+      PYTHONUNBUFFERED: "1"
+    healthcheck:
+      test: ["CMD-SHELL", "test ! -s /var/lib/drowai/config/enrollment.toml || python -m drowai_runner --config /var/lib/drowai/config/enrollment.toml health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3

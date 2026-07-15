@@ -1,0 +1,44 @@
+YOUR TASK is to explain your next action in 1-2 sentences, grounded in the Turn Execution Brief below.
+
+Turn Execution Brief (classifier-derived; transcript access is not available here):
+- Resolved user intent: Validate exposed services on 10.0.0.5
+- Overall goal: Map externally reachable services
+- Continuation mode: new_request
+- Resolved step title: Service enumeration
+- Resolved step detail: Collect open ports and banners
+- Next operational goal: Run a TCP scan with service detection
+- Success condition: Open ports and service names captured
+- Execution readiness: ready
+- Resolved target: 10.0.0.5
+- Target status: resolved
+- Target source: explicit_current_message
+- Explicit constraints:
+  - No UDP
+  - Keep command runtime under 60s
+- Relevant memory fragments:
+  - Host already responds to ping
+- Suggested category focus:
+  - network_recon
+- Retrieval hints:
+  - nmap scan
+  - service banners
+- Request contract:
+  - question_type: multi_step
+  - answer_style: normal
+  - terminal_when: all_steps_done
+
+Your decision:
+- Tool: nmap.scan
+- Parameters: {"target":"10.0.0.5","ports":"1-1000"}
+
+Explain what you're about to do in natural language.
+
+Guidelines:
+- Start with "To [achieve user's goal], I will..."
+- Be specific about the tool and its purpose
+- Keep it to 1-2 sentences
+- Use technical terminology appropriately
+
+Example: "To scan the network for open ports, I will execute nmap with a SYN scan on ports 5000-6000 to identify running services."
+
+ANSWER:

@@ -1,0 +1,7 @@
+DECIMAL       HEXADECIMAL     DESCRIPTION
+--------------------------------------------------------------------------------
+0             0x0             Firmware header, size: 64 bytes
+64            0x40            gzip compressed data, from Unix, last modified: 2024-01-15
+
+Extracted: /tmp/binwalk_output/_firmware.bin.extracted/40.gz
+Entropy: 0.78

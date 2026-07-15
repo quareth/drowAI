@@ -1,0 +1,60 @@
+{
+  "tool_id": "filesystem.search_text",
+  "test_cases": {
+    "minimal": {
+      "description": "Required fields only",
+      "params": {
+        "query": "ERROR",
+        "path": "logs"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "All optional fields populated",
+      "params": {
+        "query": "ERROR",
+        "path": "logs",
+        "recursive": true,
+        "case_sensitive": false,
+        "use_regex": false,
+        "include_globs": [
+          "*.log"
+        ],
+        "exclude_globs": [
+          "*.bak"
+        ],
+        "max_file_bytes": 200000,
+        "max_results": 100,
+        "context_before": 1,
+        "context_after": 1
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [
+      {
+        "description": "Regex search",
+        "params": {
+          "query": "WARN.*",
+          "path": "logs",
+          "use_regex": true
+        },
+        "expected_valid": true
+      }
+    ],
+    "invalid": [
+      {
+        "description": "Absolute path rejected",
+        "params": {
+          "query": "ERROR",
+          "path": "/var/log"
+        },
+        "expected_valid": false,
+        "expected_error": "Absolute paths"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [],
+    "full": []
+  }
+}

@@ -1,0 +1,60 @@
+Burp Suite Proxy - Intercepted Traffic Log
+==========================================
+
+Session: example.com
+Duration: 00:30:00
+Requests Captured: 234
+
+Request #1
+----------
+GET / HTTP/1.1
+Host: example.com
+User-Agent: Mozilla/5.0
+Accept: text/html
+
+Response: 200 OK
+Content-Type: text/html
+Content-Length: 5678
+
+Request #15
+-----------
+POST /login.php HTTP/1.1
+Host: example.com
+Content-Type: application/x-www-form-urlencoded
+
+Body: username=admin&password=test123
+
+Response: 302 Found
+Location: /dashboard.php
+Set-Cookie: PHPSESSID=abc123; HttpOnly
+
+Request #45 [HIGHLIGHTED - POTENTIAL ISSUE]
+-------------------------------------------
+GET /api/users?id=1 HTTP/1.1
+Host: example.com
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+Response: 200 OK
+Content-Type: application/json
+
+Body: {"id":1,"username":"admin","email":"admin@example.com","role":"administrator"}
+
+[!] Potential IDOR - User data returned based on ID parameter
+[!] Authorization header exposed in logs
+
+Request #89 [HIGHLIGHTED - SQL INJECTION ATTEMPT]
+-------------------------------------------------
+GET /products.php?id=1'%20OR%20'1'='1 HTTP/1.1
+Host: example.com
+
+Response: 500 Internal Server Error
+Body: <b>Fatal error</b>: Uncaught mysqli_sql_exception: You have an error in your SQL syntax...
+
+[!] SQL Error exposed - Potential SQL Injection vulnerability
+
+Scan Issues Found:
+------------------
+High:    2 (SQL Injection, IDOR)
+Medium:  3 (Missing headers, Cookie flags)
+Low:     5 (Information disclosure)
+Info:    12 (Various)

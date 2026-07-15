@@ -1,0 +1,30 @@
+{
+  "tool_id": "forensics.forensics_carving_tools.safecopy",
+  "test_cases": {
+    "minimal": {
+      "description": "Default SafeCopy run",
+      "params": {
+        "target": "/dev/sda",
+        "destination": "/tmp/safecopy.img"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Stage 2 with log file",
+      "params": {
+        "target": "/dev/sda",
+        "destination": "/tmp/safecopy.img",
+        "stage": "stage2",
+        "log_file": "/tmp/safecopy.log",
+        "verbose": true
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": []
+  },
+  "expected_command_patterns": {
+    "minimal": [],
+    "full": []
+  }
+}

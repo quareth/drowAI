@@ -1,0 +1,78 @@
+OWASP ZAP Scan Report
+=====================
+
+Target: http://example.com
+Scan Policy: Default Policy
+Start Time: 2024-01-15 10:00:00
+End Time: 2024-01-15 10:45:00
+
+Summary of Alerts
+-----------------
+High:   3
+Medium: 8
+Low:    15
+Informational: 23
+
+High Risk Alerts
+----------------
+
+1. SQL Injection
+   Risk: High
+   Confidence: High
+   URL: http://example.com/products.php
+   Parameter: id
+   Attack: 1' OR '1'='1
+   Evidence: SQL syntax error in response
+   Solution: Use parameterized queries
+   Reference: CWE-89
+
+2. Cross Site Scripting (Reflected)
+   Risk: High
+   Confidence: Medium
+   URL: http://example.com/search.php
+   Parameter: q
+   Attack: <script>alert(1)</script>
+   Evidence: Script tag reflected in response
+   Solution: Encode output properly
+   Reference: CWE-79
+
+3. Remote OS Command Injection
+   Risk: High
+   Confidence: Low
+   URL: http://example.com/admin/backup.php
+   Parameter: filename
+   Attack: test;id
+   Evidence: Command output in response
+   Solution: Validate and sanitize input
+   Reference: CWE-78
+
+Medium Risk Alerts
+------------------
+
+1. X-Frame-Options Header Not Set
+   URL: http://example.com/
+   Solution: Set X-Frame-Options header
+
+2. Content Security Policy Header Not Set
+   URL: http://example.com/
+   Solution: Implement CSP header
+
+3. Missing Anti-CSRF Tokens
+   URL: http://example.com/admin/settings.php
+   Solution: Implement CSRF tokens
+
+4. Cookie Without Secure Flag
+   URL: http://example.com/login.php
+   Cookie: PHPSESSID
+
+Spider Results:
+---------------
+URLs Found: 156
+Unique Domains: 1
+Pages Crawled: 145
+
+Scan Statistics:
+----------------
+Total Requests: 12,456
+Alerts Generated: 49
+Duration: 45 minutes

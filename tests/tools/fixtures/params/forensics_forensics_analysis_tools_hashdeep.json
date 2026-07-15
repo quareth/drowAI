@@ -1,0 +1,29 @@
+{
+  "tool_id": "forensics.forensics_analysis_tools.hashdeep",
+  "test_cases": {
+    "minimal": {
+      "description": "Hash a single directory",
+      "params": {
+        "target": "/path/to/dir"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "SHA1 recursive with additional paths",
+      "params": {
+        "target": "/path/to/dir",
+        "hash_algorithm": "sha1",
+        "recursive": true,
+        "additional_paths": ["/path/to/another"],
+        "verbose": true
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": []
+  },
+  "expected_command_patterns": {
+    "minimal": [],
+    "full": []
+  }
+}

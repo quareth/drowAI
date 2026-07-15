@@ -1,0 +1,13 @@
+Conversation (oldest -> newest, act on the turn tagged latest=true):
+user: scan 10.0.0.1
+assistant: I will run a port scan.
+
+Task Details:
+- Target: 10.0.0.1
+- Phase: phase3
+- Constraints: {"max_tool_calls": 3}
+- Relevant Prior Findings: 1 items
+- [fresh] port_open 10.0.0.1:80/tcp (service=http)
+
+Based on the latest user turn in the conversation above, call resolve_tools with the appropriate capability to discover available tools.
+Consider what the user actually wants to accomplish, not hardcoded action types.

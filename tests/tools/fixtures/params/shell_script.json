@@ -1,0 +1,106 @@
+{
+  "tool_id": "shell.script",
+  "test_cases": {
+    "minimal": {
+      "description": "Required fields only - simple script",
+      "params": {
+        "script": "#!/bin/bash\necho 'Hello World'"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "All optional fields populated",
+      "params": {
+        "script": "#!/bin/bash\nset -e\necho 'Starting...'\nls -la\necho 'Done'",
+        "interpreter": "bash",
+        "cwd": "artifacts",
+        "env": {"DEBUG": "1"},
+        "timeout_sec": 120,
+        "transport": "direct",
+        "strict_mode": true
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [
+      {
+        "description": "Python script",
+        "params": {
+          "script": "#!/usr/bin/env python3\nimport os\nprint(os.getcwd())",
+          "interpreter": "python3"
+        },
+        "expected_valid": true
+      },
+      {
+        "description": "Shell script with strict mode",
+        "params": {
+          "script": "echo 'test'\nls -la\npwd",
+          "interpreter": "sh",
+          "strict_mode": true
+        },
+        "expected_valid": true
+      },
+      {
+        "description": "Multi-line script with variables",
+        "params": {
+          "script": "#!/bin/bash\nTARGET=localhost\nping -c 1 $TARGET\necho \"Pinged $TARGET\"",
+          "env": {"TARGET": "127.0.0.1"}
+        },
+        "expected_valid": true
+      },
+      {
+        "description": "PTY transport for visibility",
+        "params": {
+          "script": "#!/bin/bash\nfor i in 1 2 3; do echo $i; sleep 0.1; done",
+          "transport": "pty"
+        },
+        "expected_valid": true
+      },
+      {
+        "description": "Long-running script with timeout",
+        "params": {
+          "script": "#!/bin/bash\nsleep 2\necho 'completed'",
+          "timeout_sec": 300
+        },
+        "expected_valid": true
+      }
+    ],
+    "invalid": [
+      {
+        "description": "Script with rm -rf / blocked",
+        "params": {
+          "script": "#!/bin/bash\nrm -rf /"
+        },
+        "expected_valid": false,
+        "expected_error": "denylist"
+      },
+      {
+        "description": "Script with privilege escalation blocked",
+        "params": {
+          "script": "#!/bin/bash\nsudo su\nwhoami"
+        },
+        "expected_valid": false,
+        "expected_error": "denylist"
+      },
+      {
+        "description": "Script with network listener blocked",
+        "params": {
+          "script": "#!/bin/bash\nnc -l -p 4444"
+        },
+        "expected_valid": false,
+        "expected_error": "denylist"
+      },
+      {
+        "description": "Script with reboot blocked",
+        "params": {
+          "script": "#!/bin/bash\nreboot"
+        },
+        "expected_valid": false,
+        "expected_error": "denylist"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": ["bash"],
+    "full": ["bash"]
+  }
+}

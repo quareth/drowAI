@@ -1,0 +1,36 @@
+Deepmagic Information Gathering Tool
+"There be some deep magic going on"
+
+HostIP:93.184.216.34
+HostName:example.com
+
+Gathered Inet-whois information for example.com
+---------------------------------
+Domain Name: EXAMPLE.COM
+Registry Domain ID: 2336799_DOMAIN_COM-VRSN
+Registrar WHOIS Server: whois.iana.org
+Registrar URL: http://www.iana.org
+Updated Date: 2024-01-10T15:32:12Z
+Creation Date: 1995-08-14T04:00:00Z
+Registry Expiry Date: 2025-08-13T04:00:00Z
+Registrar: RESERVED-Internet Assigned Numbers Authority
+
+Gathered Subdomain information for example.com
+---------------------------------
+www.example.com
+mail.example.com
+ftp.example.com
+
+Gathered E-Mail information for example.com
+---------------------------------
+admin@example.com
+webmaster@example.com
+support@example.com
+
+Gathered TCP Port information for 93.184.216.34
+---------------------------------
+Port: 22/tcp    open    ssh
+Port: 80/tcp    open    http
+Port: 443/tcp   open    https
+
+All data has been gathered

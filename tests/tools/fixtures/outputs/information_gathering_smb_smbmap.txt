@@ -1,0 +1,26 @@
+[*] Detected 1 hosts serving SMB
+[*] Established 1 SMB session(s)
+
+[+] IP: 192.168.1.100:445	Name: fileserver.example.com   	Status: Authenticated
+	Disk                                                  	Permissions	Comment
+	----                                                  	-----------	-------
+	ADMIN$                                            	NO ACCESS	Remote Admin
+	C$                                                	NO ACCESS	Default share
+	IPC$                                              	READ ONLY	Remote IPC
+	print$                                            	READ ONLY	Printer Drivers
+	Public                                            	READ, WRITE	Public Documents
+	Users                                             	READ ONLY	User Home Directories
+
+[+] Found interesting file: \\192.168.1.100\Public\passwords.txt
+[+] Found interesting file: \\192.168.1.100\Public\backup.zip
+[+] Found interesting file: \\192.168.1.100\Users\admin\Desktop\credentials.txt
+
+[*] Downloading files...
+[+] Downloaded: passwords.txt (1.2 KB)
+[+] Downloaded: backup.zip (1.0 MB)
+
+Summary:
+--------
+Total shares: 6
+Accessible shares: 4
+Interesting files found: 3

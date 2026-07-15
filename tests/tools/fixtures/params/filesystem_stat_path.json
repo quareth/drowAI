@@ -1,0 +1,44 @@
+{
+  "tool_id": "filesystem.stat_path",
+  "test_cases": {
+    "minimal": {
+      "description": "Required fields only",
+      "params": {
+        "path": "reports/summary.txt"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "All optional fields populated",
+      "params": {
+        "path": "reports/summary.txt",
+        "follow_symlinks": true
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [
+      {
+        "description": "Stat without following symlinks",
+        "params": {
+          "path": "reports/summary.txt",
+          "follow_symlinks": false
+        },
+        "expected_valid": true
+      }
+    ],
+    "invalid": [
+      {
+        "description": "Absolute path rejected",
+        "params": {
+          "path": "/etc/passwd"
+        },
+        "expected_valid": false,
+        "expected_error": "Absolute paths"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [],
+    "full": []
+  }
+}

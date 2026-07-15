@@ -1,0 +1,37 @@
+{
+  "tool_id": "system_services.snmp_enum",
+  "test_cases": {
+    "minimal": {
+      "description": "SNMP v2c walk with default OID",
+      "params": {
+        "target": "192.168.1.1"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "SNMP v3 authenticated walk",
+      "params": {
+        "target": "192.168.1.1",
+        "version": "3",
+        "username": "snmpuser",
+        "auth_protocol": "sha",
+        "auth_password": "authpass",
+        "priv_protocol": "aes",
+        "priv_password": "privpass",
+        "security_level": "authPriv",
+        "oid": "1.3.6.1.2.1.1"
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": []
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^snmpwalk"
+    ],
+    "full": [
+      "^snmpwalk"
+    ]
+  }
+}

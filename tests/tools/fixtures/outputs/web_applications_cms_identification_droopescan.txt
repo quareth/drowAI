@@ -1,0 +1,21 @@
+[+] No plugins found.
+
+[+] Themes found:
+    bartik http://example.com/themes/bartik/
+        http://example.com/themes/bartik/bartik.info.yml
+    seven http://example.com/themes/seven/
+        http://example.com/themes/seven/seven.info.yml
+    claro http://example.com/themes/claro/
+        http://example.com/themes/claro/claro.info.yml
+
+[+] Possible version(s):
+    10.1.0
+    10.1.1
+    10.1.2
+
+[+] Possible interesting urls found:
+    Default admin - http://example.com/user/login
+    Default changelog - http://example.com/CHANGELOG.txt
+    Default admin - http://example.com/admin/
+
+[+] Scan finished (0:00:45.123456 elapsed)

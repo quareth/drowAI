@@ -1,0 +1,50 @@
+{
+  "tool_id": "filesystem.copy_path",
+  "test_cases": {
+    "minimal": {
+      "description": "Required fields only",
+      "params": {
+        "src": "reports/summary.txt",
+        "dest": "reports/summary_copy.txt"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "All optional fields populated",
+      "params": {
+        "src": "reports/summary.txt",
+        "dest": "reports/archive/summary.txt",
+        "overwrite": true,
+        "create_dest_parents": true,
+        "preserve_permissions": true
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [
+      {
+        "description": "Copy directory with overwrite",
+        "params": {
+          "src": "reports",
+          "dest": "reports_backup",
+          "overwrite": true
+        },
+        "expected_valid": true
+      }
+    ],
+    "invalid": [
+      {
+        "description": "Absolute dest path rejected",
+        "params": {
+          "src": "reports/summary.txt",
+          "dest": "/tmp/summary.txt"
+        },
+        "expected_valid": false,
+        "expected_error": "Absolute paths"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [],
+    "full": []
+  }
+}

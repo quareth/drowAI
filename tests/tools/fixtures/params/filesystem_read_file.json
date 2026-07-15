@@ -1,0 +1,67 @@
+{
+  "tool_id": "filesystem.read_file",
+  "test_cases": {
+    "minimal": {
+      "description": "Required fields only - workspace-relative path",
+      "params": {
+        "path": "notes.txt"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "All optional fields populated",
+      "params": {
+        "path": "configs/app.yaml",
+        "read_mode": "head",
+        "num_lines": 50,
+        "include_line_numbers": true,
+        "encoding": "utf-8"
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [
+      {
+        "description": "Grep mode with case-insensitive matching",
+        "params": {
+          "path": "logs/app.log",
+          "read_mode": "grep",
+          "grep_pattern": "ERROR",
+          "case_sensitive": false
+        },
+        "expected_valid": true
+      },
+      {
+        "description": "Range mode for specific lines",
+        "params": {
+          "path": "logs/app.log",
+          "read_mode": "range",
+          "start_line": 10,
+          "num_lines": 5
+        },
+        "expected_valid": true
+      }
+    ],
+    "invalid": [
+      {
+        "description": "Path traversal attempt",
+        "params": {
+          "path": "../../../etc/passwd"
+        },
+        "expected_valid": false,
+        "expected_error": "escapes the workspace"
+      },
+      {
+        "description": "Absolute path rejected",
+        "params": {
+          "path": "/etc/passwd"
+        },
+        "expected_valid": false,
+        "expected_error": "Absolute paths"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [],
+    "full": []
+  }
+}

@@ -1,0 +1,5 @@
+bulk_extractor 2.0
+email: 12
+url: 8
+credit_card: 0
+100 processed

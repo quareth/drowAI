@@ -1,0 +1,2 @@
+dns query for example.com
+dns response sent for example.com

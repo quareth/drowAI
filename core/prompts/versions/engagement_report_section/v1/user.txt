@@ -1,0 +1,22 @@
+Create the engagement report section from this bounded report context and fixed section plan.
+
+Instructions:
+- Use only report_context_json and section_plan_json.
+- Follow section_plan_json for section type, title, order, purpose, required block types, and citation expectations.
+- Return valid structured JSON only.
+- Include source refs on every claim-bearing section element.
+- Do not use task_memo_ids as the only source refs for reportable section or finding content; pair them with supplied knowledge_refs or evidence_refs.
+- Use only source refs that appear in report_context_json.
+- Keep source refs out of all Markdown/title/note text; they belong only in JSON source_refs fields.
+- If a memo is marked limited, use it only for limitations or unsupported context.
+- Exclude candidate-only findings unless report_context_json.include_candidate_findings is true.
+- Treat compatible_evidence_refs as citation metadata only. Do not include raw tool output, stdout/stderr, commands, artifact bodies, XML, scanner logs, or internal tool identifiers in report text.
+- Do not fetch files, browse, call tools, inspect workspaces, or choose the report structure.
+
+<ENGAGEMENT_REPORT_CONTEXT_JSON>
+{report_context_json}
+</ENGAGEMENT_REPORT_CONTEXT_JSON>
+
+<ENGAGEMENT_REPORT_SECTION_PLAN_JSON>
+{section_plan_json}
+</ENGAGEMENT_REPORT_SECTION_PLAN_JSON>

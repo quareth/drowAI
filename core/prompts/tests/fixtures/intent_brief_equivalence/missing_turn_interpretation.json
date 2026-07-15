@@ -1,0 +1,55 @@
+{
+  "planner_surface": {
+    "blocking_reason": null,
+    "continuation_mode": "ambiguous",
+    "execution_readiness": "ambiguous",
+    "explicit_constraints": [],
+    "next_operational_goal": null,
+    "overall_goal": null,
+    "relevant_memory_fragments": [],
+    "request_contract": {
+      "answer_style": "normal",
+      "question_type": "multi_step",
+      "terminal_when": "all_steps_done"
+    },
+    "resolved_step_detail": null,
+    "resolved_step_title": null,
+    "resolved_target": "10.0.0.5",
+    "resolved_user_intent": null,
+    "retrieval_hints": [],
+    "success_condition": null,
+    "target_source": "explicit_current_message",
+    "target_status": "resolved"
+  },
+  "ptr_surface": {
+    "explicit_constraints": [],
+    "next_operational_goal": null,
+    "resolved_target": "10.0.0.5",
+    "resolved_user_intent": null,
+    "success_condition": null,
+    "target_status": "resolved"
+  },
+  "tool_surface": {
+    "blocking_reason": null,
+    "continuation_mode": "ambiguous",
+    "execution_readiness": "ambiguous",
+    "explicit_constraints": [],
+    "next_operational_goal": null,
+    "overall_goal": null,
+    "relevant_memory_fragments": [],
+    "request_contract": {
+      "answer_style": "normal",
+      "question_type": "multi_step",
+      "terminal_when": "all_steps_done"
+    },
+    "resolved_step_detail": null,
+    "resolved_step_title": null,
+    "resolved_target": "10.0.0.5",
+    "resolved_user_intent": null,
+    "retrieval_hints": [],
+    "success_condition": null,
+    "suggested_category_focus": [],
+    "target_source": "explicit_current_message",
+    "target_status": "resolved"
+  }
+}

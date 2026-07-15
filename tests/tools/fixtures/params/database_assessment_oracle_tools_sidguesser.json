@@ -1,0 +1,50 @@
+{
+  "tool_id": "database_assessment.oracle_tools.sidguesser",
+  "test_cases": {
+    "minimal": {
+      "description": "Basic sidguesser invocation",
+      "params": {
+        "target": "unused",
+        "host": "192.168.1.100"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Custom dictionary with explicit port",
+      "params": {
+        "target": "unused",
+        "host": "192.168.1.100",
+        "port": 1521,
+        "dictionary": "/usr/share/metasploit-framework/data/wordlists/sid.txt",
+        "timeout": 300
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": [
+      {
+        "name": "invalid_port",
+        "params": {
+          "target": "unused",
+          "host": "192.168.1.100",
+          "port": 70000
+        },
+        "expected_error": "less than or equal"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^sidguesser",
+      "-i",
+      "-p",
+      "-d"
+    ],
+    "full": [
+      "^sidguesser",
+      "-i",
+      "-p",
+      "-d"
+    ]
+  }
+}

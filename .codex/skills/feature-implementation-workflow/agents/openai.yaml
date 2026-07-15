@@ -1,0 +1,4 @@
+interface:
+  display_name: "Feature Implementation Workflow"
+  short_description: "Run DrowAI implementation task flow"
+  default_prompt: "Use $feature-implementation-workflow to continue the current implementation guide task."

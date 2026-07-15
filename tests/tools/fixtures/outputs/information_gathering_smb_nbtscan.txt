@@ -1,0 +1,13 @@
+Doing NBT name scan for addresses from 192.168.1.0/24
+
+IP address       NetBIOS Name     Server    User             MAC address
+------------------------------------------------------------------------------
+192.168.1.1      ROUTER           <server>  <unknown>        00:11:22:33:44:55
+192.168.1.10     SERVER           <server>  ADMIN            00:11:22:33:44:56
+192.168.1.15     WORKSTATION      <server>  USER1            00:11:22:33:44:57
+192.168.1.20     DESKTOP-ABC      <server>  JOHN             00:11:22:33:44:58
+192.168.1.100    FILESERVER       <server>  ADMINISTRATOR    00:11:22:33:44:59
+192.168.1.150    PRINTER          <server>  <unknown>        00:11:22:33:44:5a
+
+Scan completed in 15 seconds
+Hosts found: 6

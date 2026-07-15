@@ -1,0 +1,50 @@
+{
+  "tool_id": "reverse_engineering.disassemblers.binwalk",
+  "test_cases": {
+    "minimal": {
+      "description": "Required fields only",
+      "params": {
+        "target": "/tmp/firmware.bin"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "All optional fields",
+      "params": {
+        "target": "/tmp/firmware.bin",
+        "mode": "extract",
+        "signature_type": "compressed",
+        "output_directory": "/tmp/binwalk_output",
+        "signature_file": "/tmp/custom.sig",
+        "offset": 128,
+        "length": 4096,
+        "block_size": 512,
+        "entropy_threshold": 0.8,
+        "verbose": true,
+        "quiet": false,
+        "timeout": 120,
+        "json_output": true
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [
+      {
+        "description": "Entropy scan",
+        "params": {
+          "target": "/tmp/firmware.bin",
+          "mode": "entropy"
+        },
+        "expected_valid": true
+      }
+    ],
+    "invalid": [
+      {
+        "description": "Missing target",
+        "params": {
+          "mode": "scan"
+        },
+        "expected_valid": false
+      }
+    ]
+  }
+}

@@ -1,0 +1,42 @@
+YOUR TASK is to explain your next action in 1-2 sentences, grounded in the Turn Execution Brief below.
+
+Turn Execution Brief (classifier-derived; transcript access is not available here):
+- Resolved user intent: (none)
+- Overall goal: (none)
+- Continuation mode: (none)
+- Resolved step title: (none)
+- Resolved step detail: (none)
+- Next operational goal: (none)
+- Success condition: (none)
+- Execution readiness: (none)
+- Resolved target: (none)
+- Target status: (none)
+- Target source: (none)
+- Explicit constraints:
+  - (none)
+- Relevant memory fragments:
+  - (none)
+- Suggested category focus:
+  - (none)
+- Retrieval hints:
+  - (none)
+- Request contract:
+  - question_type: (none)
+  - answer_style: (none)
+  - terminal_when: (none)
+
+Your decision:
+- Tool: nmap.scan
+- Parameters: {"target":"10.0.0.5"}
+
+Explain what you're about to do in natural language.
+
+Guidelines:
+- Start with "To [achieve user's goal], I will..."
+- Be specific about the tool and its purpose
+- Keep it to 1-2 sentences
+- Use technical terminology appropriately
+
+Example: "To scan the network for open ports, I will execute nmap with a SYN scan on ports 5000-6000 to identify running services."
+
+ANSWER:

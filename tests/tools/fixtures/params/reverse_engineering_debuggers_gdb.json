@@ -1,0 +1,47 @@
+{
+  "tool_id": "reverse_engineering.debuggers.gdb",
+  "test_cases": {
+    "minimal": {
+      "description": "Required fields only",
+      "params": {
+        "target": "/tmp/sample.bin"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "All optional fields",
+      "params": {
+        "target": "/tmp/sample.bin",
+        "mode": "info",
+        "info_type": "functions",
+        "function_name": "main",
+        "script_file": "/tmp/script.gdb",
+        "gdb_script": "info registers\ninfo files",
+        "output_file": "/tmp/gdb_output.txt",
+        "verbose": false,
+        "quiet": true,
+        "timeout": 120
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [
+      {
+        "description": "Symbols mode",
+        "params": {
+          "target": "/tmp/sample.bin",
+          "mode": "symbols"
+        },
+        "expected_valid": true
+      }
+    ],
+    "invalid": [
+      {
+        "description": "Missing target",
+        "params": {
+          "mode": "disassemble"
+        },
+        "expected_valid": false
+      }
+    ]
+  }
+}

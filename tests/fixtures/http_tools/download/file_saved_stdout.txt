@@ -1,0 +1,2 @@
+saved file
+__DROWAI_HTTP_DOWNLOAD_META__200	https://downloads.example.com/tool.bin	1024	0	0.210

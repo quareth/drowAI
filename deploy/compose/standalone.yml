@@ -1,0 +1,178 @@
+# Standalone deployment profile.
+# All-in-one stack: postgres, backend, frontend, and managed runner.
+#
+# Usage:
+#   docker compose --project-directory . -f deploy/compose/standalone.yml up -d
+
+name: drowai-standalone
+
+services:
+  config-init:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      args:
+        INSTALL_DOCKER_CLI: "false"
+    container_name: drowai-config-init
+    entrypoint:
+      - python
+      - -m
+      - backend.config_bootstrap
+    command:
+      - init
+      - --profile
+      - single_host
+      - --docker
+      - --postgres-host
+      - postgres
+    environment:
+      DROWAI_CONFIG_DIR: /var/lib/drowai/config
+      DROWAI_SECRETS_DIR: /var/lib/drowai/secrets
+      POSTGRES_USER: drowai_user
+      POSTGRES_DB: drowai
+    volumes:
+      - drowai_config:/var/lib/drowai/config
+      - drowai_secrets:/var/lib/drowai/secrets
+    networks:
+      - drowai-data
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: drowai-postgres
+    restart: unless-stopped
+    stop_grace_period: 90s
+    depends_on:
+      config-init:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_USER: drowai_user
+      POSTGRES_PASSWORD_FILE: /var/lib/drowai/secrets/postgres_password
+      POSTGRES_DB: drowai
+    ports:
+      - "${POSTGRES_BIND_ADDRESS:-127.0.0.1}:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - drowai_secrets:/var/lib/drowai/secrets:ro
+      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U drowai_user -d drowai
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+    networks:
+      - drowai-data
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      args:
+        INSTALL_DOCKER_CLI: "false"
+    container_name: drowai-backend
+    restart: unless-stopped
+    depends_on:
+      config-init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    environment:
+      DROWAI_CONFIG_DIR: /var/lib/drowai/config
+      DROWAI_SECRETS_DIR: /var/lib/drowai/secrets
+      DROWAI_DEPLOYMENT_PROFILE: single_host
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: drowai_user
+      POSTGRES_DB: drowai
+      DROWAI_UVICORN_RELOAD: "false"
+      TASK_RUNTIME_PLACEMENT_MODE_DEFAULT: runner
+      ENABLE_CLOUD_RUNNER_CONTROL: "true"
+      RUNNER_TOOL_COMMAND_ENABLED: "true"
+      DATA_PLANE_OBJECT_STORE_BACKEND: local
+      EXECUTION_MODE: ${EXECUTION_MODE:-file}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      DEBUG: ${DEBUG:-false}
+    volumes:
+      - drowai_config:/var/lib/drowai/config
+      - drowai_secrets:/var/lib/drowai/secrets
+      - backend_logs:/app/backend/log
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 5
+    networks:
+      - drowai-platform
+      - drowai-data
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      target: production
+    container_name: drowai-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+    ports:
+      - "${FRONTEND_PORT:-80}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:80"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 5
+    networks:
+      - drowai-platform
+
+  runner:
+    image: ${DROWAI_RUNNER_IMAGE:-drowai/runner:local}
+    build:
+      context: .
+      dockerfile: deploy/images/Dockerfile.runner
+    container_name: drowai-runner
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      - /var/lib/drowai:/var/lib/drowai
+      - drowai_config:/var/lib/drowai/config
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      DROWAI_RUNNER_CONFIG: /var/lib/drowai/config/enrollment.toml
+      DROWAI_RUNNER_ROOT: /var/lib/drowai
+      DROWAI_RUNNER_HOST_BIND_ROOT: /var/lib/drowai
+      DROWAI_RUNNER_DEV_MODE: "false"
+      PYTHONUNBUFFERED: "1"
+    healthcheck:
+      test: ["CMD-SHELL", "test ! -s /var/lib/drowai/config/enrollment.toml || python -m drowai_runner --config /var/lib/drowai/config/enrollment.toml health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+    networks:
+      - drowai-platform
+
+networks:
+  drowai-platform:
+    driver: bridge
+    name: drowai-platform
+  drowai-data:
+    driver: bridge
+    name: drowai-data
+
+volumes:
+  postgres_data:
+    name: drowai-postgres-data
+  backend_logs:
+    name: drowai-backend-logs
+  drowai_config:
+    name: drowai-config
+  drowai_secrets:
+    name: drowai-secrets

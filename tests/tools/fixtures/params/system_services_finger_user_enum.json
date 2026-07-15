@@ -1,0 +1,31 @@
+{
+  "tool_id": "system_services.finger_user_enum",
+  "test_cases": {
+    "minimal": {
+      "description": "Enumerate users",
+      "params": {
+        "target": "192.168.1.1"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Query specific user in long format",
+      "params": {
+        "target": "192.168.1.1",
+        "username": "root",
+        "long_format": true
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": []
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^finger"
+    ],
+    "full": [
+      "^finger"
+    ]
+  }
+}

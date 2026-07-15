@@ -1,0 +1,30 @@
+Fierce 1.5.0 - https://github.com/mschwager/fierce
+
+[+] DNS Servers for example.com:
+        ns1.example.com
+        ns2.example.com
+
+[+] Attempting zone transfer against ns1.example.com...
+        Unsuccessful
+
+[+] Attempting zone transfer against ns2.example.com...
+        Unsuccessful
+
+[+] Starting subdomain enumeration...
+
+Found: www.example.com (93.184.216.34)
+Found: mail.example.com (93.184.216.35)
+Found: ftp.example.com (93.184.216.36)
+Found: api.example.com (93.184.216.37)
+Found: admin.example.com (93.184.216.38)
+
+[+] Nearby IP sweep:
+        93.184.216.33: No PTR
+        93.184.216.34: www.example.com
+        93.184.216.35: mail.example.com
+        93.184.216.36: ftp.example.com
+
+[+] Summary:
+        Subdomains found: 5
+        IPs discovered: 5
+        Duration: 32 seconds

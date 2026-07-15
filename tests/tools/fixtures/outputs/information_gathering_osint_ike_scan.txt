@@ -1,0 +1,23 @@
+Starting ike-scan 1.9.5 with 1 hosts (http://www.nta-monitor.com/tools/ike-scan/)
+192.168.1.1	Main Mode Handshake returned
+	HDR=(CKY-R=1234567890abcdef)
+	SA=(Enc=3DES Hash=SHA1 Auth=PSK Group=2:modp1024 LifeType=Seconds LifeDuration=28800)
+	VID=12f5f28c457168a9702d9fe274cc0100 (Cisco Unity)
+	VID=afcad71368a1f1c96b8696fc77570100 (Dead Peer Detection v1.0)
+	VID=4048b7d56ebce88525e7de7f00d6c2d3c0000000 (IKE Fragmentation)
+
+192.168.1.10	Main Mode Handshake returned
+	HDR=(CKY-R=fedcba0987654321)
+	SA=(Enc=AES-CBC-256 Hash=SHA256 Auth=PSK Group=14:modp2048 LifeType=Seconds LifeDuration=86400)
+	VID=4865617274426561745f4e6f74696679 (Heartbeat Notify)
+
+Ending ike-scan 1.9.5: 2 hosts scanned in 5.123 seconds (0.39 hosts/sec). 2 returned handshake; 0 returned notify
+
+Summary:
+--------
+Hosts Scanned: 2
+IKE Responders: 2
+Encryption Types Found:
+  - 3DES (1 host)
+  - AES-CBC-256 (1 host)
+Authentication: PSK (Pre-Shared Key)

@@ -1,0 +1,16 @@
+Compress the main conversation context below in one pass.
+
+Context to compress:
+{conversation_history}
+
+Projected current user message:
+{projected_user_message}
+
+Target token budget (conversation-model estimate):
+- Minimum tokens: {target_min_tokens}
+- Maximum tokens: {target_max_tokens}
+- Final output must be within this min/max range.
+
+Target guidance:
+- Compress enough for continuity, but prioritize factual fidelity.
+- Keep unresolved work and next-step dependencies explicit.

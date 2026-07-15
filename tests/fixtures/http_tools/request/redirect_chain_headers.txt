@@ -1,0 +1,9 @@
+HTTP/1.1 301 Moved Permanently
+Location: https://example.com/new
+
+HTTP/2 200
+content-type: text/plain
+content-length: 12
+
+hello world!
+__DROWAI_HTTP_META__200	https://example.com/new	text/plain	12	1	0.121

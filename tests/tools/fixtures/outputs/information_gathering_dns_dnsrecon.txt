@@ -1,0 +1,20 @@
+[*] DNSRecon 1.1.4 - DNS Enumeration Script
+[*] Performing General Enumeration against: example.com
+[-] DNSSEC is not configured for example.com
+[*]      SOA ns1.example.com 93.184.216.1
+[*]      NS ns1.example.com 93.184.216.1
+[*]      NS ns2.example.com 93.184.216.2
+[*]      MX mail.example.com 93.184.216.35
+[*]      A example.com 93.184.216.34
+[*]      TXT example.com v=spf1 include:_spf.example.com ~all
+[*] Enumerating SRV Records
+[+]      SRV _ldap._tcp.example.com ldap.example.com 93.184.216.40 389
+[*] Performing Zone Transfer against NS server(s)
+[*]      Trying Zone Transfer for example.com on ns1.example.com
+[-] Zone Transfer Failed!
+[*]      Trying Zone Transfer for example.com on ns2.example.com
+[-] Zone Transfer Failed!
+[*] Performing TLD Brute Force Enumeration
+[+] 0 Records Found
+[*] Standard Enumeration finished
+[*] 8 Records found

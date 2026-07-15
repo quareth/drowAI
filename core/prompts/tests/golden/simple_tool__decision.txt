@@ -1,0 +1,17 @@
+Choose the single most appropriate tool for the ONE focused next step in this direct executor turn.
+
+User request: Scan example.com for open ports.
+Capability focus: direct_executor
+Intent hints: nmap
+Targets: example.com
+Eligible routes: direct_executor
+
+Available tool candidates:
+nmap.scan
+
+Available catalog:
+- nmap (nmap.scan): Network mapper.
+
+Select the best tool for a single focused next step that directly closes a concrete gap in the user's stated goal.
+Name the specific gap the call will close. If no such gap exists, do NOT select a tool; instead stop because the goal is satisfied or no further justified action exists.
+When a tool call is warranted, include a clear tool_intent (description, and target/focus when applicable) with the corrected or refined approach.

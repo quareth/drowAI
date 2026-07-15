@@ -1,0 +1,55 @@
+{
+  "tool_id": "reverse_engineering.disassemblers.radare2",
+  "test_cases": {
+    "minimal": {
+      "description": "Required fields only",
+      "params": {
+        "target": "/tmp/sample.bin"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "All optional fields",
+      "params": {
+        "target": "/tmp/sample.bin",
+        "mode": "functions",
+        "start_address": "0x400000",
+        "end_address": "0x401000",
+        "search_pattern": "90",
+        "function_name": "main",
+        "section_name": ".text",
+        "script_file": "/tmp/script.r2",
+        "commands": "afl;iz",
+        "architecture": "x86",
+        "bits": 64,
+        "endian": "little",
+        "output_file": "/tmp/radare2_output.txt",
+        "verbose": false,
+        "quiet": true,
+        "json_output": true,
+        "timeout": 120
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [
+      {
+        "description": "Disassemble without json",
+        "params": {
+          "target": "/tmp/sample.bin",
+          "mode": "disassemble",
+          "json_output": false
+        },
+        "expected_valid": true
+      }
+    ],
+    "invalid": [
+      {
+        "description": "Missing target",
+        "params": {
+          "mode": "analyze"
+        },
+        "expected_valid": false
+      }
+    ]
+  }
+}

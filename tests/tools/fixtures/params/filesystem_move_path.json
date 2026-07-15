@@ -1,0 +1,49 @@
+{
+  "tool_id": "filesystem.move_path",
+  "test_cases": {
+    "minimal": {
+      "description": "Required fields only",
+      "params": {
+        "src": "reports/old.txt",
+        "dest": "reports/new.txt"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "All optional fields populated",
+      "params": {
+        "src": "reports/old.txt",
+        "dest": "reports/archive/new.txt",
+        "overwrite": true,
+        "create_dest_parents": true
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [
+      {
+        "description": "Move with overwrite",
+        "params": {
+          "src": "reports/old.txt",
+          "dest": "reports/new.txt",
+          "overwrite": true
+        },
+        "expected_valid": true
+      }
+    ],
+    "invalid": [
+      {
+        "description": "Path traversal attempt",
+        "params": {
+          "src": "../outside.txt",
+          "dest": "reports/new.txt"
+        },
+        "expected_valid": false,
+        "expected_error": "escapes the workspace"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [],
+    "full": []
+  }
+}

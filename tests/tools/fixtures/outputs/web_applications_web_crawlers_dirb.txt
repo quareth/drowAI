@@ -1,0 +1,52 @@
+
+-----------------
+DIRB v2.22
+By The Dark Raver
+-----------------
+
+START_TIME: Mon Jan 15 10:30:00 2024
+URL_BASE: http://example.com/
+WORDLIST_FILES: /usr/share/wordlists/dirb/common.txt
+
+-----------------
+
+GENERATED WORDS: 4612
+
+---- Scanning URL: http://example.com/ ----
++ http://example.com/.htaccess (CODE:403|SIZE:283)
++ http://example.com/.htpasswd (CODE:403|SIZE:283)
++ http://example.com/admin (CODE:301|SIZE:316)
++ http://example.com/api (CODE:301|SIZE:314)
++ http://example.com/backup (CODE:301|SIZE:317)
++ http://example.com/cgi-bin/ (CODE:403|SIZE:283)
++ http://example.com/config (CODE:301|SIZE:317)
++ http://example.com/css (CODE:301|SIZE:314)
++ http://example.com/data (CODE:301|SIZE:315)
++ http://example.com/images (CODE:301|SIZE:317)
++ http://example.com/includes (CODE:301|SIZE:319)
++ http://example.com/index.html (CODE:200|SIZE:1234)
++ http://example.com/index.php (CODE:200|SIZE:5678)
++ http://example.com/js (CODE:301|SIZE:313)
++ http://example.com/login (CODE:302|SIZE:0)
++ http://example.com/logout (CODE:302|SIZE:0)
++ http://example.com/robots.txt (CODE:200|SIZE:125)
++ http://example.com/server-status (CODE:403|SIZE:283)
++ http://example.com/sitemap.xml (CODE:200|SIZE:2048)
++ http://example.com/tmp (CODE:301|SIZE:314)
++ http://example.com/uploads (CODE:301|SIZE:318)
+
+---- Entering directory: http://example.com/admin/ ----
++ http://example.com/admin/config.php (CODE:403|SIZE:283)
++ http://example.com/admin/dashboard (CODE:302|SIZE:0)
++ http://example.com/admin/index.php (CODE:200|SIZE:3456)
++ http://example.com/admin/login (CODE:200|SIZE:2345)
++ http://example.com/admin/users (CODE:302|SIZE:0)
+
+---- Entering directory: http://example.com/api/ ----
++ http://example.com/api/v1 (CODE:200|SIZE:456)
++ http://example.com/api/users (CODE:401|SIZE:123)
++ http://example.com/api/products (CODE:200|SIZE:7890)
+
+-----------------
+END_TIME: Mon Jan 15 10:35:42 2024
+DOWNLOADED: 18448 - FOUND: 28

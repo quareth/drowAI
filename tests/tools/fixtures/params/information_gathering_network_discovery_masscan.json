@@ -1,0 +1,106 @@
+{
+  "tool_id": "information_gathering.network_discovery.masscan",
+  "test_cases": {
+    "minimal": {
+      "description": "Required fields only",
+      "params": {
+        "target": "127.0.0.1"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Canonical v2 parameters with internal JSON capture",
+      "params": {
+        "target": "192.168.1.0/24",
+        "ports": "U:53,T:22-25,80,443",
+        "rate": 10000,
+        "max_rate": 20000,
+        "retries": 0,
+        "wait": 5,
+        "adapter": "eth0",
+        "adapter_ip": "192.168.1.10",
+        "include_file": "targets.txt",
+        "exclude": "192.168.1.5,192.168.1.100",
+        "exclude_file": "exclude.txt",
+        "open_only": true,
+        "banners": true,
+        "host_discovery": "no_ping"
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [
+      {
+        "description": "Deprecated aliases are still accepted",
+        "params": {
+          "target": "192.168.1.0/24",
+          "interface": "eth0",
+          "source_ip": "192.168.1.10",
+          "max_retries": 0,
+          "banner": true,
+          "ping": false
+        },
+        "expected_valid": true
+      }
+    ],
+    "invalid": [
+      {
+        "description": "Reject invalid ports expression",
+        "params": {
+          "target": "127.0.0.1",
+          "ports": "top-ports 100"
+        },
+        "expected_valid": false
+      },
+      {
+        "description": "Reject removed output_format parameter",
+        "params": {
+          "target": "127.0.0.1",
+          "output_format": "json"
+        },
+        "expected_valid": false
+      },
+      {
+        "description": "Reject unknown parameters",
+        "params": {
+          "target": "127.0.0.1",
+          "adapter_name": "eth0"
+        },
+        "expected_valid": false
+      },
+      {
+        "description": "Reject hostname/domain targets",
+        "params": {
+          "target": "example.com",
+          "ports": "80"
+        },
+        "expected_valid": false
+      },
+      {
+        "description": "Reject out-of-range rate",
+        "params": {
+          "target": "127.0.0.1",
+          "rate": 0
+        },
+        "expected_valid": false
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "masscan",
+      "-oJ",
+      "127.0.0.1"
+    ],
+    "full": [
+      "masscan",
+      "--rate 10000",
+      "--max-rate 20000",
+      "--retries 0",
+      "--wait 5",
+      "-p U:53,T:22-25,80,443",
+      "-oJ -",
+      "--open-only",
+      "--banners"
+    ]
+  }
+}

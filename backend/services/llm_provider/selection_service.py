@@ -1,0 +1,275 @@
+"""Provider-neutral user LLM selection service.
+
+This service owns durable selected provider/model rows and keeps legacy OpenAI
+model mirrors synchronized for compatibility responses. Runtime selection reads
+the provider-neutral row after explicit migration/reconciliation.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from agent.providers.llm.core.capabilities import LLMCapability
+from agent.providers.llm.core.identity import (
+    OPENAI_PROVIDER_ID,
+    normalize_model_id,
+    normalize_provider_id,
+)
+from agent.providers.llm.profiles.registry import OPENAI_DEFAULT_MODEL_ID
+
+from backend.config import E2E_DETERMINISTIC_MODE
+from backend.models import UserLLMSelection, UserSettings
+
+from .catalog_service import LLMProviderCatalogService
+from .credential_service import LLMCredentialService
+from .migration_service import LLMProviderMigrationService
+from .types import CredentialNotFoundError, LLMSelectionStatus
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class LLMSelectionRead:
+    """Saved provider/model selection plus non-mutating status metadata."""
+
+    selection: UserLLMSelection
+    status: LLMSelectionStatus
+
+
+class LLMProviderSelectionService:
+    """Read, write, and reconcile user provider/model selection."""
+
+    def __init__(
+        self,
+        db: Session,
+        *,
+        catalog_service: LLMProviderCatalogService | None = None,
+        credential_service: LLMCredentialService | None = None,
+        migration_service: LLMProviderMigrationService | None = None,
+    ) -> None:
+        self._db = db
+        self._catalog = catalog_service or LLMProviderCatalogService()
+        self._migration = migration_service or LLMProviderMigrationService(db)
+        self._credential_service = credential_service or LLMCredentialService(
+            db,
+            catalog_service=self._catalog,
+            migration_service=self._migration,
+        )
+
+    def get_selection(self, user_id: int) -> UserLLMSelection:
+        """Return the canonical provider-neutral selection for a user."""
+
+        self._migration.backfill_legacy_openai_for_user(user_id)
+        selection = self._get_selection_row(user_id)
+        if selection is None:
+            selection = UserLLMSelection(
+                user_id=user_id,
+                provider=OPENAI_PROVIDER_ID,
+                model=OPENAI_DEFAULT_MODEL_ID,
+            )
+            self._db.add(selection)
+            self._sync_legacy_openai_model(user_id, OPENAI_DEFAULT_MODEL_ID)
+            self._db.flush()
+            return selection
+
+        selection = self._reconcile_selection(selection)
+        self._sync_legacy_openai_model_mirror_from_selection(selection)
+        return selection
+
+    def get_selection_read(self, user_id: int) -> LLMSelectionRead:
+        """Return a saved selection with descriptive status for product reads."""
+
+        self._migration.backfill_legacy_openai_for_user(user_id)
+        selection = self._get_selection_row(user_id)
+        if selection is None:
+            selection = UserLLMSelection(
+                user_id=user_id,
+                provider=OPENAI_PROVIDER_ID,
+                model=OPENAI_DEFAULT_MODEL_ID,
+            )
+            self._db.add(selection)
+            self._sync_legacy_openai_model(user_id, OPENAI_DEFAULT_MODEL_ID)
+            self._db.flush()
+        status = self._classify_selection(selection)
+        if status.status in {"selectable", "credential_missing"}:
+            self._sync_legacy_openai_model_mirror_from_selection(selection)
+        return LLMSelectionRead(selection=selection, status=status)
+
+    def set_selection(
+        self,
+        *,
+        user_id: int,
+        provider: str,
+        model: str,
+        require_enabled_credential: bool = True,
+    ) -> UserLLMSelection:
+        """Persist a provider-neutral provider/model selection."""
+
+        normalized_provider = normalize_provider_id(provider)
+        profile = self._catalog.require_selectable_model(normalized_provider, model)
+        normalized_model = profile.ref.model
+
+        if require_enabled_credential and not self._credential_service.has_enabled_credential(
+            user_id,
+            normalized_provider,
+        ):
+            raise CredentialNotFoundError(f"{normalized_provider} credential is required")
+
+        selection = self._get_selection_row(user_id)
+        if selection is None:
+            selection = UserLLMSelection(
+                user_id=user_id,
+                provider=normalized_provider,
+                model=normalized_model,
+            )
+            self._db.add(selection)
+        else:
+            selection.provider = normalized_provider
+            selection.model = normalized_model
+
+        if normalized_provider == OPENAI_PROVIDER_ID:
+            self._sync_legacy_openai_model(user_id, normalized_model)
+
+        self._db.flush()
+        return selection
+
+    def get_openai_model_compat(self, user_id: int) -> str:
+        """Compatibility helper for old OpenAI model callers."""
+
+        try:
+            selection = self.get_selection(user_id)
+            if selection.provider != OPENAI_PROVIDER_ID:
+                return OPENAI_DEFAULT_MODEL_ID
+            return selection.model
+        except Exception as exc:
+            logger.error("Failed to resolve OpenAI model for user %s: %s", user_id, exc)
+            return OPENAI_DEFAULT_MODEL_ID
+
+    def _get_selection_row(self, user_id: int) -> UserLLMSelection | None:
+        return self._db.execute(
+            select(UserLLMSelection).where(UserLLMSelection.user_id == user_id)
+        ).scalar_one_or_none()
+
+    def _reconcile_selection(self, selection: UserLLMSelection) -> UserLLMSelection:
+        provider = normalize_provider_id(selection.provider or OPENAI_PROVIDER_ID)
+        model = (selection.model or "").strip()
+        profile = self._catalog.require_selectable_model(provider, model)
+        normalized_model = profile.ref.model
+
+        if selection.provider != provider or selection.model != normalized_model:
+            selection.provider = provider
+            selection.model = normalized_model
+            if provider == OPENAI_PROVIDER_ID:
+                self._sync_legacy_openai_model(selection.user_id, normalized_model)
+            self._db.flush()
+        return selection
+
+    def _classify_selection(self, selection: UserLLMSelection) -> LLMSelectionStatus:
+        provider_raw = selection.provider or OPENAI_PROVIDER_ID
+        model_raw = selection.model or ""
+        try:
+            provider = normalize_provider_id(provider_raw)
+            model = normalize_model_id(model_raw)
+        except (TypeError, ValueError) as exc:
+            return LLMSelectionStatus(
+                status="invalid_selection",
+                selectable=False,
+                runnable=False,
+                reason=str(exc),
+            )
+
+        try:
+            self._catalog.require_provider(provider)
+        except Exception as exc:
+            return LLMSelectionStatus(
+                status="invalid_selection",
+                selectable=False,
+                runnable=False,
+                reason=str(exc),
+            )
+
+        if not self._catalog.is_provider_adapter_available(provider):
+            return LLMSelectionStatus(
+                status="adapter_unavailable",
+                selectable=False,
+                runnable=False,
+                reason=f"LLM provider adapter is not registered: {provider}",
+            )
+
+        try:
+            profile = self._catalog.require_model(provider, model)
+        except Exception as exc:
+            return LLMSelectionStatus(
+                status="model_unavailable",
+                selectable=False,
+                runnable=False,
+                reason=str(exc),
+            )
+
+        if not profile.supports(LLMCapability.CHAT):
+            return LLMSelectionStatus(
+                status="model_unavailable",
+                selectable=False,
+                runnable=False,
+                reason=f"Model '{profile.ref}' is not selectable because it does not support chat",
+            )
+
+        try:
+            self._catalog.require_selectable_model(provider, model)
+        except Exception as exc:
+            return LLMSelectionStatus(
+                status="model_unavailable",
+                selectable=False,
+                runnable=False,
+                reason=str(exc),
+            )
+
+        if E2E_DETERMINISTIC_MODE:
+            return LLMSelectionStatus(
+                status="deterministic_e2e",
+                selectable=True,
+                runnable=True,
+            )
+
+        if not self._credential_service.has_enabled_credential(user_id=selection.user_id, provider=provider):
+            return LLMSelectionStatus(
+                status="credential_missing",
+                selectable=True,
+                runnable=False,
+                reason=f"{provider} credential is required to run {provider} model",
+            )
+
+        return LLMSelectionStatus(
+            status="selectable",
+            selectable=True,
+            runnable=True,
+        )
+
+    def _sync_legacy_openai_model_mirror_from_selection(self, selection: UserLLMSelection) -> None:
+        if normalize_provider_id(selection.provider or OPENAI_PROVIDER_ID) != OPENAI_PROVIDER_ID:
+            return
+        settings = self._db.execute(
+            select(UserSettings).where(UserSettings.user_id == selection.user_id)
+        ).scalar_one_or_none()
+        if settings is None:
+            settings = UserSettings(user_id=selection.user_id)
+            self._db.add(settings)
+        if settings.openai_model != selection.model:
+            settings.openai_model = selection.model
+            self._db.flush()
+
+    def _sync_legacy_openai_model(self, user_id: int, model: str) -> None:
+        settings = self._db.execute(
+            select(UserSettings).where(UserSettings.user_id == user_id)
+        ).scalar_one_or_none()
+        if settings is None:
+            settings = UserSettings(user_id=user_id)
+            self._db.add(settings)
+        settings.openai_model = normalize_model_id(model)
+
+
+__all__ = ["LLMProviderSelectionService", "LLMSelectionRead"]

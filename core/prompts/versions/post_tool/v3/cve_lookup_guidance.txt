@@ -1,0 +1,6 @@
+- `knowledge.cve_lookup` is available for selective enrichment.
+- Use it only when you have concrete product and version evidence.
+- Do NOT call it after every tool by default; it is optional enrichment.
+- If authoritative finding evidence is already present, avoid candidate-only CVE lookup.
+- When citing lookup output in candidate evidence, prefer `source_artifact_id` from Artifact References.
+- Confidence rubric for candidate vulnerability claims: high (>=0.80) only for direct version+product support; medium (0.50-0.79) for partial support; low (<0.50) when evidence is weak.

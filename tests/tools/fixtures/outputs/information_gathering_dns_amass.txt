@@ -1,0 +1,24 @@
+Amass v4.0.0 - https://github.com/OWASP/Amass
+
+Querying data sources...
+[passive] Detected subdomain: www.example.com
+[passive] Detected subdomain: mail.example.com
+[passive] Detected subdomain: api.example.com
+[passive] Detected subdomain: blog.example.com
+[passive] Detected subdomain: admin.example.com
+[passive] Detected subdomain: dev.example.com
+[passive] Detected subdomain: staging.example.com
+
+DNS Resolution:
+www.example.com → 93.184.216.34
+mail.example.com → 93.184.216.35
+api.example.com → 93.184.216.36
+blog.example.com → 93.184.216.37
+admin.example.com → 93.184.216.38
+dev.example.com → 93.184.216.39
+staging.example.com → 93.184.216.40
+
+Summary:
+Subdomains found: 7
+IP addresses discovered: 7
+Scan completed in 45 seconds

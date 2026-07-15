@@ -1,0 +1,12 @@
+User Message:
+{message}
+
+Recent History (most recent last):
+{history}
+
+Heuristic Hints:
+Tool hints: {tool_hints}
+Targets: {targets}
+Eligible routes: {eligible_routes}
+Risk flags: {risk_flags}
+{environment}

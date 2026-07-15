@@ -1,0 +1,2 @@
+continued at byte 2048
+__DROWAI_HTTP_DOWNLOAD_META__206	https://downloads.example.com/tool.bin	4096	1	0.350

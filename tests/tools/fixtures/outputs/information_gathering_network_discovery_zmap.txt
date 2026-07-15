@@ -1,0 +1,25 @@
+zmap 3.0.0
+
+Aug 15 2024 10:30:00.000 [INFO] zmap: output module: csv
+Aug 15 2024 10:30:00.001 [INFO] zmap: probe module: tcp_synscan
+Aug 15 2024 10:30:00.002 [INFO] zmap: target port(s): 80,443,22,8080
+Aug 15 2024 10:30:00.003 [INFO] zmap: source port range: 32768-61000
+Aug 15 2024 10:30:00.004 [INFO] zmap: scanning at 10000 pps
+
+saddr,sport,dport,classification,success,repeat
+192.168.1.1,80,synack,1,0
+192.168.1.1,443,synack,1,0
+192.168.1.1,22,synack,1,0
+192.168.1.5,22,synack,1,0
+192.168.1.10,80,synack,1,0
+192.168.1.10,443,synack,1,0
+192.168.1.10,22,synack,1,0
+192.168.1.10,8080,synack,1,0
+192.168.1.100,22,synack,1,0
+192.168.1.200,80,synack,1,0
+192.168.1.200,443,synack,1,0
+
+Aug 15 2024 10:30:15.123 [INFO] zmap: completed
+Aug 15 2024 10:30:15.124 [INFO] zmap: 11 hosts alive (4.29% hitrate)
+Aug 15 2024 10:30:15.125 [INFO] zmap: 256 addresses scanned
+Aug 15 2024 10:30:15.126 [INFO] zmap: scan time: 15 seconds

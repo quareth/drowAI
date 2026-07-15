@@ -1,0 +1,11 @@
+http://example.com [200 OK] Apache[2.4.54], Bootstrap[5.3.0], Country[UNITED STATES][US], Email[admin@example.com,support@example.com], HTML5, HTTPServer[Ubuntu Linux][Apache/2.4.54 (Ubuntu)], IP[93.184.216.34], JQuery[3.7.1], Meta-Author[Example Inc], MetaGenerator[WordPress 6.4.2], Open-Graph-Protocol[website], PHP[8.1.0], PasswordField[password], PoweredBy[WordPress], Script[text/javascript], Title[Example Website - Home], UncommonHeaders[x-frame-options,x-content-type-options], WordPress[6.4.2], X-Frame-Options[SAMEORIGIN], X-Powered-By[PHP/8.1.0]
+
+http://example.com/wp-admin/ [302 Found] Apache[2.4.54], Country[UNITED STATES][US], HTTPServer[Ubuntu Linux][Apache/2.4.54 (Ubuntu)], IP[93.184.216.34], RedirectLocation[http://example.com/wp-login.php?redirect_to=http%3A%2F%2Fexample.com%2Fwp-admin%2F&reauth=1]
+
+http://example.com/wp-login.php [200 OK] Apache[2.4.54], Cookies[wordpress_test_cookie], Country[UNITED STATES][US], HTML5, HTTPServer[Ubuntu Linux][Apache/2.4.54 (Ubuntu)], IP[93.184.216.34], JQuery[3.7.1], PasswordField[pwd], PoweredBy[WordPress], Script[text/javascript], Title[Log In &lsaquo; Example Website &#8212; WordPress], UncommonHeaders[x-frame-options], WordPress, X-Frame-Options[SAMEORIGIN]
+
+Summary:
+--------
+Requests: 3
+Duration: 2.5 seconds
+Technologies detected: 15

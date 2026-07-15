@@ -1,0 +1,31 @@
+{
+  "tool_id": "system_services.rpc_enum",
+  "test_cases": {
+    "minimal": {
+      "description": "Portmapper service listing",
+      "params": {
+        "target": "192.168.1.1"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "TCP transport with full program listing",
+      "params": {
+        "target": "192.168.1.1",
+        "portmapper_only": false,
+        "transport": "tcp"
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": []
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^rpcinfo"
+    ],
+    "full": [
+      "^rpcinfo"
+    ]
+  }
+}

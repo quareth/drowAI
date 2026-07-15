@@ -1,0 +1,4 @@
+Use the runtime context above and follow the system contract.
+Runtime has already provided the current turn and phase context. Do NOT invent or emit turn or phase numbers; the runtime stamps them.
+If Intent Contract Check says NOT SATISFIED, choose `call_tool` with corrected `tool_intent`, set `failure_detected=true`, `failure_category="invalid_params"`, `retry_suggested=true`.
+Consult Prior Current-Turn Phase Memory when deciding whether a hypothesis is still open before acting.

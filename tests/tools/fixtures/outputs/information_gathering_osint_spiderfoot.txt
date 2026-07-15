@@ -1,0 +1,43 @@
+SpiderFoot 4.0 - Open Source Intelligence Automation
+
+Target: example.com
+Scan Started: 2024-01-15 10:30:00
+
+[*] Running 47 modules...
+
+[DNS] Found A record: example.com -> 93.184.216.34
+[DNS] Found MX record: mail.example.com
+[DNS] Found NS record: ns1.example.com
+[DNS] Found NS record: ns2.example.com
+[DNS] Found TXT record: v=spf1 include:_spf.example.com ~all
+
+[SUBDOMAIN] Found: www.example.com
+[SUBDOMAIN] Found: api.example.com
+[SUBDOMAIN] Found: mail.example.com
+[SUBDOMAIN] Found: blog.example.com
+[SUBDOMAIN] Found: admin.example.com
+
+[EMAIL] Found: admin@example.com
+[EMAIL] Found: support@example.com
+[EMAIL] Found: info@example.com
+
+[WHOIS] Registrar: ICANN
+[WHOIS] Created: 1995-08-14
+[WHOIS] Expires: 2025-08-13
+[WHOIS] Updated: 2024-01-10
+
+[SSL] Certificate CN: www.example.org
+[SSL] Issuer: DigiCert Inc
+[SSL] Valid Until: 2025-01-13
+
+[VULNERABILITY] Potential issues found: 2
+  - Missing DMARC record
+  - SPF policy could be stricter
+
+Scan Summary:
+-------------
+DNS Records: 5
+Subdomains: 5
+Email Addresses: 3
+Vulnerabilities: 2
+Duration: 180 seconds

@@ -1,0 +1,59 @@
+## User Input
+Enumerate 10.0.0.5 web exposure
+
+## User Goal
+Validate exposed services on 10.0.0.5
+
+## Execution Capability
+plan_executor
+
+## Current Execution Context
+turn_sequence: 9
+current_phase_sequence: 1
+latest_recorded_phase_sequence: 0
+
+## Prior Current-Turn Phase Memory
+<phase turn=9 phase=0 source=tool>
+## Tool Output Summary
+Nmap reported 443/tcp open on the target.
+
+## Key Findings
+443/tcp open https
+</phase>
+
+## Current Focus
+Validate externally reachable services
+
+## Relevant Prior Findings
+- [fresh] port_open 10.0.0.5:443/tcp (service=https)
+- [fresh] service_banner nginx/1.22
+
+## Tool Executed
+Tool: nmap.scan
+Parameters: target=10.0.0.5, ports=1-1000
+
+## Request Contract
+question_type: multi_step
+answer_style: normal
+terminal_when: all_steps_done
+
+## Tool Output Summary
+Nmap reported 443/tcp open on the target.
+
+## Key Findings
+• 443/tcp open https
+
+## Current Plan
+1. Run nmap
+2. Inspect TLS service
+
+## Todo List
+[0] ☐ Scan ports [pending]
+[1] ☐ Review TLS metadata [pending]
+
+## Your Task
+Use the runtime context above and follow the system contract.
+Runtime has already provided the current turn and phase context. Do NOT invent or emit turn or phase numbers; the runtime stamps them.
+If Intent Contract Check says NOT SATISFIED and the current-turn evidence does not already satisfy the user's goal, choose `call_tool` with corrected `tool_intent`, set `failure_detected=true`, `failure_category="invalid_params"`, and `retry_suggested=true`.
+If current-turn evidence already satisfies the user's goal, choose `finalize` even when the latest step was an evidence-processing helper.
+Consult Prior Current-Turn Phase Memory when deciding whether a hypothesis is still open before acting.

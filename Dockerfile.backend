@@ -1,0 +1,59 @@
+# DrowAI Backend Dockerfile
+# FastAPI + Python 3.11 development image
+
+FROM python:3.11-slim
+
+ARG INSTALL_DOCKER_CLI=true
+
+# Set environment variables
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    # PostgreSQL client libraries
+    libpq-dev \
+    # Build tools for some Python packages
+    gcc \
+    g++ \
+    curl \
+    && if [ "$INSTALL_DOCKER_CLI" = "true" ]; then \
+        apt-get install -y --no-install-recommends gnupg \
+        && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
+        && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list \
+        && apt-get update \
+        && apt-get install -y --no-install-recommends docker-ce-cli; \
+    fi \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create app directory
+WORKDIR /app
+
+# Copy requirements first for better caching
+COPY requirements.txt .
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY . .
+
+# Create directories for runtime
+RUN mkdir -p /app/backend/log /app/workspace
+
+# Make entrypoint script executable
+RUN chmod +x /app/backend/scripts/docker-entrypoint.sh
+
+# Expose port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/api/health || exit 1
+
+# Use entrypoint script that runs migrations before starting the app
+ENTRYPOINT ["/app/backend/scripts/docker-entrypoint.sh"]

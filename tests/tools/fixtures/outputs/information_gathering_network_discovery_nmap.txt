@@ -1,0 +1,31 @@
+Starting Nmap 7.94 ( https://nmap.org ) at 2024-01-15 10:30 UTC
+Nmap scan report for 192.168.1.1
+Host is up (0.0012s latency).
+Not shown: 997 closed tcp ports (reset)
+PORT    STATE SERVICE VERSION
+22/tcp  open  ssh     OpenSSH 8.9p1 Ubuntu 3ubuntu0.1
+80/tcp  open  http    nginx 1.18.0
+443/tcp open  ssl/http nginx 1.18.0
+MAC Address: 00:11:22:33:44:55 (Cisco Systems)
+
+Nmap scan report for 192.168.1.10
+Host is up (0.0015s latency).
+Not shown: 996 closed tcp ports (reset)
+PORT     STATE SERVICE     VERSION
+22/tcp   open  ssh         OpenSSH 7.4 (protocol 2.0)
+80/tcp   open  http        Apache httpd 2.4.6
+443/tcp  open  ssl/http    Apache httpd 2.4.6
+3389/tcp open  ms-wbt-server Microsoft Terminal Services
+MAC Address: 00:11:22:33:44:57 (Hewlett Packard)
+OS: Windows Server 2019
+
+Nmap scan report for 192.168.1.100
+Host is up (0.0018s latency).
+Not shown: 997 closed tcp ports (reset)
+PORT     STATE SERVICE VERSION
+22/tcp   open  ssh     OpenSSH 8.2p1 Ubuntu 4ubuntu0.5
+3306/tcp open  mysql   MySQL 8.0.28
+5432/tcp open  postgresql PostgreSQL DB 14.0
+
+Service detection performed. Please report any incorrect results at https://nmap.org/submit/ .
+Nmap done: 256 IP addresses (8 hosts up) scanned in 45.67 seconds

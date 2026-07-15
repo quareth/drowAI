@@ -1,0 +1,63 @@
+Burp Suite Professional v2023.12.1
+===================================
+
+Scan Configuration:
+  Target: http://example.com
+  Scan Type: Passive
+  Crawl Depth: 3
+
+Crawl Results:
+--------------
+Pages discovered: 156
+Links followed: 423
+Forms found: 12
+
+Site Map:
+---------
+http://example.com/
+├── /admin/
+│   ├── /admin/dashboard.php
+│   ├── /admin/users.php
+│   └── /admin/settings.php
+├── /api/
+│   ├── /api/v1/users
+│   ├── /api/v1/products
+│   └── /api/v1/orders
+├── /login.php
+├── /register.php
+├── /profile.php
+└── /products/
+
+Vulnerability Findings:
+-----------------------
+[HIGH] SQL Injection
+  URL: http://example.com/products.php?id=1
+  Parameter: id
+  Evidence: Error message revealing database type
+
+[MEDIUM] Cross-Site Scripting (Reflected)
+  URL: http://example.com/search.php?q=test
+  Parameter: q
+  Evidence: Unencoded input reflected in response
+
+[MEDIUM] Missing X-Frame-Options Header
+  URL: http://example.com/
+  Evidence: Header not present
+
+[LOW] Cookie Without Secure Flag
+  URL: http://example.com/login.php
+  Cookie: PHPSESSID
+  Evidence: Secure attribute not set
+
+[INFO] Server Information Disclosure
+  URL: http://example.com/
+  Evidence: Server: Apache/2.4.54 (Ubuntu)
+
+Scan Summary:
+-------------
+Duration: 00:15:32
+Requests made: 2,847
+High: 1
+Medium: 2
+Low: 1
+Info: 1

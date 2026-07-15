@@ -1,0 +1,5 @@
+OScanner Results:
+SID: ORCL
+Service: XE
+User: SYSTEM
+Scan completed successfully

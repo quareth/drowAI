@@ -1,0 +1,58 @@
+[
+  {
+    "_source": {
+      "layers": {
+        "frame": {
+          "frame.number": "1",
+          "frame.time_epoch": "1781431200.000000000",
+          "frame.time": "Jun 14, 2026 10:00:00.000000000 UTC",
+          "frame.protocols": "eth:ip:udp:dns",
+          "frame.len": "86"
+        },
+        "ip": {
+          "ip.src": "192.0.2.10",
+          "ip.dst": "198.51.100.53"
+        },
+        "udp": {
+          "udp.srcport": "53123",
+          "udp.dstport": "53"
+        },
+        "dns": {
+          "dns.qry.name": "www.example.test",
+          "dns.qry.type": "1",
+          "dns.a": "198.51.100.10",
+          "dns.flags.rcode": "0"
+        }
+      }
+    }
+  },
+  {
+    "_source": {
+      "layers": {
+        "frame": {
+          "frame.number": "2",
+          "frame.time_epoch": "1781431201.500000000",
+          "frame.time": "Jun 14, 2026 10:00:01.500000000 UTC",
+          "frame.protocols": "eth:ip:tcp:http",
+          "frame.len": "512"
+        },
+        "ip": {
+          "ip.src": "192.0.2.10",
+          "ip.dst": "203.0.113.20"
+        },
+        "tcp": {
+          "tcp.srcport": "49152",
+          "tcp.dstport": "80",
+          "tcp.stream": "7"
+        },
+        "http": {
+          "http.host": "app.example.test",
+          "http.request.method": "GET",
+          "http.request.uri": "http://app.example.test/login",
+          "http.authorization": "Bearer <REDACTED> kind=bearer_token length=24",
+          "http.cookie": "session=<REDACTED> kind=cookie length=22"
+        }
+      }
+    }
+  }
+]

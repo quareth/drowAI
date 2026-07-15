@@ -1,0 +1,18 @@
+{intent_brief_block}
+{next_tool_hint}
+Available Tools:
+{resolved_tools}
+
+Task Context:
+- Target: {target}
+- Phase: {phase}
+- Constraints: {constraints}
+{relevant_findings_section}{referenced_prior_turns_block}{working_memory_snapshot_block}
+{artifact_policy}
+{cve_lookup_policy}
+You are a candidate generator. Propose at most {max_tools_per_action} candidate tools that
+the builder may consider for this iteration. The builder commits the final
+subset and the execution strategy; this stage is advisory.
+Return strict JSON with only this shape:
+{{"selected_tools":["<tool id from Available Tools>"]}}
+Do not include execution_strategy; the builder decides execution strategy.

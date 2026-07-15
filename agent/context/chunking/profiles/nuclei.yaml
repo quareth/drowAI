@@ -1,0 +1,11 @@
+detect:
+  cli: "nuclei"
+extract:
+  - field: template
+    regex: "\btemplate:\\s*(\\S+)"
+chunk:
+  - group_by: [template]
+  - max_tokens: 800
+summarize:
+  template: "{count} nuclei matches"
+

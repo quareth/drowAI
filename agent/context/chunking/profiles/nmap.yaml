@@ -1,0 +1,13 @@
+detect:
+  cli: "nmap"
+extract:
+  - field: host
+    regex: "Nmap scan report for (\\S+)"
+  - field: port
+    regex: "(\\d+)/(tcp|udp)\\s+open"
+chunk:
+  - group_by: [host]
+  - max_tokens: 800
+summarize:
+  template: "{count} services open on {entity}"
+

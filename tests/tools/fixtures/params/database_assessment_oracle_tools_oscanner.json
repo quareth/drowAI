@@ -1,0 +1,51 @@
+{
+  "tool_id": "database_assessment.oracle_tools.oscanner",
+  "test_cases": {
+    "minimal": {
+      "description": "Basic oscanner invocation",
+      "params": {
+        "target": "unused",
+        "server": "192.168.1.100"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Verbose scan with report output",
+      "params": {
+        "target": "unused",
+        "server": "192.168.1.100",
+        "port": 1521,
+        "report_file": "oscanner_report.txt",
+        "verbose": true,
+        "timeout": 300
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": [
+      {
+        "name": "invalid_port",
+        "params": {
+          "target": "unused",
+          "server": "192.168.1.100",
+          "port": 0
+        },
+        "expected_error": "greater than or equal"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^oscanner",
+      "-s",
+      "-p"
+    ],
+    "full": [
+      "^oscanner",
+      "-s",
+      "-p",
+      "-r",
+      "-v"
+    ]
+  }
+}

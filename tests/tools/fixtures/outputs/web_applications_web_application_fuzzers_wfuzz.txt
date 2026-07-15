@@ -1,0 +1,34 @@
+********************************************************
+* Wfuzz 3.1.0 - The Web Fuzzer                         *
+********************************************************
+
+Target: http://example.com/FUZZ
+Total requests: 4712
+
+=====================================================================
+ID           Response   Lines    Word       Chars       Payload
+=====================================================================
+
+000000001:   301        9 L      28 W       316 Ch      "admin"
+000000002:   301        9 L      28 W       314 Ch      "api"
+000000003:   301        9 L      28 W       317 Ch      "backup"
+000000004:   403        9 L      28 W       283 Ch      "config"
+000000005:   301        9 L      28 W       314 Ch      "css"
+000000006:   301        9 L      28 W       315 Ch      "data"
+000000007:   301        9 L      28 W       317 Ch      "images"
+000000008:   200        120 L    456 W      5678 Ch     "index.php"
+000000009:   301        9 L      28 W       313 Ch      "js"
+000000010:   302        0 L      0 W        0 Ch        "login"
+000000011:   302        0 L      0 W        0 Ch        "logout"
+000000012:   200        8 L      12 W       125 Ch      "robots.txt"
+000000013:   403        9 L      28 W       283 Ch      "server-status"
+000000014:   200        45 L     89 W       2048 Ch     "sitemap.xml"
+000000015:   301        9 L      28 W       314 Ch      "tmp"
+000000016:   301        9 L      28 W       318 Ch      "uploads"
+000000017:   403        9 L      28 W       283 Ch      ".htaccess"
+000000018:   403        9 L      28 W       283 Ch      ".htpasswd"
+
+Total time: 15.45678
+Processed Requests: 4712
+Filtered Requests: 4694
+Requests/sec.: 305.1234

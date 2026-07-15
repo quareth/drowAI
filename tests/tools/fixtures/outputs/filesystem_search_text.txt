@@ -1,0 +1,2 @@
+logs/app.log:12:ERROR failed to connect
+logs/app.log:20:WARN retrying

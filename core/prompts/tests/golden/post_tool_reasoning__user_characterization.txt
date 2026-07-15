@@ -1,0 +1,39 @@
+## User Input
+Enumerate web server on 10.0.0.1
+
+## Execution Capability
+plan_executor
+
+## Relevant Prior Findings
+- [fresh] port_open 10.0.0.1:80/tcp (service=http)
+
+## Tool Executed
+Tool: nmap.scan
+Parameters: target=10.0.0.1
+
+## Tool Output Summary
+Nmap found HTTP on port 80.
+
+## Key Findings
+• 80/tcp open http
+
+## Failure Detected
+Tool execution failed with category: empty_output
+Retry attempts: 0 of 2
+Retry budget available - you may suggest retry with corrected approach.
+
+
+## Current Plan
+1. Run nmap
+2. Inspect HTTP service
+
+## Todo List
+[0] ☐ Scan ports [pending]
+[1] ☐ Fingerprint web server [pending]
+
+## Your Task
+Use the runtime context above and follow the system contract.
+Runtime has already provided the current turn and phase context. Do NOT invent or emit turn or phase numbers; the runtime stamps them.
+If Intent Contract Check says NOT SATISFIED and the current-turn evidence does not already satisfy the user's goal, choose `call_tool` with corrected `tool_intent`, set `failure_detected=true`, `failure_category="invalid_params"`, and `retry_suggested=true`.
+If current-turn evidence already satisfies the user's goal, choose `finalize` even when the latest step was an evidence-processing helper.
+Consult Prior Current-Turn Phase Memory when deciding whether a hypothesis is still open before acting.

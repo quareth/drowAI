@@ -1,0 +1,7 @@
+HTTP/1.1 200 OK
+Date: Sun, 29 Mar 2026 06:05:10 GMT
+Content-Type: text/html; charset=utf-8
+Content-Length: 77
+
+<html><body><h1>Welcome</h1><p>authorization: Bearer super-token</p></body></html>
+__DROWAI_HTTP_META__200	https://www.example.com/	text/html; charset=utf-8	77	0	0.091

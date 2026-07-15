@@ -1,0 +1,3 @@
+drwxr-xr-x 2 user user 4096 .
+drwxr-xr-x 4 user user 4096 ..
+-rw-r--r-- 1 user user 12 file.txt

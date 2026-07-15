@@ -1,0 +1,17 @@
+Selected device eth0, address 192.168.1.100, port 42756 for outgoing packets
+Tracing the path to example.com (93.184.216.34) on TCP port 80 (http), 30 hops max
+ 1  192.168.1.1  0.523 ms  0.412 ms  0.398 ms
+ 2  10.0.0.1  5.234 ms  5.178 ms  5.156 ms
+ 3  172.16.0.1  10.234 ms  10.189 ms  10.145 ms
+ 4  203.0.113.1  15.345 ms  15.298 ms  15.267 ms
+ 5  198.51.100.1  20.456 ms  20.412 ms  20.378 ms
+ 6  93.184.216.1  25.567 ms  25.523 ms  25.489 ms
+ 7  93.184.216.34 [open]  28.234 ms  28.189 ms  28.145 ms
+
+Summary:
+--------
+Target: example.com:80
+Destination reached: Yes
+Port Status: Open (HTTP)
+Hops: 7
+Final RTT: 28.2 ms (avg)

@@ -1,0 +1,53 @@
+OWASP ZAP 2.14.0
+================
+
+Target: http://example.com
+
+Spider Scan Results:
+--------------------
+URLs Found: 156
+Unique Hosts: 1
+Forms Found: 12
+AJAX Requests: 34
+
+Active Scan Results:
+--------------------
+
+HIGH Risk Alerts:
+  SQL Injection
+    URL: http://example.com/products.php?id=1
+    Parameter: id
+    Attack: 1' AND '1'='1
+    Confidence: High
+    Reference: CWE-89
+
+  Cross Site Scripting (Reflected)
+    URL: http://example.com/search?q=test
+    Parameter: q
+    Attack: <script>alert(1)</script>
+    Confidence: High
+    Reference: CWE-79
+
+MEDIUM Risk Alerts:
+  Missing Anti-CSRF Tokens
+    URL: http://example.com/admin/settings
+    Evidence: No CSRF token found
+
+  X-Frame-Options Header Not Set
+    URL: http://example.com
+
+LOW Risk Alerts:
+  Cookie No HttpOnly Flag
+    Cookie: PHPSESSID
+
+  Server Leaks Version Information
+    Evidence: Apache/2.4.54
+
+Summary:
+--------
+High: 2
+Medium: 2
+Low: 2
+Informational: 8
+
+Scan Time: 00:15:00

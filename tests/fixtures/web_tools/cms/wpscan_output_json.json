@@ -1,0 +1,9 @@
+{
+  "version": "6.5",
+  "plugins": [{"name": "akismet", "version": "5.3"}],
+  "themes": [{"name": "twentytwentyfour", "version": "1.0"}],
+  "users": [{"name": "admin", "id": 1}],
+  "vulnerabilities": [{"type": "wp_plugin", "severity": "medium", "name": "akismet"}]
+}
+
+

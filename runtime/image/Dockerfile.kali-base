@@ -1,0 +1,75 @@
+# syntax=docker/dockerfile:1.7
+# DrowAI Kali base image: shared OS/tooling layer for architecture-specific runtime images.
+
+FROM kalilinux/kali-rolling:latest
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash \
+        ca-certificates \
+        cifs-utils \
+        curl \
+        dnsutils \
+        ffuf \
+        file \
+        fping \
+        ftp \
+        gobuster \
+        iproute2 \
+        iputils-ping \
+        iputils-tracepath \
+        jq \
+        less \
+        lftp \
+        mariadb-client \
+        masscan \
+        mtr-tiny \
+        net-tools \
+        netcat-traditional \
+        ncat \
+        nfs-common \
+        nikto \
+        nmap \
+        openssh-client \
+        openvpn \
+        php-cli \
+        postgresql-client \
+        python3 \
+        python3-pip \
+        redis-tools \
+        rpcbind \
+        rsync \
+        sqlite3 \
+        smbclient \
+        socat \
+        sshpass \
+        sqlmap \
+        tcpdump \
+        telnet \
+        tftp-hpa \
+        tshark \
+        unixodbc \
+        util-linux \
+        freetds-bin \
+        unzip \
+        wget \
+        whois \
+        zip \
+        7zip \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN setcap -r /usr/lib/nmap/nmap 2>/dev/null || true
+
+RUN python3 --version \
+    && pip3 --version \
+    && nmap --version >/dev/null \
+    && openvpn --version >/dev/null \
+    && flock --version >/dev/null \
+    && for binary in \
+        fping nmap ftp lftp tftp ssh scp sftp sshpass rsync telnet smbclient rpcclient smbget \
+        nc netcat ncat socat mtr tracepath showmount rpcinfo mount.cifs tcpdump tshark \
+        file jq less zip unzip 7z php mysql psql sqlite3 redis-cli isql tsql; \
+        do command -v "$binary" >/dev/null; done

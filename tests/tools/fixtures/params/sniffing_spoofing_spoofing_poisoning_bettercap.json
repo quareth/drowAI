@@ -1,0 +1,55 @@
+{
+  "tool_id": "sniffing_spoofing.spoofing_poisoning.bettercap",
+  "test_cases": {
+    "minimal": {
+      "description": "Basic bettercap execution",
+      "params": {
+        "target": "unused",
+        "interface": "eth0",
+        "eval_commands": [
+          "net.probe on"
+        ]
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Full bettercap options",
+      "params": {
+        "target": "unused",
+        "interface": "eth0",
+        "caplet_file": "caplets/arp.cap",
+        "eval_commands": [
+          "net.probe on",
+          "net.recon on"
+        ],
+        "gateway_ip": "192.168.1.1",
+        "silent": true,
+        "no_colors": true,
+        "debug": false,
+        "extra_args": [
+          "-X"
+        ]
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": [
+      {
+        "name": "missing_target",
+        "params": {
+          "interface": "eth0"
+        },
+        "expected_error": "required"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^bettercap"
+    ],
+    "full": [
+      "^bettercap",
+      "-caplet"
+    ]
+  }
+}

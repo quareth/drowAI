@@ -1,0 +1,31 @@
+{
+  "tool_id": "forensics.forensics_analysis_tools.binwalk",
+  "test_cases": {
+    "minimal": {
+      "description": "Signature scan only",
+      "params": {
+        "target": "/path/to/firmware.bin",
+        "mode": "scan"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Extract and recurse with entropy",
+      "params": {
+        "target": "/path/to/firmware.bin",
+        "mode": "extract",
+        "extract_directory": "/tmp/binwalk_out",
+        "recursive": true,
+        "entropy": true,
+        "verbose": true
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": []
+  },
+  "expected_command_patterns": {
+    "minimal": [],
+    "full": []
+  }
+}

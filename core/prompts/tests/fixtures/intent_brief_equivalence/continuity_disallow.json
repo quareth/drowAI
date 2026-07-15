@@ -1,0 +1,77 @@
+{
+  "planner_surface": {
+    "blocking_reason": null,
+    "continuation_mode": "new_request",
+    "execution_readiness": "ready",
+    "explicit_constraints": [
+      "No UDP scan",
+      "Keep requests low-noise"
+    ],
+    "next_operational_goal": "Run targeted TCP scan on 10.0.0.5",
+    "overall_goal": "Map reachable services and identify high-risk exposure",
+    "relevant_memory_fragments": [
+      "prior host discovery found 10.0.0.5 alive"
+    ],
+    "request_contract": {
+      "answer_style": "normal",
+      "question_type": "multi_step",
+      "terminal_when": "all_steps_done"
+    },
+    "resolved_step_detail": "Enumerate TCP services before app-level checks",
+    "resolved_step_title": "Initial network recon",
+    "resolved_target": "10.0.0.5",
+    "resolved_user_intent": "Assess exposed web surface on 10.0.0.5",
+    "retrieval_hints": [
+      "tcp scan",
+      "service banner"
+    ],
+    "success_condition": "Return open ports and likely service names",
+    "target_source": "explicit_current_message",
+    "target_status": "resolved"
+  },
+  "ptr_surface": {
+    "explicit_constraints": [
+      "No UDP scan",
+      "Keep requests low-noise"
+    ],
+    "next_operational_goal": "Run targeted TCP scan on 10.0.0.5",
+    "resolved_target": "10.0.0.5",
+    "resolved_user_intent": "Assess exposed web surface on 10.0.0.5",
+    "success_condition": "Return open ports and likely service names",
+    "target_status": "resolved"
+  },
+  "tool_surface": {
+    "blocking_reason": null,
+    "continuation_mode": "new_request",
+    "execution_readiness": "ready",
+    "explicit_constraints": [
+      "No UDP scan",
+      "Keep requests low-noise"
+    ],
+    "next_operational_goal": "Run targeted TCP scan on 10.0.0.5",
+    "overall_goal": "Map reachable services and identify high-risk exposure",
+    "relevant_memory_fragments": [
+      "prior host discovery found 10.0.0.5 alive"
+    ],
+    "request_contract": {
+      "answer_style": "normal",
+      "question_type": "multi_step",
+      "terminal_when": "all_steps_done"
+    },
+    "resolved_step_detail": "Enumerate TCP services before app-level checks",
+    "resolved_step_title": "Initial network recon",
+    "resolved_target": "10.0.0.5",
+    "resolved_user_intent": "Assess exposed web surface on 10.0.0.5",
+    "retrieval_hints": [
+      "tcp scan",
+      "service banner"
+    ],
+    "success_condition": "Return open ports and likely service names",
+    "suggested_category_focus": [
+      "network_recon",
+      "service_fingerprinting"
+    ],
+    "target_source": "explicit_current_message",
+    "target_status": "resolved"
+  }
+}

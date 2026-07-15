@@ -1,0 +1,29 @@
+	Sharename       Type      Comment
+	---------       ----      -------
+	ADMIN$          Disk      Remote Admin
+	C$              Disk      Default share
+	IPC$            IPC       Remote IPC
+	print$          Disk      Printer Drivers
+	Public          Disk      Public Documents
+	Users           Disk      User Home Directories
+
+Reconnecting with SMB1 for workgroup listing.
+
+	Server               Comment
+	---------            -------
+	SERVER               Samba Server
+
+	Workgroup            Master
+	---------            -------
+	WORKGROUP            SERVER
+
+smb: \> ls
+  .                                   D        0  Mon Jan 15 10:00:00 2024
+  ..                                  D        0  Mon Jan 15 10:00:00 2024
+  Documents                           D        0  Mon Jan 15 09:30:00 2024
+  Downloads                           D        0  Mon Jan 15 09:00:00 2024
+  backup.zip                          A  1048576  Sun Jan 14 22:00:00 2024
+  config.txt                          A     4096  Sat Jan 13 18:00:00 2024
+  notes.txt                           A     2048  Fri Jan 12 14:00:00 2024
+
+		52428800 blocks of size 1024. 31457280 blocks available

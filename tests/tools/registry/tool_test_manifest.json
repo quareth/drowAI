@@ -1,0 +1,2807 @@
+{
+  "version": "1.0.0",
+  "last_updated": "2026-03-07T14:27:22+00:00",
+  "tools": {
+    "database_assessment.database_enumeration.enum4linux": {
+      "category": "database_assessment",
+      "subcategory": "database_enumeration",
+      "binary": "enum4linux",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[database_assessment.database_enumeration.enum4linux]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "database_assessment.database_enumeration.oscanner": {
+      "category": "database_assessment",
+      "subcategory": "database_enumeration",
+      "binary": "oscanner",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[database_assessment.database_enumeration.oscanner]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "database_assessment.database_enumeration.sidguesser": {
+      "category": "database_assessment",
+      "subcategory": "database_enumeration",
+      "binary": "sidguesser",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[database_assessment.database_enumeration.sidguesser]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "database_assessment.database_exploitation.sqlninja": {
+      "category": "database_assessment",
+      "subcategory": "database_exploitation",
+      "binary": "sqlninja",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[database_assessment.database_exploitation.sqlninja]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "database_assessment.database_exploitation.sqlsus": {
+      "category": "database_assessment",
+      "subcategory": "database_exploitation",
+      "binary": "sqlsus",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[database_assessment.database_exploitation.sqlsus]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "database_assessment.database_exploitation.tnscmd10g": {
+      "category": "database_assessment",
+      "subcategory": "database_exploitation",
+      "binary": "tnscmd10g",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[database_assessment.database_exploitation.tnscmd10g]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "exploitation_tools.exploit_databases.exploit_db": {
+      "category": "exploitation_tools",
+      "subcategory": "exploit_databases",
+      "binary": "exploit-db",
+      "status": "failed",
+      "last_tested": "2026-01-17T10:58:31+00:00",
+      "test_results": {
+        "test_schema_exhaustive[exploitation_tools.exploit_databases.exploit_db]": "failed",
+        "test_schema_contract[exploitation_tools.exploit_databases.exploit_db]": "failed",
+        "test_command_contract[exploitation_tools.exploit_databases.exploit_db]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "exploitation_tools.exploit_databases.findsploit": {
+      "category": "exploitation_tools",
+      "subcategory": "exploit_databases",
+      "binary": "findsploit",
+      "status": "failed",
+      "last_tested": "2026-01-17T10:58:31+00:00",
+      "test_results": {
+        "test_schema_exhaustive[exploitation_tools.exploit_databases.findsploit]": "failed",
+        "test_schema_contract[exploitation_tools.exploit_databases.findsploit]": "failed",
+        "test_command_contract[exploitation_tools.exploit_databases.findsploit]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "exploitation_tools.exploit_databases.searchsploit": {
+      "category": "exploitation_tools",
+      "subcategory": "exploit_databases",
+      "binary": "searchsploit",
+      "status": "failed",
+      "last_tested": "2026-01-17T10:58:31+00:00",
+      "test_results": {
+        "test_schema_exhaustive[exploitation_tools.exploit_databases.searchsploit]": "failed",
+        "test_schema_contract[exploitation_tools.exploit_databases.searchsploit]": "failed",
+        "test_command_contract[exploitation_tools.exploit_databases.searchsploit]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "exploitation_tools.metasploit.inspect_module": {
+      "category": "exploitation_tools",
+      "subcategory": "metasploit",
+      "binary": "msfconsole",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:27:00+00:00",
+      "test_results": {
+        "test_schema_exhaustive[exploitation_tools.metasploit.inspect_module]": "passed",
+        "test_schema_contract[exploitation_tools.metasploit.inspect_module]": "passed",
+        "test_command_contract[exploitation_tools.metasploit.inspect_module]": "passed",
+        "test_parse_output_contract[exploitation_tools.metasploit.inspect_module]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "exploitation_tools.metasploit.run_exploit": {
+      "category": "exploitation_tools",
+      "subcategory": "metasploit",
+      "binary": "msfconsole",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:27:00+00:00",
+      "test_results": {
+        "test_schema_exhaustive[exploitation_tools.metasploit.run_exploit]": "passed",
+        "test_schema_contract[exploitation_tools.metasploit.run_exploit]": "passed",
+        "test_command_contract[exploitation_tools.metasploit.run_exploit]": "passed",
+        "test_parse_output_contract[exploitation_tools.metasploit.run_exploit]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "exploitation_tools.metasploit.search_modules": {
+      "category": "exploitation_tools",
+      "subcategory": "metasploit",
+      "binary": "msfconsole",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:27:00+00:00",
+      "test_results": {
+        "test_schema_exhaustive[exploitation_tools.metasploit.search_modules]": "passed",
+        "test_schema_contract[exploitation_tools.metasploit.search_modules]": "passed",
+        "test_command_contract[exploitation_tools.metasploit.search_modules]": "passed",
+        "test_parse_output_contract[exploitation_tools.metasploit.search_modules]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "exploitation_tools.metasploit.msfdb": {
+      "category": "exploitation_tools",
+      "subcategory": "metasploit",
+      "binary": "msfdb",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:27:00+00:00",
+      "test_results": {
+        "test_schema_exhaustive[exploitation_tools.metasploit.msfdb]": "failed",
+        "test_schema_contract[exploitation_tools.metasploit.msfdb]": "passed",
+        "test_command_contract[exploitation_tools.metasploit.msfdb]": "passed",
+        "test_parse_output_contract[exploitation_tools.metasploit.msfdb]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "exploitation_tools.metasploit.msfvenom": {
+      "category": "exploitation_tools",
+      "subcategory": "metasploit",
+      "binary": "msfvenom",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:27:00+00:00",
+      "test_results": {
+        "test_schema_exhaustive[exploitation_tools.metasploit.msfvenom]": "failed",
+        "test_schema_contract[exploitation_tools.metasploit.msfvenom]": "passed",
+        "test_command_contract[exploitation_tools.metasploit.msfvenom]": "passed",
+        "test_parse_output_contract[exploitation_tools.metasploit.msfvenom]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "exploitation_tools.payload_creation.msfvenom": {
+      "category": "exploitation_tools",
+      "subcategory": "payload_creation",
+      "binary": "msfvenom",
+      "status": "partial",
+      "last_tested": "2026-01-17T10:58:31+00:00",
+      "test_results": {
+        "test_schema_exhaustive[exploitation_tools.payload_creation.msfvenom]": "failed",
+        "test_schema_contract[exploitation_tools.payload_creation.msfvenom]": "passed",
+        "test_command_contract[exploitation_tools.payload_creation.msfvenom]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "exploitation_tools.payload_creation.powersploit": {
+      "category": "exploitation_tools",
+      "subcategory": "payload_creation",
+      "binary": "powersploit",
+      "status": "failed",
+      "last_tested": "2026-01-17T10:58:31+00:00",
+      "test_results": {
+        "test_schema_exhaustive[exploitation_tools.payload_creation.powersploit]": "failed",
+        "test_schema_contract[exploitation_tools.payload_creation.powersploit]": "failed",
+        "test_command_contract[exploitation_tools.payload_creation.powersploit]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "exploitation_tools.payload_creation.shellnoob": {
+      "category": "exploitation_tools",
+      "subcategory": "payload_creation",
+      "binary": "shellnoob",
+      "status": "failed",
+      "last_tested": "2026-01-17T10:58:31+00:00",
+      "test_results": {
+        "test_schema_exhaustive[exploitation_tools.payload_creation.shellnoob]": "failed",
+        "test_schema_contract[exploitation_tools.payload_creation.shellnoob]": "failed",
+        "test_command_contract[exploitation_tools.payload_creation.shellnoob]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "exploitation_tools.payload_creation.shellter": {
+      "category": "exploitation_tools",
+      "subcategory": "payload_creation",
+      "binary": "shellter",
+      "status": "failed",
+      "last_tested": "2026-01-17T10:58:31+00:00",
+      "test_results": {
+        "test_schema_exhaustive[exploitation_tools.payload_creation.shellter]": "failed",
+        "test_schema_contract[exploitation_tools.payload_creation.shellter]": "failed",
+        "test_command_contract[exploitation_tools.payload_creation.shellter]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "exploitation_tools.payload_creation.the_backdoor_factory": {
+      "category": "exploitation_tools",
+      "subcategory": "payload_creation",
+      "binary": "the-backdoor-factory",
+      "status": "failed",
+      "last_tested": "2026-01-17T10:58:31+00:00",
+      "test_results": {
+        "test_schema_exhaustive[exploitation_tools.payload_creation.the_backdoor_factory]": "failed",
+        "test_schema_contract[exploitation_tools.payload_creation.the_backdoor_factory]": "failed",
+        "test_command_contract[exploitation_tools.payload_creation.the_backdoor_factory]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "exploitation_tools.payload_creation.veil": {
+      "category": "exploitation_tools",
+      "subcategory": "payload_creation",
+      "binary": "veil",
+      "status": "failed",
+      "last_tested": "2026-01-17T10:58:31+00:00",
+      "test_results": {
+        "test_schema_exhaustive[exploitation_tools.payload_creation.veil]": "failed",
+        "test_schema_contract[exploitation_tools.payload_creation.veil]": "failed",
+        "test_command_contract[exploitation_tools.payload_creation.veil]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "filesystem.append_file": {
+      "category": "filesystem",
+      "subcategory": "append_file",
+      "binary": "append-file",
+      "status": "partial",
+      "last_tested": "2026-01-15T17:49:35+00:00",
+      "test_results": {
+        "test_schema_exhaustive[filesystem.append_file]": "failed",
+        "test_schema_contract[filesystem.append_file]": "passed",
+        "test_command_contract[filesystem.append_file]": "passed",
+        "test_parse_output_contract[filesystem.append_file]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "filesystem.copy_path": {
+      "category": "filesystem",
+      "subcategory": "copy_path",
+      "binary": "copy-path",
+      "status": "partial",
+      "last_tested": "2026-01-15T17:49:35+00:00",
+      "test_results": {
+        "test_schema_exhaustive[filesystem.copy_path]": "failed",
+        "test_schema_contract[filesystem.copy_path]": "passed",
+        "test_command_contract[filesystem.copy_path]": "passed",
+        "test_parse_output_contract[filesystem.copy_path]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "filesystem.delete_path": {
+      "category": "filesystem",
+      "subcategory": "delete_path",
+      "binary": "delete-path",
+      "status": "partial",
+      "last_tested": "2026-01-15T17:49:35+00:00",
+      "test_results": {
+        "test_schema_exhaustive[filesystem.delete_path]": "failed",
+        "test_schema_contract[filesystem.delete_path]": "passed",
+        "test_command_contract[filesystem.delete_path]": "passed",
+        "test_parse_output_contract[filesystem.delete_path]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "filesystem.find_paths": {
+      "category": "filesystem",
+      "subcategory": "find_paths",
+      "binary": "find-paths",
+      "status": "partial",
+      "last_tested": "2026-01-15T17:49:35+00:00",
+      "test_results": {
+        "test_schema_exhaustive[filesystem.find_paths]": "failed",
+        "test_schema_contract[filesystem.find_paths]": "passed",
+        "test_command_contract[filesystem.find_paths]": "passed",
+        "test_parse_output_contract[filesystem.find_paths]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "filesystem.list_dir": {
+      "category": "filesystem",
+      "subcategory": "list_dir",
+      "binary": "list-dir",
+      "status": "partial",
+      "last_tested": "2026-01-15T17:49:35+00:00",
+      "test_results": {
+        "test_schema_exhaustive[filesystem.list_dir]": "failed",
+        "test_schema_contract[filesystem.list_dir]": "passed",
+        "test_command_contract[filesystem.list_dir]": "passed",
+        "test_parse_output_contract[filesystem.list_dir]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "filesystem.make_dir": {
+      "category": "filesystem",
+      "subcategory": "make_dir",
+      "binary": "make-dir",
+      "status": "partial",
+      "last_tested": "2026-01-15T17:49:35+00:00",
+      "test_results": {
+        "test_schema_exhaustive[filesystem.make_dir]": "failed",
+        "test_schema_contract[filesystem.make_dir]": "passed",
+        "test_command_contract[filesystem.make_dir]": "passed",
+        "test_parse_output_contract[filesystem.make_dir]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "filesystem.move_path": {
+      "category": "filesystem",
+      "subcategory": "move_path",
+      "binary": "move-path",
+      "status": "partial",
+      "last_tested": "2026-01-15T17:49:35+00:00",
+      "test_results": {
+        "test_schema_exhaustive[filesystem.move_path]": "failed",
+        "test_schema_contract[filesystem.move_path]": "passed",
+        "test_command_contract[filesystem.move_path]": "passed",
+        "test_parse_output_contract[filesystem.move_path]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "filesystem.read_file": {
+      "category": "filesystem",
+      "subcategory": "read_file",
+      "binary": "read-file",
+      "status": "partial",
+      "last_tested": "2026-01-15T17:49:35+00:00",
+      "test_results": {
+        "test_schema_exhaustive[filesystem.read_file]": "failed",
+        "test_schema_contract[filesystem.read_file]": "passed",
+        "test_command_contract[filesystem.read_file]": "passed",
+        "test_parse_output_contract[filesystem.read_file]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "filesystem.search_text": {
+      "category": "filesystem",
+      "subcategory": "search_text",
+      "binary": "search-text",
+      "status": "partial",
+      "last_tested": "2026-01-15T17:49:35+00:00",
+      "test_results": {
+        "test_schema_exhaustive[filesystem.search_text]": "failed",
+        "test_schema_contract[filesystem.search_text]": "passed",
+        "test_command_contract[filesystem.search_text]": "passed",
+        "test_parse_output_contract[filesystem.search_text]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "filesystem.stat_path": {
+      "category": "filesystem",
+      "subcategory": "stat_path",
+      "binary": "stat-path",
+      "status": "partial",
+      "last_tested": "2026-01-15T17:49:35+00:00",
+      "test_results": {
+        "test_schema_exhaustive[filesystem.stat_path]": "failed",
+        "test_schema_contract[filesystem.stat_path]": "passed",
+        "test_command_contract[filesystem.stat_path]": "passed",
+        "test_parse_output_contract[filesystem.stat_path]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "filesystem.write_file": {
+      "category": "filesystem",
+      "subcategory": "write_file",
+      "binary": "write-file",
+      "status": "partial",
+      "last_tested": "2026-01-15T17:49:35+00:00",
+      "test_results": {
+        "test_schema_exhaustive[filesystem.write_file]": "failed",
+        "test_schema_contract[filesystem.write_file]": "passed",
+        "test_command_contract[filesystem.write_file]": "passed",
+        "test_parse_output_contract[filesystem.write_file]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "forensics.digital_forensics.bulk_extractor": {
+      "category": "forensics",
+      "subcategory": "digital_forensics",
+      "binary": "bulk-extractor",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[forensics.digital_forensics.bulk_extractor]": "failed",
+        "test_schema_contract[forensics.digital_forensics.bulk_extractor]": "passed",
+        "test_command_contract[forensics.digital_forensics.bulk_extractor]": "passed",
+        "test_parse_output_contract[forensics.digital_forensics.bulk_extractor]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "forensics.digital_forensics.foremost": {
+      "category": "forensics",
+      "subcategory": "digital_forensics",
+      "binary": "foremost",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[forensics.digital_forensics.foremost]": "failed",
+        "test_schema_contract[forensics.digital_forensics.foremost]": "passed",
+        "test_command_contract[forensics.digital_forensics.foremost]": "passed",
+        "test_parse_output_contract[forensics.digital_forensics.foremost]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "forensics.digital_forensics.sleuthkit": {
+      "category": "forensics",
+      "subcategory": "digital_forensics",
+      "binary": "sleuthkit",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[forensics.digital_forensics.sleuthkit]": "failed",
+        "test_schema_contract[forensics.digital_forensics.sleuthkit]": "passed",
+        "test_command_contract[forensics.digital_forensics.sleuthkit]": "passed",
+        "test_parse_output_contract[forensics.digital_forensics.sleuthkit]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "forensics.digital_forensics.volatility": {
+      "category": "forensics",
+      "subcategory": "digital_forensics",
+      "binary": "volatility",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[forensics.digital_forensics.volatility]": "failed",
+        "test_schema_contract[forensics.digital_forensics.volatility]": "passed",
+        "test_command_contract[forensics.digital_forensics.volatility]": "passed",
+        "test_parse_output_contract[forensics.digital_forensics.volatility]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "forensics.forensics_analysis_tools.binwalk": {
+      "category": "forensics",
+      "subcategory": "forensics_analysis_tools",
+      "binary": "binwalk",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[forensics.forensics_analysis_tools.binwalk]": "failed",
+        "test_schema_contract[forensics.forensics_analysis_tools.binwalk]": "passed",
+        "test_command_contract[forensics.forensics_analysis_tools.binwalk]": "passed",
+        "test_parse_output_contract[forensics.forensics_analysis_tools.binwalk]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "forensics.forensics_analysis_tools.chkrootkit": {
+      "category": "forensics",
+      "subcategory": "forensics_analysis_tools",
+      "binary": "chkrootkit",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[forensics.forensics_analysis_tools.chkrootkit]": "failed",
+        "test_schema_contract[forensics.forensics_analysis_tools.chkrootkit]": "passed",
+        "test_command_contract[forensics.forensics_analysis_tools.chkrootkit]": "passed",
+        "test_parse_output_contract[forensics.forensics_analysis_tools.chkrootkit]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "forensics.forensics_analysis_tools.foremost": {
+      "category": "forensics",
+      "subcategory": "forensics_analysis_tools",
+      "binary": "foremost",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[forensics.forensics_analysis_tools.foremost]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "forensics.forensics_analysis_tools.hashdeep": {
+      "category": "forensics",
+      "subcategory": "forensics_analysis_tools",
+      "binary": "hashdeep",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[forensics.forensics_analysis_tools.hashdeep]": "failed",
+        "test_schema_contract[forensics.forensics_analysis_tools.hashdeep]": "passed",
+        "test_command_contract[forensics.forensics_analysis_tools.hashdeep]": "passed",
+        "test_parse_output_contract[forensics.forensics_analysis_tools.hashdeep]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "forensics.forensics_analysis_tools.scalpel": {
+      "category": "forensics",
+      "subcategory": "forensics_analysis_tools",
+      "binary": "scalpel",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[forensics.forensics_analysis_tools.scalpel]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.dns.amass": {
+      "category": "information_gathering",
+      "subcategory": "dns",
+      "binary": "amass",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.dns.amass]": "passed",
+        "test_command_contract[information_gathering.dns.amass]": "passed",
+        "test_parse_output_contract[information_gathering.dns.amass]": "passed",
+        "test_schema_exhaustive[information_gathering.dns.amass]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.dns.dnsenum": {
+      "category": "information_gathering",
+      "subcategory": "dns",
+      "binary": "dnsenum",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.dns.dnsenum]": "passed",
+        "test_command_contract[information_gathering.dns.dnsenum]": "passed",
+        "test_parse_output_contract[information_gathering.dns.dnsenum]": "passed",
+        "test_schema_exhaustive[information_gathering.dns.dnsenum]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.dns.dnsmap": {
+      "category": "information_gathering",
+      "subcategory": "dns",
+      "binary": "dnsmap",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.dns.dnsmap]": "passed",
+        "test_command_contract[information_gathering.dns.dnsmap]": "passed",
+        "test_parse_output_contract[information_gathering.dns.dnsmap]": "passed",
+        "test_schema_exhaustive[information_gathering.dns.dnsmap]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.dns.dnsrecon": {
+      "category": "information_gathering",
+      "subcategory": "dns",
+      "binary": "dnsrecon",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.dns.dnsrecon]": "passed",
+        "test_command_contract[information_gathering.dns.dnsrecon]": "passed",
+        "test_parse_output_contract[information_gathering.dns.dnsrecon]": "passed",
+        "test_schema_exhaustive[information_gathering.dns.dnsrecon]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.dns.fierce": {
+      "category": "information_gathering",
+      "subcategory": "dns",
+      "binary": "fierce",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.dns.fierce]": "passed",
+        "test_command_contract[information_gathering.dns.fierce]": "passed",
+        "test_parse_output_contract[information_gathering.dns.fierce]": "passed",
+        "test_schema_exhaustive[information_gathering.dns.fierce]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.dns.sublist3r": {
+      "category": "information_gathering",
+      "subcategory": "dns",
+      "binary": "sublist3r",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.dns.sublist3r]": "passed",
+        "test_command_contract[information_gathering.dns.sublist3r]": "passed",
+        "test_parse_output_contract[information_gathering.dns.sublist3r]": "passed",
+        "test_schema_exhaustive[information_gathering.dns.sublist3r]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.dns.theharvester": {
+      "category": "information_gathering",
+      "subcategory": "dns",
+      "binary": "theharvester",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.dns.theharvester]": "passed",
+        "test_command_contract[information_gathering.dns.theharvester]": "passed",
+        "test_parse_output_contract[information_gathering.dns.theharvester]": "passed",
+        "test_schema_exhaustive[information_gathering.dns.theharvester]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.network_discovery.fping": {
+      "category": "information_gathering",
+      "subcategory": "network_discovery",
+      "binary": "fping",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.network_discovery.fping]": "passed",
+        "test_command_contract[information_gathering.network_discovery.fping]": "passed",
+        "test_parse_output_contract[information_gathering.network_discovery.fping]": "passed",
+        "test_schema_exhaustive[information_gathering.network_discovery.fping]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.network_discovery.masscan": {
+      "category": "information_gathering",
+      "subcategory": "network_discovery",
+      "binary": "masscan",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:28+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.network_discovery.masscan]": "failed",
+        "test_command_contract[information_gathering.network_discovery.masscan]": "passed",
+        "test_parse_output_contract[information_gathering.network_discovery.masscan]": "passed",
+        "test_schema_exhaustive[information_gathering.network_discovery.masscan]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.network_discovery.netdiscover": {
+      "category": "information_gathering",
+      "subcategory": "network_discovery",
+      "binary": "netdiscover",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.network_discovery.netdiscover]": "passed",
+        "test_command_contract[information_gathering.network_discovery.netdiscover]": "passed",
+        "test_parse_output_contract[information_gathering.network_discovery.netdiscover]": "passed",
+        "test_schema_exhaustive[information_gathering.network_discovery.netdiscover]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.network_discovery.nmap": {
+      "category": "information_gathering",
+      "subcategory": "network_discovery",
+      "binary": "nmap",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.network_discovery.nmap]": "passed",
+        "test_command_contract[information_gathering.network_discovery.nmap]": "passed",
+        "test_parse_output_contract[information_gathering.network_discovery.nmap]": "passed",
+        "test_schema_exhaustive[information_gathering.network_discovery.nmap]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.network_discovery.unicornscan": {
+      "category": "information_gathering",
+      "subcategory": "network_discovery",
+      "binary": "unicornscan",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.network_discovery.unicornscan]": "passed",
+        "test_command_contract[information_gathering.network_discovery.unicornscan]": "passed",
+        "test_parse_output_contract[information_gathering.network_discovery.unicornscan]": "passed",
+        "test_schema_exhaustive[information_gathering.network_discovery.unicornscan]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.network_discovery.zmap": {
+      "category": "information_gathering",
+      "subcategory": "network_discovery",
+      "binary": "zmap",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.network_discovery.zmap]": "passed",
+        "test_command_contract[information_gathering.network_discovery.zmap]": "passed",
+        "test_parse_output_contract[information_gathering.network_discovery.zmap]": "passed",
+        "test_schema_exhaustive[information_gathering.network_discovery.zmap]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.osint.censys": {
+      "category": "information_gathering",
+      "subcategory": "osint",
+      "binary": "censys",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.osint.censys]": "passed",
+        "test_command_contract[information_gathering.osint.censys]": "passed",
+        "test_parse_output_contract[information_gathering.osint.censys]": "passed",
+        "test_schema_exhaustive[information_gathering.osint.censys]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.osint.dmitry": {
+      "category": "information_gathering",
+      "subcategory": "osint",
+      "binary": "dmitry",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.osint.dmitry]": "passed",
+        "test_command_contract[information_gathering.osint.dmitry]": "passed",
+        "test_parse_output_contract[information_gathering.osint.dmitry]": "passed",
+        "test_schema_exhaustive[information_gathering.osint.dmitry]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.osint.ike_scan": {
+      "category": "information_gathering",
+      "subcategory": "osint",
+      "binary": "ike-scan",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.osint.ike_scan]": "passed",
+        "test_command_contract[information_gathering.osint.ike_scan]": "passed",
+        "test_parse_output_contract[information_gathering.osint.ike_scan]": "passed",
+        "test_schema_exhaustive[information_gathering.osint.ike_scan]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.osint.recon_ng": {
+      "category": "information_gathering",
+      "subcategory": "osint",
+      "binary": "recon-ng",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.osint.recon_ng]": "passed",
+        "test_command_contract[information_gathering.osint.recon_ng]": "passed",
+        "test_parse_output_contract[information_gathering.osint.recon_ng]": "passed",
+        "test_schema_exhaustive[information_gathering.osint.recon_ng]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.osint.shodan": {
+      "category": "information_gathering",
+      "subcategory": "osint",
+      "binary": "shodan",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.osint.shodan]": "passed",
+        "test_command_contract[information_gathering.osint.shodan]": "passed",
+        "test_parse_output_contract[information_gathering.osint.shodan]": "passed",
+        "test_schema_exhaustive[information_gathering.osint.shodan]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.osint.spiderfoot": {
+      "category": "information_gathering",
+      "subcategory": "osint",
+      "binary": "spiderfoot",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.osint.spiderfoot]": "passed",
+        "test_command_contract[information_gathering.osint.spiderfoot]": "passed",
+        "test_parse_output_contract[information_gathering.osint.spiderfoot]": "passed",
+        "test_schema_exhaustive[information_gathering.osint.spiderfoot]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.osint.theharvester": {
+      "category": "information_gathering",
+      "subcategory": "osint",
+      "binary": "theharvester",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.osint.theharvester]": "passed",
+        "test_command_contract[information_gathering.osint.theharvester]": "passed",
+        "test_parse_output_contract[information_gathering.osint.theharvester]": "passed",
+        "test_schema_exhaustive[information_gathering.osint.theharvester]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.osint.whois": {
+      "category": "information_gathering",
+      "subcategory": "osint",
+      "binary": "whois",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.osint.whois]": "passed",
+        "test_command_contract[information_gathering.osint.whois]": "passed",
+        "test_parse_output_contract[information_gathering.osint.whois]": "passed",
+        "test_schema_exhaustive[information_gathering.osint.whois]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.route_analysis.mtr": {
+      "category": "information_gathering",
+      "subcategory": "route_analysis",
+      "binary": "mtr",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.route_analysis.mtr]": "passed",
+        "test_command_contract[information_gathering.route_analysis.mtr]": "passed",
+        "test_parse_output_contract[information_gathering.route_analysis.mtr]": "passed",
+        "test_schema_exhaustive[information_gathering.route_analysis.mtr]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.route_analysis.pathping": {
+      "category": "information_gathering",
+      "subcategory": "route_analysis",
+      "binary": "pathping",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.route_analysis.pathping]": "failed",
+        "test_command_contract[information_gathering.route_analysis.pathping]": "failed",
+        "test_parse_output_contract[information_gathering.route_analysis.pathping]": "passed",
+        "test_schema_exhaustive[information_gathering.route_analysis.pathping]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.route_analysis.tcptraceroute": {
+      "category": "information_gathering",
+      "subcategory": "route_analysis",
+      "binary": "tcptraceroute",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.route_analysis.tcptraceroute]": "passed",
+        "test_command_contract[information_gathering.route_analysis.tcptraceroute]": "passed",
+        "test_parse_output_contract[information_gathering.route_analysis.tcptraceroute]": "passed",
+        "test_schema_exhaustive[information_gathering.route_analysis.tcptraceroute]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.route_analysis.traceroute": {
+      "category": "information_gathering",
+      "subcategory": "route_analysis",
+      "binary": "traceroute",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.route_analysis.traceroute]": "passed",
+        "test_command_contract[information_gathering.route_analysis.traceroute]": "passed",
+        "test_parse_output_contract[information_gathering.route_analysis.traceroute]": "passed",
+        "test_schema_exhaustive[information_gathering.route_analysis.traceroute]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.smtp_analysis.smtp_user_enum": {
+      "category": "information_gathering",
+      "subcategory": "smtp_analysis",
+      "binary": "smtp-user-enum",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.smtp_analysis.smtp_user_enum]": "passed",
+        "test_command_contract[information_gathering.smtp_analysis.smtp_user_enum]": "passed",
+        "test_parse_output_contract[information_gathering.smtp_analysis.smtp_user_enum]": "passed",
+        "test_schema_exhaustive[information_gathering.smtp_analysis.smtp_user_enum]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "information_gathering.smtp_analysis.swaks": {
+      "category": "information_gathering",
+      "subcategory": "smtp_analysis",
+      "binary": "swaks",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:22:19+00:00",
+      "test_results": {
+        "test_schema_contract[information_gathering.smtp_analysis.swaks]": "passed",
+        "test_command_contract[information_gathering.smtp_analysis.swaks]": "passed",
+        "test_parse_output_contract[information_gathering.smtp_analysis.swaks]": "passed",
+        "test_schema_exhaustive[information_gathering.smtp_analysis.swaks]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "maintaining_access.os_backdoors.cymothoa": {
+      "category": "maintaining_access",
+      "subcategory": "os_backdoors",
+      "binary": "cymothoa",
+      "status": "partial",
+      "last_tested": "2026-01-15T19:10:42+00:00",
+      "test_results": {
+        "test_schema_exhaustive[maintaining_access.os_backdoors.cymothoa]": "failed",
+        "test_schema_contract[maintaining_access.os_backdoors.cymothoa]": "passed",
+        "test_command_contract[maintaining_access.os_backdoors.cymothoa]": "passed",
+        "test_parse_output_contract[maintaining_access.os_backdoors.cymothoa]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "maintaining_access.os_backdoors.intersect": {
+      "category": "maintaining_access",
+      "subcategory": "os_backdoors",
+      "binary": "intersect",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[maintaining_access.os_backdoors.intersect]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "maintaining_access.os_backdoors.powersploit": {
+      "category": "maintaining_access",
+      "subcategory": "os_backdoors",
+      "binary": "powersploit",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[maintaining_access.os_backdoors.powersploit]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "maintaining_access.tunneling_pivoting.dns2tcp": {
+      "category": "maintaining_access",
+      "subcategory": "tunneling_pivoting",
+      "binary": "dns2tcp",
+      "status": "partial",
+      "last_tested": "2026-01-15T19:10:42+00:00",
+      "test_results": {
+        "test_schema_exhaustive[maintaining_access.tunneling_pivoting.dns2tcp]": "failed",
+        "test_schema_contract[maintaining_access.tunneling_pivoting.dns2tcp]": "passed",
+        "test_command_contract[maintaining_access.tunneling_pivoting.dns2tcp]": "passed",
+        "test_parse_output_contract[maintaining_access.tunneling_pivoting.dns2tcp]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "maintaining_access.tunneling_pivoting.iodine": {
+      "category": "maintaining_access",
+      "subcategory": "tunneling_pivoting",
+      "binary": "iodine",
+      "status": "partial",
+      "last_tested": "2026-01-15T19:10:42+00:00",
+      "test_results": {
+        "test_schema_exhaustive[maintaining_access.tunneling_pivoting.iodine]": "failed",
+        "test_schema_contract[maintaining_access.tunneling_pivoting.iodine]": "passed",
+        "test_command_contract[maintaining_access.tunneling_pivoting.iodine]": "passed",
+        "test_parse_output_contract[maintaining_access.tunneling_pivoting.iodine]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "maintaining_access.tunneling_pivoting.proxychains": {
+      "category": "maintaining_access",
+      "subcategory": "tunneling_pivoting",
+      "binary": "proxychains",
+      "status": "partial",
+      "last_tested": "2026-01-15T19:10:42+00:00",
+      "test_results": {
+        "test_schema_exhaustive[maintaining_access.tunneling_pivoting.proxychains]": "failed",
+        "test_schema_contract[maintaining_access.tunneling_pivoting.proxychains]": "passed",
+        "test_command_contract[maintaining_access.tunneling_pivoting.proxychains]": "passed",
+        "test_parse_output_contract[maintaining_access.tunneling_pivoting.proxychains]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "maintaining_access.tunneling_pivoting.proxytunnel": {
+      "category": "maintaining_access",
+      "subcategory": "tunneling_pivoting",
+      "binary": "proxytunnel",
+      "status": "partial",
+      "last_tested": "2026-01-15T19:10:42+00:00",
+      "test_results": {
+        "test_schema_exhaustive[maintaining_access.tunneling_pivoting.proxytunnel]": "failed",
+        "test_schema_contract[maintaining_access.tunneling_pivoting.proxytunnel]": "passed",
+        "test_command_contract[maintaining_access.tunneling_pivoting.proxytunnel]": "passed",
+        "test_parse_output_contract[maintaining_access.tunneling_pivoting.proxytunnel]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "maintaining_access.tunneling_pivoting.ptunnel": {
+      "category": "maintaining_access",
+      "subcategory": "tunneling_pivoting",
+      "binary": "ptunnel",
+      "status": "partial",
+      "last_tested": "2026-01-15T19:10:42+00:00",
+      "test_results": {
+        "test_schema_exhaustive[maintaining_access.tunneling_pivoting.ptunnel]": "failed",
+        "test_schema_contract[maintaining_access.tunneling_pivoting.ptunnel]": "passed",
+        "test_command_contract[maintaining_access.tunneling_pivoting.ptunnel]": "passed",
+        "test_parse_output_contract[maintaining_access.tunneling_pivoting.ptunnel]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "maintaining_access.web_backdoors.php_meterpreter": {
+      "category": "maintaining_access",
+      "subcategory": "web_backdoors",
+      "binary": "php-meterpreter",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[maintaining_access.web_backdoors.php_meterpreter]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "maintaining_access.web_backdoors.weevely": {
+      "category": "maintaining_access",
+      "subcategory": "web_backdoors",
+      "binary": "weevely",
+      "status": "partial",
+      "last_tested": "2026-01-15T19:10:42+00:00",
+      "test_results": {
+        "test_schema_exhaustive[maintaining_access.web_backdoors.weevely]": "failed",
+        "test_schema_contract[maintaining_access.web_backdoors.weevely]": "passed",
+        "test_command_contract[maintaining_access.web_backdoors.weevely]": "passed",
+        "test_parse_output_contract[maintaining_access.web_backdoors.weevely]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "password_attacks.offline_attacks.crunch": {
+      "category": "password_attacks",
+      "subcategory": "offline_attacks",
+      "binary": "crunch",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00",
+      "test_results": {
+        "test_schema_contract[password_attacks.offline_attacks.crunch]": "passed",
+        "test_command_contract[password_attacks.offline_attacks.crunch]": "passed",
+        "test_parse_output_contract[password_attacks.offline_attacks.crunch]": "passed",
+        "test_schema_exhaustive[password_attacks.offline_attacks.crunch]": "passed"
+      },
+      "fixture_available": true,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "password_attacks.offline_attacks.hashcat": {
+      "category": "password_attacks",
+      "subcategory": "offline_attacks",
+      "binary": "hashcat",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00",
+      "test_results": {
+        "test_schema_contract[password_attacks.offline_attacks.hashcat]": "passed",
+        "test_command_contract[password_attacks.offline_attacks.hashcat]": "passed",
+        "test_parse_output_contract[password_attacks.offline_attacks.hashcat]": "passed",
+        "test_schema_exhaustive[password_attacks.offline_attacks.hashcat]": "passed"
+      },
+      "fixture_available": true,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "password_attacks.offline_attacks.john": {
+      "category": "password_attacks",
+      "subcategory": "offline_attacks",
+      "binary": "john",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00",
+      "test_results": {
+        "test_schema_contract[password_attacks.offline_attacks.john]": "passed",
+        "test_command_contract[password_attacks.offline_attacks.john]": "passed",
+        "test_parse_output_contract[password_attacks.offline_attacks.john]": "passed",
+        "test_schema_exhaustive[password_attacks.offline_attacks.john]": "passed"
+      },
+      "fixture_available": true,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "password_attacks.offline_attacks.rainbowcrack": {
+      "category": "password_attacks",
+      "subcategory": "offline_attacks",
+      "binary": "rainbowcrack",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00",
+      "test_results": {
+        "test_schema_contract[password_attacks.offline_attacks.rainbowcrack]": "passed",
+        "test_command_contract[password_attacks.offline_attacks.rainbowcrack]": "passed",
+        "test_parse_output_contract[password_attacks.offline_attacks.rainbowcrack]": "passed",
+        "test_schema_exhaustive[password_attacks.offline_attacks.rainbowcrack]": "passed"
+      },
+      "fixture_available": true,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "password_attacks.offline_attacks.samdump2": {
+      "category": "password_attacks",
+      "subcategory": "offline_attacks",
+      "binary": "samdump2",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00",
+      "test_results": {
+        "test_schema_contract[password_attacks.offline_attacks.samdump2]": "passed",
+        "test_command_contract[password_attacks.offline_attacks.samdump2]": "passed",
+        "test_parse_output_contract[password_attacks.offline_attacks.samdump2]": "passed",
+        "test_schema_exhaustive[password_attacks.offline_attacks.samdump2]": "passed"
+      },
+      "fixture_available": true,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "password_attacks.online_attacks.crowbar": {
+      "category": "password_attacks",
+      "subcategory": "online_attacks",
+      "binary": "crowbar",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00",
+      "test_results": {
+        "test_schema_contract[password_attacks.online_attacks.crowbar]": "passed",
+        "test_command_contract[password_attacks.online_attacks.crowbar]": "passed",
+        "test_parse_output_contract[password_attacks.online_attacks.crowbar]": "passed",
+        "test_schema_exhaustive[password_attacks.online_attacks.crowbar]": "passed"
+      },
+      "fixture_available": true,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "password_attacks.online_attacks.hydra": {
+      "category": "password_attacks",
+      "subcategory": "online_attacks",
+      "binary": "hydra",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00",
+      "test_results": {
+        "test_schema_contract[password_attacks.online_attacks.hydra]": "passed",
+        "test_command_contract[password_attacks.online_attacks.hydra]": "passed",
+        "test_parse_output_contract[password_attacks.online_attacks.hydra]": "passed",
+        "test_schema_exhaustive[password_attacks.online_attacks.hydra]": "passed"
+      },
+      "fixture_available": true,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "password_attacks.online_attacks.medusa": {
+      "category": "password_attacks",
+      "subcategory": "online_attacks",
+      "binary": "medusa",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00",
+      "test_results": {
+        "test_schema_contract[password_attacks.online_attacks.medusa]": "passed",
+        "test_command_contract[password_attacks.online_attacks.medusa]": "passed",
+        "test_parse_output_contract[password_attacks.online_attacks.medusa]": "passed",
+        "test_schema_exhaustive[password_attacks.online_attacks.medusa]": "passed"
+      },
+      "fixture_available": true,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "password_attacks.online_attacks.ncrack": {
+      "category": "password_attacks",
+      "subcategory": "online_attacks",
+      "binary": "ncrack",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00",
+      "test_results": {
+        "test_schema_contract[password_attacks.online_attacks.ncrack]": "passed",
+        "test_command_contract[password_attacks.online_attacks.ncrack]": "passed",
+        "test_parse_output_contract[password_attacks.online_attacks.ncrack]": "passed",
+        "test_schema_exhaustive[password_attacks.online_attacks.ncrack]": "passed"
+      },
+      "fixture_available": true,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "password_attacks.online_attacks.patator": {
+      "category": "password_attacks",
+      "subcategory": "online_attacks",
+      "binary": "patator",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00",
+      "test_results": {
+        "test_schema_contract[password_attacks.online_attacks.patator]": "passed",
+        "test_command_contract[password_attacks.online_attacks.patator]": "passed",
+        "test_parse_output_contract[password_attacks.online_attacks.patator]": "passed",
+        "test_schema_exhaustive[password_attacks.online_attacks.patator]": "passed"
+      },
+      "fixture_available": true,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "password_attacks.passing_the_hash.mimikatz": {
+      "category": "password_attacks",
+      "subcategory": "passing_the_hash",
+      "binary": "mimikatz",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_contract[password_attacks.passing_the_hash.mimikatz]": "failed",
+        "test_command_contract[password_attacks.passing_the_hash.mimikatz]": "failed",
+        "test_parse_output_contract[password_attacks.passing_the_hash.mimikatz]": "passed",
+        "test_schema_exhaustive[password_attacks.passing_the_hash.mimikatz]": "failed"
+      },
+      "fixture_available": true,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "password_attacks.passing_the_hash.ntlmrelayx": {
+      "category": "password_attacks",
+      "subcategory": "passing_the_hash",
+      "binary": "ntlmrelayx",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00",
+      "test_results": {
+        "test_schema_contract[password_attacks.passing_the_hash.ntlmrelayx]": "passed",
+        "test_command_contract[password_attacks.passing_the_hash.ntlmrelayx]": "passed",
+        "test_parse_output_contract[password_attacks.passing_the_hash.ntlmrelayx]": "passed",
+        "test_schema_exhaustive[password_attacks.passing_the_hash.ntlmrelayx]": "passed"
+      },
+      "fixture_available": true,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "password_attacks.passing_the_hash.passing_the_hash_toolkit": {
+      "category": "password_attacks",
+      "subcategory": "passing_the_hash",
+      "binary": "passing-the-hash-toolkit",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00",
+      "test_results": {
+        "test_schema_contract[password_attacks.passing_the_hash.passing_the_hash_toolkit]": "passed",
+        "test_command_contract[password_attacks.passing_the_hash.passing_the_hash_toolkit]": "passed",
+        "test_parse_output_contract[password_attacks.passing_the_hash.passing_the_hash_toolkit]": "passed",
+        "test_schema_exhaustive[password_attacks.passing_the_hash.passing_the_hash_toolkit]": "passed"
+      },
+      "fixture_available": true,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "password_attacks.passing_the_hash.responder": {
+      "category": "password_attacks",
+      "subcategory": "passing_the_hash",
+      "binary": "responder",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00",
+      "test_results": {
+        "test_schema_contract[password_attacks.passing_the_hash.responder]": "passed",
+        "test_command_contract[password_attacks.passing_the_hash.responder]": "passed",
+        "test_parse_output_contract[password_attacks.passing_the_hash.responder]": "passed",
+        "test_schema_exhaustive[password_attacks.passing_the_hash.responder]": "passed"
+      },
+      "fixture_available": true,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "reporting_tools.report_generation.dumpzilla": {
+      "category": "reporting_tools",
+      "subcategory": "report_generation",
+      "binary": "dumpzilla",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[reporting_tools.report_generation.dumpzilla]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "reporting_tools.report_generation.metagoofil": {
+      "category": "reporting_tools",
+      "subcategory": "report_generation",
+      "binary": "metagoofil",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[reporting_tools.report_generation.metagoofil]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "reporting_tools.report_generation.serpico": {
+      "category": "reporting_tools",
+      "subcategory": "report_generation",
+      "binary": "serpico",
+      "status": "partial",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[reporting_tools.report_generation.serpico]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "reverse_engineering.hex_editors.bless": {
+      "category": "reverse_engineering",
+      "subcategory": "hex_editors",
+      "binary": "bless",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[reverse_engineering.hex_editors.bless]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "reverse_engineering.hex_editors.hexedit": {
+      "category": "reverse_engineering",
+      "subcategory": "hex_editors",
+      "binary": "hexedit",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[reverse_engineering.hex_editors.hexedit]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "shell.exec": {
+      "category": "shell",
+      "subcategory": "exec",
+      "binary": "exec",
+      "status": "partial",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[shell.exec]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "shell.script": {
+      "category": "shell",
+      "subcategory": "script",
+      "binary": "script",
+      "status": "partial",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[shell.script]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "sniffing_spoofing.network_sniffers.ettercap": {
+      "category": "sniffing_spoofing",
+      "subcategory": "network_sniffers",
+      "binary": "ettercap",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[sniffing_spoofing.network_sniffers.ettercap]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "sniffing_spoofing.network_sniffers.tcpdump": {
+      "category": "sniffing_spoofing",
+      "subcategory": "network_sniffers",
+      "binary": "tcpdump",
+      "status": "partial",
+      "last_tested": "2026-01-15T19:10:47+00:00",
+      "test_results": {
+        "test_schema_exhaustive[sniffing_spoofing.network_sniffers.tcpdump]": "failed",
+        "test_schema_contract[sniffing_spoofing.network_sniffers.tcpdump]": "passed",
+        "test_command_contract[sniffing_spoofing.network_sniffers.tcpdump]": "passed",
+        "test_parse_output_contract[sniffing_spoofing.network_sniffers.tcpdump]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "sniffing_spoofing.network_sniffers.wireshark": {
+      "category": "sniffing_spoofing",
+      "subcategory": "network_sniffers",
+      "binary": "wireshark",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[sniffing_spoofing.network_sniffers.wireshark]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "sniffing_spoofing.spoofing_poisoning.arpspoof": {
+      "category": "sniffing_spoofing",
+      "subcategory": "spoofing_poisoning",
+      "binary": "arpspoof",
+      "status": "partial",
+      "last_tested": "2026-01-15T19:10:47+00:00",
+      "test_results": {
+        "test_schema_exhaustive[sniffing_spoofing.spoofing_poisoning.arpspoof]": "failed",
+        "test_schema_contract[sniffing_spoofing.spoofing_poisoning.arpspoof]": "passed",
+        "test_command_contract[sniffing_spoofing.spoofing_poisoning.arpspoof]": "passed",
+        "test_parse_output_contract[sniffing_spoofing.spoofing_poisoning.arpspoof]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "sniffing_spoofing.spoofing_poisoning.bettercap": {
+      "category": "sniffing_spoofing",
+      "subcategory": "spoofing_poisoning",
+      "binary": "bettercap",
+      "status": "partial",
+      "last_tested": "2026-01-15T19:10:47+00:00",
+      "test_results": {
+        "test_schema_exhaustive[sniffing_spoofing.spoofing_poisoning.bettercap]": "failed",
+        "test_schema_contract[sniffing_spoofing.spoofing_poisoning.bettercap]": "passed",
+        "test_command_contract[sniffing_spoofing.spoofing_poisoning.bettercap]": "passed",
+        "test_parse_output_contract[sniffing_spoofing.spoofing_poisoning.bettercap]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "sniffing_spoofing.spoofing_poisoning.dnsspoof": {
+      "category": "sniffing_spoofing",
+      "subcategory": "spoofing_poisoning",
+      "binary": "dnsspoof",
+      "status": "partial",
+      "last_tested": "2026-01-15T19:10:47+00:00",
+      "test_results": {
+        "test_schema_exhaustive[sniffing_spoofing.spoofing_poisoning.dnsspoof]": "failed",
+        "test_schema_contract[sniffing_spoofing.spoofing_poisoning.dnsspoof]": "passed",
+        "test_command_contract[sniffing_spoofing.spoofing_poisoning.dnsspoof]": "passed",
+        "test_parse_output_contract[sniffing_spoofing.spoofing_poisoning.dnsspoof]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "sniffing_spoofing.spoofing_poisoning.ettercap": {
+      "category": "sniffing_spoofing",
+      "subcategory": "spoofing_poisoning",
+      "binary": "ettercap",
+      "status": "partial",
+      "last_tested": "2026-01-15T19:10:47+00:00",
+      "test_results": {
+        "test_schema_exhaustive[sniffing_spoofing.spoofing_poisoning.ettercap]": "failed",
+        "test_schema_contract[sniffing_spoofing.spoofing_poisoning.ettercap]": "passed",
+        "test_command_contract[sniffing_spoofing.spoofing_poisoning.ettercap]": "passed",
+        "test_parse_output_contract[sniffing_spoofing.spoofing_poisoning.ettercap]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "sniffing_spoofing.spoofing_poisoning.responder": {
+      "category": "sniffing_spoofing",
+      "subcategory": "spoofing_poisoning",
+      "binary": "responder",
+      "status": "partial",
+      "last_tested": "2026-01-15T19:10:47+00:00",
+      "test_results": {
+        "test_schema_exhaustive[sniffing_spoofing.spoofing_poisoning.responder]": "failed",
+        "test_schema_contract[sniffing_spoofing.spoofing_poisoning.responder]": "passed",
+        "test_command_contract[sniffing_spoofing.spoofing_poisoning.responder]": "passed",
+        "test_parse_output_contract[sniffing_spoofing.spoofing_poisoning.responder]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "sniffing_spoofing.web_sniffers.burpsuite": {
+      "category": "sniffing_spoofing",
+      "subcategory": "web_sniffers",
+      "binary": "burpsuite",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[sniffing_spoofing.web_sniffers.burpsuite]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "sniffing_spoofing.web_sniffers.hamster": {
+      "category": "sniffing_spoofing",
+      "subcategory": "web_sniffers",
+      "binary": "hamster",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[sniffing_spoofing.web_sniffers.hamster]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "sniffing_spoofing.web_sniffers.websploit": {
+      "category": "sniffing_spoofing",
+      "subcategory": "web_sniffers",
+      "binary": "websploit",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[sniffing_spoofing.web_sniffers.websploit]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "sniffing_spoofing.web_sniffers.zaproxy": {
+      "category": "sniffing_spoofing",
+      "subcategory": "web_sniffers",
+      "binary": "zaproxy",
+      "status": "partial",
+      "last_tested": "2026-01-15T19:10:47+00:00",
+      "test_results": {
+        "test_schema_exhaustive[sniffing_spoofing.web_sniffers.zaproxy]": "failed",
+        "test_schema_contract[sniffing_spoofing.web_sniffers.zaproxy]": "passed",
+        "test_command_contract[sniffing_spoofing.web_sniffers.zaproxy]": "passed",
+        "test_parse_output_contract[sniffing_spoofing.web_sniffers.zaproxy]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "system_services.apache_users": {
+      "category": "system_services",
+      "subcategory": "apache_users",
+      "binary": "apache-users",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[system_services.apache_users]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "system_services.cisco_torch": {
+      "category": "system_services",
+      "subcategory": "cisco_torch",
+      "binary": "cisco-torch",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[system_services.cisco_torch]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "system_services.nbtscan": {
+      "category": "system_services",
+      "subcategory": "nbtscan",
+      "binary": "nbtscan",
+      "status": "partial",
+      "last_tested": "2026-01-15T19:31:57+00:00",
+      "test_results": {
+        "test_schema_exhaustive[system_services.nbtscan]": "failed",
+        "test_schema_contract[system_services.nbtscan]": "passed",
+        "test_command_contract[system_services.nbtscan]": "passed",
+        "test_parse_output_contract[system_services.nbtscan]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "system_services.rpc_enum": {
+      "category": "system_services",
+      "subcategory": "rpc_enum",
+      "binary": "rpc-enum",
+      "status": "partial",
+      "last_tested": "2026-01-15T19:31:57+00:00",
+      "test_results": {
+        "test_schema_exhaustive[system_services.rpc_enum]": "failed",
+        "test_schema_contract[system_services.rpc_enum]": "passed",
+        "test_command_contract[system_services.rpc_enum]": "passed",
+        "test_parse_output_contract[system_services.rpc_enum]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "system_services.showmount": {
+      "category": "system_services",
+      "subcategory": "showmount",
+      "binary": "showmount",
+      "status": "partial",
+      "last_tested": "2026-01-15T19:31:57+00:00",
+      "test_results": {
+        "test_schema_exhaustive[system_services.showmount]": "failed",
+        "test_schema_contract[system_services.showmount]": "passed",
+        "test_command_contract[system_services.showmount]": "passed",
+        "test_parse_output_contract[system_services.showmount]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.cisco_tools.cisco_auditing_tool": {
+      "category": "vulnerability_analysis",
+      "subcategory": "cisco_tools",
+      "binary": "cisco-auditing-tool",
+      "status": "partial",
+      "last_tested": "2026-01-17T08:11:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.cisco_tools.cisco_auditing_tool]": "failed",
+        "test_schema_contract[vulnerability_analysis.cisco_tools.cisco_auditing_tool]": "passed",
+        "test_command_contract[vulnerability_analysis.cisco_tools.cisco_auditing_tool]": "passed",
+        "test_parse_output_contract[vulnerability_analysis.cisco_tools.cisco_auditing_tool]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.cisco_tools.cisco_global_exploiter": {
+      "category": "vulnerability_analysis",
+      "subcategory": "cisco_tools",
+      "binary": "cisco-global-exploiter",
+      "status": "partial",
+      "last_tested": "2026-01-17T08:11:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.cisco_tools.cisco_global_exploiter]": "failed",
+        "test_schema_contract[vulnerability_analysis.cisco_tools.cisco_global_exploiter]": "passed",
+        "test_command_contract[vulnerability_analysis.cisco_tools.cisco_global_exploiter]": "passed",
+        "test_parse_output_contract[vulnerability_analysis.cisco_tools.cisco_global_exploiter]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.cisco_tools.cisco_ocs": {
+      "category": "vulnerability_analysis",
+      "subcategory": "cisco_tools",
+      "binary": "cisco-ocs",
+      "status": "partial",
+      "last_tested": "2026-01-17T08:11:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.cisco_tools.cisco_ocs]": "failed",
+        "test_schema_contract[vulnerability_analysis.cisco_tools.cisco_ocs]": "passed",
+        "test_command_contract[vulnerability_analysis.cisco_tools.cisco_ocs]": "passed",
+        "test_parse_output_contract[vulnerability_analysis.cisco_tools.cisco_ocs]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.cisco_tools.cisco_torch": {
+      "category": "vulnerability_analysis",
+      "subcategory": "cisco_tools",
+      "binary": "cisco-torch",
+      "status": "partial",
+      "last_tested": "2026-01-17T08:11:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.cisco_tools.cisco_torch]": "failed",
+        "test_schema_contract[vulnerability_analysis.cisco_tools.cisco_torch]": "passed",
+        "test_command_contract[vulnerability_analysis.cisco_tools.cisco_torch]": "passed",
+        "test_parse_output_contract[vulnerability_analysis.cisco_tools.cisco_torch]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.cisco_tools.yersinia": {
+      "category": "vulnerability_analysis",
+      "subcategory": "cisco_tools",
+      "binary": "yersinia",
+      "status": "partial",
+      "last_tested": "2026-01-17T08:11:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.cisco_tools.yersinia]": "failed",
+        "test_schema_contract[vulnerability_analysis.cisco_tools.yersinia]": "passed",
+        "test_command_contract[vulnerability_analysis.cisco_tools.yersinia]": "passed",
+        "test_parse_output_contract[vulnerability_analysis.cisco_tools.yersinia]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.database_assessment.bbqsql": {
+      "category": "vulnerability_analysis",
+      "subcategory": "database_assessment",
+      "binary": "bbqsql",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.database_assessment.bbqsql]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.database_assessment.hexorbase": {
+      "category": "vulnerability_analysis",
+      "subcategory": "database_assessment",
+      "binary": "hexorbase",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.database_assessment.hexorbase]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.database_assessment.jsql": {
+      "category": "vulnerability_analysis",
+      "subcategory": "database_assessment",
+      "binary": "jsql",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.database_assessment.jsql]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.database_assessment.sqlmap": {
+      "category": "vulnerability_analysis",
+      "subcategory": "database_assessment",
+      "binary": "sqlmap",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.database_assessment.sqlmap]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.fuzzing.american_fuzzy_lop": {
+      "category": "vulnerability_analysis",
+      "subcategory": "fuzzing",
+      "binary": "american-fuzzy-lop",
+      "status": "partial",
+      "last_tested": "2026-01-17T08:11:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.fuzzing.american_fuzzy_lop]": "failed",
+        "test_schema_contract[vulnerability_analysis.fuzzing.american_fuzzy_lop]": "passed",
+        "test_command_contract[vulnerability_analysis.fuzzing.american_fuzzy_lop]": "passed",
+        "test_parse_output_contract[vulnerability_analysis.fuzzing.american_fuzzy_lop]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.fuzzing.bed": {
+      "category": "vulnerability_analysis",
+      "subcategory": "fuzzing",
+      "binary": "bed",
+      "status": "partial",
+      "last_tested": "2026-01-17T08:11:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.fuzzing.bed]": "failed",
+        "test_schema_contract[vulnerability_analysis.fuzzing.bed]": "passed",
+        "test_command_contract[vulnerability_analysis.fuzzing.bed]": "passed",
+        "test_parse_output_contract[vulnerability_analysis.fuzzing.bed]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.fuzzing.boofuzz": {
+      "category": "vulnerability_analysis",
+      "subcategory": "fuzzing",
+      "binary": "boofuzz",
+      "status": "partial",
+      "last_tested": "2026-01-17T08:11:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.fuzzing.boofuzz]": "failed",
+        "test_schema_contract[vulnerability_analysis.fuzzing.boofuzz]": "passed",
+        "test_command_contract[vulnerability_analysis.fuzzing.boofuzz]": "passed",
+        "test_parse_output_contract[vulnerability_analysis.fuzzing.boofuzz]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.fuzzing.peach": {
+      "category": "vulnerability_analysis",
+      "subcategory": "fuzzing",
+      "binary": "peach",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.fuzzing.peach]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.fuzzing.powerfuzzer": {
+      "category": "vulnerability_analysis",
+      "subcategory": "fuzzing",
+      "binary": "powerfuzzer",
+      "status": "partial",
+      "last_tested": "2026-01-17T08:11:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.fuzzing.powerfuzzer]": "failed",
+        "test_schema_contract[vulnerability_analysis.fuzzing.powerfuzzer]": "passed",
+        "test_command_contract[vulnerability_analysis.fuzzing.powerfuzzer]": "passed",
+        "test_parse_output_contract[vulnerability_analysis.fuzzing.powerfuzzer]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.fuzzing.sfuzz": {
+      "category": "vulnerability_analysis",
+      "subcategory": "fuzzing",
+      "binary": "sfuzz",
+      "status": "partial",
+      "last_tested": "2026-01-17T08:11:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.fuzzing.sfuzz]": "failed",
+        "test_schema_contract[vulnerability_analysis.fuzzing.sfuzz]": "passed",
+        "test_command_contract[vulnerability_analysis.fuzzing.sfuzz]": "passed",
+        "test_parse_output_contract[vulnerability_analysis.fuzzing.sfuzz]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.fuzzing.spike": {
+      "category": "vulnerability_analysis",
+      "subcategory": "fuzzing",
+      "binary": "spike",
+      "status": "partial",
+      "last_tested": "2026-01-17T08:11:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.fuzzing.spike]": "failed",
+        "test_schema_contract[vulnerability_analysis.fuzzing.spike]": "passed",
+        "test_command_contract[vulnerability_analysis.fuzzing.spike]": "passed",
+        "test_parse_output_contract[vulnerability_analysis.fuzzing.spike]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.openvas.greenbone": {
+      "category": "vulnerability_analysis",
+      "subcategory": "openvas",
+      "binary": "greenbone",
+      "status": "partial",
+      "last_tested": "2026-01-17T08:11:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.openvas.greenbone]": "failed",
+        "test_schema_contract[vulnerability_analysis.openvas.greenbone]": "passed",
+        "test_command_contract[vulnerability_analysis.openvas.greenbone]": "passed",
+        "test_parse_output_contract[vulnerability_analysis.openvas.greenbone]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.openvas.openvas": {
+      "category": "vulnerability_analysis",
+      "subcategory": "openvas",
+      "binary": "openvas",
+      "status": "partial",
+      "last_tested": "2026-01-17T08:11:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.openvas.openvas]": "failed",
+        "test_schema_contract[vulnerability_analysis.openvas.openvas]": "passed",
+        "test_command_contract[vulnerability_analysis.openvas.openvas]": "passed",
+        "test_parse_output_contract[vulnerability_analysis.openvas.openvas]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.openvas.openvas_cli": {
+      "category": "vulnerability_analysis",
+      "subcategory": "openvas",
+      "binary": "openvas-cli",
+      "status": "partial",
+      "last_tested": "2026-01-17T08:11:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.openvas.openvas_cli]": "failed",
+        "test_schema_contract[vulnerability_analysis.openvas.openvas_cli]": "passed",
+        "test_command_contract[vulnerability_analysis.openvas.openvas_cli]": "passed",
+        "test_parse_output_contract[vulnerability_analysis.openvas.openvas_cli]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.openvas.openvas_manager": {
+      "category": "vulnerability_analysis",
+      "subcategory": "openvas",
+      "binary": "openvas-manager",
+      "status": "partial",
+      "last_tested": "2026-01-17T08:11:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.openvas.openvas_manager]": "failed",
+        "test_schema_contract[vulnerability_analysis.openvas.openvas_manager]": "passed",
+        "test_command_contract[vulnerability_analysis.openvas.openvas_manager]": "passed",
+        "test_parse_output_contract[vulnerability_analysis.openvas.openvas_manager]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.openvas.openvas_scanner": {
+      "category": "vulnerability_analysis",
+      "subcategory": "openvas",
+      "binary": "openvas-scanner",
+      "status": "partial",
+      "last_tested": "2026-01-17T08:11:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.openvas.openvas_scanner]": "failed",
+        "test_schema_contract[vulnerability_analysis.openvas.openvas_scanner]": "passed",
+        "test_command_contract[vulnerability_analysis.openvas.openvas_scanner]": "passed",
+        "test_parse_output_contract[vulnerability_analysis.openvas.openvas_scanner]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.voip_analysis.enumiax": {
+      "category": "vulnerability_analysis",
+      "subcategory": "voip_analysis",
+      "binary": "enumiax",
+      "status": "partial",
+      "last_tested": "2026-01-17T08:11:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.voip_analysis.enumiax]": "failed",
+        "test_schema_contract[vulnerability_analysis.voip_analysis.enumiax]": "passed",
+        "test_command_contract[vulnerability_analysis.voip_analysis.enumiax]": "passed",
+        "test_parse_output_contract[vulnerability_analysis.voip_analysis.enumiax]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.voip_analysis.sipvicious": {
+      "category": "vulnerability_analysis",
+      "subcategory": "voip_analysis",
+      "binary": "sipvicious",
+      "status": "partial",
+      "last_tested": "2026-01-17T08:11:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.voip_analysis.sipvicious]": "failed",
+        "test_schema_contract[vulnerability_analysis.voip_analysis.sipvicious]": "passed",
+        "test_command_contract[vulnerability_analysis.voip_analysis.sipvicious]": "passed",
+        "test_parse_output_contract[vulnerability_analysis.voip_analysis.sipvicious]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.voip_analysis.svmap": {
+      "category": "vulnerability_analysis",
+      "subcategory": "voip_analysis",
+      "binary": "svmap",
+      "status": "partial",
+      "last_tested": "2026-01-17T08:11:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.voip_analysis.svmap]": "failed",
+        "test_schema_contract[vulnerability_analysis.voip_analysis.svmap]": "passed",
+        "test_command_contract[vulnerability_analysis.voip_analysis.svmap]": "passed",
+        "test_parse_output_contract[vulnerability_analysis.voip_analysis.svmap]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "vulnerability_analysis.voip_analysis.voiphopper": {
+      "category": "vulnerability_analysis",
+      "subcategory": "voip_analysis",
+      "binary": "voiphopper",
+      "status": "partial",
+      "last_tested": "2026-01-17T08:11:46+00:00",
+      "test_results": {
+        "test_schema_exhaustive[vulnerability_analysis.voip_analysis.voiphopper]": "failed",
+        "test_schema_contract[vulnerability_analysis.voip_analysis.voiphopper]": "passed",
+        "test_command_contract[vulnerability_analysis.voip_analysis.voiphopper]": "passed",
+        "test_parse_output_contract[vulnerability_analysis.voip_analysis.voiphopper]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.cms_identification.cmsmap": {
+      "category": "web_applications",
+      "subcategory": "cms_identification",
+      "binary": "cmsmap",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:12:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.cms_identification.cmsmap]": "passed",
+        "test_command_contract[web_applications.cms_identification.cmsmap]": "passed",
+        "test_parse_output_contract[web_applications.cms_identification.cmsmap]": "passed",
+        "test_schema_exhaustive[web_applications.cms_identification.cmsmap]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.cms_identification.droopescan": {
+      "category": "web_applications",
+      "subcategory": "cms_identification",
+      "binary": "droopescan",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:12:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.cms_identification.droopescan]": "passed",
+        "test_command_contract[web_applications.cms_identification.droopescan]": "passed",
+        "test_parse_output_contract[web_applications.cms_identification.droopescan]": "passed",
+        "test_schema_exhaustive[web_applications.cms_identification.droopescan]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.cms_identification.joomscan": {
+      "category": "web_applications",
+      "subcategory": "cms_identification",
+      "binary": "joomscan",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:12:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.cms_identification.joomscan]": "passed",
+        "test_command_contract[web_applications.cms_identification.joomscan]": "passed",
+        "test_parse_output_contract[web_applications.cms_identification.joomscan]": "passed",
+        "test_schema_exhaustive[web_applications.cms_identification.joomscan]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.cms_identification.whatweb": {
+      "category": "web_applications",
+      "subcategory": "cms_identification",
+      "binary": "whatweb",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:12:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.cms_identification.whatweb]": "passed",
+        "test_command_contract[web_applications.cms_identification.whatweb]": "passed",
+        "test_parse_output_contract[web_applications.cms_identification.whatweb]": "passed",
+        "test_schema_exhaustive[web_applications.cms_identification.whatweb]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.cms_identification.wpscan": {
+      "category": "web_applications",
+      "subcategory": "cms_identification",
+      "binary": "wpscan",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:12:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.cms_identification.wpscan]": "passed",
+        "test_command_contract[web_applications.cms_identification.wpscan]": "passed",
+        "test_parse_output_contract[web_applications.cms_identification.wpscan]": "passed",
+        "test_schema_exhaustive[web_applications.cms_identification.wpscan]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.web_application_fuzzers.clusterd": {
+      "category": "web_applications",
+      "subcategory": "web_application_fuzzers",
+      "binary": "clusterd",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.web_application_fuzzers.clusterd]": "failed",
+        "test_command_contract[web_applications.web_application_fuzzers.clusterd]": "failed",
+        "test_parse_output_contract[web_applications.web_application_fuzzers.clusterd]": "passed",
+        "test_schema_exhaustive[web_applications.web_application_fuzzers.clusterd]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.web_application_fuzzers.ffuf": {
+      "category": "web_applications",
+      "subcategory": "web_application_fuzzers",
+      "binary": "ffuf",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:12:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.web_application_fuzzers.ffuf]": "passed",
+        "test_command_contract[web_applications.web_application_fuzzers.ffuf]": "passed",
+        "test_parse_output_contract[web_applications.web_application_fuzzers.ffuf]": "passed",
+        "test_schema_exhaustive[web_applications.web_application_fuzzers.ffuf]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.web_application_fuzzers.websploit": {
+      "category": "web_applications",
+      "subcategory": "web_application_fuzzers",
+      "binary": "websploit",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.web_application_fuzzers.websploit]": "failed",
+        "test_command_contract[web_applications.web_application_fuzzers.websploit]": "failed",
+        "test_parse_output_contract[web_applications.web_application_fuzzers.websploit]": "passed",
+        "test_schema_exhaustive[web_applications.web_application_fuzzers.websploit]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.web_application_fuzzers.wfuzz": {
+      "category": "web_applications",
+      "subcategory": "web_application_fuzzers",
+      "binary": "wfuzz",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:12:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.web_application_fuzzers.wfuzz]": "passed",
+        "test_command_contract[web_applications.web_application_fuzzers.wfuzz]": "passed",
+        "test_parse_output_contract[web_applications.web_application_fuzzers.wfuzz]": "passed",
+        "test_schema_exhaustive[web_applications.web_application_fuzzers.wfuzz]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.web_application_proxies.mitmproxy": {
+      "category": "web_applications",
+      "subcategory": "web_application_proxies",
+      "binary": "mitmproxy",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:12:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.web_application_proxies.mitmproxy]": "passed",
+        "test_command_contract[web_applications.web_application_proxies.mitmproxy]": "passed",
+        "test_parse_output_contract[web_applications.web_application_proxies.mitmproxy]": "passed",
+        "test_schema_exhaustive[web_applications.web_application_proxies.mitmproxy]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.web_application_proxies.zaproxy": {
+      "category": "web_applications",
+      "subcategory": "web_application_proxies",
+      "binary": "zaproxy",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.web_application_proxies.zaproxy]": "failed",
+        "test_command_contract[web_applications.web_application_proxies.zaproxy]": "failed",
+        "test_parse_output_contract[web_applications.web_application_proxies.zaproxy]": "passed",
+        "test_schema_exhaustive[web_applications.web_application_proxies.zaproxy]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.web_crawlers.dirb": {
+      "category": "web_applications",
+      "subcategory": "web_crawlers",
+      "binary": "dirb",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:12:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.web_crawlers.dirb]": "passed",
+        "test_command_contract[web_applications.web_crawlers.dirb]": "passed",
+        "test_parse_output_contract[web_applications.web_crawlers.dirb]": "passed",
+        "test_schema_exhaustive[web_applications.web_crawlers.dirb]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.web_crawlers.feroxbuster": {
+      "category": "web_applications",
+      "subcategory": "web_crawlers",
+      "binary": "feroxbuster",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:12:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.web_crawlers.feroxbuster]": "passed",
+        "test_command_contract[web_applications.web_crawlers.feroxbuster]": "passed",
+        "test_parse_output_contract[web_applications.web_crawlers.feroxbuster]": "passed",
+        "test_schema_exhaustive[web_applications.web_crawlers.feroxbuster]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.web_crawlers.ffuf": {
+      "category": "web_applications",
+      "subcategory": "web_crawlers",
+      "binary": "ffuf",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:12:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.web_crawlers.ffuf]": "passed",
+        "test_command_contract[web_applications.web_crawlers.ffuf]": "passed",
+        "test_parse_output_contract[web_applications.web_crawlers.ffuf]": "passed",
+        "test_schema_exhaustive[web_applications.web_crawlers.ffuf]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.web_crawlers.gobuster": {
+      "category": "web_applications",
+      "subcategory": "web_crawlers",
+      "binary": "gobuster",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:12:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.web_crawlers.gobuster]": "passed",
+        "test_command_contract[web_applications.web_crawlers.gobuster]": "passed",
+        "test_parse_output_contract[web_applications.web_crawlers.gobuster]": "passed",
+        "test_schema_exhaustive[web_applications.web_crawlers.gobuster]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.web_crawlers.wfuzz": {
+      "category": "web_applications",
+      "subcategory": "web_crawlers",
+      "binary": "wfuzz",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:12:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.web_crawlers.wfuzz]": "passed",
+        "test_command_contract[web_applications.web_crawlers.wfuzz]": "passed",
+        "test_parse_output_contract[web_applications.web_crawlers.wfuzz]": "passed",
+        "test_schema_exhaustive[web_applications.web_crawlers.wfuzz]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.web_vulnerability_scanners.arachni": {
+      "category": "web_applications",
+      "subcategory": "web_vulnerability_scanners",
+      "binary": "arachni",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.web_vulnerability_scanners.arachni]": "failed",
+        "test_command_contract[web_applications.web_vulnerability_scanners.arachni]": "failed",
+        "test_parse_output_contract[web_applications.web_vulnerability_scanners.arachni]": "passed",
+        "test_schema_exhaustive[web_applications.web_vulnerability_scanners.arachni]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.web_vulnerability_scanners.commix": {
+      "category": "web_applications",
+      "subcategory": "web_vulnerability_scanners",
+      "binary": "commix",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:12:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.web_vulnerability_scanners.commix]": "passed",
+        "test_command_contract[web_applications.web_vulnerability_scanners.commix]": "passed",
+        "test_parse_output_contract[web_applications.web_vulnerability_scanners.commix]": "passed",
+        "test_schema_exhaustive[web_applications.web_vulnerability_scanners.commix]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.web_vulnerability_scanners.nikto": {
+      "category": "web_applications",
+      "subcategory": "web_vulnerability_scanners",
+      "binary": "nikto",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:12:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.web_vulnerability_scanners.nikto]": "passed",
+        "test_command_contract[web_applications.web_vulnerability_scanners.nikto]": "passed",
+        "test_parse_output_contract[web_applications.web_vulnerability_scanners.nikto]": "passed",
+        "test_schema_exhaustive[web_applications.web_vulnerability_scanners.nikto]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.web_vulnerability_scanners.nuclei": {
+      "category": "web_applications",
+      "subcategory": "web_vulnerability_scanners",
+      "binary": "nuclei",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:12:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.web_vulnerability_scanners.nuclei]": "passed",
+        "test_command_contract[web_applications.web_vulnerability_scanners.nuclei]": "passed",
+        "test_parse_output_contract[web_applications.web_vulnerability_scanners.nuclei]": "passed",
+        "test_schema_exhaustive[web_applications.web_vulnerability_scanners.nuclei]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.web_vulnerability_scanners.skipfish": {
+      "category": "web_applications",
+      "subcategory": "web_vulnerability_scanners",
+      "binary": "skipfish",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:12:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.web_vulnerability_scanners.skipfish]": "passed",
+        "test_command_contract[web_applications.web_vulnerability_scanners.skipfish]": "passed",
+        "test_parse_output_contract[web_applications.web_vulnerability_scanners.skipfish]": "passed",
+        "test_schema_exhaustive[web_applications.web_vulnerability_scanners.skipfish]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.web_vulnerability_scanners.sqlmap": {
+      "category": "web_applications",
+      "subcategory": "web_vulnerability_scanners",
+      "binary": "sqlmap",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:12:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.web_vulnerability_scanners.sqlmap]": "passed",
+        "test_command_contract[web_applications.web_vulnerability_scanners.sqlmap]": "passed",
+        "test_parse_output_contract[web_applications.web_vulnerability_scanners.sqlmap]": "passed",
+        "test_schema_exhaustive[web_applications.web_vulnerability_scanners.sqlmap]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.web_vulnerability_scanners.w3af": {
+      "category": "web_applications",
+      "subcategory": "web_vulnerability_scanners",
+      "binary": "w3af",
+      "status": "failed",
+      "last_tested": "2026-01-14T20:08:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.web_vulnerability_scanners.w3af]": "failed",
+        "test_command_contract[web_applications.web_vulnerability_scanners.w3af]": "failed",
+        "test_parse_output_contract[web_applications.web_vulnerability_scanners.w3af]": "passed",
+        "test_schema_exhaustive[web_applications.web_vulnerability_scanners.w3af]": "failed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.web_vulnerability_scanners.wapiti": {
+      "category": "web_applications",
+      "subcategory": "web_vulnerability_scanners",
+      "binary": "wapiti",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:12:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.web_vulnerability_scanners.wapiti]": "passed",
+        "test_command_contract[web_applications.web_vulnerability_scanners.wapiti]": "passed",
+        "test_parse_output_contract[web_applications.web_vulnerability_scanners.wapiti]": "passed",
+        "test_schema_exhaustive[web_applications.web_vulnerability_scanners.wapiti]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "web_applications.web_vulnerability_scanners.xsser": {
+      "category": "web_applications",
+      "subcategory": "web_vulnerability_scanners",
+      "binary": "xsser",
+      "status": "partial",
+      "last_tested": "2026-02-22T09:12:30+00:00",
+      "test_results": {
+        "test_schema_contract[web_applications.web_vulnerability_scanners.xsser]": "passed",
+        "test_command_contract[web_applications.web_vulnerability_scanners.xsser]": "passed",
+        "test_parse_output_contract[web_applications.web_vulnerability_scanners.xsser]": "passed",
+        "test_schema_exhaustive[web_applications.web_vulnerability_scanners.xsser]": "passed"
+      },
+      "fixture_available": false,
+      "help_cached": false,
+      "notes": "Pending fixture creation"
+    },
+    "sniffing_spoofing.network_sniffers.tshark": {
+      "test_results": {
+        "test_schema_contract[sniffing_spoofing.network_sniffers.tshark]": "passed",
+        "test_command_contract[sniffing_spoofing.network_sniffers.tshark]": "passed",
+        "test_parse_output_contract[sniffing_spoofing.network_sniffers.tshark]": "passed"
+      },
+      "status": "partial",
+      "last_tested": "2026-01-15T19:10:47+00:00"
+    },
+    "sniffing_spoofing.network_sniffers.netsniff_ng": {
+      "test_results": {
+        "test_schema_contract[sniffing_spoofing.network_sniffers.netsniff_ng]": "passed",
+        "test_command_contract[sniffing_spoofing.network_sniffers.netsniff_ng]": "passed",
+        "test_parse_output_contract[sniffing_spoofing.network_sniffers.netsniff_ng]": "passed"
+      },
+      "status": "partial",
+      "last_tested": "2026-01-15T19:10:47+00:00"
+    },
+    "sniffing_spoofing.network_sniffers.dsniff": {
+      "test_results": {
+        "test_schema_contract[sniffing_spoofing.network_sniffers.dsniff]": "passed",
+        "test_command_contract[sniffing_spoofing.network_sniffers.dsniff]": "passed",
+        "test_parse_output_contract[sniffing_spoofing.network_sniffers.dsniff]": "passed"
+      },
+      "status": "partial",
+      "last_tested": "2026-01-15T19:10:47+00:00"
+    },
+    "system_services.snmp_enum": {
+      "test_results": {
+        "test_schema_contract[system_services.snmp_enum]": "passed",
+        "test_command_contract[system_services.snmp_enum]": "passed",
+        "test_parse_output_contract[system_services.snmp_enum]": "passed"
+      },
+      "status": "partial",
+      "last_tested": "2026-01-15T19:31:57+00:00"
+    },
+    "system_services.smb_enum": {
+      "test_results": {
+        "test_schema_contract[system_services.smb_enum]": "passed",
+        "test_command_contract[system_services.smb_enum]": "passed",
+        "test_parse_output_contract[system_services.smb_enum]": "passed"
+      },
+      "status": "partial",
+      "last_tested": "2026-01-15T19:31:57+00:00"
+    },
+    "system_services.finger_user_enum": {
+      "test_results": {
+        "test_schema_contract[system_services.finger_user_enum]": "passed",
+        "test_command_contract[system_services.finger_user_enum]": "passed",
+        "test_parse_output_contract[system_services.finger_user_enum]": "passed"
+      },
+      "status": "partial",
+      "last_tested": "2026-01-15T19:31:57+00:00"
+    },
+    "reverse_engineering.debuggers.gdb": {
+      "test_results": {
+        "test_schema_contract[reverse_engineering.debuggers.gdb]": "passed",
+        "test_command_contract[reverse_engineering.debuggers.gdb]": "passed",
+        "test_parse_output_contract[reverse_engineering.debuggers.gdb]": "passed"
+      },
+      "status": "partial",
+      "last_tested": "2026-01-15T19:52:41+00:00"
+    },
+    "reverse_engineering.disassemblers.binwalk": {
+      "test_results": {
+        "test_schema_contract[reverse_engineering.disassemblers.binwalk]": "passed",
+        "test_command_contract[reverse_engineering.disassemblers.binwalk]": "passed",
+        "test_parse_output_contract[reverse_engineering.disassemblers.binwalk]": "passed"
+      },
+      "status": "partial",
+      "last_tested": "2026-01-15T19:52:41+00:00"
+    },
+    "reverse_engineering.disassemblers.objdump": {
+      "test_results": {
+        "test_schema_contract[reverse_engineering.disassemblers.objdump]": "passed",
+        "test_command_contract[reverse_engineering.disassemblers.objdump]": "passed",
+        "test_parse_output_contract[reverse_engineering.disassemblers.objdump]": "passed"
+      },
+      "status": "partial",
+      "last_tested": "2026-01-15T19:52:41+00:00"
+    },
+    "reverse_engineering.disassemblers.radare2": {
+      "test_results": {
+        "test_schema_contract[reverse_engineering.disassemblers.radare2]": "passed",
+        "test_command_contract[reverse_engineering.disassemblers.radare2]": "passed",
+        "test_parse_output_contract[reverse_engineering.disassemblers.radare2]": "passed"
+      },
+      "status": "partial",
+      "last_tested": "2026-01-15T19:52:41+00:00"
+    },
+    "database_assessment.oracle_tools.tnscmd10g": {
+      "test_results": {
+        "test_schema_contract[database_assessment.oracle_tools.tnscmd10g]": "passed",
+        "test_command_contract[database_assessment.oracle_tools.tnscmd10g]": "passed",
+        "test_parse_output_contract[database_assessment.oracle_tools.tnscmd10g]": "passed"
+      },
+      "status": "partial",
+      "last_tested": "2026-01-17T07:46:56+00:00"
+    },
+    "database_assessment.oracle_tools.oscanner": {
+      "test_results": {
+        "test_schema_contract[database_assessment.oracle_tools.oscanner]": "passed",
+        "test_command_contract[database_assessment.oracle_tools.oscanner]": "passed",
+        "test_parse_output_contract[database_assessment.oracle_tools.oscanner]": "passed"
+      },
+      "status": "partial",
+      "last_tested": "2026-01-17T07:46:56+00:00"
+    },
+    "database_assessment.oracle_tools.sidguesser": {
+      "test_results": {
+        "test_schema_contract[database_assessment.oracle_tools.sidguesser]": "passed",
+        "test_command_contract[database_assessment.oracle_tools.sidguesser]": "passed",
+        "test_parse_output_contract[database_assessment.oracle_tools.sidguesser]": "passed"
+      },
+      "status": "partial",
+      "last_tested": "2026-01-17T07:46:56+00:00"
+    },
+    "forensics.forensics_carving_tools.ddrescue": {
+      "test_results": {
+        "test_schema_contract[forensics.forensics_carving_tools.ddrescue]": "passed",
+        "test_command_contract[forensics.forensics_carving_tools.ddrescue]": "passed",
+        "test_parse_output_contract[forensics.forensics_carving_tools.ddrescue]": "passed"
+      },
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00"
+    },
+    "forensics.forensics_carving_tools.safecopy": {
+      "test_results": {
+        "test_schema_contract[forensics.forensics_carving_tools.safecopy]": "passed",
+        "test_command_contract[forensics.forensics_carving_tools.safecopy]": "passed",
+        "test_parse_output_contract[forensics.forensics_carving_tools.safecopy]": "passed"
+      },
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00"
+    },
+    "forensics.forensics_carving_tools.scalpel": {
+      "test_results": {
+        "test_schema_contract[forensics.forensics_carving_tools.scalpel]": "passed",
+        "test_command_contract[forensics.forensics_carving_tools.scalpel]": "passed",
+        "test_parse_output_contract[forensics.forensics_carving_tools.scalpel]": "passed"
+      },
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:46+00:00"
+    },
+    "information_gathering.smb_enumeration.enum4linux": {
+      "test_results": {
+        "test_schema_contract[information_gathering.smb_enumeration.enum4linux]": "failed",
+        "test_command_contract[information_gathering.smb_enumeration.enum4linux]": "failed",
+        "test_parse_output_contract[information_gathering.smb_enumeration.enum4linux]": "passed"
+      },
+      "status": "partial",
+      "last_tested": "2026-02-22T09:20:28+00:00"
+    }
+  },
+  "categories": {
+    "database_assessment": {
+      "total": 6,
+      "tested": 0,
+      "pending": 0,
+      "failed": 6,
+      "partial": 0
+    },
+    "exploitation_tools": {
+      "total": 12,
+      "tested": 0,
+      "pending": 0,
+      "failed": 8,
+      "partial": 4
+    },
+    "filesystem": {
+      "total": 11,
+      "tested": 0,
+      "pending": 0,
+      "failed": 0,
+      "partial": 11
+    },
+    "forensics": {
+      "total": 9,
+      "tested": 0,
+      "pending": 0,
+      "failed": 2,
+      "partial": 7
+    },
+    "information_gathering": {
+      "total": 27,
+      "tested": 0,
+      "pending": 0,
+      "failed": 1,
+      "partial": 26
+    },
+    "maintaining_access": {
+      "total": 10,
+      "tested": 0,
+      "pending": 0,
+      "failed": 3,
+      "partial": 7
+    },
+    "password_attacks": {
+      "total": 14,
+      "tested": 0,
+      "pending": 0,
+      "failed": 1,
+      "partial": 13
+    },
+    "reporting_tools": {
+      "total": 3,
+      "tested": 0,
+      "pending": 0,
+      "failed": 2,
+      "partial": 1
+    },
+    "reverse_engineering": {
+      "total": 2,
+      "tested": 0,
+      "pending": 0,
+      "failed": 2,
+      "partial": 0
+    },
+    "shell": {
+      "total": 2,
+      "tested": 0,
+      "pending": 0,
+      "failed": 0,
+      "partial": 2
+    },
+    "sniffing_spoofing": {
+      "total": 12,
+      "tested": 0,
+      "pending": 0,
+      "failed": 5,
+      "partial": 7
+    },
+    "system_services": {
+      "total": 5,
+      "tested": 0,
+      "pending": 0,
+      "failed": 2,
+      "partial": 3
+    },
+    "vulnerability_analysis": {
+      "total": 25,
+      "tested": 0,
+      "pending": 0,
+      "failed": 5,
+      "partial": 20
+    },
+    "web_applications": {
+      "total": 25,
+      "tested": 0,
+      "pending": 0,
+      "failed": 5,
+      "partial": 20
+    },
+    "unknown": {
+      "total": 17,
+      "tested": 0,
+      "pending": 0,
+      "failed": 0,
+      "partial": 17
+    }
+  }
+}

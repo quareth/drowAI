@@ -1,0 +1,13 @@
+detect:
+  cli: "gobuster"
+extract:
+  - field: url_path
+    regex: "^(/\\S+)"
+  - field: status
+    regex: "Status:\\s*(\\d+)"
+chunk:
+  - group_by: [status]
+  - max_tokens: 800
+summarize:
+  template: "{count} findings across statuses"
+

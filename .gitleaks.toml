@@ -1,0 +1,72 @@
+title = "DrowAI Gitleaks Configuration"
+
+[extend]
+useDefault = true
+
+# These allowlists pair an exact repository path with a specific synthetic
+# fixture marker or non-secret identifier. They intentionally do not suppress
+# a whole file or a whole detector rule.
+
+[[allowlists]]
+description = "Synthetic curl basic-auth argument used by the HTTP security tests."
+targetRules = ["curl-auth-user"]
+condition = "AND"
+regexTarget = "match"
+paths = ['''^agent/tests/test_http_tool_security\.py$''']
+regexes = ['''curl --user''']
+
+[[allowlists]]
+description = "Artifact object identifier misclassified as an API key."
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "match"
+paths = ['''^backend/services/data_plane/artifact_read_service\.py$''']
+regexes = ['''\bobject_key\b''']
+
+[[allowlists]]
+description = "Synthetic idempotency key used by runner-control tests."
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "match"
+paths = ['''^backend/tests/routers/test_runner_control_router\.py$''']
+regexes = ['''\bidempotency_key\b''']
+
+[[allowlists]]
+description = "Synthetic secret token used by tool-result ingest tests."
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "match"
+paths = ['''^backend/tests/services/runner_control/test_tool_result_ingest\.py$''']
+regexes = ['''\bsecret_token\b''']
+
+[[allowlists]]
+description = "Synthetic internal message key used by grouping tests."
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "match"
+paths = ['''^client/src/hooks/__tests__/useMessageGrouping\.test\.ts$''']
+regexes = ['''\b__internalKey\b''']
+
+[[allowlists]]
+description = "Synthetic internal message key used by message-conversion tests."
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "match"
+paths = ['''^client/src/utils/__tests__/stepToChatMessage\.test\.ts$''']
+regexes = ['''\b__internalKey\b''']
+
+[[allowlists]]
+description = "Synthetic API-key header used by redaction tests."
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "match"
+paths = ['''^tests/context/test_redactor\.py$''']
+regexes = ['''\bX-API-Key\b''']
+
+[[allowlists]]
+description = "Synthetic bearer token embedded in the secret-exposure fixture."
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "match"
+paths = ['''^tests/tools/fixtures/outputs/sniffing_spoofing_network_sniffers_tshark_secret_exposure\.json$''']
+regexes = ['''\bbearer_token\b''']

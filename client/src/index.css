@@ -1,0 +1,298 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+  background-color: hsl(240, 10%, 3.9%);
+}
+
+#root {
+  min-height: 100vh;
+  background-color: hsl(240, 10%, 3.9%);
+}
+
+:root {
+  --background: hsl(0, 0%, 100%);
+  --foreground: hsl(20, 14.3%, 4.1%);
+  --muted: hsl(60, 4.8%, 95.9%);
+  --muted-foreground: hsl(25, 5.3%, 44.7%);
+  --popover: hsl(0, 0%, 100%);
+  --popover-foreground: hsl(20, 14.3%, 4.1%);
+  --card: hsl(0, 0%, 100%);
+  --card-foreground: hsl(20, 14.3%, 4.1%);
+  --border: hsl(20, 5.9%, 90%);
+  --input: hsl(20, 5.9%, 90%);
+  --primary: hsl(207, 90%, 54%);
+  --primary-foreground: hsl(211, 100%, 99%);
+  --secondary: hsl(60, 4.8%, 95.9%);
+  --secondary-foreground: hsl(24, 9.8%, 10%);
+  --accent: hsl(60, 4.8%, 95.9%);
+  --accent-foreground: hsl(24, 9.8%, 10%);
+  --destructive: hsl(0, 84.2%, 60.2%);
+  --destructive-foreground: hsl(60, 9.1%, 97.8%);
+  --ring: hsl(20, 14.3%, 4.1%);
+  --radius: 0.5rem;
+  
+  --sidebar-background: hsl(240, 10%, 3.9%);
+  --sidebar-foreground: hsl(0, 0%, 98%);
+  --sidebar-primary: hsl(207, 90%, 54%);
+  --sidebar-primary-foreground: hsl(211, 100%, 99%);
+  --sidebar-accent: hsl(240, 3.7%, 15.9%);
+  --sidebar-accent-foreground: hsl(0, 0%, 98%);
+  --sidebar-border: hsl(240, 3.7%, 15.9%);
+  --sidebar-ring: hsl(240, 4.9%, 83.9%);
+  
+  --chart-1: hsl(220, 70%, 50%);
+  --chart-2: hsl(160, 60%, 45%);
+  --chart-3: hsl(30, 80%, 55%);
+  --chart-4: hsl(280, 65%, 60%);
+  --chart-5: hsl(340, 75%, 55%);
+}
+
+.dark {
+  --background: hsl(240, 10%, 3.9%);
+  --foreground: hsl(0, 0%, 98%);
+  --muted: hsl(240, 3.7%, 15.9%);
+  --muted-foreground: hsl(240, 5%, 64.9%);
+  --popover: hsl(222, 16%, 7%);
+  --popover-foreground: hsl(0, 0%, 98%);
+  --card: hsl(240, 10%, 3.9%);
+  --card-foreground: hsl(0, 0%, 98%);
+  --border: hsl(240, 3.7%, 15.9%);
+  --input: hsl(240, 3.7%, 15.9%);
+  --primary: hsl(207, 90%, 54%);
+  --primary-foreground: hsl(211, 100%, 99%);
+  --secondary: hsl(240, 3.7%, 15.9%);
+  --secondary-foreground: hsl(0, 0%, 98%);
+  --accent: hsl(220, 14%, 14%);
+  --accent-foreground: hsl(0, 0%, 98%);
+  --destructive: hsl(0, 62.8%, 30.6%);
+  --destructive-foreground: hsl(0, 0%, 98%);
+  --ring: hsl(240, 4.9%, 83.9%);
+  --radius: 0.5rem;
+  
+  --sidebar-background: hsl(240, 10%, 3.9%);
+  --sidebar-foreground: hsl(0, 0%, 98%);
+  --sidebar-primary: hsl(207, 90%, 54%);
+  --sidebar-primary-foreground: hsl(211, 100%, 99%);
+  --sidebar-accent: hsl(240, 3.7%, 15.9%);
+  --sidebar-accent-foreground: hsl(0, 0%, 98%);
+  --sidebar-border: hsl(240, 3.7%, 15.9%);
+  --sidebar-ring: hsl(240, 4.9%, 83.9%);
+
+  --chart-1: hsl(220, 70%, 50%);
+  --chart-2: hsl(160, 60%, 45%);
+  --chart-3: hsl(30, 80%, 55%);
+  --chart-4: hsl(280, 65%, 60%);
+  --chart-5: hsl(340, 75%, 55%);
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply font-sans antialiased bg-background text-foreground;
+  }
+  
+  html {
+    @apply dark;
+  }
+}
+
+@layer components {
+  .panel-border {
+    @apply border border-slate-700 shadow-lg;
+  }
+  
+  .terminal-output {
+    font-family: 'JetBrains Mono', 'Monaco', 'Consolas', monospace;
+    font-size: 13px;
+    line-height: 1.4;
+  }
+  
+  .status-indicator {
+    @apply relative;
+  }
+  
+  .status-indicator::before {
+    content: '';
+    @apply absolute top-1/2 -left-3 transform -translate-y-1/2 w-2 h-2 rounded-full;
+  }
+  
+  .status-running::before {
+    @apply bg-green-500 animate-pulse;
+  }
+  
+  .status-paused::before {
+    @apply bg-yellow-500;
+  }
+  
+  .status-stopped::before {
+    @apply bg-red-500;
+  }
+  
+  .status-completed::before {
+    @apply bg-gray-500;
+  }
+}
+
+@layer utilities {
+  .shadow-glow-sm {
+    box-shadow: 0 0 10px rgba(59, 130, 246, 0.3);
+  }
+  
+  .shadow-glow {
+    box-shadow: 0 0 20px rgba(59, 130, 246, 0.4);
+  }
+  
+  .shadow-glow-green {
+    box-shadow: 0 0 15px rgba(16, 185, 129, 0.3);
+  }
+
+  /* Modern minimal scrollbar styles - Cursor IDE inspired */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(100, 116, 139, 0.2) transparent;
+  }
+  
+  /* Webkit scrollbar styles for Chrome/Safari/Edge */
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  
+  *::-webkit-scrollbar-thumb {
+    background: rgba(100, 116, 139, 0.1);
+    border-radius: 4px;
+    border: 1px solid transparent;
+    background-clip: content-box;
+    transition: all 0.2s ease-in-out;
+  }
+  
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(100, 116, 139, 0.3);
+    border: 1px solid rgba(100, 116, 139, 0.1);
+  }
+  
+  *::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+  
+  /* Hide scrollbar by default, show on container hover */
+  .scrollbar-hide {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+  
+  .scrollbar-show-on-hover {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  
+  .scrollbar-show-on-hover::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  
+  .scrollbar-show-on-hover::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  
+  .scrollbar-show-on-hover::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 4px;
+    transition: background 0.2s ease-in-out;
+  }
+  
+  .scrollbar-show-on-hover:hover::-webkit-scrollbar-thumb {
+    background: rgba(100, 116, 139, 0.2);
+  }
+  
+  .scrollbar-show-on-hover:hover::-webkit-scrollbar-thumb:hover {
+    background: rgba(100, 116, 139, 0.4);
+  }
+
+  .engagement-motion {
+    transition-property: color, background-color, border-color, box-shadow, opacity, transform;
+    transition-duration: 150ms;
+    transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+  }
+
+  .engagement-fade-in {
+    animation: engagement-fade-in 160ms cubic-bezier(0.2, 0, 0, 1);
+  }
+}
+
+@keyframes glow {
+  from { box-shadow: 0 0 10px rgba(59, 130, 246, 0.2); }
+  to { box-shadow: 0 0 20px rgba(59, 130, 246, 0.4); }
+}
+
+.animate-glow {
+  animation: glow 2s ease-in-out infinite alternate;
+}
+
+@keyframes engagement-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes llm-shimmer {
+  0% {
+    background-position: 200% 50%;
+  }
+  100% {
+    background-position: -200% 50%;
+  }
+}
+
+.llm-shimmer-text-slate {
+  color: transparent;
+  -webkit-background-clip: text;
+  background-clip: text;
+  background-image: linear-gradient(
+    90deg,
+    rgba(148, 163, 184, 0.55) 0%,
+    rgba(226, 232, 240, 0.98) 45%,
+    rgba(148, 163, 184, 0.55) 100%
+  );
+  background-size: 220% 100%;
+  animation: llm-shimmer 1.45s linear infinite;
+}
+
+.llm-shimmer-text-emerald {
+  color: transparent;
+  -webkit-background-clip: text;
+  background-clip: text;
+  background-image: linear-gradient(
+    90deg,
+    rgba(167, 243, 208, 0.5) 0%,
+    rgba(209, 250, 229, 0.98) 45%,
+    rgba(167, 243, 208, 0.5) 100%
+  );
+  background-size: 220% 100%;
+  animation: llm-shimmer 1.45s linear infinite;
+}

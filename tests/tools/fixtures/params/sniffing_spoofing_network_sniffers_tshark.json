@@ -1,0 +1,100 @@
+{
+  "tool_id": "sniffing_spoofing.network_sniffers.tshark",
+  "test_cases": {
+    "minimal": {
+      "description": "Offline PCAP summary with canonical JSON output",
+      "params": {
+        "target": "unused",
+        "analysis_mode": "pcap_summary",
+        "input_file": "captures/tshark-summary.pcap",
+        "max_rows": 25
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "HTTP secret exposure analysis with bounded proof metadata",
+      "params": {
+        "target": "unused",
+        "analysis_mode": "secret_exposure",
+        "input_file": "captures/tshark-http-auth.pcap",
+        "display_filter": "http.authorization || http.cookie",
+        "host": "203.0.113.20",
+        "port": 80,
+        "protocol": "http",
+        "include_payload_indicators": true,
+        "max_rows": 10,
+        "sensitive_proof_mode": "proof_excerpt"
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [
+      {
+        "description": "Allowlisted field extraction uses structured row metadata",
+        "params": {
+          "target": "unused",
+          "analysis_mode": "field_extract",
+          "input_file": "captures/tshark-dns.pcap",
+          "fields": [
+            "frame.number",
+            "ip.src",
+            "dns.qry.name"
+          ],
+          "max_rows": 5
+        },
+        "expected_valid": true
+      },
+      {
+        "description": "Finite live capture keeps hard packet and timeout bounds hidden from planner-facing args",
+        "params": {
+          "target": "unused",
+          "analysis_mode": "dns",
+          "interface": "any",
+          "capture_filter": "udp port 53",
+          "max_rows": 5
+        },
+        "expected_valid": true
+      }
+    ],
+    "invalid": [
+      {
+        "name": "missing_target",
+        "params": {
+          "analysis_mode": "pcap_summary",
+          "input_file": "captures/tshark-summary.pcap"
+        },
+        "expected_error": "required"
+      },
+      {
+        "name": "field_extract_without_fields",
+        "params": {
+          "target": "unused",
+          "analysis_mode": "field_extract",
+          "input_file": "captures/tshark-dns.pcap"
+        },
+        "expected_error": "fields"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "tshark",
+      "-r",
+      "/workspace/captures/tshark-summary.pcap",
+      "-c",
+      "25",
+      "-T",
+      "json"
+    ],
+    "full": [
+      "tshark",
+      "-r",
+      "/workspace/captures/tshark-http-auth.pcap",
+      "-c",
+      "10",
+      "-T",
+      "json",
+      "-Y",
+      "(http.authorization || http.cookie) && ((ip.addr == 203.0.113.20) && ((tcp.port == 80 || udp.port == 80)) && (http))"
+    ]
+  }
+}

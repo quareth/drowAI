@@ -1,0 +1,45 @@
+Censys Search Results
+=====================
+
+Query: example.com
+API Endpoint: search.censys.io
+
+Results (Top 10):
+-----------------
+
+Host: 93.184.216.34
+Autonomous System: AS15133 (Verizon Digital Media Services)
+Country: United States
+City: Edgecast
+
+Services:
+  Port 80 (HTTP):
+    Server: ECS (dcb/7F84)
+    Title: Example Domain
+    
+  Port 443 (HTTPS):
+    Server: ECS (dcb/7F84)
+    TLS Version: TLS 1.3
+    Certificate:
+      Subject CN: www.example.org
+      Issuer: DigiCert TLS RSA SHA256 2020 CA1
+      Valid Until: 2025-01-13
+      
+  Port 22 (SSH):
+    Banner: SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.1
+    Key Type: ssh-ed25519
+
+Host: 93.184.216.35
+Autonomous System: AS15133 (Verizon Digital Media Services)
+Country: United States
+
+Services:
+  Port 25 (SMTP)
+  Port 465 (SMTPS)
+  Port 993 (IMAPS)
+
+Search Statistics:
+------------------
+Total Results: 2
+Query Time: 1.2s
+Credits Used: 1

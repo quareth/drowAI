@@ -1,0 +1,51 @@
+{
+  "tool_id": "sniffing_spoofing.network_sniffers.netsniff_ng",
+  "test_cases": {
+    "minimal": {
+      "description": "Basic netsniff-ng capture",
+      "params": {
+        "target": "unused",
+        "interface": "any",
+        "packet_count": 5
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Full netsniff-ng options",
+      "params": {
+        "target": "unused",
+        "interface": "eth0",
+        "output_file": "capture.pcap",
+        "packet_count": 10,
+        "duration_seconds": 5,
+        "capture_filter": "tcp port 80",
+        "snaplen": 128,
+        "buffer_size_mb": 64,
+        "verbose": true,
+        "extra_args": [
+          "-s"
+        ]
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": [
+      {
+        "name": "missing_target",
+        "params": {
+          "interface": "eth0"
+        },
+        "expected_error": "required"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^netsniff-ng"
+    ],
+    "full": [
+      "^netsniff-ng",
+      "-i"
+    ]
+  }
+}

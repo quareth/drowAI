@@ -1,0 +1,6 @@
+TNS Listener:
+  Version: TNSLSNR for Linux: Version 19.0.0.0.0
+  Status: READY
+  Services:
+    Service: ORCL
+    Service: XE

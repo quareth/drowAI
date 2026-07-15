@@ -1,0 +1,59 @@
+{
+  "tool_id": "sniffing_spoofing.network_sniffers.tcpdump",
+  "test_cases": {
+    "minimal": {
+      "description": "Basic tcpdump capture",
+      "params": {
+        "target": "unused",
+        "interface": "any",
+        "packet_count": 5
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Full tcpdump options",
+      "params": {
+        "target": "unused",
+        "interface": "eth0",
+        "protocol": "tcp",
+        "port": 80,
+        "host": "192.168.1.10",
+        "packet_count": 10,
+        "duration_seconds": 5,
+        "snaplen": 128,
+        "verbose_level": 2,
+        "quiet": false,
+        "include_payload": true,
+        "write_file": "capture.pcap",
+        "bpf_filter": "tcp"
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": [
+      {
+        "name": "missing_target",
+        "params": {
+          "interface": "eth0"
+        },
+        "expected_error": "required"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^timeout",
+      "tcpdump",
+      "-c",
+      "200",
+      "-w"
+    ],
+    "full": [
+      "^timeout",
+      "tcpdump",
+      "-i",
+      "-w",
+      "-c"
+    ]
+  }
+}

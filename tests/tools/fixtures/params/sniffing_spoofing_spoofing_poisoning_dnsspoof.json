@@ -1,0 +1,46 @@
+{
+  "tool_id": "sniffing_spoofing.spoofing_poisoning.dnsspoof",
+  "test_cases": {
+    "minimal": {
+      "description": "Basic dnsspoof execution",
+      "params": {
+        "target": "unused",
+        "interface": "eth0"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Full dnsspoof options",
+      "params": {
+        "target": "unused",
+        "interface": "eth0",
+        "hosts_file": "hosts.txt",
+        "capture_filter": "udp port 53",
+        "verbose": true,
+        "extra_args": [
+          "-n"
+        ]
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": [
+      {
+        "name": "missing_target",
+        "params": {
+          "interface": "eth0"
+        },
+        "expected_error": "required"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^dnsspoof"
+    ],
+    "full": [
+      "^dnsspoof",
+      "-f"
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "metadata": {
+    "status": "success",
+    "stderr": "",
+    "stdout": "443/tcp open https\n",
+    "tool_params": {
+      "target": "10.0.0.5"
+    }
+  },
+  "raw_output": "443/tcp open https\n",
+  "tool_name": "nmap.scan"
+}

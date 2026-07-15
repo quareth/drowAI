@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kalitool"
+  short_description: "Validate tools in real Kali"
+  default_prompt: "Use $kalitool to validate a tool with safe parameters in the real Kali runtime."

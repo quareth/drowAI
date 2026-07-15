@@ -1,0 +1,7 @@
+Summarize the result of the direct executor run.
+
+Observation: {observation}
+{stderr_line}
+Status: {status}
+
+Return a concise summary focusing on what was learned and whether the request is satisfied.

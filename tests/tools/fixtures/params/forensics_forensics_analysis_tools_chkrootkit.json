@@ -1,0 +1,29 @@
+{
+  "tool_id": "forensics.forensics_analysis_tools.chkrootkit",
+  "test_cases": {
+    "minimal": {
+      "description": "Default chkrootkit run",
+      "params": {
+        "target": "/"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Scan alternate root with expert mode",
+      "params": {
+        "target": "/",
+        "root_directory": "/mnt/rootfs",
+        "search_path": "/usr/bin:/bin",
+        "expert_mode": true,
+        "quiet": true
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": []
+  },
+  "expected_command_patterns": {
+    "minimal": [],
+    "full": []
+  }
+}

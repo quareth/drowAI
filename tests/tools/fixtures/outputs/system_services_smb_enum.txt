@@ -1,0 +1,5 @@
+Sharename       Type      Comment
+---------       ----      -------
+IPC$            IPC       IPC Service (Samba Server)
+public          Disk      Public Share
+print$          Disk      Printer Drivers

@@ -1,0 +1,18 @@
+Scanning 192.168.1.0/24 for SNMP community strings...
+
+192.168.1.1 [public] Hardware: Cisco 2960 Switch
+192.168.1.1 [private] Hardware: Cisco 2960 Switch
+192.168.1.10 [public] Hardware: HP ProLiant DL380 Gen10
+192.168.1.20 [public] Linux server 5.4.0-150-generic #167-Ubuntu SMP
+192.168.1.100 [public] Hardware: APC Smart-UPS 1500
+192.168.1.254 [public] Hardware: Cisco ASA 5505
+
+Summary:
+--------
+Hosts scanned: 256
+Hosts with SNMP: 6
+Community strings found:
+  - public: 6 devices
+  - private: 1 device
+
+Scan completed in 45 seconds

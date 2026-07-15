@@ -1,0 +1,21 @@
+unicornscan 0.4.7-2 (http://www.unicornscan.org/)
+Scanning 192.168.1.0/24
+
+TCP open 192.168.1.1:22    ttl 64
+TCP open 192.168.1.1:80    ttl 64
+TCP open 192.168.1.1:443   ttl 64
+TCP open 192.168.1.5:22    ttl 64
+TCP open 192.168.1.10:22   ttl 128
+TCP open 192.168.1.10:80   ttl 128
+TCP open 192.168.1.10:443  ttl 128
+TCP open 192.168.1.10:3389 ttl 128
+TCP open 192.168.1.100:22  ttl 64
+TCP open 192.168.1.100:3306 ttl 64
+TCP open 192.168.1.100:5432 ttl 64
+TCP open 192.168.1.200:80  ttl 64
+TCP open 192.168.1.200:443 ttl 64
+
+Scan completed in 12.345 seconds
+Total hosts scanned: 256
+Hosts up: 8
+Open ports found: 13

@@ -1,0 +1,22 @@
+Apply strict fallback compression to the content below.
+
+Previous compression output:
+{previous_pass_output}
+
+Context source reference:
+{conversation_history}
+
+Projected current user message:
+{projected_user_message}
+
+Token budget correction:
+- Previous pass token estimate: {previous_pass_tokens}
+- Correction direction: {budget_direction}
+- Required target min tokens: {target_min_tokens}
+- Required target max tokens: {target_max_tokens}
+
+Requirement:
+- If direction is `shorter`, reduce detail to land within target min/max.
+- If direction is `longer`, add continuity-critical detail to land within target min/max.
+- Keep continuity-critical facts, unresolved tasks, and safety constraints.
+- Final output must be within target min/max.

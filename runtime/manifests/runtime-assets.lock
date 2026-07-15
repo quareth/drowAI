@@ -1,0 +1,51 @@
+{
+  "manifest_version": 1,
+  "runtime_version": "2.0.0",
+  "generated_by": "runtime-image-consolidation",
+  "assets": [
+    {
+      "path": "/opt/drowai/runtime/python/workspace_init.py",
+      "sha256": "519d300c0a0a8e438fd2068f449e5d2f96cabb3098929b3e7ec1cc4b01ff2299"
+    },
+    {
+      "path": "/opt/drowai/runtime/python/executor_daemon.py",
+      "sha256": "f1be704bc0d050ae48693b6483c7a1138b715f16cd89c40356cdb44daaad9dbc"
+    },
+    {
+      "path": "/opt/drowai/runtime/python/kali_executor/__init__.py",
+      "sha256": "75725b4926ff62f61cd6124f801b5c0c36f7e0ccca7c34cda0aabcc0672297db"
+    },
+    {
+      "path": "/opt/drowai/runtime/python/kali_executor/communication/__init__.py",
+      "sha256": "2355329216d6ac30c4df91cf84971190d25cef60bb852c5c72f414f7f3ff8367"
+    },
+    {
+      "path": "/opt/drowai/runtime/python/kali_executor/communication/file_comm.py",
+      "sha256": "71932769cd1393f5136801a0a5145d6f903ec37bdae68c680189d2932fbe5687"
+    },
+    {
+      "path": "/opt/drowai/runtime/python/kali_executor/executor_daemon.py",
+      "sha256": "f1be704bc0d050ae48693b6483c7a1138b715f16cd89c40356cdb44daaad9dbc"
+    },
+    {
+      "path": "/opt/drowai/runtime/python/runtime_shared/__init__.py",
+      "sha256": "9db1519fceaf142cb1eaca979efb73bb1ca79616dce993e41e79b27fe6704919"
+    },
+    {
+      "path": "/opt/drowai/runtime/python/runtime_shared/file_comm_contracts.py",
+      "sha256": "6dfcfa3bf0b4b814e5703dd265ff49f5cc9522b2c828f50e75c6d18910e99837"
+    },
+    {
+      "path": "/opt/drowai/runtime/python/runtime_shared/runtime_manifest.py",
+      "sha256": "0ca8add7ffc9a3c5e7f24b4b684dc4639042a6877d0eea298f2d8b068a6fde30"
+    },
+    {
+      "path": "/opt/drowai/runtime/python/runtime_shared/vpn_observability.py",
+      "sha256": "d52aac0f1720d0c21364aa1ab27ec56c54dbfa2b58f2e5083a6a2d421efde944"
+    },
+    {
+      "path": "/opt/drowai/runtime/vpn/vpn-manager.sh",
+      "sha256": "333563e55a93966dbcc5aac530151ba4e468e5ad8277515d63af8f83e10139ca"
+    }
+  ]
+}

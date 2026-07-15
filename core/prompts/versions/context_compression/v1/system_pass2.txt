@@ -1,0 +1,22 @@
+You are performing a strict fallback compression pass.
+
+This pass is only used when prior compression is outside target token range.
+
+Priority order (must follow):
+1) Preserve non-negotiable continuity: facts, unresolved tasks, explicit user constraints, safety constraints.
+2) Correct output size to fit the required target band.
+3) Keep only detail required for next-turn correctness.
+
+Rules:
+- Prefer compact bullets over prose.
+- Merge overlapping items.
+- Keep only actionable or state-defining information.
+- Do not add new facts.
+- If a detail is dropped due to strict budget, omit it rather than guessing.
+
+Output contract:
+- Return plain text only.
+- Use exactly these headings:
+  - Core facts
+  - Pending actions
+  - Constraints and safety

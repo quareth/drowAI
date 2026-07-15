@@ -1,0 +1,11 @@
+file: elf64-x86-64
+arch: x86
+entry: 0x00401000
+S 0x00400000 0x00400000 r-x 0x1000 0x1000 .text
+f sym.main 0x00401000 42
+f sym.printf 0x00401030 16
+i 0x00402000 0x00402000 4 4 sym.imp.printf
+s 0x00403000 0x00403000 0x05 0x05 str.Hello
+| 0x00401000:  55                    push rbp
+| 0x00401001:  48 89 e5              mov rbp, rsp
+0x00401010 90 90 90 90 90 NOPNOP

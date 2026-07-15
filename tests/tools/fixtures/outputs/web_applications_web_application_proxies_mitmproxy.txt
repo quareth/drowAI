@@ -1,0 +1,38 @@
+mitmproxy 10.1.5
+Proxy running on http://0.0.0.0:8080
+
+Flows captured:
+---------------
+
+Flow 1: GET http://example.com/ -> 200 OK
+  Request Headers:
+    Host: example.com
+    User-Agent: Mozilla/5.0
+    Accept: text/html
+  Response Headers:
+    Content-Type: text/html
+    Content-Length: 1256
+    Server: nginx/1.18.0
+
+Flow 2: POST http://example.com/login -> 302 Found
+  Request Headers:
+    Host: example.com
+    Content-Type: application/x-www-form-urlencoded
+  Request Body:
+    username=admin&password=test123
+  Response Headers:
+    Location: /dashboard
+    Set-Cookie: session=abc123; HttpOnly
+
+Flow 3: GET http://example.com/api/users -> 200 OK
+  Request Headers:
+    Authorization: Bearer eyJhbGc...
+  Response Body (JSON):
+    {"users": [{"id": 1, "name": "admin"}]}
+
+Statistics:
+-----------
+Total flows: 156
+HTTP requests: 89
+HTTPS requests: 67
+Average response time: 245ms

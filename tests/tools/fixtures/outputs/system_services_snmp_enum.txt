@@ -1,0 +1,4 @@
+SNMPv2-MIB::sysDescr.0 = STRING: Linux test-host 5.10.0
+SNMPv2-MIB::sysObjectID.0 = OID: SNMPv2-SMI::enterprises.8072.3.2.10
+SNMPv2-MIB::sysUpTime.0 = Timeticks: (123456) 0:20:34.56
+SNMPv2-MIB::sysName.0 = STRING: test-host

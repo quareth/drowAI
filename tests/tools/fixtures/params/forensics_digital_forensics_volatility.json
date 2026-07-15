@@ -1,0 +1,35 @@
+{
+  "tool_id": "forensics.digital_forensics.volatility",
+  "test_cases": {
+    "minimal": {
+      "description": "Volatility 3 minimal run",
+      "params": {
+        "target": "/path/to/memory.dmp",
+        "version": "vol3",
+        "plugin": "pslist"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Volatility 2 with profile and output",
+      "params": {
+        "target": "/path/to/memory.dmp",
+        "version": "vol2",
+        "profile": "Win7SP1x64",
+        "plugin": "netscan",
+        "output_format": "json",
+        "output_file": "/tmp/volatility.json",
+        "verbose": true,
+        "quiet": false,
+        "plugin_options": ["--dump-dir", "/tmp/dumps"]
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": []
+  },
+  "expected_command_patterns": {
+    "minimal": [],
+    "full": []
+  }
+}

@@ -1,0 +1,179 @@
+{
+  "scenario": "deep_reasoning",
+  "cancellable_events": [
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "reasoning_start",
+        "content": "reasoning_start",
+        "metadata": {}
+      }
+    },
+    {
+      "delay_ms": 60000,
+      "mode": "custom",
+      "chunk": {
+        "type": "reasoning_delta",
+        "content": "cancellable deterministic work",
+        "metadata": {}
+      }
+    }
+  ],
+  "events": [
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "reasoning_start",
+        "content": "reasoning_start",
+        "conversation_id": "conv-e2e-deep",
+        "turn_id": "turn-e2e-deep-1",
+        "metadata": {
+          "task_id": 1
+        }
+      }
+    },
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "reasoning_delta",
+        "content": "thinking...",
+        "conversation_id": "conv-e2e-deep",
+        "turn_id": "turn-e2e-deep-1",
+        "metadata": {
+          "task_id": 1
+        }
+      }
+    },
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "reasoning_section_end",
+        "content": "reasoning_section_end",
+        "conversation_id": "conv-e2e-deep",
+        "turn_id": "turn-e2e-deep-1",
+        "metadata": {
+          "task_id": 1
+        }
+      }
+    },
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "tool_start",
+        "content": "tool_start",
+        "tool_call_id": "deterministic-workspace-read-1",
+        "tool": "workspace_read",
+        "status": "running",
+        "conversation_id": "conv-e2e-deep",
+        "turn_id": "turn-e2e-deep-1",
+        "metadata": {
+          "task_id": 1,
+          "tool_call_id": "deterministic-workspace-read-1",
+          "tool": "workspace_read",
+          "status": "running"
+        }
+      }
+    },
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "tool_end",
+        "content": "tool_end",
+        "tool_call_id": "deterministic-workspace-read-1",
+        "tool": "workspace_read",
+        "status": "success",
+        "output": "Deterministic workspace inspection completed.",
+        "conversation_id": "conv-e2e-deep",
+        "turn_id": "turn-e2e-deep-1",
+        "metadata": {
+          "task_id": 1,
+          "tool_call_id": "deterministic-workspace-read-1",
+          "tool": "workspace_read",
+          "status": "success",
+          "output": "Deterministic workspace inspection completed."
+        }
+      }
+    },
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "observation_start",
+        "content": "observation_start",
+        "conversation_id": "conv-e2e-deep",
+        "turn_id": "turn-e2e-deep-1",
+        "metadata": {
+          "task_id": 1
+        }
+      }
+    },
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "observation_delta",
+        "content": "observation_delta",
+        "conversation_id": "conv-e2e-deep",
+        "turn_id": "turn-e2e-deep-1",
+        "metadata": {
+          "task_id": 1
+        }
+      }
+    },
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "observation_section_end",
+        "content": "observation_section_end",
+        "conversation_id": "conv-e2e-deep",
+        "turn_id": "turn-e2e-deep-1",
+        "metadata": {
+          "task_id": 1
+        }
+      }
+    },
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "message_start",
+        "content": "message_start",
+        "conversation_id": "conv-e2e-deep",
+        "turn_id": "turn-e2e-deep-1",
+        "metadata": {
+          "task_id": 1
+        }
+      }
+    },
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "message_delta",
+        "content": "Done.",
+        "conversation_id": "conv-e2e-deep",
+        "turn_id": "turn-e2e-deep-1",
+        "metadata": {
+          "task_id": 1
+        }
+      }
+    },
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "section_end",
+        "content": "section_end",
+        "conversation_id": "conv-e2e-deep",
+        "turn_id": "turn-e2e-deep-1",
+        "metadata": {
+          "task_id": 1
+        }
+      }
+    },
+    {
+      "mode": "values",
+      "chunk": {
+        "facts": {},
+        "trace": {
+          "final_text": "Done."
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,65 @@
+name: E2E PR core
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-pr-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e-pr-core:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: "true"
+      DEBUG: "true"
+      E2E_START_BACKEND: "true"
+      E2E_DETERMINISTIC_MODE: "true"
+      TASK_RUNTIME_PLACEMENT_MODE_DEFAULT: local
+      DATABASE_URL: sqlite:///./.e2e-smoke.sqlite3
+      API_URL: http://127.0.0.1:18080
+      BASE_URL: http://127.0.0.1:15173
+      E2E_CI_TIER: pr-core
+      E2E_CI_ARTIFACT_ROOT: e2e/output/ci-artifacts
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E fixture and artifact-security contracts
+        run: npm run test:e2e:fixture-contracts
+
+      - name: Run PR core browser journey
+        run: npm run test:e2e:pr
+
+      - name: Upload Playwright failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-pr-core-failure-${{ github.run_attempt }}
+          path: |
+            e2e/output/playwright/
+            e2e/output/playwright-report/
+            e2e/output/ci-artifacts/
+          if-no-files-found: warn
+          retention-days: 7

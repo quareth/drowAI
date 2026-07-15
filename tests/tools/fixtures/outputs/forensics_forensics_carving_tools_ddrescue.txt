@@ -1,0 +1,2 @@
+ddrescue 1.27
+123456 bytes copied, 128 bytes failed, 99% recovered

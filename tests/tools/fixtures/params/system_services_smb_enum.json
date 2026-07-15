@@ -1,0 +1,34 @@
+{
+  "tool_id": "system_services.smb_enum",
+  "test_cases": {
+    "minimal": {
+      "description": "Anonymous share listing",
+      "params": {
+        "target": "192.168.1.10",
+        "no_pass": true
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Authenticated share listing",
+      "params": {
+        "target": "192.168.1.10",
+        "username": "admin",
+        "password": "password123",
+        "domain": "WORKGROUP",
+        "port": 445
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": []
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^smbclient"
+    ],
+    "full": [
+      "^smbclient"
+    ]
+  }
+}

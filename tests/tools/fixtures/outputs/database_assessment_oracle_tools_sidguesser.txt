@@ -1,0 +1,3 @@
+Found SID: ORCL
+Found SID: XE
+Scan completed

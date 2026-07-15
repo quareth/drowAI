@@ -1,0 +1,56 @@
+Based on current state, decide the next action in the plan executor loop.
+
+**Current Plan**:
+1. Run nmap scan
+2. Enumerate SMB if open
+
+**Todo List**:
+- Identify open ports
+- Check SMB
+
+**Recent Observations**:
+- No prior tools run yet.
+
+**Recent Tool Results**:
+• nmap.scan: No response...
+
+**Available Actions**:
+
+1. **call_tool**: Execute a pentesting tool to gather information
+   - Use when: Have a specific target/action identified, need data to proceed
+   - Output: Tool execution results and observations
+   - Note: Tool failures (network errors, timeouts, etc.) are handled AUTOMATICALLY by post_tool_reasoning
+
+2. **think_more**: Reason further about findings before calling tools
+   - Use when: New evidence requires deliberation before another tool call
+   - Output: Updated reasoning trace; agent re-enters the decision loop
+
+3. **reflect**: Analyze stuck patterns and generate strategic alternatives
+   - Use when: Stuck in PATTERN (repeated same action 3+ times, oscillating between 2 decisions, no progress after multiple iterations)
+   - Use when: Current STRATEGY isn't working (not individual tool failures)
+   - Output: Strategic analysis and alternative approaches
+   - DO NOT use for individual tool failures - those trigger automatic retry
+
+4. **finalize**: Synthesize findings and provide final answer
+   - Use when: Goal achieved, sufficient information gathered, or budget exhausted
+   - Output: Final report/answer
+
+**Decision Criteria**:
+- Have I gathered enough information to answer?
+- Is my current STRATEGY working? (not "did the last tool fail" - that's handled automatically)
+- Am I making progress or stuck in a PATTERN?
+- Do I have budget for more actions?
+
+**Important**: Tool execution failures trigger immediate analysis and retry in post_tool_reasoning.
+Only suggest "reflect" for strategic stuck loops, not individual tool failures.
+When saved workspace evidence is required, use only visible filesystem tools and avoid full reads by default.
+
+**Required Response Format**:
+```json
+{
+  "action": "call_tool" | "think_more" | "reflect" | "finalize",
+  "reasoning": "Clear explanation of why this action is appropriate"
+}
+```
+
+Provide your decision as valid JSON.

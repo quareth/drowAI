@@ -1,0 +1,3 @@
+WARN-NEW: Cross-Site Scripting
+INFO: 12 URLs
+Scan completed

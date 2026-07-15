@@ -1,0 +1,54 @@
+{
+  "tool_id": "reverse_engineering.disassemblers.objdump",
+  "test_cases": {
+    "minimal": {
+      "description": "Required fields only",
+      "params": {
+        "target": "/tmp/sample.o"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "All optional fields",
+      "params": {
+        "target": "/tmp/sample.o",
+        "mode": "disassemble",
+        "output_format": "intel",
+        "start_address": "0x400000",
+        "end_address": "0x401000",
+        "section_name": ".text",
+        "symbol_name": "main",
+        "architecture": "i386",
+        "demangle": true,
+        "show_raw_insn": true,
+        "show_source": true,
+        "line_numbers": true,
+        "full_contents": false,
+        "wide_output": true,
+        "output_file": "/tmp/objdump_output.txt",
+        "verbose": true,
+        "timeout": 120
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [
+      {
+        "description": "Headers only",
+        "params": {
+          "target": "/tmp/sample.o",
+          "mode": "headers"
+        },
+        "expected_valid": true
+      }
+    ],
+    "invalid": [
+      {
+        "description": "Missing target",
+        "params": {
+          "mode": "disassemble"
+        },
+        "expected_valid": false
+      }
+    ]
+  }
+}

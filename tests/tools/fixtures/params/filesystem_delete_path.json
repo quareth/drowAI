@@ -1,0 +1,45 @@
+{
+  "tool_id": "filesystem.delete_path",
+  "test_cases": {
+    "minimal": {
+      "description": "Required fields only",
+      "params": {
+        "path": "temp/output.txt"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "All optional fields populated",
+      "params": {
+        "path": "temp/archive",
+        "recursive": true,
+        "force": true
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [
+      {
+        "description": "Force delete missing path",
+        "params": {
+          "path": "temp/missing.txt",
+          "force": true
+        },
+        "expected_valid": true
+      }
+    ],
+    "invalid": [
+      {
+        "description": "Absolute path rejected",
+        "params": {
+          "path": "/etc/passwd"
+        },
+        "expected_valid": false,
+        "expected_error": "Absolute paths"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [],
+    "full": []
+  }
+}

@@ -1,0 +1,25 @@
+dnsmap 0.36 - DNS Network Mapper by pagvac (gnucitizen.org)
+
+[+] searching (sub)domains for example.com using built-in wordlist
+[+] using maximum random delay of 10 millisecond(s) between requests
+
+www.example.com
+IP address #1: 93.184.216.34
+
+mail.example.com
+IP address #1: 93.184.216.35
+
+ftp.example.com
+IP address #1: 93.184.216.36
+
+api.example.com
+IP address #1: 93.184.216.37
+
+blog.example.com
+IP address #1: 93.184.216.38
+
+admin.example.com
+IP address #1: 93.184.216.39
+
+[+] 6 (sub)domains and 6 IP address(es) found
+[+] completion time: 45 second(s)

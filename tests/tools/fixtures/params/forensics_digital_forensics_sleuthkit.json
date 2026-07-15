@@ -1,0 +1,33 @@
+{
+  "tool_id": "forensics.digital_forensics.sleuthkit",
+  "test_cases": {
+    "minimal": {
+      "description": "List partition table with mmls",
+      "params": {
+        "target": "/path/to/disk.img",
+        "command": "mmls"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "List files with offsets and filesystem type",
+      "params": {
+        "target": "/path/to/disk.img",
+        "command": "fls",
+        "file_system_type": "ntfs",
+        "image_type": "raw",
+        "offset": 2048,
+        "inode": 5,
+        "recursive": true,
+        "path_prefix": "/"
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": []
+  },
+  "expected_command_patterns": {
+    "minimal": [],
+    "full": []
+  }
+}

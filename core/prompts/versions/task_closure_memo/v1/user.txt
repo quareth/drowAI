@@ -1,0 +1,14 @@
+Create the task closure memo from this bounded context packet.
+
+Instructions:
+- Use task metadata and transcript context to summarize the work performed and any execution limitations.
+- Use only evidence_packet.items[].ref and knowledge_packet.items[].ref values when making reportable observations or possible findings.
+- If transcript context suggests a claim but no evidence or knowledge packet ref supports it, put that claim in unsupported_notes or limitations instead of reportable_observations or possible_findings.
+- If memo_mode is limited, leave reportable_observations and possible_findings empty and explain why in limitations or unsupported_notes.
+- Never invent or alter evidence refs or knowledge refs. Omit refs that are not present in the packet.
+- Treat evidence packet items as citation metadata only. Do not include raw tool output, stdout/stderr, artifact bodies, XML, scanner logs, or internal tool identifiers in the memo.
+- Return valid structured JSON only.
+
+<TASK_CLOSURE_MEMO_CONTEXT_JSON>
+{memo_context_json}
+</TASK_CLOSURE_MEMO_CONTEXT_JSON>

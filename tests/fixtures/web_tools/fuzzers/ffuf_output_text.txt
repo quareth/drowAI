@@ -1,0 +1,3 @@
+http://example.com/admin 200 123 10
+http://example.com/login 403 321 20
+

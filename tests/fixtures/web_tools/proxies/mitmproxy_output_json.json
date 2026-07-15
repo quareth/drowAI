@@ -1,0 +1,9 @@
+{
+  "flows": [
+    {
+      "request": {"method": "GET", "url": "http://example.com/"},
+      "response": {"status_code": 200, "content_length": 1234}
+    }
+  ]
+}
+

@@ -1,0 +1,8 @@
+Summarize the result of this direct executor turn.
+
+Observation: Found 2 open ports.
+stderr: none
+Status: success
+
+Return a concise summary focused on what was learned in this single step and whether the user's goal is now satisfied, a corrective next step is justified, or no further justified action remains.
+Do not propose optional exploratory follow-up work; if there is no concrete gap a next tool call would close, state that no further action is justified.

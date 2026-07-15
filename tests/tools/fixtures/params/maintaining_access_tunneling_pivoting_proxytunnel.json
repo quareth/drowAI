@@ -1,0 +1,48 @@
+{
+  "tool_id": "maintaining_access.tunneling_pivoting.proxytunnel",
+  "test_cases": {
+    "minimal": {
+      "description": "Proxy to destination",
+      "params": {
+        "target": "unused",
+        "proxy_host": "proxy.local",
+        "dest_host": "example.com",
+        "dest_port": 443
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Proxy with auth and local port",
+      "params": {
+        "target": "unused",
+        "proxy_host": "proxy.local",
+        "proxy_port": 8080,
+        "dest_host": "example.com",
+        "dest_port": 443,
+        "local_port": 9000,
+        "username": "user",
+        "password": "pass"
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": [
+      {
+        "name": "missing_destination",
+        "params": {
+          "target": "unused",
+          "proxy_host": "proxy.local"
+        },
+        "expected_error": "required"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^proxytunnel"
+    ],
+    "full": [
+      "^proxytunnel"
+    ]
+  }
+}

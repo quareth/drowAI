@@ -1,0 +1,46 @@
+{
+  "tool_id": "maintaining_access.tunneling_pivoting.dns2tcp",
+  "test_cases": {
+    "minimal": {
+      "description": "Client mode with minimal settings",
+      "params": {
+        "target": "unused",
+        "domain": "tunnel.example.com",
+        "server": "1.1.1.1"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Client mode with key and resource",
+      "params": {
+        "target": "unused",
+        "mode": "client",
+        "domain": "tunnel.example.com",
+        "server": "1.1.1.1",
+        "key": "secret",
+        "resource": "ssh",
+        "local_port": 5353
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": [
+      {
+        "name": "missing_server",
+        "params": {
+          "target": "unused",
+          "domain": "tunnel.example.com"
+        },
+        "expected_error": "required"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^dns2tcpc"
+    ],
+    "full": [
+      "^dns2tcpc"
+    ]
+  }
+}

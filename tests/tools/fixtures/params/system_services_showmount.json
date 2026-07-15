@@ -1,0 +1,33 @@
+{
+  "tool_id": "system_services.showmount",
+  "test_cases": {
+    "minimal": {
+      "description": "List exports with default options",
+      "params": {
+        "target": "192.168.1.1"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "List all mounts with verbose output",
+      "params": {
+        "target": "192.168.1.1",
+        "option": "-a",
+        "verbose": true
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": []
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^showmount",
+      "-e"
+    ],
+    "full": [
+      "^showmount",
+      "-a"
+    ]
+  }
+}

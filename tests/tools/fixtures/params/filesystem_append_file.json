@@ -1,0 +1,49 @@
+{
+  "tool_id": "filesystem.append_file",
+  "test_cases": {
+    "minimal": {
+      "description": "Required fields only",
+      "params": {
+        "path": "logs/app.log",
+        "content": "New entry\n"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "All optional fields populated",
+      "params": {
+        "path": "logs/app.log",
+        "content": "More details\n",
+        "encoding": "utf-8",
+        "create_if_missing": true
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [
+      {
+        "description": "Append with create_if_missing",
+        "params": {
+          "path": "logs/new.log",
+          "content": "First line\n",
+          "create_if_missing": true
+        },
+        "expected_valid": true
+      }
+    ],
+    "invalid": [
+      {
+        "description": "Path traversal attempt",
+        "params": {
+          "path": "../outside.txt",
+          "content": "bad"
+        },
+        "expected_valid": false,
+        "expected_error": "escapes the workspace"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [],
+    "full": []
+  }
+}

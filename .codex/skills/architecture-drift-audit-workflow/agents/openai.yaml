@@ -1,0 +1,4 @@
+interface:
+  display_name: "Architecture Drift Audit"
+  short_description: "Daily architecture doc drift checks"
+  default_prompt: "Use $architecture-drift-audit-workflow to verify existing architecture docs against current code and update drifted docs."

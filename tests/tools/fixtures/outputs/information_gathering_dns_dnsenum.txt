@@ -1,0 +1,44 @@
+dnsenum VERSION:1.2.6
+
+-----   example.com   -----
+
+Host's addresses:
+__________________
+
+example.com.                             300     IN    A        93.184.216.34
+
+
+Name Servers:
+______________
+
+ns1.example.com.                         300     IN    A        93.184.216.1
+ns2.example.com.                         300     IN    A        93.184.216.2
+
+
+Mail (MX) Servers:
+___________________
+
+mail.example.com.                        300     IN    A        93.184.216.35
+
+
+Trying Zone Transfers and getting Bind Versions:
+_________________________________________________
+
+Trying Zone Transfer for example.com on ns1.example.com ...
+AXFR record query failed: REFUSED
+
+Trying Zone Transfer for example.com on ns2.example.com ...
+AXFR record query failed: REFUSED
+
+
+Brute forcing with dns-big.txt:
+________________________________
+
+www.example.com.                         300     IN    A        93.184.216.34
+mail.example.com.                        300     IN    A        93.184.216.35
+ftp.example.com.                         300     IN    A        93.184.216.36
+api.example.com.                         300     IN    A        93.184.216.37
+
+
+dnsenum completed in 120 seconds
+4 hosts found

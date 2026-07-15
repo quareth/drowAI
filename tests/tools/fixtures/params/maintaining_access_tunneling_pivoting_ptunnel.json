@@ -1,0 +1,51 @@
+{
+  "tool_id": "maintaining_access.tunneling_pivoting.ptunnel",
+  "test_cases": {
+    "minimal": {
+      "description": "Client mode with remote target",
+      "params": {
+        "target": "unused",
+        "mode": "client",
+        "proxy_host": "10.0.0.2",
+        "local_port": 8080,
+        "remote_host": "10.0.0.3",
+        "remote_port": 22
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Server mode",
+      "params": {
+        "target": "unused",
+        "mode": "server",
+        "proxy_host": "10.0.0.2",
+        "local_port": 8080,
+        "remote_host": "10.0.0.3",
+        "remote_port": 22
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": [
+      {
+        "name": "missing_proxy_host",
+        "params": {
+          "target": "unused",
+          "mode": "client",
+          "local_port": 8080,
+          "remote_host": "10.0.0.3",
+          "remote_port": 22
+        },
+        "expected_error": "required"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^ptunnel-ng"
+    ],
+    "full": [
+      "^ptunnel-ng"
+    ]
+  }
+}

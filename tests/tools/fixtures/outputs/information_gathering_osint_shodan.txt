@@ -1,0 +1,42 @@
+Shodan Search Results for example.com
+=====================================
+
+Host: 93.184.216.34
+-------------------
+Hostnames: example.com, www.example.com
+Country: United States
+City: Edgecast
+Organization: Verizon Digital Media Services
+ASN: AS15133
+
+Open Ports:
+  Port 80 (HTTP):
+    Server: ECS (dcb/7F84)
+    Content-Type: text/html; charset=UTF-8
+    
+  Port 443 (HTTPS):
+    SSL Certificate:
+      Issuer: DigiCert Inc
+      Subject: www.example.org
+      Valid until: 2025-01-13
+      
+  Port 22 (SSH):
+    SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.1
+
+Vulnerabilities:
+  - CVE-2023-48795 (Terrapin Attack) - Medium
+
+Host: 93.184.216.35
+-------------------
+Hostnames: mail.example.com
+Country: United States
+Organization: Verizon Digital Media Services
+
+Open Ports:
+  Port 25 (SMTP)
+  Port 465 (SMTPS)
+  Port 587 (Submission)
+  Port 993 (IMAPS)
+
+Total Results: 2 hosts
+API Credits Used: 1

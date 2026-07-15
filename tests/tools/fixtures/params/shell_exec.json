@@ -1,0 +1,111 @@
+{
+  "tool_id": "shell.exec",
+  "test_cases": {
+    "minimal": {
+      "description": "Required fields only - simple command",
+      "params": {
+        "command": "whoami"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "All optional fields populated",
+      "params": {
+        "command": "ls -la",
+        "cwd": "artifacts",
+        "env": {"MY_VAR": "value"},
+        "timeout_sec": 60,
+        "transport": "direct",
+        "idempotent": true,
+        "redact_output": false
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [
+      {
+        "description": "Network reconnaissance command",
+        "params": {
+          "command": "ping -c 4 127.0.0.1"
+        },
+        "expected_valid": true
+      },
+      {
+        "description": "File listing with options",
+        "params": {
+          "command": "find . -name '*.txt' -type f"
+        },
+        "expected_valid": true
+      },
+      {
+        "description": "PTY transport for debugging",
+        "params": {
+          "command": "cat /proc/version",
+          "transport": "pty"
+        },
+        "expected_valid": true
+      },
+      {
+        "description": "Command with environment variables",
+        "params": {
+          "command": "echo $HOME",
+          "env": {"HOME": "/tmp/test"}
+        },
+        "expected_valid": true
+      },
+      {
+        "description": "Long timeout for slow operations",
+        "params": {
+          "command": "sleep 1 && echo done",
+          "timeout_sec": 300
+        },
+        "expected_valid": true
+      }
+    ],
+    "invalid": [
+      {
+        "description": "Destructive rm -rf / blocked by denylist",
+        "params": {
+          "command": "rm -rf /"
+        },
+        "expected_valid": false,
+        "expected_error": "denylist"
+      },
+      {
+        "description": "Fork bomb blocked by denylist",
+        "params": {
+          "command": ":(){:|:&};:"
+        },
+        "expected_valid": false,
+        "expected_error": "denylist"
+      },
+      {
+        "description": "Privilege escalation blocked",
+        "params": {
+          "command": "sudo su"
+        },
+        "expected_valid": false,
+        "expected_error": "denylist"
+      },
+      {
+        "description": "Network listener blocked",
+        "params": {
+          "command": "nc -l -p 8080"
+        },
+        "expected_valid": false,
+        "expected_error": "denylist"
+      },
+      {
+        "description": "System reboot blocked",
+        "params": {
+          "command": "reboot"
+        },
+        "expected_valid": false,
+        "expected_error": "denylist"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": ["sh", "-lc", "whoami"],
+    "full": ["sh", "-lc", "ls -la"]
+  }
+}

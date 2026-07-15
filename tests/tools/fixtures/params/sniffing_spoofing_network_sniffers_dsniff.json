@@ -1,0 +1,49 @@
+{
+  "tool_id": "sniffing_spoofing.network_sniffers.dsniff",
+  "test_cases": {
+    "minimal": {
+      "description": "Basic dsniff capture",
+      "params": {
+        "target": "unused",
+        "tool": "dsniff",
+        "interface": "eth0"
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Full dsniff options",
+      "params": {
+        "target": "unused",
+        "tool": "dsniff",
+        "interface": "eth0",
+        "protocol": "http",
+        "output_file": "dsniff.log",
+        "bpf_filter": "tcp port 80",
+        "verbose": true,
+        "extra_args": [
+          "-n"
+        ]
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": [
+      {
+        "name": "missing_target",
+        "params": {
+          "tool": "dsniff",
+          "interface": "eth0"
+        },
+        "expected_error": "required"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^dsniff"
+    ],
+    "full": [
+      "^dsniff"
+    ]
+  }
+}

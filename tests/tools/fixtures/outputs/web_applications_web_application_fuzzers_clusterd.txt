@@ -1,0 +1,36 @@
+Clusterd v0.5 - Application Server Attack Toolkit
+================================================
+
+[*] Target: http://example.com
+[*] Scanning for application servers...
+
+[+] Apache Tomcat detected!
+    Version: 9.0.65
+    Port: 8080
+    Manager: /manager/html (401 Unauthorized)
+
+[+] JBoss AS detected!
+    Version: 7.1.1
+    Port: 8080
+    Admin Console: /admin-console/
+
+[+] WebLogic detected!
+    Version: 14.1.1
+    Port: 7001
+    Console: /console (Protected)
+
+[*] Vulnerability Assessment:
+    [!] Apache Tomcat - Default credentials may be in use
+    [!] JBoss - JMX Console exposed
+    [!] WebLogic - T3 protocol accessible
+
+[*] Exploitation Options:
+    1. Tomcat Manager Upload (CVE-2017-12617)
+    2. JBoss JMX Bean Deployment
+    3. WebLogic T3 Deserialization
+
+Summary:
+--------
+Servers found: 3
+Vulnerabilities: 3
+Scan time: 15.3 seconds

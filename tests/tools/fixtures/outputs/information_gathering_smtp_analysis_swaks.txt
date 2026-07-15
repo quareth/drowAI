@@ -1,0 +1,44 @@
+=== Trying mail.example.com:25...
+=== Connected to mail.example.com.
+<-  220 mail.example.com ESMTP Postfix (Ubuntu)
+ -> EHLO test.local
+<-  250-mail.example.com
+<-  250-PIPELINING
+<-  250-SIZE 52428800
+<-  250-VRFY
+<-  250-ETRN
+<-  250-STARTTLS
+<-  250-ENHANCEDSTATUSCODES
+<-  250-8BITMIME
+<-  250-DSN
+<-  250-SMTPUTF8
+<-  250 CHUNKING
+ -> MAIL FROM:<test@test.local>
+<-  250 2.1.0 Ok
+ -> RCPT TO:<admin@example.com>
+<-  250 2.1.5 Ok
+ -> DATA
+<-  354 End data with <CR><LF>.<CR><LF>
+ -> Date: Mon, 15 Jan 2024 10:30:00 +0000
+ -> To: admin@example.com
+ -> From: test@test.local
+ -> Subject: Test Email
+ -> Message-Id: <20240115103000.123456@test.local>
+ -> X-Mailer: swaks v20201014.0
+ -> 
+ -> This is a test message.
+ -> 
+ -> .
+<-  250 2.0.0 Ok: queued as ABC123DEF456
+ -> QUIT
+<-  221 2.0.0 Bye
+=== Connection closed with remote host.
+
+Summary:
+--------
+Server: mail.example.com:25
+Banner: Postfix (Ubuntu)
+STARTTLS: Supported
+Auth Methods: None required
+Test Result: SUCCESS
+Message ID: ABC123DEF456

@@ -1,0 +1,36 @@
+[I] CMSmap - CMS Detection and Exploitation Tool
+[I] Version: 1.0.1
+
+[*] Target: http://example.com
+[*] Starting CMS detection...
+
+[+] CMS Detected: WordPress
+[+] Version: 6.4.2
+[+] Theme: Twenty Twenty-Four
+[+] Plugins detected:
+    - Yoast SEO (v21.5)
+    - Contact Form 7 (v5.8.3)
+    - WooCommerce (v8.4.0)
+    - Elementor (v3.18.3)
+
+[*] Vulnerability Check:
+[!] WordPress version 6.4.2 has known vulnerabilities:
+    - CVE-2024-XXXX: XSS in block editor (Medium)
+[!] Plugin vulnerabilities:
+    - Contact Form 7 < 5.8.4: File upload bypass (High)
+    - WooCommerce < 8.5.0: SQL Injection (Critical)
+
+[*] User Enumeration:
+[+] admin (ID: 1)
+[+] editor (ID: 2)
+[+] author1 (ID: 3)
+
+[*] Directory Structure:
+[+] /wp-admin/
+[+] /wp-content/
+[+] /wp-includes/
+[+] /wp-content/uploads/
+[+] /wp-content/plugins/
+[+] /wp-content/themes/
+
+[I] Scan completed in 45 seconds

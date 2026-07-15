@@ -1,0 +1,4 @@
+interface:
+  display_name: "Playwright CLI"
+  short_description: "Automate browser flows with CLI"
+  default_prompt: "Use $playwright to automate this browser flow from the terminal."

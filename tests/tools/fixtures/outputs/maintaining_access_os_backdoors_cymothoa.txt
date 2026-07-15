@@ -1,0 +1,4 @@
+Injection success
+PID: 1234
+Shellcode: 1
+Address: 0x7ffdf00a

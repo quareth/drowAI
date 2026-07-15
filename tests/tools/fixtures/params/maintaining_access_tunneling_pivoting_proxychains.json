@@ -1,0 +1,48 @@
+{
+  "tool_id": "maintaining_access.tunneling_pivoting.proxychains",
+  "test_cases": {
+    "minimal": {
+      "description": "Proxychains with a basic command",
+      "params": {
+        "target": "unused",
+        "command": "nmap",
+        "command_args": [
+          "-sT",
+          "127.0.0.1"
+        ]
+      },
+      "expected_valid": true
+    },
+    "full": {
+      "description": "Proxychains with config and quiet mode",
+      "params": {
+        "target": "unused",
+        "command": "curl",
+        "command_args": [
+          "http://example.com"
+        ],
+        "config_file": "/etc/proxychains4.conf",
+        "quiet": true
+      },
+      "expected_valid": true
+    },
+    "edge_cases": [],
+    "invalid": [
+      {
+        "name": "missing_command",
+        "params": {
+          "target": "unused"
+        },
+        "expected_error": "required"
+      }
+    ]
+  },
+  "expected_command_patterns": {
+    "minimal": [
+      "^proxychains4"
+    ],
+    "full": [
+      "^proxychains4"
+    ]
+  }
+}

@@ -1,0 +1,5 @@
+DECIMAL       HEXADECIMAL     DESCRIPTION
+--------------------------------------------------------------------------------
+0             0x0             U-Boot boot loader
+524288        0x80000         Linux kernel ARM boot executable zImage
+1048576       0x100000        Squashfs filesystem, little endian

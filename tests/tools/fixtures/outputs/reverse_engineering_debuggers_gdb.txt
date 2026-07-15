@@ -1,0 +1,8 @@
+Reading symbols from /tmp/sample.bin...
+Breakpoint 1 at 0x401000: file main.c, line 12.
+#0  main () at main.c:12
+eax            0x0        0
+ebx            0x1        1
+0x0000000000401000:  push   %rbp
+0x0000000000401001:  mov    %rsp,%rbp
+End of assembler dump.

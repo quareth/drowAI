@@ -1,0 +1,15 @@
+Choose the most appropriate tool for this direct executor request.
+
+User request: {user_message}
+Capability focus: {capability}
+Intent hints: {tool_hints}
+Targets: {targets}
+Eligible routes: {eligible_routes}
+
+Available tool candidates:
+{tool_candidates}
+
+Available catalog:
+{catalog_lines}
+
+Select the best tool and explain briefly why it matches the request.
