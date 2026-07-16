@@ -1,3 +1,5 @@
+"""Provide slowhttptest arguments and command execution."""
+
 import subprocess
 from typing import Dict, Any, Optional
 from enum import Enum
@@ -144,8 +146,6 @@ class SlowHTTPTestTool(BaseTool):
     name: str = "slowhttptest"
     description: str = "Application layer DoS attack simulator for testing slow HTTP attack vulnerabilities"
     version: str = "1.0.0"
-    author: str = "AI Assistant"
-
     def run(self, args: SlowHTTPTestArgs) -> ToolResult:
         """Execute slowhttptest with the specified arguments."""
         try:

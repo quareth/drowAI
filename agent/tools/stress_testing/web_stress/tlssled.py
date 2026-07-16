@@ -1,3 +1,5 @@
+"""Provide tlssled TLS testing arguments and command execution."""
+
 import subprocess
 import re
 from typing import Dict, Any, Optional
@@ -180,8 +182,6 @@ class TLSSledTool(BaseTool):
     name: str = "tlssled"
     description: str = "TLS/SSL stress testing and vulnerability assessment tool"
     version: str = "1.0.0"
-    author: str = "AI Assistant"
-
     def run(self, args: TLSSledArgs) -> ToolResult:
         """Execute tlssled with the specified arguments."""
         try:

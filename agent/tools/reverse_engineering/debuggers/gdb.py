@@ -4,9 +4,6 @@ GDB (GNU Debugger) Tool Implementation
 This module provides a Python interface for GDB, the GNU Debugger. GDB is a
 portable debugger that runs on many Unix-like systems and works for many
 programming languages including C, C++, and Fortran.
-
-Author: AI Assistant
-Date: 2024
 """
 
 import os

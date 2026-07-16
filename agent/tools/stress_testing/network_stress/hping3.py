@@ -1,3 +1,5 @@
+"""Provide hping3 network-testing arguments and command execution."""
+
 import subprocess
 import re
 from typing import Dict, Any, Optional
@@ -184,8 +186,6 @@ class Hping3Tool(BaseTool):
     name: str = "hping3"
     description: str = "Network testing tool for TCP/IP stack analysis and stress testing"
     version: str = "1.0.0"
-    author: str = "AI Assistant"
-
     def run(self, args: Hping3Args) -> ToolResult:
         """Execute hping3 with the specified arguments."""
         try:

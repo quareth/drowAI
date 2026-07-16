@@ -1,3 +1,5 @@
+"""Provide Scapy network-testing arguments and command execution."""
+
 import subprocess
 import re
 from typing import Dict, Any, Optional
@@ -186,8 +188,6 @@ class ScapyTool(BaseTool):
     name: str = "scapy"
     description: str = "Interactive packet manipulation program for network analysis and stress testing"
     version: str = "1.0.0"
-    author: str = "AI Assistant"
-
     def run(self, args: ScapyArgs) -> ToolResult:
         """Execute scapy with the specified arguments."""
         try:

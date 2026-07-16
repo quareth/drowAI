@@ -1,3 +1,5 @@
+"""Provide Siege web load-testing arguments and command execution."""
+
 import subprocess
 import re
 from typing import Dict, Any, Optional
@@ -156,8 +158,6 @@ class SiegeTool(BaseTool):
     name: str = "siege"
     description: str = "HTTP/HTTPS load testing and benchmarking tool"
     version: str = "1.0.0"
-    author: str = "AI Assistant"
-
     def run(self, args: SiegeArgs) -> ToolResult:
         """Execute siege with the specified arguments."""
         try:
