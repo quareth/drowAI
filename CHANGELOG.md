@@ -23,3 +23,8 @@ Target version: `0.1.0`.
   including per-task Kali runtimes and isolated workspaces.
 - Local development and deployment workflows, architecture documentation,
   contribution guidance, and private vulnerability reporting.
+
+### Changed
+
+- The frontend toolchain now requires Node.js 20.19 or newer and uses
+  security-patched Vite dependencies.
