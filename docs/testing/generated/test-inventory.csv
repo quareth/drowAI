@@ -940,6 +940,7 @@ e2e/fixtures/deterministic-backend.test.ts,node:test,product-e2e,product/e2e,uni
 e2e/fixtures/runtime-local-contract.test.ts,node:test,product-e2e,product/e2e,contract,e2e-fixture-contracts-pr-ci;release-main-manual;release-quick-ci,trusted-ci-selection,,
 e2e/fixtures/sanitized-logs.test.ts,node:test,product-e2e,product/e2e,unit,e2e-fixture-contracts-pr-ci;release-main-manual;release-quick-ci,trusted-ci-selection,,
 e2e/fixtures/suite-resources.test.ts,node:test,product-e2e,product/e2e,unit,e2e-fixture-contracts-pr-ci,candidate-e2e,,
+e2e/fixtures/task-lifecycle.test.ts,node:test,product-e2e,product/e2e,unit,e2e-fixture-contracts-pr-ci,candidate-e2e,,
 e2e/probes/authenticated-failure-artifact.spec.ts,playwright,product-e2e,product/e2e,integration,e2e-fixture-contracts-pr-ci,candidate-e2e,,
 e2e/tests/cross-tenant-isolation-journey.spec.ts,playwright,product-e2e,product/e2e,end-to-end,e2e-journeys-pr-main-release-ci,candidate-e2e,,Contract and lower-layer verification passed; live browser execution is pending because the current managed sandbox blocks browser MachPort and loopback binding.
 e2e/tests/dashboard-workspaces.spec.ts,playwright,product-e2e,product/e2e,end-to-end,e2e-journeys-pr-main-release-ci,candidate-e2e,,"Phase 3 lifecycle, interrupt, and dashboard scoped matrix passed 9/9 cases across Chromium, Firefox, and WebKit in approximately 3.1 minutes; a per-file duration was not recorded."

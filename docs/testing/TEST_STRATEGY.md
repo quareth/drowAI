@@ -7,8 +7,8 @@ This document defines how DrowAI turns a large historical test surface into unde
 ## Current Test-Suite Maturity
 
 > **Important:** DrowAI contains a large historical test surface that is still
-> being audited. The generated inventory currently records 1,089 test files;
-> 1,042 are `untriaged`, 24 contain trusted CI selections, 17 are candidate E2E
+> being audited. The generated inventory currently records 1,090 test files;
+> 1,042 are `untriaged`, 24 contain trusted CI selections, 18 are candidate E2E
 > coverage, five are curated manual coverage, and one is environment-dependent.
 > Only the documented curated gates currently represent release evidence. The
 > repository does not claim that every historical test passes as one aggregate
@@ -79,7 +79,7 @@ Never mark a test `trusted-ci-selection`, `useful-slow`, `flaky`, `duplicate`, o
 
 Failure artifacts are owned by each workflow and uploaded only after failure. They include screenshots, video, HTML output, sanitized service logs, and scenario metadata. Playwright network traces remain disabled because they can retain authorization and cookie headers.
 
-`npm run test:e2e:fixture-contracts` executes all nine `node:test` fixture contracts in the PR E2E workflow after Chromium is installed. The required quick release gate uses `test:e2e:fixture-contracts:quick`, which selects the four contracts that need neither a browser nor a live loopback stack.
+`npm run test:e2e:fixture-contracts` executes all ten `node:test` fixture contracts in the PR E2E workflow after Chromium is installed. The required quick release gate uses `test:e2e:fixture-contracts:quick`, which selects the four contracts that need neither a browser nor a live loopback stack.
 
 `test:release:e2e` is a maintained manual aggregate. It runs the `main`
 release contracts and the isolated `test:e2e:pr` Chromium core; it does not
