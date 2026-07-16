@@ -7,9 +7,10 @@ This document defines how DrowAI turns a large historical test surface into unde
 ## Current Test-Suite Maturity
 
 > **Important:** DrowAI contains a large historical test surface that is still
-> being audited. The generated inventory currently records 1,090 test files;
-> 1,042 are `untriaged`, 24 contain trusted CI selections, 18 are candidate E2E
-> coverage, five are curated manual coverage, and one is environment-dependent.
+> being audited. The generated inventory currently records 1,091 test files;
+> 1,043 are `untriaged`, 31 contain trusted CI selections, ten are useful slow
+> journeys, one is candidate E2E coverage, five are curated manual coverage,
+> and one is environment-dependent.
 > Only the documented curated gates currently represent release evidence. The
 > repository does not claim that every historical test passes as one aggregate
 > suite.
@@ -73,9 +74,9 @@ Never mark a test `trusted-ci-selection`, `useful-slow`, `flaky`, `duplicate`, o
 | Tier | Command and selector | CI ownership | Included environment | Explicit exclusions / status |
 |---|---|---|---|---|
 | Required release contracts | `npm run test:release:quick` | `.github/workflows/release-gate.yml` on pull requests | Curated backend, LangGraph, frontend, four environment-independent `node:test` fixture/security contracts, TypeScript, and build checks | No browser journey, Docker execution, managed runner, or Kali execution. |
-| PR browser core | `npm run test:e2e:pr` (`@pr-core`, Chromium) | `.github/workflows/e2e-smoke.yml` on pull requests | Real frontend/backend/WebSocket/SQLite with deterministic graph execution; one worker and zero retries | No external LLM, Docker, viewer journey, full settings/reporting/knowledge lifecycle, or multi-browser certification. The workflow is configured but is not documented as a required check yet. |
-| Deterministic journeys | `npm run test:e2e:journeys` (`@journey`, Chromium/Firefox/WebKit) | `.github/workflows/e2e-journeys.yml` on pull requests, `main`, `master`, `release/**`, and manual dispatch | Isolated frontend/backend/database/workspaces plus offline process-scoped seeding; no browser request interception | No real Docker, managed runner, live LLM, external credentials, mobile/Safari emulation, accessibility, or visual-regression certification. |
-| Local-runtime canary | `npm run test:e2e:runtime:local` (`@runtime-local`, Chromium) | `.github/workflows/e2e-runtime-local.yml` nightly/manual, with a separate manual `release_certification` job | Clean supported Linux host, real Docker image/container/terminal/workspace, deterministic safe shell command | No external LLM or managed runner. Missing Linux, Docker daemon, image, or runtime capability fails explicitly. No successful clean-host run is recorded yet. |
+| PR browser core | `npm run test:e2e:pr` (`@pr-core`, Chromium) | Required `.github/workflows/e2e-smoke.yml` check on pull requests | Real frontend/backend/WebSocket/SQLite with deterministic graph execution; one worker and zero retries | No external LLM, Docker, viewer journey, full settings/reporting/knowledge lifecycle, or multi-browser certification. |
+| Deterministic journeys | `npm run test:e2e:journeys:chromium` on `main`/`master`; `npm run test:e2e:journeys:all` on `release/**` and manual dispatch | `.github/workflows/e2e-journeys.yml` after merge or on explicit certification | Isolated frontend/backend/database/workspaces plus offline process-scoped seeding; release/manual certification covers Chromium, Firefox, and WebKit | No real Docker, managed runner, live LLM, external credentials, mobile/Safari emulation, accessibility, or visual-regression certification. |
+| Local-runtime canary | `npm run test:e2e:runtime:local` (`@runtime-local`, Chromium) | `.github/workflows/e2e-runtime-local.yml` nightly/manual, with a separate manual `release_certification` job | Clean supported Linux host, real Docker image/container/terminal/workspace, deterministic safe shell command | No external LLM or managed runner. Missing Linux, Docker daemon, image, or runtime capability fails explicitly. The first scheduled run found a final-read polling defect that PR #2 fixed; a successful clean-host rerun is pending. |
 
 Failure artifacts are owned by each workflow and uploaded only after failure. They include screenshots, video, HTML output, sanitized service logs, and scenario metadata. Playwright network traces remain disabled because they can retain authorization and cookie headers.
 
@@ -87,14 +88,14 @@ replace the multi-browser journey or Linux Docker certification tiers.
 
 ## Stability Evidence And Promotion Policy
 
-| Evidence gate | Recorded result on 2026-07-11 | Promotion state |
+| Evidence gate | Recorded result | Promotion state |
 |---|---|---|
 | PR core: three consecutive local passes | Met; recorded Chromium examples are 11.4s, 11.5s, 11.6s, 11.8s, 12.0s, and 12.3s for four cases | Local threshold met. |
-| PR core: three consecutive post-fix CI passes | Not recorded | Do not mark the browser check required. |
-| Complete deterministic suite: two consecutive 45-case all-browser passes | First complete local pass recorded on 2026-07-12: 45/45 in 8.7 minutes | One additional complete pass is required before release certification. |
-| Real runtime: one clean supported Linux Docker pass with leak-free teardown | Not recorded; the current non-Linux host fails closed with `platform/linux_required` | Do not approve public release from the runtime canary. |
+| PR core: three consecutive post-fix CI passes | Met; more than three successful GitHub Actions runs are recorded after the polling fix | The repository ruleset requires `e2e-pr-core`. |
+| Complete deterministic suite: two consecutive 45-case all-browser passes | Met: 45/45 locally on 2026-07-12 and 45/45 in GitHub Actions on 2026-07-16 | Multi-browser stability threshold met; retain the full matrix for release/manual certification. |
+| Real runtime: one clean supported Linux Docker pass with leak-free teardown | Pending; the first scheduled Linux run built the image and exposed the now-fixed final-read polling defect | Rerun the nightly/manual canary before using it as release-certification evidence. |
 
-Scoped evidence retained in the inventory is useful implementation proof: Phase 2 passed 6/6 browser cases in approximately 1.4 minutes, Phase 3 passed 9/9 in approximately 3.1 minutes, Knowledge passed 3/3 with no duration captured, and Reporting passed 3/3 in 51.5 seconds. The first complete local matrix passed all 45 cases in 8.7 minutes on 2026-07-12; a second complete run is still required by the certification policy.
+Scoped evidence retained in the inventory is useful implementation proof: Phase 2 passed 6/6 browser cases in approximately 1.4 minutes, Phase 3 passed 9/9 in approximately 3.1 minutes, Knowledge passed 3/3 with no duration captured, and Reporting passed 3/3 in 51.5 seconds. The complete matrix passed 45/45 locally on 2026-07-12 and again in GitHub Actions on 2026-07-16. The optimized Chromium post-merge tier passed 15/15 locally in 2.6 minutes on 2026-07-16.
 
 ## Test Placement
 

@@ -2,54 +2,54 @@
   "schema_version": 1,
   "tests": {
     "e2e/tests/pr-core.spec.ts": {
-      "trust_status": "candidate-e2e",
+      "trust_status": "trusted-ci-selection",
       "duration_seconds": 12.3,
-      "notes": "Four-scenario PR core passed more than three consecutive local Chromium runs on 2026-07-11 (recorded examples: 11.4s, 11.5s, 11.6s, 11.8s, 12.0s, and 12.3s). The PR workflow is configured but three post-fix CI passes and required-check promotion are pending."
+      "notes": "Four-scenario PR core passed more than three consecutive local Chromium runs on 2026-07-11 (recorded examples: 11.4s, 11.5s, 11.6s, 11.8s, 12.0s, and 12.3s), followed by more than three successful post-fix GitHub Actions runs. The repository ruleset requires the e2e-pr-core check."
     },
     "e2e/tests/setup-auth-lifecycle.spec.ts": {
-      "trust_status": "candidate-e2e",
+      "trust_status": "useful-slow",
       "notes": "Phase 2 setup and owner-core scoped matrix passed 6/6 cases across Chromium, Firefox, and WebKit in approximately 1.4 minutes; a per-file duration was not recorded."
     },
     "e2e/tests/owner-core-journey.spec.ts": {
-      "trust_status": "candidate-e2e",
+      "trust_status": "useful-slow",
       "notes": "Phase 2 setup and owner-core scoped matrix passed 6/6 cases across Chromium, Firefox, and WebKit in approximately 1.4 minutes; a per-file duration was not recorded."
     },
     "e2e/tests/task-lifecycle-recovery.spec.ts": {
-      "trust_status": "candidate-e2e",
+      "trust_status": "useful-slow",
       "notes": "Phase 3 lifecycle, interrupt, and dashboard scoped matrix passed 9/9 cases across Chromium, Firefox, and WebKit in approximately 3.1 minutes; a per-file duration was not recorded."
     },
     "e2e/tests/interrupt-journey.spec.ts": {
-      "trust_status": "candidate-e2e",
+      "trust_status": "useful-slow",
       "notes": "Phase 3 lifecycle, interrupt, and dashboard scoped matrix passed 9/9 cases across Chromium, Firefox, and WebKit in approximately 3.1 minutes; a per-file duration was not recorded."
     },
     "e2e/tests/dashboard-workspaces.spec.ts": {
-      "trust_status": "candidate-e2e",
+      "trust_status": "useful-slow",
       "notes": "Phase 3 lifecycle, interrupt, and dashboard scoped matrix passed 9/9 cases across Chromium, Firefox, and WebKit in approximately 3.1 minutes; a per-file duration was not recorded."
     },
     "e2e/tests/engagement-knowledge-workspace.spec.ts": {
-      "trust_status": "candidate-e2e",
+      "trust_status": "useful-slow",
       "notes": "Persisted Knowledge journey passed 3/3 cases across Chromium, Firefox, and WebKit on 2026-07-11; duration was not recorded."
     },
     "e2e/tests/report-lifecycle.spec.ts": {
-      "trust_status": "candidate-e2e",
+      "trust_status": "useful-slow",
       "duration_seconds": 51.5,
       "notes": "Deterministic persisted report lifecycle passed 3/3 cases across Chromium, Firefox, and WebKit in 51.5 seconds on 2026-07-11."
     },
     "e2e/tests/remaining-pages-lifecycle.spec.ts": {
-      "trust_status": "candidate-e2e",
-      "notes": "Contract and lower-layer verification passed; live browser execution is pending because the current managed sandbox blocks browser MachPort and loopback binding."
+      "trust_status": "useful-slow",
+      "notes": "The complete Chromium, Firefox, and WebKit matrix passed in GitHub Actions on 2026-07-16; this scenario remains outside the fast PR tier."
     },
     "e2e/tests/viewer-authorization-journey.spec.ts": {
-      "trust_status": "candidate-e2e",
-      "notes": "Contract and lower-layer verification passed; live browser execution is pending because the current managed sandbox blocks browser MachPort and loopback binding."
+      "trust_status": "useful-slow",
+      "notes": "The complete Chromium, Firefox, and WebKit matrix passed in GitHub Actions on 2026-07-16; this scenario remains outside the fast PR tier."
     },
     "e2e/tests/cross-tenant-isolation-journey.spec.ts": {
-      "trust_status": "candidate-e2e",
-      "notes": "Contract and lower-layer verification passed; live browser execution is pending because the current managed sandbox blocks browser MachPort and loopback binding."
+      "trust_status": "useful-slow",
+      "notes": "The complete Chromium, Firefox, and WebKit matrix passed in GitHub Actions on 2026-07-16; this scenario remains outside the fast PR tier."
     },
     "e2e/tests/runtime-local-canary.spec.ts": {
       "trust_status": "environment-dependent",
-      "notes": "Runtime prerequisite, cleanup, Docker, and selector contracts pass. The canary correctly fails closed with platform/linux_required on the current non-Linux host; no clean Linux Docker pass is recorded."
+      "notes": "Runtime prerequisite, cleanup, Docker, selector, and final-status polling contracts pass. The first scheduled Linux run built the image but exposed a final-read polling defect; that defect was fixed by PR #2 and has regression coverage. A successful clean Linux Docker run is still pending."
     }
   }
 }

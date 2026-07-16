@@ -101,33 +101,37 @@ def test_build_inventory_derives_gate_membership_and_untriaged_status(tmp_path: 
     assert "marked tests" in by_path[
         "backend/tests/langgraph_regression/test_flow.py"
     ].notes
-    assert "e2e-pr-ci-configured" in by_path[
+    assert "e2e-pr-required-ci" in by_path[
         "e2e/tests/pr-core.spec.ts"
     ].gate_memberships
+    assert by_path["e2e/tests/pr-core.spec.ts"].trust_status == "trusted-ci-selection"
     assert by_path["e2e/tests/owner-core-journey.spec.ts"].gate_memberships == (
         "e2e-journeys-main-release-ci",
     )
     assert by_path["e2e/tests/both-tiers.spec.ts"].gate_memberships == (
         "e2e-journeys-main-release-ci",
-        "e2e-pr-ci-configured",
+        "e2e-pr-required-ci",
     )
     assert by_path["e2e/tests/runtime.spec.ts"].gate_memberships == (
         "e2e-runtime-nightly-release-manual",
     )
     assert by_path["e2e/fixtures/security.test.ts"].framework == "node:test"
     assert by_path["e2e/fixtures/security.test.ts"].gate_memberships == (
-        "e2e-fixture-contracts-pr-ci",
+        "e2e-fixture-contracts-required-pr-ci",
         "release-main-manual",
         "release-quick-ci",
     )
     assert by_path["e2e/fixtures/security.test.ts"].trust_status == "trusted-ci-selection"
     assert by_path["e2e/fixtures/live.integration.test.ts"].gate_memberships == (
-        "e2e-fixture-contracts-pr-ci",
+        "e2e-fixture-contracts-required-pr-ci",
     )
-    assert by_path["e2e/fixtures/live.integration.test.ts"].trust_status == "candidate-e2e"
+    assert by_path["e2e/fixtures/live.integration.test.ts"].trust_status == "trusted-ci-selection"
     assert by_path[
         "e2e/probes/authenticated-failure-artifact.spec.ts"
-    ].gate_memberships == ("e2e-fixture-contracts-pr-ci",)
+    ].gate_memberships == ("e2e-fixture-contracts-required-pr-ci",)
+    assert by_path[
+        "e2e/probes/authenticated-failure-artifact.spec.ts"
+    ].trust_status == "candidate-e2e"
     assert by_path[
         "e2e/probes/authenticated-failure-artifact.spec.ts"
     ].layer == "integration"

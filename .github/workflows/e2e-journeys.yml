@@ -1,7 +1,6 @@
 name: E2E deterministic journeys
 
 on:
-  pull_request:
   push:
     branches:
       - main
@@ -17,7 +16,65 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deterministic-journeys:
+  deterministic-journeys-chromium:
+    if: >-
+      github.event_name == 'push' &&
+      (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CI: "true"
+      DEBUG: "true"
+      E2E_START_BACKEND: "true"
+      E2E_DETERMINISTIC_MODE: "true"
+      TASK_RUNTIME_PLACEMENT_MODE_DEFAULT: local
+      DATABASE_URL: sqlite:///./.e2e-journeys.sqlite3
+      API_URL: http://127.0.0.1:18080
+      BASE_URL: http://127.0.0.1:15173
+      E2E_CI_TIER: deterministic-journeys-chromium
+      E2E_CI_ARTIFACT_ROOT: e2e/output/ci-artifacts
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install Python dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run deterministic Chromium journeys
+        run: npm run test:e2e:journeys:chromium
+
+      - name: Upload deterministic Chromium failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-journeys-chromium-failure-${{ github.run_attempt }}
+          path: |
+            e2e/output/playwright/
+            e2e/output/playwright-report/
+            e2e/output/ci-artifacts/
+          if-no-files-found: warn
+          retention-days: 7
+
+  deterministic-journeys-all-browsers:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      startsWith(github.ref, 'refs/heads/release/')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
@@ -29,7 +86,7 @@ jobs:
       DATABASE_URL: sqlite:///./.e2e-journeys.sqlite3
       API_URL: http://127.0.0.1:18080
       BASE_URL: http://127.0.0.1:15173
-      E2E_CI_TIER: deterministic-journeys
+      E2E_CI_TIER: deterministic-journeys-all-browsers
       E2E_CI_ARTIFACT_ROOT: e2e/output/ci-artifacts
     steps:
       - uses: actions/checkout@v4
@@ -37,6 +94,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
 
       - uses: actions/setup-node@v4
         with:
@@ -52,14 +111,14 @@ jobs:
       - name: Install release browsers
         run: npx playwright install --with-deps chromium firefox webkit
 
-      - name: Run deterministic UI journeys
-        run: npm run test:e2e:journeys
+      - name: Run deterministic all-browser journeys
+        run: npm run test:e2e:journeys:all
 
-      - name: Upload deterministic journey failure artifacts
+      - name: Upload deterministic all-browser failure artifacts
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: e2e-journeys-failure-${{ github.run_attempt }}
+          name: e2e-journeys-all-browsers-failure-${{ github.run_attempt }}
           path: |
             e2e/output/playwright/
             e2e/output/playwright-report/

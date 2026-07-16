@@ -33,11 +33,11 @@ _RELEASE_PATH_VARIABLES = {
 }
 _REGRESSION_MARKERS = {"quick", "main", "nightly"}
 _PLAYWRIGHT_TIER_TAGS = {
-    "@journey": "e2e-journeys-pr-main-release-ci",
-    "@pr-core": "e2e-pr-ci-configured",
+    "@journey": "e2e-journeys-main-release-ci",
+    "@pr-core": "e2e-pr-required-ci",
     "@runtime-local": "e2e-runtime-nightly-release-manual",
 }
-_FIXTURE_CONTRACT_CI_MEMBERSHIP = "e2e-fixture-contracts-pr-ci"
+_FIXTURE_CONTRACT_CI_MEMBERSHIP = "e2e-fixture-contracts-required-pr-ci"
 
 
 @dataclass(frozen=True)
@@ -238,13 +238,17 @@ def _gate_memberships(
 
 
 def _trust_status(path: str, memberships: tuple[str, ...]) -> str:
-    if "release-quick-ci" in memberships:
+    if "release-quick-ci" in memberships or "e2e-pr-required-ci" in memberships:
+        return "trusted-ci-selection"
+    if (
+        _FIXTURE_CONTRACT_CI_MEMBERSHIP in memberships
+        and not path.startswith("e2e/probes/")
+    ):
         return "trusted-ci-selection"
     if any(
         membership in memberships
         for membership in (
-            "e2e-pr-ci-configured",
-            "e2e-journeys-pr-main-release-ci",
+            "e2e-journeys-main-release-ci",
             _FIXTURE_CONTRACT_CI_MEMBERSHIP,
         )
     ):
