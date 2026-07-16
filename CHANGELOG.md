@@ -26,5 +26,5 @@ Target version: `0.1.0`.
 
 ### Changed
 
-- The frontend toolchain now requires Node.js 20.19 or newer and uses
-  security-patched Vite dependencies.
+- Dependency security updates refresh the frontend and backend toolchains,
+  replace python-jose with PyJWT, and require Node.js 20.19 or newer.

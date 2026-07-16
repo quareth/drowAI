@@ -5,7 +5,7 @@ This FastAPI backend replaces the Node.js/Express server with Python-based imple
 - **FastAPI** (Python 3.10+) - Modern, fast web framework
 - **SQLAlchemy** (async ORM) - Database operations
 - **PostgreSQL** - Database backend with asyncpg driver
-- **JWT** with python-jose - Authentication and authorization
+- **JWT** with PyJWT - Authentication and authorization
 - **bcrypt** via passlib - Password hashing
 
 ## Architecture
