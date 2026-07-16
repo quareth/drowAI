@@ -35,6 +35,10 @@ def test_package_scripts_expose_pr_and_multi_browser_journey_tiers() -> None:
     assert "--project" not in journey_command
     assert "@pr-core" not in journey_command
     assert RUNTIME_LOCAL_SELECTOR not in journey_command
+    chromium_journey_command = scripts["test:e2e:journeys:chromium"]
+    assert chromium_journey_command.startswith(journey_command)
+    assert chromium_journey_command.endswith("--project=chromium")
+    assert scripts["test:e2e:journeys:all"] == journey_command
     runtime_command = scripts["test:e2e:runtime:local"]
     assert "--grep @runtime-local" in runtime_command
     assert "--project=chromium" in runtime_command

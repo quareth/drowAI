@@ -22,6 +22,11 @@ def _assert_failure_only_safe_artifacts(workflow: str) -> None:
     assert "trace: retain-on-failure" not in workflow
 
 
+def _assert_pip_cache(workflow: str, *, jobs: int = 1) -> None:
+    assert workflow.count("cache: pip") == jobs
+    assert workflow.count("cache-dependency-path: requirements-dev.txt") == jobs
+
+
 def test_pr_core_owns_pull_request_chromium_job() -> None:
     workflow = _workflow("e2e-smoke.yml")
 
@@ -34,6 +39,7 @@ def test_pr_core_owns_pull_request_chromium_job() -> None:
     assert "npm run test:e2e:runtime:local" not in workflow
     assert "playwright install --with-deps chromium" in workflow
     assert "playwright install --with-deps chromium firefox webkit" not in workflow
+    _assert_pip_cache(workflow)
     _assert_failure_only_safe_artifacts(workflow)
 
 
@@ -45,8 +51,15 @@ def test_deterministic_journeys_own_main_release_and_manual_runs() -> None:
     assert "release/**" in workflow
     assert "workflow_dispatch:" in workflow
     assert "pull_request:" not in workflow
-    assert "npm run test:e2e:journeys" in workflow
+    assert "deterministic-journeys-chromium:" in workflow
+    assert "deterministic-journeys-all-browsers:" in workflow
+    assert "npm run test:e2e:journeys:chromium" in workflow
+    assert "npm run test:e2e:journeys:all" in workflow
+    assert "github.ref == 'refs/heads/main'" in workflow
+    assert "startsWith(github.ref, 'refs/heads/release/')" in workflow
+    assert "playwright install --with-deps chromium" in workflow
     assert "playwright install --with-deps chromium firefox webkit" in workflow
+    _assert_pip_cache(workflow, jobs=2)
     _assert_failure_only_safe_artifacts(workflow)
 
 
@@ -60,8 +73,13 @@ def test_runtime_local_owns_nightly_manual_and_explicit_certification() -> None:
     assert "runtime-local-release-certification:" in workflow
     assert workflow.count("npm run test:e2e:runtime:local") == 2
     assert workflow.count("playwright install --with-deps chromium") == 2
+    _assert_pip_cache(workflow, jobs=2)
     assert "playwright install --with-deps chromium firefox webkit" not in workflow
     assert workflow.count("if: failure()") == 2
     assert workflow.count("e2e/output/ci-artifacts/") >= 2
     assert "pull_request:" not in workflow
     _assert_failure_only_safe_artifacts(workflow)
+
+
+def test_release_gate_uses_pip_dependency_cache() -> None:
+    _assert_pip_cache(_workflow("release-gate.yml"))
