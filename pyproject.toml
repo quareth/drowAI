@@ -31,7 +31,7 @@ dependencies = [
     "pydantic==2.11.7",
     "python-dotenv==1.1.0",
     "python-jose[cryptography]==3.5.0",
-    "python-multipart==0.0.20",
+    "python-multipart==0.0.31",
     "redis==5.2.1",
     "requests==2.32.4",
     "sqlalchemy==2.0.41",
