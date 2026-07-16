@@ -23,3 +23,8 @@ Target version: `0.1.0`.
   including per-task Kali runtimes and isolated workspaces.
 - Local development and deployment workflows, architecture documentation,
   contribution guidance, and private vulnerability reporting.
+
+### Changed
+
+- Dependency security updates refresh the frontend and backend toolchains,
+  replace python-jose with PyJWT, and require Node.js 20.19 or newer.

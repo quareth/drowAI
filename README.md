@@ -102,7 +102,7 @@ through the same control-channel architecture used by single-host deployments.
 Prerequisites:
 
 - Python 3.11 or newer;
-- Node.js 20 with npm;
+- Node.js 20.19 or newer with npm;
 - PostgreSQL 15 or newer, running with a provisioned database and login role;
 - Docker Engine or Docker Desktop for the managed runner and task runtimes.
 

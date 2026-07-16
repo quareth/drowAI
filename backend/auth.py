@@ -11,7 +11,8 @@ from collections.abc import Mapping
 from typing import Any, TYPE_CHECKING, Optional
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import ExpiredSignatureError, JWTError, jwt
+import jwt
+from jwt import ExpiredSignatureError, InvalidTokenError
 from passlib.context import CryptContext
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -117,7 +118,7 @@ def decode_token_payload(token: str) -> tuple[Optional[dict[str, Any]], Optional
     except ExpiredSignatureError as e:
         logger.error(f"Token verification failed: {e}")
         return None, "token_expired"
-    except JWTError as e:
+    except InvalidTokenError as e:
         logger.error(f"Token verification failed: {e}")
         return None, "invalid_token"
 
