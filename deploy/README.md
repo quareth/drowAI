@@ -5,7 +5,7 @@ Product deployment has two supported lanes:
 - **Standalone:** one Linux host runs postgres, backend, frontend, and runner.
 - **Distributed:** a Management host runs UI/API/DB, and Runner Site hosts run the packaged runner.
 
-Local parity and development use [`scripts/local_production_cloud.py`](../scripts/local_production_cloud.py); it is not a customer deployment entrypoint.
+Local parity and development use [`scripts/local_dev.py`](../scripts/local_dev.py); it is not a customer deployment entrypoint.
 
 ## Prerequisites
 
@@ -85,7 +85,7 @@ Full cloud runbook: [`docs/runbooks/cloud-installation.md`](../docs/runbooks/clo
 ## Dev
 
 ```bash
-python3 scripts/local_production_cloud.py up
+python3 scripts/local_dev.py up
 ```
 
 The launcher uses generated local secrets under `.drowai-local` when no explicit

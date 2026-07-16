@@ -103,36 +103,59 @@ Prerequisites:
 
 - Python 3.11 or newer;
 - Node.js 20.19 or newer with npm;
-- PostgreSQL 15 or newer, running with a provisioned database and login role;
+- PostgreSQL 15 or newer, running with the pgvector extension available;
 - Docker Engine or Docker Desktop for the managed runner and task runtimes.
 
-Before the first run, create a PostgreSQL database and login role using your
-normal PostgreSQL administration tools. The generated local defaults target a
-database named `drowai` as `drowai_user` on `localhost:5432`. If your database
-uses different connection details or password authentication, set
-`DATABASE_URL` in the shell or in an optional root `.env` file.
+Install the application dependencies first:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements-dev.txt
 npm install
+```
 
-python3 scripts/local_production_cloud.py up
+The generated local defaults target a database named `drowai` as `drowai_user`
+on `localhost:5432`. On the first `up`, the launcher checks for that login role,
+database, and pgvector extension. If any are missing, it shows the planned
+administrative changes and asks before creating them. The launcher first tries
+the current local PostgreSQL administrator identity; if that is unavailable,
+the interactive flow asks for a PostgreSQL administrator username and password.
+Administrator credentials are used only for the bootstrap connection and are
+not stored.
+
+You can run the same bootstrap explicitly before starting the stack:
+
+```bash
+python3 scripts/local_dev.py bootstrap-db
+```
+
+For a non-default or password-authenticated application database, set
+`DATABASE_URL` in the shell or an optional root `.env` file before running the
+bootstrap. Remote or separately administered PostgreSQL installations should
+normally be provisioned by their operator. A one-time
+`DROWAI_POSTGRES_ADMIN_URL` override is available when the bootstrap must use a
+specific administrator connection; do not commit or retain that credential.
+
+Start the local stack and accept the database bootstrap prompt when it appears:
+
+```bash
+python3 scripts/local_dev.py up
 ```
 
 The launcher generates local configuration and secrets under `.drowai-local`.
-A root `.env` file is read only for development overrides. Model-provider
-credentials are configured through the setup UI.
+A root `.env` file is read only for development overrides. After first-run
+setup and sign-in, model-provider credentials are configured under
+**Settings → API**.
 
 `requirements-dev.txt` includes `requirements.txt` plus contributor and test
 dependencies. Production images install only `requirements.txt`.
 
-The launcher applies migrations to create or update the application schema,
-but it does not install or start PostgreSQL or create its database and login
-role. SQLite is not supported as the primary application database for this
-path. The launcher is for development and parity testing, not the production
-deployment entrypoint.
+The launcher can provision the local development database objects, but it does
+not install or start PostgreSQL or install the pgvector server extension. It
+applies migrations after database readiness succeeds. SQLite is not supported
+as the primary application database for this path. The launcher is for
+development and parity testing, not the production deployment entrypoint.
 
 Useful URLs:
 

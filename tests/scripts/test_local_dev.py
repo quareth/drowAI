@@ -20,7 +20,7 @@ from backend.database import Base
 from backend.models.core import Task, User
 from backend.models.runner_control import ExecutionSite, Runner, RunnerConnection, RunnerCredential
 from backend.models.tenant import Tenant
-from scripts import local_production_cloud
+from scripts import local_dev
 
 
 class _FakeProcess:
@@ -47,7 +47,7 @@ def test_single_host_env_defaults_use_managed_runner_control_channel() -> None:
         runner_root=Path(".drowai-runner-cloud"),
         tenant_id=None,
     )
-    env = local_production_cloud._single_host_env(args)
+    env = local_dev._single_host_env(args)
 
     assert env["DROWAI_DEPLOYMENT_PROFILE"] == "single_host"
     assert env["TASK_RUNTIME_PLACEMENT_MODE_DEFAULT"] == "runner"
@@ -70,22 +70,22 @@ def test_run_up_fresh_setup_waits_for_enrollment_before_runner(monkeypatch, tmp_
     calls: list[tuple[str, object]] = []
     created: dict[str, _FakeProcess] = {}
 
-    monkeypatch.setattr(local_production_cloud, "_run_schema_migrations", lambda _env: calls.append(("migrate", None)))
+    monkeypatch.setattr(local_dev, "_run_schema_migrations", lambda _env: calls.append(("migrate", None)))
     def _unexpected_runtime_image_preflight(_env):
         raise AssertionError("startup must defer missing-image handling to task materialization")
 
     monkeypatch.setattr(
-        local_production_cloud,
+        local_dev,
         "_run_runtime_image_preflight",
         _unexpected_runtime_image_preflight,
     )
-    monkeypatch.setattr(local_production_cloud, "_wait_for_backend", lambda _url: calls.append(("wait-backend", _url)))
-    monkeypatch.setattr(local_production_cloud, "_has_setup_identity", lambda _args, _env: False)
-    monkeypatch.setattr(local_production_cloud, "_local_enrollment_path", lambda: enrollment_path)
-    monkeypatch.setattr(local_production_cloud, "_write_pid_file", lambda _env, _processes: None)
-    monkeypatch.setattr(local_production_cloud, "_remove_pid_file", lambda _env: None)
-    monkeypatch.setattr(local_production_cloud, "_attach_output_threads", lambda _name, _process: [])
-    monkeypatch.setattr(local_production_cloud, "_wait_for_connected_runner", lambda *_args, **_kwargs: calls.append(("wait-runner", None)))
+    monkeypatch.setattr(local_dev, "_wait_for_backend", lambda _url: calls.append(("wait-backend", _url)))
+    monkeypatch.setattr(local_dev, "_has_setup_identity", lambda _args, _env: False)
+    monkeypatch.setattr(local_dev, "_local_enrollment_path", lambda: enrollment_path)
+    monkeypatch.setattr(local_dev, "_write_pid_file", lambda _env, _processes: None)
+    monkeypatch.setattr(local_dev, "_remove_pid_file", lambda _env: None)
+    monkeypatch.setattr(local_dev, "_attach_output_threads", lambda _name, _process: [])
+    monkeypatch.setattr(local_dev, "_wait_for_connected_runner", lambda *_args, **_kwargs: calls.append(("wait-runner", None)))
 
     def _fake_backend(_args, _env):
         calls.append(("backend", None))
@@ -108,17 +108,17 @@ def test_run_up_fresh_setup_waits_for_enrollment_before_runner(monkeypatch, tmp_
         created["runner"] = _FakeProcess("runner")
         return created["runner"]
 
-    monkeypatch.setattr(local_production_cloud, "_run_backend", _fake_backend)
-    monkeypatch.setattr(local_production_cloud, "_run_frontend", _fake_frontend)
-    monkeypatch.setattr(local_production_cloud, "_wait_for_local_enrollment", _fake_wait_for_enrollment)
-    monkeypatch.setattr(local_production_cloud, "_run_runner", _fake_runner)
+    monkeypatch.setattr(local_dev, "_run_backend", _fake_backend)
+    monkeypatch.setattr(local_dev, "_run_frontend", _fake_frontend)
+    monkeypatch.setattr(local_dev, "_wait_for_local_enrollment", _fake_wait_for_enrollment)
+    monkeypatch.setattr(local_dev, "_run_runner", _fake_runner)
 
     def _exit_main_loop(_seconds):
         created["backend"].returncode = 0
 
-    monkeypatch.setattr(local_production_cloud.time, "sleep", _exit_main_loop)
+    monkeypatch.setattr(local_dev.time, "sleep", _exit_main_loop)
 
-    code = local_production_cloud._run_up(args, env)
+    code = local_dev._run_up(args, env)
 
     assert code == 0
     assert ("frontend", None) in calls
@@ -144,14 +144,14 @@ def test_run_up_fresh_setup_discards_stale_enrollment_before_wait(monkeypatch, t
     created: dict[str, _FakeProcess] = {}
     wait_saw_stale_file = None
 
-    monkeypatch.setattr(local_production_cloud, "_run_schema_migrations", lambda _env: None)
-    monkeypatch.setattr(local_production_cloud, "_wait_for_backend", lambda _url: None)
-    monkeypatch.setattr(local_production_cloud, "_has_setup_identity", lambda _args, _env: False)
-    monkeypatch.setattr(local_production_cloud, "_local_enrollment_path", lambda: enrollment_path)
-    monkeypatch.setattr(local_production_cloud, "_write_pid_file", lambda _env, _processes: None)
-    monkeypatch.setattr(local_production_cloud, "_remove_pid_file", lambda _env: None)
-    monkeypatch.setattr(local_production_cloud, "_attach_output_threads", lambda _name, _process: [])
-    monkeypatch.setattr(local_production_cloud, "_wait_for_connected_runner", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(local_dev, "_run_schema_migrations", lambda _env: None)
+    monkeypatch.setattr(local_dev, "_wait_for_backend", lambda _url: None)
+    monkeypatch.setattr(local_dev, "_has_setup_identity", lambda _args, _env: False)
+    monkeypatch.setattr(local_dev, "_local_enrollment_path", lambda: enrollment_path)
+    monkeypatch.setattr(local_dev, "_write_pid_file", lambda _env, _processes: None)
+    monkeypatch.setattr(local_dev, "_remove_pid_file", lambda _env: None)
+    monkeypatch.setattr(local_dev, "_attach_output_threads", lambda _name, _process: [])
+    monkeypatch.setattr(local_dev, "_wait_for_connected_runner", lambda *_args, **_kwargs: None)
 
     def _fake_backend(_args, _env):
         created["backend"] = _FakeProcess("backend")
@@ -169,16 +169,16 @@ def test_run_up_fresh_setup_discards_stale_enrollment_before_wait(monkeypatch, t
         created["runner"] = _FakeProcess("runner")
         return created["runner"]
 
-    monkeypatch.setattr(local_production_cloud, "_run_backend", _fake_backend)
-    monkeypatch.setattr(local_production_cloud, "_wait_for_local_enrollment", _fake_wait_for_enrollment)
-    monkeypatch.setattr(local_production_cloud, "_run_runner", _fake_runner)
+    monkeypatch.setattr(local_dev, "_run_backend", _fake_backend)
+    monkeypatch.setattr(local_dev, "_wait_for_local_enrollment", _fake_wait_for_enrollment)
+    monkeypatch.setattr(local_dev, "_run_runner", _fake_runner)
 
     def _exit_main_loop(_seconds):
         created["backend"].returncode = 0
 
-    monkeypatch.setattr(local_production_cloud.time, "sleep", _exit_main_loop)
+    monkeypatch.setattr(local_dev.time, "sleep", _exit_main_loop)
 
-    code = local_production_cloud._run_up(args, env)
+    code = local_dev._run_up(args, env)
 
     assert code == 0
     assert wait_saw_stale_file is False
@@ -212,14 +212,14 @@ def test_run_up_fresh_setup_discards_stale_runner_identity_before_start(monkeypa
     created: dict[str, _FakeProcess] = {}
     runner_saw_stale_identity = None
 
-    monkeypatch.setattr(local_production_cloud, "_run_schema_migrations", lambda _env: None)
-    monkeypatch.setattr(local_production_cloud, "_wait_for_backend", lambda _url: None)
-    monkeypatch.setattr(local_production_cloud, "_has_setup_identity", lambda _args, _env: False)
-    monkeypatch.setattr(local_production_cloud, "_local_enrollment_path", lambda: enrollment_path)
-    monkeypatch.setattr(local_production_cloud, "_write_pid_file", lambda _env, _processes: None)
-    monkeypatch.setattr(local_production_cloud, "_remove_pid_file", lambda _env: None)
-    monkeypatch.setattr(local_production_cloud, "_attach_output_threads", lambda _name, _process: [])
-    monkeypatch.setattr(local_production_cloud, "_wait_for_connected_runner", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(local_dev, "_run_schema_migrations", lambda _env: None)
+    monkeypatch.setattr(local_dev, "_wait_for_backend", lambda _url: None)
+    monkeypatch.setattr(local_dev, "_has_setup_identity", lambda _args, _env: False)
+    monkeypatch.setattr(local_dev, "_local_enrollment_path", lambda: enrollment_path)
+    monkeypatch.setattr(local_dev, "_write_pid_file", lambda _env, _processes: None)
+    monkeypatch.setattr(local_dev, "_remove_pid_file", lambda _env: None)
+    monkeypatch.setattr(local_dev, "_attach_output_threads", lambda _name, _process: [])
+    monkeypatch.setattr(local_dev, "_wait_for_connected_runner", lambda *_args, **_kwargs: None)
 
     def _fake_backend(_args, _env):
         created["backend"] = _FakeProcess("backend")
@@ -238,16 +238,16 @@ def test_run_up_fresh_setup_discards_stale_runner_identity_before_start(monkeypa
         created["runner"] = _FakeProcess("runner")
         return created["runner"]
 
-    monkeypatch.setattr(local_production_cloud, "_run_backend", _fake_backend)
-    monkeypatch.setattr(local_production_cloud, "_wait_for_local_enrollment", _fake_wait_for_enrollment)
-    monkeypatch.setattr(local_production_cloud, "_run_runner", _fake_runner)
+    monkeypatch.setattr(local_dev, "_run_backend", _fake_backend)
+    monkeypatch.setattr(local_dev, "_wait_for_local_enrollment", _fake_wait_for_enrollment)
+    monkeypatch.setattr(local_dev, "_run_runner", _fake_runner)
 
     def _exit_main_loop(_seconds):
         created["backend"].returncode = 0
 
-    monkeypatch.setattr(local_production_cloud.time, "sleep", _exit_main_loop)
+    monkeypatch.setattr(local_dev.time, "sleep", _exit_main_loop)
 
-    code = local_production_cloud._run_up(args, env)
+    code = local_dev._run_up(args, env)
 
     assert code == 0
     assert runner_saw_stale_identity is False
@@ -266,10 +266,10 @@ def test_runtime_image_preflight_runs_runner_runtime_info(monkeypatch, capsys) -
             stderr="runtime-info failed",
         )
 
-    monkeypatch.setattr(local_production_cloud, "_project_python", lambda: "/venv/bin/python")
-    monkeypatch.setattr(local_production_cloud.subprocess, "run", _fake_run)
+    monkeypatch.setattr(local_dev, "_project_python", lambda: "/venv/bin/python")
+    monkeypatch.setattr(local_dev.subprocess, "run", _fake_run)
 
-    code = local_production_cloud._run_runtime_image_preflight(
+    code = local_dev._run_runtime_image_preflight(
         {"DROWAI_RUNTIME_IMAGE": "stale-runtime"}
     )
 
@@ -289,40 +289,105 @@ def test_runner_command_starts_without_runtime_image_preflight(monkeypatch) -> N
         raise AssertionError("runner startup must not require a local runtime image")
 
     process = _FakeProcess("runner")
-    monkeypatch.setattr(local_production_cloud, "_ensure_project_python", lambda: None)
-    monkeypatch.setattr(local_production_cloud, "_load_dotenv", lambda: None)
+    monkeypatch.setattr(local_dev, "_ensure_project_python", lambda: None)
+    monkeypatch.setattr(local_dev, "_load_dotenv", lambda: None)
     monkeypatch.setattr(
-        local_production_cloud,
+        local_dev,
         "_parse_args",
         lambda _argv: Namespace(command="runner"),
     )
     monkeypatch.setattr(
-        local_production_cloud,
+        local_dev,
         "_single_host_env",
         lambda _args: {"DROWAI_RUNTIME_IMAGE": "runtime:missing"},
     )
     monkeypatch.setattr(
-        local_production_cloud,
+        local_dev,
         "_run_runtime_image_preflight",
         _unexpected_runtime_image_preflight,
     )
     monkeypatch.setattr(
-        local_production_cloud,
+        local_dev,
         "_bootstrap_install_token",
         lambda _args, _env: "",
     )
     monkeypatch.setattr(
-        local_production_cloud,
+        local_dev,
         "_run_runner",
         lambda _env: process,
     )
     monkeypatch.setattr(
-        local_production_cloud,
+        local_dev,
         "_attach_output_threads",
         lambda _name, _process: [],
     )
 
-    assert local_production_cloud.main(["runner"]) == 0
+    assert local_dev.main(["runner"]) == 0
+
+
+def test_main_up_checks_postgres_before_starting_stack(monkeypatch) -> None:
+    calls: list[str] = []
+    env = {
+        "DATABASE_URL": "postgresql://drowai_user:secret@localhost:5432/drowai",
+        "DROWAI_POSTGRES_ADMIN_URL": "postgresql://admin:secret@localhost/postgres",
+    }
+
+    monkeypatch.setattr(local_dev, "_ensure_project_python", lambda: None)
+    monkeypatch.setattr(local_dev, "_load_dotenv", lambda: None)
+    monkeypatch.setenv(
+        "DROWAI_POSTGRES_ADMIN_URL",
+        "postgresql://admin:secret@localhost/postgres",
+    )
+    monkeypatch.setattr(
+        local_dev,
+        "_parse_args",
+        lambda _argv: Namespace(command="up"),
+    )
+    monkeypatch.setattr(local_dev, "_single_host_env", lambda _args: env)
+    monkeypatch.setattr(
+        local_dev,
+        "ensure_local_postgres_ready",
+        lambda actual_env, *, interactive: calls.append(
+            f"postgres:{actual_env is env}:{interactive}"
+        ),
+    )
+    monkeypatch.setattr(
+        local_dev,
+        "_run_up",
+        lambda _args, _env: calls.append("up") or 0,
+    )
+    monkeypatch.setattr(local_dev.sys.stdin, "isatty", lambda: True)
+
+    assert local_dev.main(["up"]) == 0
+    assert calls == ["postgres:True:True", "up"]
+    assert "DROWAI_POSTGRES_ADMIN_URL" not in env
+    assert "DROWAI_POSTGRES_ADMIN_URL" not in local_dev.os.environ
+
+
+def test_bootstrap_db_command_stops_after_database_readiness(monkeypatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(local_dev, "_ensure_project_python", lambda: None)
+    monkeypatch.setattr(local_dev, "_load_dotenv", lambda: None)
+    monkeypatch.setattr(
+        local_dev,
+        "_parse_args",
+        lambda _argv: Namespace(command="bootstrap-db"),
+    )
+    monkeypatch.setattr(
+        local_dev,
+        "_single_host_env",
+        lambda _args: {"DATABASE_URL": "postgresql://drowai_user:secret@localhost:5432/drowai"},
+    )
+    monkeypatch.setattr(
+        local_dev,
+        "ensure_local_postgres_ready",
+        lambda _env, *, interactive: calls.append(f"bootstrap:{interactive}"),
+    )
+    monkeypatch.setattr(local_dev.sys.stdin, "isatty", lambda: True)
+
+    assert local_dev.main(["bootstrap-db"]) == 0
+    assert calls == ["bootstrap:True"]
 
 
 def test_stored_runner_identity_still_sets_runner_tenant_env(
@@ -343,9 +408,9 @@ def test_stored_runner_identity_still_sets_runner_tenant_env(
         env_payload["DROWAI_RUNNER_TENANT_ID"] = "123"
         return (123, 456)
 
-    monkeypatch.setattr(local_production_cloud, "_ensure_runner_tenant_env", _fake_ensure)
+    monkeypatch.setattr(local_dev, "_ensure_runner_tenant_env", _fake_ensure)
 
-    token = local_production_cloud._bootstrap_install_token(args, env)
+    token = local_dev._bootstrap_install_token(args, env)
 
     assert token == ""
     assert env["DROWAI_RUNNER_TENANT_ID"] == "123"
@@ -420,11 +485,11 @@ def test_wait_for_connected_runner_uses_postgres_selection_with_stale_capacity_j
     db.commit()
     db.close()
 
-    monkeypatch.setattr(local_production_cloud, "_ensure_runner_tenant_env", lambda _args, _env: (tenant_id, user_id))
+    monkeypatch.setattr(local_dev, "_ensure_runner_tenant_env", lambda _args, _env: (tenant_id, user_id))
     monkeypatch.setattr("backend.database.SessionLocal", session_local)
-    monkeypatch.setattr(local_production_cloud.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(local_dev.time, "sleep", lambda _seconds: None)
 
-    local_production_cloud._wait_for_connected_runner(
+    local_dev._wait_for_connected_runner(
         Namespace(tenant_id=tenant_id, user_id=user_id),
         {"DROWAI_RUNNER_ROOT": str(Path.cwd())},
         timeout_seconds=0.5,

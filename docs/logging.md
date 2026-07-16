@@ -43,7 +43,7 @@ Backend logging is configured at application startup from:
 For local development:
 
 ```bash
-python3 scripts/local_production_cloud.py up
+python3 scripts/local_dev.py up
 tail -f backend/log/backend.log
 ```
 

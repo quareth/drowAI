@@ -171,9 +171,9 @@ When docs disagree with code:
 
 ## Start the local development stack
 - Start backend, managed runner, and frontend:
-  `python3 scripts/local_production_cloud.py up`
+  `python3 scripts/local_dev.py up`
 - Stop the local stack:
-  `python3 scripts/local_production_cloud.py down`
+  `python3 scripts/local_dev.py down`
 
 ## Testing instructions
 Pick the smallest set that proves your change:

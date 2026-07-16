@@ -93,7 +93,7 @@ add new cross-boundary imports.
 
 | Process or surface | Wired entrypoint | Owner |
 |---|---|---|
-| Canonical developer workflow and managed-runner parity stack | `python3 scripts/local_production_cloud.py up` | Product-canonical local development command; starts the backend, managed runner cloud client, and frontend as separate processes |
+| Canonical developer workflow and managed-runner parity stack | `python3 scripts/local_dev.py up` | Product-canonical local development command; starts the backend, managed runner cloud client, and frontend as separate processes |
 | Backend application | `backend/main.py` | FastAPI lifespan, mounted routers, `/ws` channel multiplexer |
 | Frontend application | `client/src/main.tsx` -> `client/src/App.tsx` | React providers, setup gate, top-level routes, runtime-stream bootstrap |
 | Managed runner CLI | `drowai_runner.app:main` | `drowai-runner` commands and cloud-mode startup |
@@ -439,7 +439,7 @@ Backend stream schema changes must update the generator in
 | `scripts/run_release_gate.py` | Release tier selection |
 | `scripts/run_langgraph_*` | LangGraph regression and prompt-mock suites |
 | `scripts/build_*`, `package_*`, `verify_*` | Runtime/runner packaging and verification |
-| `scripts/local_production_cloud.py` | Canonical local-development launcher; use `python3 scripts/local_production_cloud.py up` |
+| `scripts/local_dev.py` | Canonical local-development launcher; use `python3 scripts/local_dev.py up` |
 | `deploy/compose/`, `deploy/cloud/` | Product deployment manifests |
 | `deploy/env/` | Checked-in deployment environment examples, never real secrets |
 | `deploy/images/`, root `Dockerfile.*` | Control-plane, frontend, and runner images |
