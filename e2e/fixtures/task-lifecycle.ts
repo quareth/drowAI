@@ -8,6 +8,11 @@ import type { EngagementRecord, TaskRecord } from "./domain-fixtures";
 const STATUS_POLL_ATTEMPTS = 40;
 const STATUS_POLL_DELAY_MS = 250;
 
+export interface TaskStatusPollOptions {
+  maxDelays?: number;
+  delayMs?: number;
+}
+
 export function taskCard(page: Page, taskId: number): Locator {
   return page.getByTestId(`task-card-${taskId}`);
 }
@@ -89,20 +94,25 @@ async function ensureTaskCardVisible(
   return card;
 }
 
-async function waitForTaskStatus(
+export async function waitForTaskStatus(
   api: APIRequestContext,
   actor: E2EActor,
   taskId: number,
   expectedStatus: string,
+  options: TaskStatusPollOptions = {},
 ): Promise<TaskRecord> {
-  for (let attempt = 0; attempt < STATUS_POLL_ATTEMPTS; attempt += 1) {
-    const task = await fetchTask(api, actor, taskId);
-    if (task.status === expectedStatus) {
-      return task;
-    }
-    await new Promise((resolve) => setTimeout(resolve, STATUS_POLL_DELAY_MS));
+  const maxDelays = options.maxDelays ?? STATUS_POLL_ATTEMPTS;
+  const delayMs = options.delayMs ?? STATUS_POLL_DELAY_MS;
+  let task = await fetchTask(api, actor, taskId);
+
+  for (let delayCount = 0; task.status !== expectedStatus && delayCount < maxDelays; delayCount += 1) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+    task = await fetchTask(api, actor, taskId);
   }
-  const task = await fetchTask(api, actor, taskId);
+
+  if (task.status === expectedStatus) {
+    return task;
+  }
   throw new Error(`Task ${taskId} remained ${task.status}; expected ${expectedStatus}.`);
 }
 
