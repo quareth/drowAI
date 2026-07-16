@@ -1,3 +1,5 @@
+"""Provide SNMP enumeration arguments and command execution."""
+
 import os
 import subprocess
 import time
@@ -114,8 +116,6 @@ class SNMPEnumTool(BaseTool):
     name: str = "snmp_enum"
     description: str = "SNMP enumeration tool for network device reconnaissance and enumeration"
     version: str = "1.0.0"
-    author: str = "AI Assistant"
-
     args_model = SNMPEnumArgs
 
     def build_command(self, args: SNMPEnumArgs) -> List[str]:

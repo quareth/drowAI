@@ -28,3 +28,6 @@ Target version: `0.1.0`.
 
 - Dependency security updates refresh the frontend and backend toolchains,
   replace python-jose with PyJWT, and require Node.js 20.19 or newer.
+- The canonical local launcher is now `scripts/local_dev.py`; startup can
+  interactively provision its PostgreSQL login role, database, and pgvector
+  extension before running migrations.

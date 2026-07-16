@@ -1,3 +1,5 @@
+"""Provide httprint web-server testing arguments and command execution."""
+
 import subprocess
 import re
 from typing import Dict, Any, Optional
@@ -163,8 +165,6 @@ class HTTPPrintTool(BaseTool):
     name: str = "httprint"
     description: str = "Web server fingerprinting and stress testing tool"
     version: str = "1.0.0"
-    author: str = "AI Assistant"
-
     def run(self, args: HTTPPrintArgs) -> ToolResult:
         """Execute httprint with the specified arguments."""
         try:

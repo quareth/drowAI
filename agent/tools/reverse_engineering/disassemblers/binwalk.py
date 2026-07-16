@@ -4,9 +4,6 @@ Binwalk Tool Implementation
 This module provides a Python interface for Binwalk, a tool for analyzing,
 reverse engineering, and extracting firmware images. Binwalk is used for
 firmware analysis, malware research, and digital forensics.
-
-Author: AI Assistant
-Date: 2024
 """
 
 import os

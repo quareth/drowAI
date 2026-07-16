@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Local single-host managed-runtime launcher for manual parity testing.
+"""Local development launcher for the single-host managed-runtime stack.
 
 This script does not introduce a standalone runtime architecture. It runs the
 same managed-runner control-channel path locally by starting backend,
@@ -30,6 +30,11 @@ from backend.config.generated_config import default_generated_paths, resolved_ba
 from backend.migrations.runtime import upgrade_database_to_head  # noqa: E402
 from deploy.env_contract import DEFAULT_RUNNER_CAPABILITIES, single_host_management_env  # noqa: E402
 from runtime_shared.runtime_image_contract import default_runtime_image_for_machine  # noqa: E402
+from scripts.local_postgres_bootstrap import (  # noqa: E402
+    ADMIN_DATABASE_URL_ENV,
+    LocalPostgresBootstrapError,
+    ensure_local_postgres_ready,
+)
 
 DOTENV_PATH = REPO_ROOT / ".env"
 DEFAULT_BACKEND_HOST = "127.0.0.1"
@@ -73,10 +78,22 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "command",
-        choices=("up", "down", "backend", "runner", "frontend", "check", "print-env"),
+        choices=(
+            "up",
+            "down",
+            "backend",
+            "runner",
+            "frontend",
+            "check",
+            "print-env",
+            "bootstrap-db",
+        ),
         nargs="?",
         default="up",
-        help="Component command to run. `up` starts backend, runner, and frontend.",
+        help=(
+            "Component command to run. `up` starts backend, runner, and frontend; "
+            "`bootstrap-db` provisions the local PostgreSQL role, database, and pgvector."
+        ),
     )
     parser.add_argument("--no-frontend", action="store_true", help="Do not start Vite during `up`.")
     parser.add_argument("--backend-host", default=DEFAULT_BACKEND_HOST)
@@ -843,6 +860,19 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "print-env":
         _print_env(env)
+        return 0
+    if args.command in {"up", "backend", "check", "bootstrap-db"}:
+        try:
+            ensure_local_postgres_ready(
+                env,
+                interactive=sys.stdin.isatty(),
+            )
+        except LocalPostgresBootstrapError as exc:
+            print(f"[local-cloud] PostgreSQL readiness failed: {exc}")
+            return 1
+        env.pop(ADMIN_DATABASE_URL_ENV, None)
+        os.environ.pop(ADMIN_DATABASE_URL_ENV, None)
+    if args.command == "bootstrap-db":
         return 0
     if args.command == "check":
         return _run_check(args, env)

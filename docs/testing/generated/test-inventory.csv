@@ -1009,7 +1009,7 @@ tests/scripts/test_docker_entrypoint.py,pytest,cross-system,cross-system/scripts
 tests/scripts/test_e2e_seed.py,pytest,cross-system,cross-system/scripts,end-to-end,,untriaged,,
 tests/scripts/test_executor_daemon_runtime_info.py,pytest,cross-system,cross-system/scripts,unit,,untriaged,,
 tests/scripts/test_generate_test_inventory.py,pytest,cross-system,cross-system/scripts,unit,,untriaged,,
-tests/scripts/test_local_production_cloud.py,pytest,cross-system,cross-system/scripts,unit,,untriaged,,
+tests/scripts/test_local_dev.py,pytest,cross-system,cross-system/scripts,unit,,untriaged,,
 tests/scripts/test_package_runner.py,pytest,cross-system,cross-system/scripts,unit,,untriaged,,
 tests/scripts/test_python_package_assets.py,pytest,cross-system,cross-system/scripts,unit,,untriaged,,
 tests/scripts/test_verify_runtime_package.py,pytest,cross-system,cross-system/scripts,unit,,untriaged,,
