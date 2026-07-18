@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from backend.database import Base
 from backend.models import (
     LLMDeploymentRoute,
+    LLMConversation,
     LLMInferenceConnection,
     LLMModelDeployment,
     Task,
@@ -40,6 +41,7 @@ def llm_identity_db() -> Iterator[Session]:
             UserLLMSelection.__table__,
             UserReportingLLMSelection.__table__,
             UserMemoryLLMSelection.__table__,
+            LLMConversation.__table__,
             LLMInferenceConnection.__table__,
             LLMModelDeployment.__table__,
             LLMDeploymentRoute.__table__,

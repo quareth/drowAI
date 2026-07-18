@@ -104,6 +104,63 @@ class LLMDeploymentBackfillStats:
 
 
 @dataclass(frozen=True, slots=True)
+class LLMDeploymentBackfillReadiness:
+    """Safe rollout gate after one deterministic backfill attempt."""
+
+    stats: LLMDeploymentBackfillStats
+    auth_missing: int = 0
+    unresolved_unmapped: int = 0
+    mapping_required: int = 0
+    missing_legacy_connections: int = 0
+
+    @property
+    def ready(self) -> bool:
+        """Return whether deployment-reference preference may proceed."""
+
+        return (
+            self.stats.failed == 0
+            and self.mapping_required == 0
+            and self.missing_legacy_connections == 0
+        )
+
+    @property
+    def created(self) -> int:
+        """Expose the underlying run's created count for operator callers."""
+
+        return self.stats.created
+
+    @property
+    def skipped(self) -> int:
+        """Expose the underlying run's skipped count for operator callers."""
+
+        return self.stats.skipped
+
+    @property
+    def unmapped(self) -> int:
+        """Expose the underlying run's unmapped count for operator callers."""
+
+        return self.stats.unmapped
+
+    @property
+    def failed(self) -> int:
+        """Expose the underlying run's failure count for operator callers."""
+
+        return self.stats.failed
+
+    def to_dict(self) -> dict[str, int | bool]:
+        """Return aggregate readiness counters without row values or secrets."""
+
+        return {
+            **self.stats.to_dict(),
+            "ready": self.ready,
+            "auth_missing": self.auth_missing,
+            "unresolved_unmapped": self.unresolved_unmapped,
+            "mapping_required": self.mapping_required,
+            "missing_legacy_connections": self.missing_legacy_connections,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class _SelectionTarget:
     row: object
     deployment_field: str
@@ -240,6 +297,72 @@ class LLMProviderMigrationService:
             else:
                 aggregate.merge(result)
         return aggregate
+
+    def prepare_deployment_backfill_readiness(
+        self,
+    ) -> LLMDeploymentBackfillReadiness:
+        """Rerun the idempotent backfill, then return its rollout decision."""
+
+        stats = self.backfill_all_deployment_identity(continue_on_error=True)
+        return self.assess_deployment_backfill_readiness(stats=stats)
+
+    def assess_deployment_backfill_readiness(
+        self,
+        *,
+        stats: LLMDeploymentBackfillStats | None = None,
+    ) -> LLMDeploymentBackfillReadiness:
+        """Classify remaining rows without mutating identity or credential data."""
+
+        auth_missing = 0
+        unresolved_unmapped = 0
+        mapping_required = 0
+        missing_legacy_connections = 0
+        for user_id in self._candidate_user_ids():
+            credential_providers = frozenset(self._credential_groups(user_id))
+            legacy_connections = {
+                provider: connection
+                for connection in self._db.execute(
+                    select(LLMInferenceConnection).where(
+                        LLMInferenceConnection.user_id == user_id,
+                        LLMInferenceConnection.legacy_default_provider.is_not(None),
+                    )
+                ).scalars()
+                if (
+                    provider := _normalized_legacy_provider(
+                        connection.legacy_default_provider
+                    )
+                )
+                is not None
+            }
+            missing_legacy_connections += len(
+                credential_providers.difference(legacy_connections)
+            )
+            for target in self._selection_targets(user_id):
+                provider = _normalized_legacy_provider(target.provider)
+                deployment_id = getattr(target.row, target.deployment_field)
+                if deployment_id is None:
+                    if provider is None or not _valid_wire_model_id(
+                        target.wire_model_id
+                    ):
+                        unresolved_unmapped += 1
+                    elif provider not in credential_providers:
+                        auth_missing += 1
+                    else:
+                        mapping_required += 1
+                    continue
+                if not self._selection_deployment_matches(
+                    user_id=user_id,
+                    target=target,
+                    deployment_id=deployment_id,
+                ):
+                    mapping_required += 1
+        return LLMDeploymentBackfillReadiness(
+            stats=stats or LLMDeploymentBackfillStats(),
+            auth_missing=auth_missing,
+            unresolved_unmapped=unresolved_unmapped,
+            mapping_required=mapping_required,
+            missing_legacy_connections=missing_legacy_connections,
+        )
 
     def ensure_legacy_default_connection_for_provider(
         self,
@@ -442,6 +565,35 @@ class LLMProviderMigrationService:
             )
         return tuple(sorted(user_ids))
 
+    def _selection_deployment_matches(
+        self,
+        *,
+        user_id: int,
+        target: _SelectionTarget,
+        deployment_id: object,
+    ) -> bool:
+        """Validate that one persisted ref retains its exact legacy identity."""
+
+        deployment = self._db.get(LLMModelDeployment, deployment_id)
+        if deployment is None or deployment.wire_model_id != target.wire_model_id:
+            return False
+        connection = self._db.get(
+            LLMInferenceConnection,
+            deployment.connection_id,
+        )
+        if connection is None or int(connection.user_id) != int(user_id):
+            return False
+        expected_provider = _normalized_legacy_provider(target.provider)
+        actual_provider = _normalized_legacy_provider(connection.connection_preset_id)
+        actual_legacy_default = _normalized_legacy_provider(
+            connection.legacy_default_provider
+        )
+        return (
+            expected_provider is not None
+            and expected_provider == actual_provider
+            and expected_provider == actual_legacy_default
+        )
+
 
 def deterministic_legacy_connection_id(user_id: int, provider: str) -> UUID:
     """Return the stable UUID for one user's legacy provider connection."""
@@ -493,6 +645,7 @@ def _normalize_legacy_openai_selection_model(model: str) -> str:
 
 __all__ = [
     "LEGACY_DEPLOYMENT_BACKFILL_NAMESPACE",
+    "LLMDeploymentBackfillReadiness",
     "LLMDeploymentBackfillStats",
     "LLMProviderMigrationService",
     "deterministic_legacy_connection_id",

@@ -20,6 +20,7 @@ from backend.services.langgraph_chat.checkpoint.execution_config import (
     build_checkpoint_execution_config,
     resolve_resume_runtime_path_label,
 )
+from backend.services.langgraph_chat.exceptions import HITLError
 from backend.services.llm_provider.types import ProviderConfigurationError
 
 GRAPH_THREAD_ID = "a" * 32
@@ -462,10 +463,10 @@ async def test_continuation_resolves_checkpoint_runtime_hint(monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
-async def test_continuation_falls_back_from_invalid_legacy_checkpoint_hint(
+async def test_continuation_fails_from_invalid_legacy_checkpoint_hint(
     monkeypatch,
 ) -> None:
-    """Legacy checkpoint model hints do not override an explicit runtime carrier."""
+    """Invalid legacy checkpoint hints stop resume instead of using fallback."""
     captured_configs: list[Dict[str, Any]] = []
 
     class _Session:
@@ -485,10 +486,10 @@ async def test_continuation_falls_back_from_invalid_legacy_checkpoint_hint(
             assert user_id == 77
             if checkpoint_hint is not None:
                 raise ProviderConfigurationError("legacy model is not selectable")
-            raise AssertionError("explicit runtime selection should be preserved")
+            raise AssertionError("invalid checkpoint hint should stop resume")
 
         def build_runtime_services(self) -> Any:
-            raise AssertionError("explicit runtime services should be preserved")
+            raise AssertionError("invalid checkpoint hint should stop resume")
 
     class _CompiledGraph:
         async def aget_state(self, _config: Dict[str, Any]) -> Any:
@@ -527,19 +528,18 @@ async def test_continuation_falls_back_from_invalid_legacy_checkpoint_hint(
     explicit_services = SimpleNamespace(client_resolver=object())
     monkeypatch.setattr(service, "_compile_graph_for_name", _compile_graph)
 
-    await service.resume_from_interrupt(
-        task_id=7,
-        graph_thread_id=GRAPH_THREAD_ID,
-        user_id=77,
-        response={"approved": True},
-        checkpoint_id="cp-legacy",
-        llm_runtime_selection=explicit_selection,
-        runtime_services=explicit_services,
-    )
+    with pytest.raises(HITLError, match="legacy model is not selectable"):
+        await service.resume_from_interrupt(
+            task_id=7,
+            graph_thread_id=GRAPH_THREAD_ID,
+            user_id=77,
+            response={"approved": True},
+            checkpoint_id="cp-legacy",
+            llm_runtime_selection=explicit_selection,
+            runtime_services=explicit_services,
+        )
 
-    configurable = captured_configs[0]["configurable"]
-    assert configurable["llm_runtime_selection"] == explicit_selection
-    assert configurable["runtime_services"] is explicit_services
+    assert captured_configs == []
 
 
 def test_build_checkpoint_execution_config_sets_recursion_limit() -> None:

@@ -45,9 +45,16 @@ def test_script_reports_required_safe_counts_and_is_repeatable(
 
         for result in (first, second):
             payload = result.to_dict()
-            assert {"created", "skipped", "unmapped", "failed"}.issubset(
-                payload
-            )
+            assert {
+                "ready",
+                "created",
+                "skipped",
+                "unmapped",
+                "auth_missing",
+                "mapping_required",
+                "missing_legacy_connections",
+                "failed",
+            }.issubset(payload)
             assert ciphertext not in json.dumps(payload, sort_keys=True)
         assert first.created > 0
         assert first.failed == 0

@@ -30,6 +30,7 @@ Usage in handlers:
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 if TYPE_CHECKING:
@@ -195,6 +196,7 @@ def record_usage_list_best_effort(
     source: str,
     conversation_id: Optional[str],
     model: Optional[str] = None,
+    runtime_selection: Optional[Mapping[str, Any]] = None,
     session_factory: Optional[Callable[[], "Session"]] = None,
 ) -> None:
     """Best-effort helper to persist a list of usage records.
@@ -216,6 +218,7 @@ def record_usage_list_best_effort(
     _ = model
     if not usage_list:
         return
+    usage_identity = _usage_identity_from_runtime_selection(runtime_selection)
     if session_factory is None:
         from backend.database import SessionLocal
 
@@ -244,6 +247,7 @@ def record_usage_list_best_effort(
                 source=source,
                 conversation_id=conversation_id,
                 usage_metadata=usage_metadata,
+                **usage_identity,
             )
     except Exception:
         logger.warning("Failed to record usage for task %s", task_id, exc_info=True)
@@ -252,6 +256,26 @@ def record_usage_list_best_effort(
             db.close()
         except Exception:
             pass
+
+
+def _usage_identity_from_runtime_selection(
+    runtime_selection: Optional[Mapping[str, Any]],
+) -> dict[str, str]:
+    """Return deployment refs safe to pass to usage persistence."""
+
+    if not isinstance(runtime_selection, Mapping):
+        return {}
+    deployment_ref = runtime_selection.get("deployment_ref")
+    if not isinstance(deployment_ref, Mapping):
+        return {}
+    deployment_id = deployment_ref.get("deployment_id")
+    if not isinstance(deployment_id, str) or not deployment_id.strip():
+        return {}
+    identity = {"deployment_id": deployment_id.strip()}
+    route_id = runtime_selection.get("preferred_route_id")
+    if isinstance(route_id, str) and route_id.strip():
+        identity["route_id"] = route_id.strip()
+    return identity
 
 
 def _known_request_mode(value: Any) -> str:

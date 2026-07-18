@@ -708,13 +708,16 @@ async def get_task_conversation(
         .first()
     )
     if row and (row.remote_resource_id or row.conversation_id):
+        lifecycle_service = LLMConversationLifecycleService(db)
         try:
-            LLMConversationLifecycleService(db).validate_remote_conversation_origin(
-                origin=_remote_origin_from_row(row),
-                runtime_user_id=current_user.id,
-                task_id=task_id,
-                tenant_id=int(task.tenant_id),
-            )
+            if lifecycle_service.backfill_remote_conversation_origin(row):
+                db.commit()
+                lifecycle_service.validate_remote_conversation_origin(
+                    origin=_remote_origin_from_row(row),
+                    runtime_user_id=current_user.id,
+                    task_id=task_id,
+                    tenant_id=int(task.tenant_id),
+                )
         except LLMProviderServiceError as exc:
             raise _provider_configuration_exception(exc) from exc
 
@@ -864,12 +867,14 @@ async def list_task_conversations(
     try:
         for row in rows:
             if row.remote_resource_id or row.conversation_id:
-                lifecycle_service.validate_remote_conversation_origin(
-                    origin=_remote_origin_from_row(row),
-                    runtime_user_id=current_user.id,
-                    task_id=task_id,
-                    tenant_id=int(task.tenant_id),
-                )
+                if lifecycle_service.backfill_remote_conversation_origin(row):
+                    db.commit()
+                    lifecycle_service.validate_remote_conversation_origin(
+                        origin=_remote_origin_from_row(row),
+                        runtime_user_id=current_user.id,
+                        task_id=task_id,
+                        tenant_id=int(task.tenant_id),
+                    )
     except LLMProviderServiceError as exc:
         raise _provider_configuration_exception(exc) from exc
     return [
@@ -976,7 +981,9 @@ async def activate_task_conversation(
     if not row:
         raise HTTPException(status_code=404, detail="Conversation not found")
     try:
-        LLMConversationLifecycleService(db).validate_remote_conversation_origin(
+        lifecycle_service = LLMConversationLifecycleService(db)
+        lifecycle_service.backfill_remote_conversation_origin(row)
+        lifecycle_service.validate_remote_conversation_origin(
             origin=_remote_origin_from_row(row),
             runtime_user_id=current_user.id,
             task_id=task_id,
@@ -1036,6 +1043,7 @@ async def delete_task_conversation(
         raise HTTPException(status_code=404, detail="Conversation not found")
     lifecycle_service = LLMConversationLifecycleService(db)
     try:
+        lifecycle_service.backfill_remote_conversation_origin(row)
         origin = _remote_origin_from_row(row)
         if origin.remote_resource_id:
             lifecycle_service.delete_remote_conversation(

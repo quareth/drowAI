@@ -266,6 +266,11 @@ class TurnExecutionService:
             source="langgraph",
             conversation_id=resolved_conversation_id,
             model=model,
+            runtime_selection=(
+                result_metadata.get("llm_runtime_selection")
+                if isinstance(result_metadata.get("llm_runtime_selection"), Mapping)
+                else None
+            ),
         )
         workflow_completed_fn = mark_turn_workflow_completed or mark_turn_workflow_completed_best_effort
         completed_metadata: Dict[str, Any] = {"completion_source": completion_source}

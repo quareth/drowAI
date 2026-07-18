@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from backend.database import SessionLocal
 from backend.services.llm_provider.migration_service import (
+    LLMDeploymentBackfillReadiness,
     LLMDeploymentBackfillStats,
     LLMProviderMigrationService,
 )
@@ -30,12 +31,10 @@ from backend.services.llm_provider.migration_service import (
 logger = logging.getLogger(__name__)
 
 
-def run_backfill(*, db: Session) -> LLMDeploymentBackfillStats:
-    """Run a retryable backfill without committing the caller's transaction."""
+def run_backfill(*, db: Session) -> LLMDeploymentBackfillReadiness:
+    """Run the retryable backfill and assess rollout readiness."""
 
-    return LLMProviderMigrationService(db).backfill_all_deployment_identity(
-        continue_on_error=True
-    )
+    return LLMProviderMigrationService(db).prepare_deployment_backfill_readiness()
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -48,7 +47,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = run_backfill(db=db)
         db.commit()
         print(json.dumps(result.to_dict(), sort_keys=True))
-        return 1 if result.failed else 0
+        return 0 if result.ready else 1
     except Exception:
         db.rollback()
         logger.error("LLM deployment identity backfill failed")

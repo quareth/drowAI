@@ -27,9 +27,13 @@ from backend.services.llm_provider.migration_service import (
     deterministic_legacy_connection_id,
     deterministic_legacy_deployment_id,
 )
+from backend.services.llm_provider.runtime_config_service import (
+    LLMRuntimeConfigService,
+)
 from backend.services.llm_provider.selection_service import (
     LLMProviderSelectionService,
 )
+from backend.services.llm_provider.types import LLMRuntimeSelection
 
 
 def test_backfill_is_deterministic_idempotent_and_preserves_exact_models(
@@ -276,3 +280,225 @@ def test_existing_explicit_legacy_default_is_never_replaced(
     assert len(connections) == 1
     assert connections[0].id == existing_id
     assert connections[0].revision == 7
+
+
+def test_readiness_blocks_until_deterministic_mapping_is_complete(
+    llm_identity_db: Session,
+    identity_users: tuple[User, User],
+) -> None:
+    """Rollout cannot prefer deployment refs before repairable rows are mapped."""
+
+    owner, _ = identity_users
+    selection = UserLLMSelection(
+        user_id=owner.id,
+        provider=OPENAI_PROVIDER_ID,
+        model="gpt-5-mini",
+    )
+    llm_identity_db.add_all(
+        [
+            UserLLMProviderCredential(
+                user_id=owner.id,
+                provider=OPENAI_PROVIDER_ID,
+                encrypted_api_key="ciphertext",
+                enabled=True,
+            ),
+            selection,
+        ]
+    )
+    llm_identity_db.flush()
+    service = LLMProviderMigrationService(llm_identity_db)
+
+    before = service.assess_deployment_backfill_readiness()
+
+    assert before.ready is False
+    assert before.missing_legacy_connections == 1
+    assert before.mapping_required == 1
+
+    first = service.prepare_deployment_backfill_readiness()
+    second = service.prepare_deployment_backfill_readiness()
+
+    assert first.ready is True
+    assert first.created > 0
+    assert selection.deployment_id is not None
+    assert second.ready is True
+    assert second.created == 0
+    assert second.failed == 0
+
+
+def test_readiness_blocks_selection_refs_outside_legacy_default_connection(
+    llm_identity_db: Session,
+    identity_users: tuple[User, User],
+) -> None:
+    """A matching deployment is not ready unless it is on the legacy default."""
+
+    owner, _ = identity_users
+    default_connection = LLMInferenceConnection(
+        id=uuid4(),
+        user_id=owner.id,
+        display_name="Existing Legacy Default",
+        connection_preset_id=OPENAI_PROVIDER_ID,
+        runtime_family_id="openai_native",
+        transport_origin="backend",
+        endpoint_policy_id="fixed_provider_v1",
+        state="enabled",
+        revision=1,
+        legacy_default_provider=OPENAI_PROVIDER_ID,
+    )
+    other_connection = LLMInferenceConnection(
+        id=uuid4(),
+        user_id=owner.id,
+        display_name="Other OpenAI Connection",
+        connection_preset_id=OPENAI_PROVIDER_ID,
+        runtime_family_id="openai_native",
+        transport_origin="backend",
+        endpoint_policy_id="fixed_provider_v1",
+        state="enabled",
+        revision=1,
+        legacy_default_provider=None,
+    )
+    other_deployment = LLMModelDeployment(
+        id=uuid4(),
+        connection_id=other_connection.id,
+        wire_model_id="gpt-5-mini",
+        display_name="gpt-5-mini",
+        discovery_source="test",
+        lifecycle_state="active",
+        availability_state="unknown",
+        enabled=True,
+        revision=1,
+    )
+    selection = UserLLMSelection(
+        user_id=owner.id,
+        provider=OPENAI_PROVIDER_ID,
+        model="gpt-5-mini",
+        deployment_id=other_deployment.id,
+    )
+    llm_identity_db.add_all(
+        [
+            UserLLMProviderCredential(
+                user_id=owner.id,
+                provider=OPENAI_PROVIDER_ID,
+                encrypted_api_key="ciphertext",
+                enabled=True,
+            ),
+            default_connection,
+            other_connection,
+            other_deployment,
+            selection,
+        ]
+    )
+    llm_identity_db.flush()
+
+    report = LLMProviderMigrationService(
+        llm_identity_db
+    ).prepare_deployment_backfill_readiness()
+
+    assert report.ready is False
+    assert report.mapping_required == 1
+    assert report.missing_legacy_connections == 0
+    assert selection.deployment_id == other_deployment.id
+
+
+def test_conversation_runtime_does_not_prefer_deployment_ref_before_readiness(
+    llm_identity_db: Session,
+    identity_users: tuple[User, User],
+) -> None:
+    """Runtime reads stay legacy-compatible until rollout readiness is true."""
+
+    owner, _ = identity_users
+    default_connection = LLMInferenceConnection(
+        id=uuid4(),
+        user_id=owner.id,
+        display_name="Existing Legacy Default",
+        connection_preset_id=OPENAI_PROVIDER_ID,
+        runtime_family_id="openai_native",
+        transport_origin="backend",
+        endpoint_policy_id="fixed_provider_v1",
+        state="enabled",
+        revision=1,
+        legacy_default_provider=OPENAI_PROVIDER_ID,
+    )
+    other_connection = LLMInferenceConnection(
+        id=uuid4(),
+        user_id=owner.id,
+        display_name="Other OpenAI Connection",
+        connection_preset_id=OPENAI_PROVIDER_ID,
+        runtime_family_id="openai_native",
+        transport_origin="backend",
+        endpoint_policy_id="fixed_provider_v1",
+        state="enabled",
+        revision=1,
+        legacy_default_provider=None,
+    )
+    other_deployment = LLMModelDeployment(
+        id=uuid4(),
+        connection_id=other_connection.id,
+        wire_model_id="gpt-5-mini",
+        display_name="gpt-5-mini",
+        discovery_source="test",
+        lifecycle_state="active",
+        availability_state="unknown",
+        enabled=True,
+        revision=1,
+    )
+    selection = UserLLMSelection(
+        user_id=owner.id,
+        provider=OPENAI_PROVIDER_ID,
+        model="gpt-5-mini",
+        deployment_id=other_deployment.id,
+    )
+    llm_identity_db.add_all(
+        [
+            UserLLMProviderCredential(
+                user_id=owner.id,
+                provider=OPENAI_PROVIDER_ID,
+                encrypted_api_key="ciphertext",
+                enabled=True,
+            ),
+            default_connection,
+            other_connection,
+            other_deployment,
+            selection,
+        ]
+    )
+    llm_identity_db.flush()
+
+    runtime = LLMRuntimeConfigService(
+        llm_identity_db
+    ).build_conversation_runtime_selection(user_id=owner.id)
+
+    assert isinstance(runtime, LLMRuntimeSelection)
+    assert runtime.provider == OPENAI_PROVIDER_ID
+    assert runtime.model == "gpt-5-mini"
+    assert selection.deployment_id == other_deployment.id
+
+
+def test_readiness_records_auth_missing_selection_without_blocking_rollout(
+    llm_identity_db: Session,
+    identity_users: tuple[User, User],
+) -> None:
+    """An auth-missing selection is explicit, selectable, and still unrunnable."""
+
+    owner, _ = identity_users
+    selection = UserLLMSelection(
+        user_id=owner.id,
+        provider=ANTHROPIC_PROVIDER_ID,
+        model=ANTHROPIC_LISTABLE_MODEL_IDS[0],
+    )
+    llm_identity_db.add(selection)
+    llm_identity_db.flush()
+
+    report = LLMProviderMigrationService(
+        llm_identity_db
+    ).prepare_deployment_backfill_readiness()
+
+    assert report.ready is True
+    assert report.auth_missing == 1
+    assert report.mapping_required == 0
+    assert selection.deployment_id is None
+    status = LLMProviderSelectionService(llm_identity_db).get_selection_read(
+        owner.id
+    ).status
+    assert status.selectable is True
+    assert status.runnable is False
+    assert status.status == "credential_missing"

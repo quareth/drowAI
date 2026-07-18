@@ -15,6 +15,7 @@ from backend.services.langgraph_chat.checkpoint.execution_config import (
 )
 from backend.services.llm_provider import (
     LLMCredentialService,
+    LLMProviderMigrationService,
     LLMProviderSelectionService,
     LLMRuntimeConfigService,
 )
@@ -97,6 +98,17 @@ def test_continuation_selection_prefers_checkpoint_hint_over_current_selection()
             db,
             credential_service=credential_service,
         )
+        mapped_selection = selection_service.set_selection(
+            user_id=user.id,
+            provider=OPENAI_PROVIDER_ID,
+            model="gpt-5.2",
+        )
+        LLMProviderMigrationService(db).backfill_deployment_identity_for_user(user.id)
+        db.commit()
+        db.refresh(mapped_selection)
+        assert mapped_selection.deployment_id is not None
+        deployment_id = str(mapped_selection.deployment_id)
+
         selection_service.set_selection(
             user_id=user.id,
             provider=OPENAI_PROVIDER_ID,
@@ -118,10 +130,11 @@ def test_continuation_selection_prefers_checkpoint_hint_over_current_selection()
             },
         )
 
-        assert selection.provider == OPENAI_PROVIDER_ID
-        assert selection.model == "gpt-5.2"
+        assert selection.deployment_ref.deployment_id == deployment_id
+        assert selection.legacy_provider == OPENAI_PROVIDER_ID
+        assert selection.legacy_model == "gpt-5.2"
         assert selection.reasoning_effort == "low"
-        assert selection.credential_ref.user_id == user.id
+        assert "credential_ref" not in repr(selection.to_dict())
     finally:
         db.close()
 

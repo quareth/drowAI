@@ -617,14 +617,11 @@ class CheckpointContinuationService:
                     raise
                 except ProviderConfigurationError:
                     logger.info(
-                        "[HITL] Ignoring invalid checkpoint runtime hint for task "
-                        "continuation; resolving current user selection"
+                        "[HITL] Checkpoint runtime hint is not runnable; "
+                        "continuation requires user reselection",
+                        exc_info=True,
                     )
-                    if llm_runtime_selection is None:
-                        selection = runtime_config_service.build_continuation_selection(
-                            user_id=user_id,
-                        )
-                        llm_runtime_selection = selection.to_dict()
+                    raise
             elif llm_runtime_selection is None:
                 selection = runtime_config_service.build_continuation_selection(
                     user_id=user_id,
@@ -728,6 +725,29 @@ class CheckpointContinuationService:
     @staticmethod
     def _sanitize_runtime_hint(source: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
         """Return only non-secret runtime hint fields used for fresh resolution."""
+
+        if isinstance(source.get("deployment_ref"), Mapping):
+            hint: Dict[str, Any] = {"schema_version": 2}
+            deployment_ref = source["deployment_ref"]
+            safe_ref: Dict[str, Any] = {}
+            deployment_id = deployment_ref.get("deployment_id")
+            expected_revision = deployment_ref.get("expected_revision")
+            if isinstance(deployment_id, str) and deployment_id.strip():
+                safe_ref["deployment_id"] = deployment_id.strip()
+            if isinstance(expected_revision, int):
+                safe_ref["expected_revision"] = expected_revision
+            if safe_ref:
+                hint["deployment_ref"] = safe_ref
+            for key in (
+                "preferred_route_id",
+                "reasoning_effort",
+                "legacy_provider",
+                "legacy_model",
+            ):
+                value = source.get(key)
+                if isinstance(value, str) and value.strip():
+                    hint[key] = value.strip()
+            return hint if "deployment_ref" in hint else None
 
         hint: Dict[str, Any] = {}
         for key in ("provider", "model", "reasoning_effort"):

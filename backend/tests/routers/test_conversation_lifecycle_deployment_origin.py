@@ -152,6 +152,9 @@ async def test_delete_route_uses_row_origin_after_selection_change(
             def require_remote_conversation_lifecycle(self, _provider: str) -> None:
                 pass
 
+            def backfill_remote_conversation_origin(self, _row) -> bool:
+                return True
+
             def delete_remote_conversation(self, **kwargs) -> None:
                 calls.append(kwargs)
 
@@ -176,6 +179,46 @@ async def test_delete_route_uses_row_origin_after_selection_change(
                 "runtime_user_id": user.id,
                 "task_id": task.id,
                 "tenant_id": int(task.tenant_id),
+            }
+        ]
+    finally:
+        db.close()
+
+
+@pytest.mark.asyncio
+async def test_list_route_keeps_unmapped_legacy_remote_history_readable() -> None:
+    db = SessionLocal()
+    try:
+        user, task, tenant_context = _identity(db)
+        row = LLMConversation(
+            task_id=task.id,
+            tenant_id=task.tenant_id,
+            user_id=user.id,
+            provider="openai",
+            model="gpt-unmapped-legacy",
+            conversation_id="legacy-readable-history",
+            status="active",
+            is_active=True,
+        )
+        db.add(row)
+        db.commit()
+
+        response = await llm_routes.list_task_conversations(
+            task_id=task.id,
+            current_user=user,
+            tenant_context=tenant_context,
+            db=db,
+        )
+
+        assert response == [
+            {
+                "id": row.id,
+                "provider": "openai",
+                "model": "gpt-unmapped-legacy",
+                "conversation_id": "legacy-readable-history",
+                "title": None,
+                "status": "active",
+                "is_active": True,
             }
         ]
     finally:

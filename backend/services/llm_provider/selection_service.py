@@ -23,6 +23,7 @@ from agent.providers.llm.profiles.registry import OPENAI_DEFAULT_MODEL_ID
 
 from backend.config import E2E_DETERMINISTIC_MODE
 from backend.models import UserLLMSelection, UserSettings
+from backend.services.metrics.utils import safe_inc_labeled
 
 from .catalog_service import LLMProviderCatalogService
 from .credential_service import LLMCredentialService
@@ -105,7 +106,13 @@ class LLMProviderSelectionService:
             self._db.add(selection)
             self._sync_legacy_openai_model(user_id, OPENAI_DEFAULT_MODEL_ID)
             self._db.flush()
+        else:
+            selection = self._reconcile_selection(selection)
         status = self._classify_selection(selection)
+        self._emit_selection_status(status.status)
+        self._emit_legacy_identity_status(
+            "mapped" if selection.deployment_id is not None else "unmapped"
+        )
         if status.status in {"selectable", "credential_missing"}:
             self._sync_legacy_openai_model_mirror_from_selection(selection)
         return LLMSelectionRead(selection=selection, status=status)
@@ -186,6 +193,7 @@ class LLMProviderSelectionService:
 
         selection = self.get_selection(user_id)
         if selection.deployment_id is None:
+            self._emit_legacy_identity_status("unmapped")
             raise ProviderConfigurationError(
                 "Conversation selection has no deployment binding"
             )
@@ -215,10 +223,13 @@ class LLMProviderSelectionService:
         try:
             selection = self.get_selection(user_id)
             if selection.provider != OPENAI_PROVIDER_ID:
+                self._emit_legacy_compat_status("default_provider")
                 return OPENAI_DEFAULT_MODEL_ID
+            self._emit_legacy_compat_status("selected")
             return selection.model
         except Exception as exc:
             logger.error("Failed to resolve OpenAI model for user %s: %s", user_id, exc)
+            self._emit_legacy_compat_status("failure")
             return OPENAI_DEFAULT_MODEL_ID
 
     def _get_selection_row(self, user_id: int) -> UserLLMSelection | None:
@@ -362,6 +373,27 @@ class LLMProviderSelectionService:
         if unavailable is not None:
             return unavailable
         return LLMSelectionStatus(status="selectable", selectable=True, runnable=True)
+
+    @staticmethod
+    def _emit_selection_status(status: str) -> None:
+        safe_inc_labeled(
+            "llm_provider.selection_status.total",
+            {"status": status},
+        )
+
+    @staticmethod
+    def _emit_legacy_identity_status(status: str) -> None:
+        safe_inc_labeled(
+            "llm_provider.legacy_identity_read.total",
+            {"status": status},
+        )
+
+    @staticmethod
+    def _emit_legacy_compat_status(status: str) -> None:
+        safe_inc_labeled(
+            "llm_provider.legacy_compat_read.total",
+            {"status": status},
+        )
 
     def _sync_legacy_openai_model_mirror_from_selection(self, selection: UserLLMSelection) -> None:
         if normalize_provider_id(selection.provider or OPENAI_PROVIDER_ID) != OPENAI_PROVIDER_ID:

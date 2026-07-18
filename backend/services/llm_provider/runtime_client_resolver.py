@@ -41,6 +41,7 @@ from backend.models import (
     LLMModelDeployment,
     Task,
 )
+from backend.services.metrics.utils import safe_inc_labeled
 
 from .connection_authorization import LLMConnectionAuthorizer
 from .credential_service import LLMCredentialService
@@ -52,6 +53,7 @@ from .types import (
     LLMAuthMode,
     LLMCallTarget,
     LLMConnectionAccessContext,
+    LLMConnectionAuthorizationError,
     LLMConnectionCredentialRef,
     LLMCredentialRef,
     LLMDeploymentNotFoundError,
@@ -230,16 +232,28 @@ class LLMRuntimeClientResolver:
             user_id=access_context.runtime_user_id,
             deployment_id=selection.deployment_ref.deployment_id,
         )
-        if (
-            int(deployment.revision) != selection.deployment_ref.expected_revision
-            or not deployment.enabled
-            or deployment.lifecycle_state != "active"
-        ):
+        if int(deployment.revision) != selection.deployment_ref.expected_revision:
+            _emit_deployment_resolution_metric(
+                "stale_revision",
+                deployment_id=str(deployment.id),
+            )
             raise LLMDeploymentNotFoundError(
                 "Deployment revision is unavailable"
             )
+        if not deployment.enabled or deployment.lifecycle_state != "active":
+            _emit_deployment_resolution_metric(
+                "deployment_unavailable",
+                deployment_id=str(deployment.id),
+            )
+            raise LLMDeploymentNotFoundError(
+                "Deployment is unavailable"
+            )
         connection = self._db.get(LLMInferenceConnection, deployment.connection_id)
         if connection is None:
+            _emit_deployment_resolution_metric(
+                "connection_unavailable",
+                deployment_id=str(deployment.id),
+            )
             raise LLMDeploymentNotFoundError("Deployment connection was not found")
         route = self._select_route(
             user_id=access_context.runtime_user_id,
@@ -264,16 +278,24 @@ class LLMRuntimeClientResolver:
                 raise LLMDeploymentNotFoundError(
                     "Call target does not match the selected deployment"
                 )
-        authorized = self._authorizer.authorize(
-            access_context=LLMConnectionAccessContext(
-                authenticated_user_id=access_context.runtime_user_id,
-                task_id=access_context.task_id,
-                tenant_id=access_context.tenant_id,
-            ),
-            connection_id=connection.id,
-            expected_revision=int(connection.revision),
-            operation="inference",
-        )
+        try:
+            authorized = self._authorizer.authorize(
+                access_context=LLMConnectionAccessContext(
+                    authenticated_user_id=access_context.runtime_user_id,
+                    task_id=access_context.task_id,
+                    tenant_id=access_context.tenant_id,
+                ),
+                connection_id=connection.id,
+                expected_revision=int(connection.revision),
+                operation="inference",
+            )
+        except LLMConnectionAuthorizationError as exc:
+            _emit_deployment_resolution_metric(
+                _authorization_metric_status(exc.code),
+                deployment_id=str(deployment.id),
+                connection_id=str(connection.id),
+            )
+            raise
         auth_mode = _connection_auth_mode(connection)
         resolved_auth = self._credential_service.resolve_connection_auth(
             LLMConnectionCredentialRef(
@@ -342,6 +364,10 @@ class LLMRuntimeClientResolver:
                     )
                 ).scalar_one_or_none()
                 if deployment is not None:
+                    _emit_legacy_identity_metric(
+                        "mapped",
+                        deployment_id=str(deployment.id),
+                    )
                     return self._resolve_v2_target(
                         LLMRuntimeSelectionV2(
                             deployment_ref=DeploymentRef(
@@ -356,6 +382,10 @@ class LLMRuntimeClientResolver:
                         purpose=purpose,
                         target=target,
                     )
+                _emit_legacy_identity_metric(
+                    "live_unmapped",
+                    connection_id=str(connection.id),
+                )
                 return self._resolve_live_legacy_target(
                     selection,
                     call_ref=call_ref,
@@ -363,6 +393,7 @@ class LLMRuntimeClientResolver:
                     access_context=access_context,
                     purpose=purpose,
                 )
+        _emit_legacy_identity_metric("detached")
         return self._resolve_detached_legacy_target(
             selection,
             call_ref=call_ref,
@@ -618,6 +649,43 @@ class LLMRuntimeClientResolver:
         """Return an enabled credential ref for explicit non-chat dependencies."""
 
         return self._credential_service.get_credential_ref(user_id, provider)
+
+
+def _emit_legacy_identity_metric(
+    status: str,
+    *,
+    deployment_id: str | None = None,
+    connection_id: str | None = None,
+) -> None:
+    labels = {"status": status}
+    if deployment_id is not None:
+        labels["deployment_id"] = deployment_id
+    if connection_id is not None:
+        labels["connection_id"] = connection_id
+    safe_inc_labeled("llm_provider.legacy_identity_read.total", labels)
+
+
+def _emit_deployment_resolution_metric(
+    status: str,
+    *,
+    deployment_id: str | None = None,
+    connection_id: str | None = None,
+    route_id: str | None = None,
+) -> None:
+    labels = {"status": status}
+    if deployment_id is not None:
+        labels["deployment_id"] = deployment_id
+    if connection_id is not None:
+        labels["connection_id"] = connection_id
+    if route_id is not None:
+        labels["route_id"] = route_id
+    safe_inc_labeled("llm_provider.deployment_resolution.total", labels)
+
+
+def _authorization_metric_status(code: str) -> str:
+    if code == "stale_connection_revision":
+        return "connection_revision_conflict"
+    return code or "authorization_denied"
 
 
 class BudgetEnforcingLLMClient(LLMClient):

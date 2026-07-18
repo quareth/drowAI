@@ -90,6 +90,10 @@ class ReportingLLMSelectionService:
                     reason="Reporting model is not configured.",
                 ),
             )
+        try:
+            selection = self._reconcile_selection(selection)
+        except Exception:
+            pass
         return ReportingLLMSelectionRead(
             selection=selection,
             status=self._classify_selection(selection),
@@ -222,6 +226,7 @@ class ReportingLLMSelectionService:
             raise ReportingLLMSelectionMissingError(
                 "Reporting model has no deployment binding."
             )
+        selection = self._reconcile_selection(selection)
         status = self._classify_selection(selection)
         if not status.runnable:
             raise ProviderConfigurationError(
@@ -252,6 +257,26 @@ class ReportingLLMSelectionService:
                 UserReportingLLMSelection.user_id == int(user_id)
             )
         ).scalar_one_or_none()
+
+    def _reconcile_selection(
+        self,
+        selection: UserReportingLLMSelection,
+    ) -> UserReportingLLMSelection:
+        """Refresh compatibility snapshots from a saved deployment binding."""
+
+        if selection.deployment_id is None:
+            return selection
+        target = self._deployment_resolver.resolve(
+            user_id=int(selection.user_id),
+            deployment_id=selection.deployment_id,
+            role="reporting",
+            require_structured_output=True,
+        )
+        if selection.provider != target.provider or selection.model != target.model:
+            selection.provider = target.provider
+            selection.model = target.model
+            self._db.flush()
+        return selection
 
     def _classify_selection(
         self,

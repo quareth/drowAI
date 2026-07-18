@@ -164,24 +164,6 @@ def _patch_provider_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
         def close(self) -> None:
             return None
 
-    class _Selection:
-        provider = "openai"
-        model = "gpt-4o-mini"
-
-        def __init__(self, user_id: int) -> None:
-            self._user_id = user_id
-
-        def to_dict(self) -> Dict[str, Any]:
-            return {
-                "provider": self.provider,
-                "model": self.model,
-                "credential_ref": {
-                    "user_id": self._user_id,
-                    "provider": self.provider,
-                },
-                "reasoning_effort": "medium",
-            }
-
     class _Resolver:
         def resolve_secret(self, *_args: Any, **_kwargs: Any) -> Any:
             return SimpleNamespace(value="test-key")
@@ -193,8 +175,10 @@ def _patch_provider_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
         def __init__(self, _db: Any) -> None:
             return None
 
-        def build_continuation_selection(self, *, user_id: int) -> _Selection:
-            return _Selection(user_id)
+        def build_continuation_selection(self, *, user_id: int) -> Any:
+            raise AssertionError(
+                "orchestrator must not prebuild current runtime selection"
+            )
 
         def build_runtime_services(self) -> _RuntimeServices:
             return _RuntimeServices()
@@ -220,24 +204,6 @@ def _patch_provider_runtime_with_session(
         def close(self) -> None:
             self.closed = True
 
-    class _Selection:
-        provider = "openai"
-        model = "gpt-4o-mini"
-
-        def __init__(self, user_id: int) -> None:
-            self._user_id = user_id
-
-        def to_dict(self) -> Dict[str, Any]:
-            return {
-                "provider": self.provider,
-                "model": self.model,
-                "credential_ref": {
-                    "user_id": self._user_id,
-                    "provider": self.provider,
-                },
-                "reasoning_effort": "medium",
-            }
-
     class _RuntimeServices:
         pass
 
@@ -245,8 +211,10 @@ def _patch_provider_runtime_with_session(
         def __init__(self, db: Any) -> None:
             self._db = db
 
-        def build_continuation_selection(self, *, user_id: int) -> _Selection:
-            return _Selection(user_id)
+        def build_continuation_selection(self, *, user_id: int) -> Any:
+            raise AssertionError(
+                "orchestrator must not prebuild current runtime selection"
+            )
 
         def build_runtime_services(self) -> _RuntimeServices:
             return runtime_services
@@ -378,15 +346,7 @@ async def test_resume_generation_closes_runtime_db_and_forwards_runtime_context(
     )
 
     assert session.closed is True
-    assert captured_kwargs["llm_runtime_selection"] == {
-        "provider": "openai",
-        "model": "gpt-4o-mini",
-        "credential_ref": {
-            "user_id": 15,
-            "provider": "openai",
-        },
-        "reasoning_effort": "medium",
-    }
+    assert captured_kwargs["llm_runtime_selection"] is None
     assert captured_kwargs["runtime_services"] is runtime_services
     assert (
         completed_workflows[0]["metadata"]["completion_source"]
@@ -482,10 +442,10 @@ async def test_run_checkpoint_retry_generation_threads_carrier_to_facade(
     assert kwargs["graph_name"] == "simple_tool"
     assert kwargs["reserved_message_id"] == 909
     assert kwargs["user_id"] == 12
-    assert kwargs["llm_runtime_selection"]["provider"] == "openai"
-    assert kwargs["llm_runtime_selection"]["model"] == "gpt-4o-mini"
+    assert kwargs["llm_runtime_selection"] is None
     assert kwargs["runtime_services"].client_resolver is not None
-    # Stored checkpoint pins continuation; the worker must not recalculate.
+    # Stored checkpoint pins continuation; the worker must not prebuild from
+    # the current user default before the facade can read checkpoint identity.
     assert kwargs["checkpoint_id"] == "ckpt-stable-abc123"
     retry_context = kwargs["retry_context"]
     assert retry_context["retry_attempt"] == 1

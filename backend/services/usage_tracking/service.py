@@ -24,7 +24,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.models.core import Task
-from backend.models.llm import LLMUsageRecord
+from backend.models.llm import (
+    LLMDeploymentRoute,
+    LLMInferenceConnection,
+    LLMModelDeployment,
+    LLMUsageRecord,
+)
 
 from .insights_models import UsageRecordMetadata, serialize_usage_metadata
 from .models import TaskUsageSummary, UsageData
@@ -105,6 +110,9 @@ class UsageTrackingService:
         conversation_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
         usage_metadata: Optional[UsageRecordMetadata] = None,
+        connection_id: Optional[str] = None,
+        deployment_id: Optional[str] = None,
+        route_id: Optional[str] = None,
     ) -> Optional[LLMUsageRecord]:
         """Record a single LLM call's usage.
 
@@ -132,6 +140,12 @@ class UsageTrackingService:
                 ``source`` strings. When omitted, the record is written
                 without structured metadata (legacy behavior) or with the
                 legacy ``metadata`` dict if provided.
+            connection_id: Optional deployment-aware connection identity for
+                this call. When omitted and ``deployment_id`` is present, the
+                connection is resolved from the deployment row.
+            deployment_id: Optional deployment identity for this call.
+            route_id: Optional route identity for this call. Ignored unless it
+                belongs to ``deployment_id``.
 
         Returns:
             Created LLMUsageRecord if successful, None on failure
@@ -141,6 +155,16 @@ class UsageTrackingService:
             return None
 
         tenant_id = self._resolve_tenant_id(task_id=task_id, user_id=user_id)
+        (
+            resolved_connection_id,
+            resolved_deployment_id,
+            resolved_route_id,
+        ) = self._resolve_usage_identity(
+            user_id=user_id,
+            connection_id=connection_id,
+            deployment_id=deployment_id,
+            route_id=route_id,
+        )
 
         # Canonical metadata wins when provided; legacy ``metadata`` dict is
         # preserved as a fallback for callers that still pass debug-only info.
@@ -203,6 +227,9 @@ class UsageTrackingService:
                 reasoning_tokens=usage.reasoning_tokens,
                 model=usage.model,
                 provider=usage.provider,
+                connection_id=resolved_connection_id,
+                deployment_id=resolved_deployment_id,
+                route_id=resolved_route_id,
                 source=source,
                 conversation_id=conversation_id,
                 request_metadata=request_metadata_payload,
@@ -234,6 +261,42 @@ class UsageTrackingService:
             except Exception:
                 pass
             return None
+
+    def _resolve_usage_identity(
+        self,
+        *,
+        user_id: int,
+        connection_id: Optional[str],
+        deployment_id: Optional[str],
+        route_id: Optional[str],
+    ) -> tuple[object | None, object | None, object | None]:
+        """Validate optional deployment refs before writing a usage row."""
+
+        resolved_connection_id: object | None = None
+        resolved_deployment_id: object | None = None
+        resolved_route_id: object | None = None
+
+        if deployment_id:
+            deployment = self._db.get(LLMModelDeployment, deployment_id)
+            if deployment is None:
+                return None, None, None
+            connection = self._db.get(LLMInferenceConnection, deployment.connection_id)
+            if connection is None or int(connection.user_id) != int(user_id):
+                return None, None, None
+            resolved_connection_id = connection.id
+            resolved_deployment_id = deployment.id
+            if route_id:
+                route = self._db.get(LLMDeploymentRoute, route_id)
+                if route is not None and route.deployment_id == deployment.id:
+                    resolved_route_id = route.id
+            return resolved_connection_id, resolved_deployment_id, resolved_route_id
+
+        if connection_id:
+            connection = self._db.get(LLMInferenceConnection, connection_id)
+            if connection is not None and int(connection.user_id) == int(user_id):
+                resolved_connection_id = connection.id
+
+        return resolved_connection_id, resolved_deployment_id, resolved_route_id
 
     def _resolve_tenant_id(self, *, task_id: int, user_id: int) -> int:
         """Resolve usage ownership from the authoritative task tenant."""
