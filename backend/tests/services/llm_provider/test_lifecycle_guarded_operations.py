@@ -76,19 +76,9 @@ def test_openai_create_and_delete_use_registered_guarded_operations() -> None:
     transport = _LifecycleTransport()
     credentials = _CredentialService()
     service = _service(transport, credentials)
-    ref = LLMCredentialRef(user_id=7, provider="openai")
 
-    created_id = service.create_remote_conversation(
-        credential_ref=ref,
-        runtime_user_id=7,
-        task_id=11,
-    )
-    service.delete_remote_conversation(
-        credential_ref=ref,
-        runtime_user_id=7,
-        task_id=11,
-        conversation_id=created_id,
-    )
+    created_id = service._create_openai_conversation("sk-life")
+    service._delete_openai_conversation("sk-life", created_id)
 
     assert created_id == "conv-created"
     assert transport.calls == [
@@ -105,10 +95,7 @@ def test_openai_create_and_delete_use_registered_guarded_operations() -> None:
             "resource_id": "conv-created",
         },
     ]
-    assert [call["purpose"] for call in credentials.calls] == [
-        "remote_conversation_create",
-        "remote_conversation_delete",
-    ]
+    assert credentials.calls == []
 
 
 def test_lifecycle_remains_openai_only_and_fails_before_secret_resolution() -> None:
@@ -119,11 +106,7 @@ def test_lifecycle_remains_openai_only_and_fails_before_secret_resolution() -> N
     service = _service(transport, credentials)
 
     with pytest.raises(ProviderConfigurationError, match="does not support"):
-        service.create_remote_conversation(
-            credential_ref=LLMCredentialRef(user_id=7, provider="anthropic"),
-            runtime_user_id=7,
-            task_id=11,
-        )
+        service.require_remote_conversation_lifecycle("anthropic")
 
     assert credentials.calls == []
     assert transport.calls == []
@@ -140,11 +123,7 @@ def test_create_preserves_missing_remote_id_error() -> None:
         CredentialNotFoundError,
         match="OpenAI did not return a conversation id",
     ):
-        service.create_remote_conversation(
-            credential_ref=LLMCredentialRef(user_id=7, provider="openai"),
-            runtime_user_id=7,
-            task_id=11,
-        )
+        service._create_openai_conversation("sk-life")
 
 
 def test_create_preserves_provider_configuration_error_mapping() -> None:
@@ -162,11 +141,7 @@ def test_create_preserves_provider_configuration_error_mapping() -> None:
         ProviderConfigurationError,
         match="OpenAI conversation create failed",
     ):
-        service.create_remote_conversation(
-            credential_ref=LLMCredentialRef(user_id=7, provider="openai"),
-            runtime_user_id=7,
-            task_id=11,
-        )
+        service._create_openai_conversation("sk-life")
 
 
 def test_lifecycle_service_has_no_direct_provider_sdk_construction() -> None:

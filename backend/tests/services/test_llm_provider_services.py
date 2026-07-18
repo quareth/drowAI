@@ -1397,7 +1397,7 @@ def test_runtime_services_strip_removes_live_resolver() -> None:
         db.close()
 
 
-def test_environment_service_preserves_openai_container_variables() -> None:
+def test_environment_service_returns_backend_only_openai_metadata() -> None:
     db = SessionLocal()
     try:
         user = _create_user(db)
@@ -1415,7 +1415,6 @@ def test_environment_service_preserves_openai_container_variables() -> None:
         assert environment == {
             "LLM_PROVIDER": OPENAI_PROVIDER_ID,
             "LLM_MODEL": "gpt-5.2",
-            "OPENAI_API_KEY": "sk-env",
         }
     finally:
         db.close()

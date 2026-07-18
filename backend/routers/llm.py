@@ -18,11 +18,16 @@ from ..database import get_db
 from ..models import User, LLMConversation, LLMConversationResponse
 from ..schemas.llm import (
     LLMModelCatalogResponse,
+    DeploymentLLMSelectionResponse,
+    DeploymentLLMSelectionWriteResponse,
     LLMProviderCredentialDeleteResponse,
     LLMProviderCredentialStatusResponse,
     LLMProviderCredentialTestRequest,
     LLMProviderCredentialTestResponse,
+    LLMSelectionUpsert,
     LLMSelectionResponse,
+    LLMSelectionWriteResponse,
+    ReportingDeploymentLLMSelectionResponse,
     ReportingLLMSelectionResponse,
     ReportingLLMSelectionUpsert,
     UserEmbeddingSelectionResponse,
@@ -37,11 +42,14 @@ from ..services.llm_provider import (
     CredentialNotFoundError,
     LLMCredentialRef,
     LLMCredentialService,
+    LLMConnectionService,
     LLMConversationLifecycleService,
+    LLMDeploymentService,
     LLMProviderCatalogService,
     LLMProviderHealthService,
+    LLMProviderMigrationService,
+    LLMProviderServiceError,
     LLMProviderSelectionService,
-    LLMRuntimeConfigService,
     ProviderConfigurationError,
     ReportingLLMSelectionService,
 )
@@ -50,18 +58,14 @@ from ..services.tenant.context import TenantRequestContext
 from ..services.tenant.dependencies import get_tenant_request_context
 from ..services.task.runtime_input_service import TaskRuntimeInputService
 from ..services.usage_tracking.pricing_registry import get_pricing_quote
+from ..services.llm_provider.conversation_lifecycle_service import RemoteConversationOrigin
 from .tasks.deps import enforce_tenant_action, get_tenant_task_or_404
 router = APIRouter(prefix="/api/llm", tags=["llm"])
 logger = logging.getLogger(__name__)
 _runtime_input_service = TaskRuntimeInputService()
 
 
-class LLMSelection(BaseModel):
-    provider: str
-    model: str
-
-
-def _provider_configuration_exception(exc: ProviderConfigurationError) -> HTTPException:
+def _provider_configuration_exception(exc: LLMProviderServiceError) -> HTTPException:
     """Map provider service errors to stable route responses."""
 
     detail = str(exc)
@@ -77,16 +81,105 @@ def _provider_configuration_exception(exc: ProviderConfigurationError) -> HTTPEx
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
 
 
-def _credential_status_response(status_obj) -> LLMProviderCredentialStatusResponse:
+def _credential_status_response(
+    status_obj,
+    *,
+    db: Session,
+) -> LLMProviderCredentialStatusResponse:
     """Convert service credential status to the public response schema."""
 
+    connection_ref = None
+    if status_obj.connection_id is not None:
+        connection = LLMConnectionService(db).get_owned(
+            user_id=status_obj.user_id,
+            connection_id=status_obj.connection_id,
+        )
+        connection_ref = {
+            "connection_id": str(connection.id),
+            "expected_revision": int(connection.revision),
+        }
     return LLMProviderCredentialStatusResponse(
         user_id=status_obj.user_id,
         provider=status_obj.provider,
         enabled=status_obj.enabled,
         has_api_key=status_obj.has_api_key,
         masked_api_key=status_obj.masked_api_key,
+        connection_ref=connection_ref,
+        auth_mode=(status_obj.auth_mode.value if status_obj.auth_mode else None),
     )
+
+
+def _deployment_ref(
+    db: Session,
+    *,
+    user_id: int,
+    deployment_id,
+) -> dict[str, object] | None:
+    """Return a current owner-scoped opaque deployment ref."""
+
+    if deployment_id is None:
+        return None
+    deployment = LLMDeploymentService(db).get_deployment(
+        user_id=user_id,
+        deployment_id=deployment_id,
+    )
+    return {
+        "deployment_id": str(deployment.id),
+        "expected_revision": int(deployment.revision),
+    }
+
+
+def _catalog_deployment_map(
+    db: Session,
+    *,
+    user_id: int,
+) -> dict[tuple[str, str], tuple[object, object]]:
+    """Map catalog provider/model keys to current owner-scoped deployments."""
+
+    LLMProviderMigrationService(db).backfill_deployment_identity_for_user(user_id)
+    connections = LLMConnectionService(db).list_for_user(user_id=user_id)
+    deployments = LLMDeploymentService(db)
+    mapped: dict[tuple[str, str], tuple[object, object]] = {}
+    for connection in connections:
+        if connection.legacy_default_provider is None:
+            continue
+        for deployment in deployments.list_deployments(
+            user_id=user_id,
+            connection_id=connection.id,
+        ):
+            model = deployment.canonical_model_id or deployment.wire_model_id
+            mapped[(connection.connection_preset_id, model.strip().lower())] = (
+                connection,
+                deployment,
+            )
+    return mapped
+
+
+def _catalog_deployment_fields(
+    *,
+    provider: str,
+    model: str,
+    deployment_map: dict[tuple[str, str], tuple[object, object]],
+    credential_runnable: bool,
+) -> dict[str, object]:
+    """Return public deployment metadata for one catalog model."""
+
+    target = deployment_map.get((provider, model))
+    if target is None:
+        return {"deployment_ref": None, "runnable": False}
+    connection, deployment = target
+    return {
+        "deployment_ref": {
+            "deployment_id": str(deployment.id),
+            "expected_revision": int(deployment.revision),
+        },
+        "runnable": bool(
+            credential_runnable
+            and connection.state == "enabled"
+            and deployment.enabled
+            and deployment.lifecycle_state == "active"
+        ),
+    }
 
 
 def _memory_selection_service(db: Session) -> EmbeddingRuntimeSelectionService:
@@ -115,6 +208,14 @@ async def list_models(
     catalog = LLMProviderCatalogService()
     credential_service = LLMCredentialService(db, catalog_service=catalog)
     providers = catalog.list_providers()
+    credential_statuses = {
+        provider.id: credential_service.get_masked_status(
+            current_user.id,
+            provider.id,
+        )
+        for provider in providers
+    }
+    deployment_map = _catalog_deployment_map(db, user_id=current_user.id)
     response = {
         "providers": [
             {
@@ -124,7 +225,8 @@ async def list_models(
                 "available": provider.available,
                 "selectable": provider.selectable,
                 "credential": _credential_status_response(
-                    credential_service.get_masked_status(current_user.id, provider.id)
+                    credential_statuses[provider.id],
+                    db=db,
                 ).model_dump(),
                 "models": [
                     {
@@ -144,6 +246,15 @@ async def list_models(
                             ProviderModelRef(provider.id, model.id),
                             api_surface=model.api_surface,
                         ).status,
+                        **_catalog_deployment_fields(
+                            provider=provider.id,
+                            model=model.id,
+                            deployment_map=deployment_map,
+                            credential_runnable=bool(
+                                credential_statuses[provider.id].enabled
+                                and credential_statuses[provider.id].has_api_key
+                            ),
+                        ),
                     }
                     for model in provider.models
                 ],
@@ -156,7 +267,10 @@ async def list_models(
     return response
 
 
-@router.get("/selection", response_model=LLMSelectionResponse)
+@router.get(
+    "/selection",
+    response_model=DeploymentLLMSelectionResponse | LLMSelectionResponse,
+)
 async def get_selection(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -170,27 +284,48 @@ async def get_selection(
     except ProviderConfigurationError as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {
+    response = {
         "provider": selection.provider,
         "model": selection.model,
         "selection_status": read.status.to_dict(),
     }
+    deployment_ref = _deployment_ref(
+        db,
+        user_id=current_user.id,
+        deployment_id=getattr(selection, "deployment_id", None),
+    )
+    if deployment_ref is not None:
+        response["deployment_ref"] = deployment_ref
+    return response
 
 
-@router.put("/selection", response_model=LLMSelection)
+@router.put(
+    "/selection",
+    response_model=(
+        DeploymentLLMSelectionWriteResponse | LLMSelectionWriteResponse
+    ),
+)
 async def set_selection(
-    body: LLMSelection,
+    body: LLMSelectionUpsert,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     """Set current user's LLM selection; validates provider and persists model in settings."""
     try:
-        selection = LLMProviderSelectionService(db).set_selection(
-            user_id=current_user.id,
-            provider=body.provider,
-            model=body.model,
-            require_enabled_credential=False,
-        )
+        service = LLMProviderSelectionService(db)
+        if body.deployment_ref is not None:
+            selection = service.set_deployment_selection(
+                user_id=current_user.id,
+                deployment_id=body.deployment_ref.deployment_id,
+                expected_deployment_revision=body.deployment_ref.expected_revision,
+            )
+        else:
+            selection = service.set_selection(
+                user_id=current_user.id,
+                provider=str(body.provider),
+                model=str(body.model),
+                require_enabled_credential=False,
+            )
         db.commit()
         db.refresh(selection)
     except CredentialNotFoundError as exc:
@@ -198,7 +333,8 @@ async def set_selection(
             status_code=400,
             detail=f"{body.provider} credential is required to select {body.provider} model",
         ) from exc
-    except ProviderConfigurationError as exc:
+    except LLMProviderServiceError as exc:
+        db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     logger.info(
@@ -207,12 +343,22 @@ async def set_selection(
         selection.provider,
         selection.model,
     )
-    return {"provider": selection.provider, "model": selection.model}
+    response = {"provider": selection.provider, "model": selection.model}
+    deployment_ref = _deployment_ref(
+        db,
+        user_id=current_user.id,
+        deployment_id=getattr(selection, "deployment_id", None),
+    )
+    if deployment_ref is not None:
+        response["deployment_ref"] = deployment_ref
+    return response
 
 
 @router.get(
     "/reporting-selection",
-    response_model=ReportingLLMSelectionResponse,
+    response_model=(
+        ReportingDeploymentLLMSelectionResponse | ReportingLLMSelectionResponse
+    ),
 )
 async def get_reporting_selection(
     current_user: User = Depends(get_current_user),
@@ -231,17 +377,27 @@ async def get_reporting_selection(
             "selection_status": read.status.to_dict(),
         }
     db.refresh(selection)
-    return {
+    response = {
         "provider": selection.provider,
         "model": selection.model,
         "reasoning_effort": selection.reasoning_effort,
         "selection_status": read.status.to_dict(),
     }
+    deployment_ref = _deployment_ref(
+        db,
+        user_id=current_user.id,
+        deployment_id=getattr(selection, "deployment_id", None),
+    )
+    if deployment_ref is not None:
+        response["deployment_ref"] = deployment_ref
+    return response
 
 
 @router.put(
     "/reporting-selection",
-    response_model=ReportingLLMSelectionResponse,
+    response_model=(
+        ReportingDeploymentLLMSelectionResponse | ReportingLLMSelectionResponse
+    ),
 )
 async def set_reporting_selection(
     body: ReportingLLMSelectionUpsert,
@@ -252,25 +408,41 @@ async def set_reporting_selection(
 
     try:
         service = ReportingLLMSelectionService(db)
-        selection = service.set_selection(
-            user_id=current_user.id,
-            provider=body.provider,
-            model=body.model,
-            reasoning_effort=body.reasoning_effort,
-        )
+        if body.deployment_ref is not None:
+            selection = service.set_deployment_selection(
+                user_id=current_user.id,
+                deployment_id=body.deployment_ref.deployment_id,
+                expected_deployment_revision=body.deployment_ref.expected_revision,
+                reasoning_effort=body.reasoning_effort,
+            )
+        else:
+            selection = service.set_selection(
+                user_id=current_user.id,
+                provider=str(body.provider),
+                model=str(body.model),
+                reasoning_effort=body.reasoning_effort,
+            )
         read = service.get_selection_read(current_user.id)
         db.commit()
         db.refresh(selection)
-    except ProviderConfigurationError as exc:
+    except LLMProviderServiceError as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    return {
+    response = {
         "provider": selection.provider,
         "model": selection.model,
         "reasoning_effort": selection.reasoning_effort,
         "selection_status": read.status.to_dict(),
     }
+    deployment_ref = _deployment_ref(
+        db,
+        user_id=current_user.id,
+        deployment_id=getattr(selection, "deployment_id", None),
+    )
+    if deployment_ref is not None:
+        response["deployment_ref"] = deployment_ref
+    return response
 
 
 @router.get(
@@ -373,8 +545,8 @@ async def get_provider_credential(
             provider=provider,
         )
         db.commit()
-        return _credential_status_response(status_obj)
-    except ProviderConfigurationError as exc:
+        return _credential_status_response(status_obj, db=db)
+    except LLMProviderServiceError as exc:
         raise _provider_configuration_exception(exc) from exc
 
 
@@ -398,8 +570,8 @@ async def upsert_provider_credential(
             enabled=body.enabled,
         )
         db.commit()
-        return _credential_status_response(status_obj)
-    except ProviderConfigurationError as exc:
+        return _credential_status_response(status_obj, db=db)
+    except LLMProviderServiceError as exc:
         db.rollback()
         raise _provider_configuration_exception(exc) from exc
 
@@ -419,7 +591,7 @@ async def delete_provider_credential(
         LLMCredentialService(db).delete(user_id=current_user.id, provider=provider)
         db.commit()
         return {"success": True}
-    except ProviderConfigurationError as exc:
+    except LLMProviderServiceError as exc:
         db.rollback()
         raise _provider_configuration_exception(exc) from exc
 
@@ -454,7 +626,7 @@ async def test_provider_credential(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"No {provider} credential found. Please enter an API key to test.",
         ) from exc
-    except ProviderConfigurationError as exc:
+    except LLMProviderServiceError as exc:
         raise _provider_configuration_exception(exc) from exc
 
 
@@ -463,7 +635,7 @@ class TaskSwitchRequest(BaseModel):
     model: str
 
 
-@router.post("/tasks/{task_id}/switch")
+@router.post("/tasks/{task_id}/switch", deprecated=True)
 async def switch_task_model(
     task_id: int,
     body: TaskSwitchRequest,
@@ -471,59 +643,46 @@ async def switch_task_model(
     tenant_context: TenantRequestContext = Depends(get_tenant_request_context),
     db: Session = Depends(get_db),
 ):
-    """Switch model for a running task by writing a control message and signaling the agent."""
+    """Persist next-turn user selection for deprecated task-switch callers."""
     enforce_tenant_action(tenant_context=tenant_context, action=ACTION_TASK_CONTROL)
     get_tenant_task_or_404(db=db, task_id=task_id, tenant_context=tenant_context)
     if not body.model or not isinstance(body.model, str):
         raise HTTPException(status_code=400, detail="Model is required")
-    requested_provider = (
+    requested_provider: str | None = (
         body.provider.strip()
         if isinstance(body.provider, str) and body.provider.strip()
         else None
     )
     requested_model = body.model.strip()
     try:
-        runtime_selection = LLMRuntimeConfigService(db).build_runtime_selection(
+        selection_service = LLMProviderSelectionService(db)
+        if requested_provider is None:
+            requested_provider = selection_service.get_selection(current_user.id).provider
+        selection = selection_service.set_selection(
             user_id=current_user.id,
             provider=requested_provider,
             model=requested_model,
+            require_enabled_credential=False,
         )
-    except CredentialNotFoundError as exc:
-        missing_provider = requested_provider or ""
-        exc_detail = str(exc)
-        if not missing_provider and exc_detail.lower().startswith("openai "):
-            missing_provider = OPENAI_PROVIDER_ID
-        detail = (
-            f"{OPENAI_PROVIDER_ID} credential is required to switch model at runtime"
-            if missing_provider.strip().lower() == OPENAI_PROVIDER_ID
-            else f"{exc_detail} to switch model at runtime"
-        )
-        raise HTTPException(
-            status_code=400,
-            detail=detail,
-        ) from exc
-    except ProviderConfigurationError as exc:
+        db.commit()
+        db.refresh(selection)
+    except LLMProviderServiceError as exc:
+        db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    result = await _runtime_input_service.append_and_signal(
+    logger.info(
+        "User %s updated conversation selection via deprecated task %s switch facade",
+        current_user.id,
         task_id,
-        message=f"__switch_model:{runtime_selection.model}",
-        strict_persistence=True,
-        user_id=current_user.id,
-        metadata={
-            "type": "switch_llm",
-            "command": "switch_llm_model",
-            "provider": runtime_selection.provider,
-            "model": runtime_selection.model,
-            "credential_ref": runtime_selection.credential_ref.to_dict(),
-        },
     )
-    if not result.persisted:
-        raise HTTPException(status_code=500, detail=f"Failed to persist control message: {result.detail}")
-    if not result.signal_sent:
-        return {"success": True, "signal_sent": False, "detail": result.detail}
-    logger.info("User %s switched task %s model to %s", current_user.id, task_id, runtime_selection.model)
-    return {"success": True, "signal_sent": True}
+    return {
+        "success": True,
+        "deprecated": True,
+        "effective_from": "next_submitted_turn",
+        "provider": selection.provider,
+        "model": selection.model,
+        "signal_sent": False,
+    }
 
 
 @router.get("/tasks/{task_id}/conversation", response_model=LLMConversationResponse)
@@ -548,6 +707,16 @@ async def get_task_conversation(
         .order_by(LLMConversation.updated_at.desc())
         .first()
     )
+    if row and (row.remote_resource_id or row.conversation_id):
+        try:
+            LLMConversationLifecycleService(db).validate_remote_conversation_origin(
+                origin=_remote_origin_from_row(row),
+                runtime_user_id=current_user.id,
+                task_id=task_id,
+                tenant_id=int(task.tenant_id),
+            )
+        except LLMProviderServiceError as exc:
+            raise _provider_configuration_exception(exc) from exc
 
     # Fall back to user's selected model when row is absent
     model = None
@@ -646,6 +815,33 @@ class ConversationCreateBody(BaseModel):
     model: str | None = None
 
 
+def _remote_origin_from_row(row: LLMConversation) -> RemoteConversationOrigin:
+    """Build a lifecycle origin only from persisted row snapshots."""
+
+    required = (
+        row.connection_id,
+        row.deployment_id,
+        row.route_id,
+        row.origin_revision,
+        row.origin_deployment_revision,
+        row.remote_resource_id,
+        row.provider,
+        row.model,
+    )
+    if any(value is None or value == "" for value in required):
+        raise ProviderConfigurationError("Remote conversation origin is unmapped")
+    return RemoteConversationOrigin(
+        connection_id=str(row.connection_id),
+        deployment_id=str(row.deployment_id),
+        route_id=str(row.route_id),
+        origin_revision=int(row.origin_revision),
+        deployment_revision=int(row.origin_deployment_revision),
+        provider=str(row.provider),
+        model=str(row.model),
+        remote_resource_id=str(row.remote_resource_id),
+    )
+
+
 @router.get("/tasks/{task_id}/conversations")
 async def list_task_conversations(
     task_id: int,
@@ -664,6 +860,18 @@ async def list_task_conversations(
         .order_by(LLMConversation.updated_at.desc())
         .all()
     )
+    lifecycle_service = LLMConversationLifecycleService(db)
+    try:
+        for row in rows:
+            if row.remote_resource_id or row.conversation_id:
+                lifecycle_service.validate_remote_conversation_origin(
+                    origin=_remote_origin_from_row(row),
+                    runtime_user_id=current_user.id,
+                    task_id=task_id,
+                    tenant_id=int(task.tenant_id),
+                )
+    except LLMProviderServiceError as exc:
+        raise _provider_configuration_exception(exc) from exc
     return [
         {
             "id": r.id,
@@ -690,14 +898,14 @@ async def create_task_conversation(
     task = get_tenant_task_or_404(db=db, task_id=task_id, tenant_context=tenant_context)
     lifecycle_service = LLMConversationLifecycleService(db)
     try:
-        cid = lifecycle_service.create_remote_conversation(
-            credential_ref=LLMCredentialRef(user_id=current_user.id, provider=OPENAI_PROVIDER_ID),
+        origin = lifecycle_service.create_remote_conversation(
             runtime_user_id=current_user.id,
             task_id=task_id,
+            tenant_id=int(task.tenant_id),
         )
     except CredentialNotFoundError as exc:
         raise HTTPException(status_code=400, detail="OpenAI API key not configured") from exc
-    except ProviderConfigurationError as exc:
+    except LLMProviderServiceError as exc:
         raise _provider_configuration_exception(exc) from exc
 
     # Deactivate existing ones and create new active row
@@ -710,9 +918,15 @@ async def create_task_conversation(
             task_id=task_id,
             tenant_id=task.tenant_id,
             user_id=current_user.id,
-            provider=OPENAI_PROVIDER_ID,
-            model=body.model,
-            conversation_id=str(cid),
+            provider=origin.provider,
+            model=origin.model,
+            connection_id=origin.connection_id,
+            deployment_id=origin.deployment_id,
+            route_id=origin.route_id,
+            origin_revision=origin.origin_revision,
+            origin_deployment_revision=origin.deployment_revision,
+            remote_resource_id=origin.remote_resource_id,
+            conversation_id=origin.remote_resource_id,
             title=body.title,
             status="active",
             is_active=True,
@@ -729,7 +943,7 @@ async def create_task_conversation(
         from agent.chat.conversation_manager import ConversationManager  # lazy import
         cm = ConversationManager(task_id)
         local_id = cm.get_active_conversation_id() or cm.create_conversation(title=body.title or "Conversation")
-        cm.set_openai_conversation_id(local_id, str(cid))
+        cm.set_openai_conversation_id(local_id, origin.remote_resource_id)
     except Exception:
         logger.debug("Failed to mirror conversation to workspace for task %s", task_id, exc_info=True)
 
@@ -762,8 +976,13 @@ async def activate_task_conversation(
     if not row:
         raise HTTPException(status_code=404, detail="Conversation not found")
     try:
-        LLMConversationLifecycleService(db).require_remote_conversation_lifecycle(row.provider)
-    except ProviderConfigurationError as exc:
+        LLMConversationLifecycleService(db).validate_remote_conversation_origin(
+            origin=_remote_origin_from_row(row),
+            runtime_user_id=current_user.id,
+            task_id=task_id,
+            tenant_id=int(task.tenant_id),
+        )
+    except LLMProviderServiceError as exc:
         raise _provider_configuration_exception(exc) from exc
     try:
         db.query(LLMConversation).filter(
@@ -817,21 +1036,16 @@ async def delete_task_conversation(
         raise HTTPException(status_code=404, detail="Conversation not found")
     lifecycle_service = LLMConversationLifecycleService(db)
     try:
-        lifecycle_service.require_remote_conversation_lifecycle(row.provider)
-    except ProviderConfigurationError as exc:
-        raise _provider_configuration_exception(exc) from exc
-
-    # Attempt to delete remote conversation (best-effort)
-    try:
-        if row.conversation_id:
+        origin = _remote_origin_from_row(row)
+        if origin.remote_resource_id:
             lifecycle_service.delete_remote_conversation(
-                credential_ref=LLMCredentialRef(user_id=current_user.id, provider=row.provider),
+                origin=origin,
                 runtime_user_id=current_user.id,
                 task_id=task_id,
-                conversation_id=row.conversation_id,
+                tenant_id=int(task.tenant_id),
             )
-    except Exception:
-        logger.debug("Remote conversation delete failed for %s", row.conversation_id, exc_info=True)
+    except LLMProviderServiceError as exc:
+        raise _provider_configuration_exception(exc) from exc
 
     # Delete local row
     was_active = bool(row.is_active)

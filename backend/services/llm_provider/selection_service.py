@@ -1,8 +1,8 @@
 """Provider-neutral user LLM selection service.
 
-This service owns durable selected provider/model rows and keeps legacy OpenAI
-model mirrors synchronized for compatibility responses. Runtime selection reads
-the provider-neutral row after explicit migration/reconciliation.
+This service owns durable conversation deployment refs and provider/model
+compatibility snapshots, and keeps legacy OpenAI model mirrors synchronized.
+Runtime reads revalidate deployment ownership, compatibility, and runnability.
 """
 
 from __future__ import annotations
@@ -27,21 +27,31 @@ from backend.models import UserLLMSelection, UserSettings
 from .catalog_service import LLMProviderCatalogService
 from .credential_service import LLMCredentialService
 from .migration_service import LLMProviderMigrationService
-from .types import CredentialNotFoundError, LLMSelectionStatus
+from .selection_deployment_resolver import (
+    LLMSelectionDeploymentResolver,
+    SelectionDeploymentTarget,
+)
+from .types import (
+    CredentialNotFoundError,
+    DeploymentRef,
+    LLMRuntimeSelectionV2,
+    LLMSelectionStatus,
+    ProviderConfigurationError,
+)
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
 class LLMSelectionRead:
-    """Saved provider/model selection plus non-mutating status metadata."""
+    """Saved conversation selection plus non-mutating status metadata."""
 
     selection: UserLLMSelection
     status: LLMSelectionStatus
 
 
 class LLMProviderSelectionService:
-    """Read, write, and reconcile user provider/model selection."""
+    """Read, write, and reconcile user conversation LLM selection."""
 
     def __init__(
         self,
@@ -59,6 +69,7 @@ class LLMProviderSelectionService:
             catalog_service=self._catalog,
             migration_service=self._migration,
         )
+        self._deployment_resolver = LLMSelectionDeploymentResolver(db)
 
     def get_selection(self, user_id: int) -> UserLLMSelection:
         """Return the canonical provider-neutral selection for a user."""
@@ -130,12 +141,73 @@ class LLMProviderSelectionService:
         else:
             selection.provider = normalized_provider
             selection.model = normalized_model
+        selection.deployment_id = None
 
         if normalized_provider == OPENAI_PROVIDER_ID:
             self._sync_legacy_openai_model(user_id, normalized_model)
 
         self._db.flush()
         return selection
+
+    def set_deployment_selection(
+        self,
+        *,
+        user_id: int,
+        deployment_id: str,
+        expected_deployment_revision: int,
+    ) -> UserLLMSelection:
+        """Persist an owner-scoped conversation deployment and legacy snapshot."""
+
+        target = self._deployment_resolver.resolve(
+            user_id=user_id,
+            deployment_id=deployment_id,
+            expected_revision=expected_deployment_revision,
+            role="conversation",
+        )
+        selection = self._get_selection_row(user_id)
+        if selection is None:
+            selection = UserLLMSelection(user_id=user_id)
+            self._db.add(selection)
+        selection.provider = target.provider
+        selection.model = target.model
+        selection.deployment_id = target.deployment.id
+        if target.provider == OPENAI_PROVIDER_ID:
+            self._sync_legacy_openai_model(user_id, target.model)
+        self._db.flush()
+        return selection
+
+    def build_deployment_runtime_selection(
+        self,
+        *,
+        user_id: int,
+        reasoning_effort: str | None = None,
+    ) -> LLMRuntimeSelectionV2:
+        """Build V2 identity while revalidating a saved deployment binding."""
+
+        selection = self.get_selection(user_id)
+        if selection.deployment_id is None:
+            raise ProviderConfigurationError(
+                "Conversation selection has no deployment binding"
+            )
+        target = self._deployment_resolver.resolve(
+            user_id=user_id,
+            deployment_id=selection.deployment_id,
+            role="conversation",
+        )
+        status = self._classify_deployment_selection(selection, target=target)
+        if not status.runnable:
+            raise ProviderConfigurationError(
+                status.reason or "Conversation deployment is not runnable"
+            )
+        return LLMRuntimeSelectionV2(
+            deployment_ref=DeploymentRef(
+                deployment_id=str(target.deployment.id),
+                expected_revision=int(target.deployment.revision),
+            ),
+            reasoning_effort=reasoning_effort,
+            legacy_provider=selection.provider,
+            legacy_model=selection.model,
+        )
 
     def get_openai_model_compat(self, user_id: int) -> str:
         """Compatibility helper for old OpenAI model callers."""
@@ -155,6 +227,17 @@ class LLMProviderSelectionService:
         ).scalar_one_or_none()
 
     def _reconcile_selection(self, selection: UserLLMSelection) -> UserLLMSelection:
+        if selection.deployment_id is not None:
+            target = self._deployment_resolver.resolve(
+                user_id=selection.user_id,
+                deployment_id=selection.deployment_id,
+                role="conversation",
+            )
+            if selection.provider != target.provider or selection.model != target.model:
+                selection.provider = target.provider
+                selection.model = target.model
+                self._db.flush()
+            return selection
         provider = normalize_provider_id(selection.provider or OPENAI_PROVIDER_ID)
         model = (selection.model or "").strip()
         profile = self._catalog.require_selectable_model(provider, model)
@@ -169,6 +252,21 @@ class LLMProviderSelectionService:
         return selection
 
     def _classify_selection(self, selection: UserLLMSelection) -> LLMSelectionStatus:
+        if selection.deployment_id is not None:
+            try:
+                target = self._deployment_resolver.resolve(
+                    user_id=selection.user_id,
+                    deployment_id=selection.deployment_id,
+                    role="conversation",
+                )
+            except Exception as exc:
+                return LLMSelectionStatus(
+                    status="model_unavailable",
+                    selectable=False,
+                    runnable=False,
+                    reason=str(exc),
+                )
+            return self._classify_deployment_selection(selection, target=target)
         provider_raw = selection.provider or OPENAI_PROVIDER_ID
         model_raw = selection.model or ""
         try:
@@ -248,6 +346,22 @@ class LLMProviderSelectionService:
             selectable=True,
             runnable=True,
         )
+
+    def _classify_deployment_selection(
+        self,
+        selection: UserLLMSelection,
+        *,
+        target: SelectionDeploymentTarget,
+    ) -> LLMSelectionStatus:
+        unavailable = self._deployment_resolver.classify_runnability(
+            user_id=int(selection.user_id),
+            target=target,
+            credential_available=self._credential_service.has_enabled_credential,
+            missing_credential_reason="Deployment credential is required",
+        )
+        if unavailable is not None:
+            return unavailable
+        return LLMSelectionStatus(status="selectable", selectable=True, runnable=True)
 
     def _sync_legacy_openai_model_mirror_from_selection(self, selection: UserLLMSelection) -> None:
         if normalize_provider_id(selection.provider or OPENAI_PROVIDER_ID) != OPENAI_PROVIDER_ID:

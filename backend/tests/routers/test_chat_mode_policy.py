@@ -22,7 +22,11 @@ from backend.database import Base
 from backend.models.core import Task, User
 from backend.models.tenant import Tenant, TenantMembership
 from backend.routers import chat as chat_routes
+from backend.core.rate_limiter import rate_limiter
 from backend.services.llm_provider import LLMCredentialService, LLMProviderSelectionService
+from backend.services.llm_provider.connection_service import LLMConnectionService
+from backend.services.llm_provider.deployment_service import LLMDeploymentService
+from backend.services.llm_provider.types import LLMConnectionState
 from agent.providers.llm.core.identity import ANTHROPIC_PROVIDER_ID
 from agent.providers.llm.profiles import ANTHROPIC_LISTABLE_MODEL_IDS
 
@@ -70,6 +74,7 @@ def _build_client(
     monkeypatch,
     selected_provider: str = "openai",
     selected_model: str = "gpt-5.2",
+    deployment_model: str | None = None,
 ) -> tuple[TestClient, dict[str, Any], list[dict[str, Any]]]:
     engine = create_engine(
         "sqlite://",
@@ -100,16 +105,58 @@ def _build_client(
             provider=ANTHROPIC_PROVIDER_ID,
             api_key="test-anthropic-key",
         )
-        LLMProviderSelectionService(
+        selection_service = LLMProviderSelectionService(
             db,
             credential_service=credential_service,
-        ).set_selection(
-            user_id=user.id,
-            provider=selected_provider,
-            model=selected_model,
         )
+        deployment_id = None
+        if deployment_model is not None:
+            connection_service = LLMConnectionService(db)
+            connection = connection_service.create_draft(
+                user_id=user.id,
+                display_name="Chat deployment endpoint",
+                connection_preset_id="openai",
+                runtime_family_id="openai_native",
+            )
+            connection = connection_service.transition_state(
+                user_id=user.id,
+                connection_id=connection.id,
+                expected_revision=1,
+                target_state=LLMConnectionState.DISABLED,
+            )
+            connection_service.transition_state(
+                user_id=user.id,
+                connection_id=connection.id,
+                expected_revision=connection.revision,
+                target_state=LLMConnectionState.ENABLED,
+            )
+            deployment = LLMDeploymentService(db).create_deployment(
+                user_id=user.id,
+                connection_id=connection.id,
+                expected_connection_revision=3,
+                wire_model_id=deployment_model,
+                canonical_model_id=deployment_model,
+                display_name=deployment_model,
+                discovery_source="operator",
+            )
+            selection_service.set_deployment_selection(
+                user_id=user.id,
+                deployment_id=str(deployment.id),
+                expected_deployment_revision=1,
+            )
+            deployment_id = str(deployment.id)
+        else:
+            selection_service.set_selection(
+                user_id=user.id,
+                provider=selected_provider,
+                model=selected_model,
+            )
         db.commit()
-        seeded = {"user_id": user.id, "task_id": task.id}
+        seeded = {
+            "user_id": user.id,
+            "task_id": task.id,
+            "deployment_id": deployment_id,
+        }
 
     app = FastAPI()
     app.include_router(chat_routes.router)
@@ -150,6 +197,7 @@ def _build_client(
 
     def _cleanup() -> None:
         app.dependency_overrides.clear()
+        rate_limiter.calls.clear()
         client.close()
         engine.dispose()
 
@@ -187,6 +235,36 @@ def test_chat_route_ignores_client_mode_for_generation(monkeypatch) -> None:
         }
         assert "api_key" not in generation_call["runtime_selection"]
         assert asyncio.create_task is original_create_task
+    finally:
+        seeded["_cleanup"]()
+
+
+def test_chat_route_preserves_saved_deployment_runtime_selection(monkeypatch) -> None:
+    hub = _FakeHub(streaming=False, queued_count=0)
+    client, seeded, captured_calls = _build_client(
+        hub=hub,
+        monkeypatch=monkeypatch,
+        deployment_model="gpt-5-mini",
+    )
+    try:
+        response = client.post(
+            f"/tasks/{seeded['task_id']}/chat",
+            json={"message": "Use the saved deployment"},
+        )
+        assert response.status_code == 202, response.text
+
+        generation_call = captured_calls[0]
+        runtime_selection = generation_call["runtime_selection"]
+        assert runtime_selection["schema_version"] == 2
+        assert runtime_selection["deployment_ref"] == {
+            "deployment_id": seeded["deployment_id"],
+            "expected_revision": 1,
+        }
+        assert runtime_selection["legacy_provider"] == "openai"
+        assert runtime_selection["legacy_model"] == "gpt-5-mini"
+        assert generation_call["provider"] == "openai"
+        assert generation_call["model"] == "gpt-5-mini"
+        assert "credential_ref" not in runtime_selection
     finally:
         seeded["_cleanup"]()
 

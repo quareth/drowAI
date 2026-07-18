@@ -1,6 +1,7 @@
-"""
-User Settings API Router
-Handles user settings including OpenAI API key configuration
+"""User settings routes and legacy OpenAI compatibility facade.
+
+OpenAI credential and model fields delegate to provider/deployment authorities;
+non-LLM preferences remain stored directly on ``UserSettings``.
 """
 from fastapi import APIRouter, HTTPException, Depends, status
 from sqlalchemy.orm import Session
@@ -20,6 +21,7 @@ from ..services.llm_provider import (
     CredentialNotFoundError,
     LLMProviderHealthService,
     LLMProviderCatalogService,
+    LLMProviderServiceError,
     LLMCredentialService,
     LLMProviderSelectionService,
     ProviderConfigurationError,
@@ -101,6 +103,44 @@ def _reconcile_legacy_openai_model(settings: UserSettings, db: Session) -> None:
     db.commit()
     db.refresh(settings)
 
+
+def _settings_response_data(
+    *,
+    settings: UserSettings,
+    user_id: int,
+    db: Session,
+) -> dict[str, object]:
+    """Build legacy settings fields from provider/deployment authorities."""
+
+    credential_service = LLMCredentialService(db)
+    credential_status = credential_service.get_masked_status(
+        user_id,
+        OPENAI_PROVIDER_ID,
+    )
+    selection_service = LLMProviderSelectionService(
+        db,
+        credential_service=credential_service,
+    )
+    selection = selection_service.get_selection_read(user_id).selection
+    openai_model = (
+        selection.model
+        if selection.provider == OPENAI_PROVIDER_ID
+        else selection_service.get_openai_model_compat(user_id)
+    )
+    return {
+        "id": settings.id,
+        "user_id": settings.user_id,
+        "openai_api_key": credential_status.masked_api_key,
+        "openai_model": openai_model,
+        "enable_ai": True,
+        "shodan_api_key": "***" if getattr(settings, "shodan_api_key", None) else None,
+        "session_timeout": settings.session_timeout,
+        "theme": settings.theme,
+        "timezone": settings.timezone,
+        "created_at": settings.created_at,
+        "updated_at": settings.updated_at,
+    }
+
 @router.get("/", response_model=UserSettingsResponse)
 async def get_user_settings(
     current_user: User = Depends(get_current_user),
@@ -129,21 +169,13 @@ async def get_user_settings(
         else:
             _reconcile_legacy_openai_model(settings, db)
         
-        # Create response with masked API keys for security
-        response_data = {
-            "id": settings.id,
-            "user_id": settings.user_id,
-            "openai_api_key": "***" if getattr(settings, 'openai_api_key', None) else None,
-            "openai_model": settings.openai_model,
-            "enable_ai": True,
-            "shodan_api_key": "***" if getattr(settings, 'shodan_api_key', None) else None,
-            "session_timeout": settings.session_timeout,
-            "theme": settings.theme,
-            "timezone": settings.timezone,
-            "created_at": settings.created_at,
-            "updated_at": settings.updated_at
-        }
-        
+        response_data = _settings_response_data(
+            settings=settings,
+            user_id=current_user.id,
+            db=db,
+        )
+        db.commit()
+        db.refresh(settings)
         return UserSettingsResponse(**response_data)
         
     except Exception as e:
@@ -172,7 +204,7 @@ async def update_user_settings(
             db.add(settings)
         
         # Update fields if provided
-        update_data = settings_update.dict(exclude_unset=True)
+        update_data = settings_update.model_dump(exclude_unset=True)
         credential_service = LLMCredentialService(db)
         selection_service = LLMProviderSelectionService(
             db,
@@ -222,21 +254,12 @@ async def update_user_settings(
             db.commit()
             db.refresh(settings)
         
-        # Return response without actual API keys
-        response_data = {
-            "id": settings.id,
-            "user_id": settings.user_id,
-            "openai_api_key": "***" if getattr(settings, 'openai_api_key', None) else None,
-            "openai_model": settings.openai_model,
-            "enable_ai": True,
-            "shodan_api_key": "***" if getattr(settings, 'shodan_api_key', None) else None,
-            "session_timeout": settings.session_timeout,
-            "theme": settings.theme,
-            "timezone": settings.timezone,
-            "created_at": settings.created_at,
-            "updated_at": settings.updated_at
-        }
-        
+        response_data = _settings_response_data(
+            settings=settings,
+            user_id=current_user.id,
+            db=db,
+        )
+        db.commit()
         return UserSettingsResponse(**response_data)
         
     except HTTPException:
@@ -282,7 +305,7 @@ async def test_openai_connection(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No OpenAI API key found. Please enter an API key to test.",
         )
-    except ProviderConfigurationError as exc:
+    except LLMProviderServiceError as exc:
         detail = str(exc)
         status_code = status.HTTP_429_TOO_MANY_REQUESTS if "rate limit" in detail.lower() else status.HTTP_400_BAD_REQUEST
         raise HTTPException(status_code=status_code, detail=detail)

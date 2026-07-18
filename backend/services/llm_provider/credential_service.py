@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+from uuid import UUID
 
 from cryptography.fernet import Fernet
 from sqlalchemy import select
@@ -18,7 +19,12 @@ from sqlalchemy.orm import Session
 
 from agent.providers.llm.core.identity import OPENAI_PROVIDER_ID, normalize_provider_id
 
-from backend.models import Task, UserLLMProviderCredential, UserSettings
+from backend.models import (
+    LLMInferenceConnection,
+    Task,
+    UserLLMProviderCredential,
+    UserSettings,
+)
 from backend.config.generated_config import resolve_config_value, validate_encryption_key
 
 from .catalog_service import LLMProviderCatalogService
@@ -28,8 +34,11 @@ from .types import (
     CredentialEncryptionError,
     CredentialNotFoundError,
     CredentialStatus,
+    LLMAuthMode,
+    LLMConnectionCredentialRef,
     LLMCredentialRef,
     ProviderSecret,
+    ResolvedAuth,
 )
 
 logger = logging.getLogger(__name__)
@@ -126,6 +135,11 @@ class LLMCredentialService:
 
         normalized_provider = self._normalize_provider(provider)
         credential = self._get_credential(user_id=user_id, provider=normalized_provider, migrate=True)
+        connection = self._get_legacy_default_connection(
+            user_id=user_id,
+            provider=normalized_provider,
+            migrate=False,
+        )
         if credential is None:
             return CredentialStatus(
                 user_id=user_id,
@@ -133,8 +147,12 @@ class LLMCredentialService:
                 enabled=False,
                 has_api_key=False,
                 masked_api_key=None,
+                connection_id=str(connection.id) if connection is not None else None,
+                auth_mode=(
+                    LLMAuthMode.API_KEY if connection is not None else None
+                ),
             )
-        return self._status_from_credential(credential)
+        return self._status_from_credential(credential, connection=connection)
 
     def has_enabled_credential(self, user_id: int, provider: str) -> bool:
         """Return True when an enabled credential exists for a provider."""
@@ -190,7 +208,11 @@ class LLMCredentialService:
 
         self._invalidate_decrypted_compat_cache(user_id)
         self._db.flush()
-        return self._status_from_credential(credential)
+        connection = self._ensure_legacy_default_connection(
+            user_id=user_id,
+            provider=normalized_provider,
+        )
+        return self._status_from_credential(credential, connection=connection)
 
     def upsert_encrypted_api_key(
         self,
@@ -227,7 +249,11 @@ class LLMCredentialService:
 
         self._invalidate_decrypted_compat_cache(user_id)
         self._db.flush()
-        return self._status_from_credential(credential)
+        connection = self._ensure_legacy_default_connection(
+            user_id=user_id,
+            provider=normalized_provider,
+        )
+        return self._status_from_credential(credential, connection=connection)
 
     def disable(self, *, user_id: int, provider: str) -> CredentialStatus:
         """Disable a provider credential and clear legacy OpenAI mirrors."""
@@ -252,7 +278,11 @@ class LLMCredentialService:
 
         self._invalidate_decrypted_compat_cache(user_id)
         self._db.flush()
-        return self._status_from_credential(credential)
+        connection = self._ensure_legacy_default_connection(
+            user_id=user_id,
+            provider=normalized_provider,
+        )
+        return self._status_from_credential(credential, connection=connection)
 
     def delete(self, *, user_id: int, provider: str) -> None:
         """Delete a provider credential and clear legacy OpenAI mirrors."""
@@ -260,6 +290,10 @@ class LLMCredentialService:
         normalized_provider = self._normalize_provider(provider)
         credential = self._get_credential(user_id=user_id, provider=normalized_provider, migrate=False)
         if credential is not None:
+            self._ensure_legacy_default_connection(
+                user_id=user_id,
+                provider=normalized_provider,
+            )
             self._db.delete(credential)
 
         if normalized_provider == OPENAI_PROVIDER_ID:
@@ -268,6 +302,76 @@ class LLMCredentialService:
 
         self._invalidate_decrypted_compat_cache(user_id)
         self._db.flush()
+
+    def resolve_connection_auth(
+        self,
+        connection_ref: LLMConnectionCredentialRef,
+        *,
+        runtime_user_id: int,
+        task_id: int | None = None,
+        purpose: str,
+        auth_mode: LLMAuthMode | str,
+    ) -> ResolvedAuth:
+        """Resolve typed auth after revalidating a live connection reference."""
+
+        connection = self._authorize_connection_ref(
+            connection_ref,
+            runtime_user_id=runtime_user_id,
+            task_id=task_id,
+        )
+        try:
+            mode = (
+                auth_mode
+                if isinstance(auth_mode, LLMAuthMode)
+                else LLMAuthMode(str(auth_mode).strip().lower())
+            )
+        except ValueError as exc:
+            raise CredentialAuthorizationError(
+                "Connection auth mode is not permitted"
+            ) from exc
+        if mode is LLMAuthMode.NONE:
+            return ResolvedAuth.none()
+        if mode is LLMAuthMode.OPERATOR_MANAGED:
+            return ResolvedAuth.operator_managed()
+
+        provider = connection.legacy_default_provider
+        if not provider:
+            raise CredentialAuthorizationError(
+                "Connection has no explicitly bound local credential"
+            )
+        normalized_provider = self._normalize_provider(provider)
+        if (
+            self._normalize_provider(connection.connection_preset_id)
+            != normalized_provider
+        ):
+            raise CredentialAuthorizationError(
+                "Connection credential binding is invalid"
+            )
+        credential = self._get_credential(
+            user_id=runtime_user_id,
+            provider=normalized_provider,
+            migrate=False,
+        )
+        if credential is None or not credential.enabled or not credential.has_api_key:
+            raise CredentialNotFoundError(
+                f"{normalized_provider} credential is not configured"
+            )
+        secret_value = decrypt_api_key(credential.encrypted_api_key)
+        if not secret_value:
+            raise CredentialNotFoundError(
+                f"{normalized_provider} credential could not be decrypted"
+            )
+        logger.debug(
+            "Resolved connection credential connection_id=%s mode=%s",
+            connection.id,
+            mode.value,
+        )
+        secret = ProviderSecret(provider=normalized_provider, value=secret_value)
+        return ResolvedAuth.with_secret(
+            mode=mode,
+            provider=normalized_provider,
+            secret=secret,
+        )
 
     def resolve_secret(
         self,
@@ -303,10 +407,9 @@ class LLMCredentialService:
             raise CredentialNotFoundError(f"{normalized_provider} credential could not be decrypted")
 
         logger.debug(
-            "Resolved provider credential for provider=%s user_id=%s purpose=%s",
+            "Resolved provider credential for provider=%s user_id=%s",
             normalized_provider,
             runtime_user_id,
-            purpose,
         )
         return ProviderSecret(provider=normalized_provider, value=secret)
 
@@ -332,8 +435,16 @@ class LLMCredentialService:
         provider: str,
         migrate: bool,
     ) -> UserLLMProviderCredential | None:
-        if migrate and provider == OPENAI_PROVIDER_ID:
-            self._migration.backfill_legacy_openai_for_user(user_id)
+        if migrate:
+            self._migration.backfill_deployment_identity_for_user(user_id)
+
+        connection = self._get_legacy_default_connection(
+            user_id=user_id,
+            provider=provider,
+            migrate=False,
+        )
+        if migrate and connection is None:
+            return None
 
         credential = self._db.execute(
             select(UserLLMProviderCredential).where(
@@ -342,6 +453,99 @@ class LLMCredentialService:
             )
         ).scalar_one_or_none()
         return credential
+
+    def _ensure_legacy_default_connection(
+        self,
+        *,
+        user_id: int,
+        provider: str,
+    ) -> LLMInferenceConnection:
+        connection = self._migration.ensure_legacy_default_connection_for_provider(
+            user_id=user_id,
+            provider=provider,
+        )
+        if connection is None:
+            raise CredentialAuthorizationError(
+                "Legacy credential has no explicit default connection"
+            )
+        return connection
+
+    def _get_legacy_default_connection(
+        self,
+        *,
+        user_id: int,
+        provider: str,
+        migrate: bool,
+    ) -> LLMInferenceConnection | None:
+        if migrate:
+            self._migration.backfill_deployment_identity_for_user(user_id)
+        return self._db.execute(
+            select(LLMInferenceConnection).where(
+                LLMInferenceConnection.user_id == user_id,
+                LLMInferenceConnection.legacy_default_provider == provider,
+            )
+        ).scalar_one_or_none()
+
+    def _authorize_connection_ref(
+        self,
+        connection_ref: LLMConnectionCredentialRef,
+        *,
+        runtime_user_id: int,
+        task_id: int | None,
+    ) -> LLMInferenceConnection:
+        if not isinstance(connection_ref, LLMConnectionCredentialRef):
+            raise TypeError("connection_ref must be LLMConnectionCredentialRef")
+        if (
+            isinstance(runtime_user_id, bool)
+            or not isinstance(runtime_user_id, int)
+            or runtime_user_id <= 0
+        ):
+            raise CredentialAuthorizationError(
+                "Connection credential ref is unavailable"
+            )
+        if task_id is not None and (
+            isinstance(task_id, bool)
+            or not isinstance(task_id, int)
+            or task_id <= 0
+        ):
+            raise CredentialAuthorizationError(
+                "Connection credential ref is not authorized for this task"
+            )
+        try:
+            connection_id = UUID(str(connection_ref.connection_id))
+        except (TypeError, ValueError, AttributeError) as exc:
+            raise CredentialAuthorizationError(
+                "Connection credential ref is unavailable"
+            ) from exc
+        connection = self._db.execute(
+            select(LLMInferenceConnection)
+            .where(LLMInferenceConnection.id == connection_id)
+            .execution_options(populate_existing=True)
+        ).scalar_one_or_none()
+        if connection is None or int(connection.user_id) != int(runtime_user_id):
+            raise CredentialAuthorizationError(
+                "Connection credential ref is unavailable"
+            )
+        if (
+            isinstance(connection_ref.expected_revision, bool)
+            or not isinstance(connection_ref.expected_revision, int)
+            or int(connection.revision) != connection_ref.expected_revision
+        ):
+            raise CredentialAuthorizationError(
+                "Connection credential ref revision is stale"
+            )
+        if task_id is not None:
+            owns_task = self._db.execute(
+                select(Task.id).where(
+                    Task.id == task_id,
+                    Task.user_id == runtime_user_id,
+                )
+            ).scalar_one_or_none()
+            if owns_task is None:
+                raise CredentialAuthorizationError(
+                    "Connection credential ref is not authorized for this task"
+                )
+        return connection
 
     def _get_or_create_user_settings(self, user_id: int) -> UserSettings:
         settings = self._db.execute(
@@ -359,13 +563,19 @@ class LLMCredentialService:
         return normalized_provider
 
     @staticmethod
-    def _status_from_credential(credential: UserLLMProviderCredential) -> CredentialStatus:
+    def _status_from_credential(
+        credential: UserLLMProviderCredential,
+        *,
+        connection: LLMInferenceConnection | None = None,
+    ) -> CredentialStatus:
         return CredentialStatus(
             user_id=credential.user_id,
             provider=credential.provider,
             enabled=bool(credential.enabled),
             has_api_key=credential.has_api_key,
             masked_api_key="***" if credential.has_api_key else None,
+            connection_id=str(connection.id) if connection is not None else None,
+            auth_mode=(LLMAuthMode.API_KEY if connection is not None else None),
         )
 
     @staticmethod

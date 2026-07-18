@@ -26,6 +26,7 @@ from backend.services.llm_provider.types import (
     LLMCallTarget,
     LLMProviderServiceError,
     LLMRuntimeSelection,
+    LLMRuntimeSelectionV2,
 )
 from core.memory.retrieval_summary import render_memory_summary, split_retrieval_limits
 
@@ -72,10 +73,11 @@ class MemoryRuntimeService:
     ) -> str:
         """Retrieve a bounded semantic-memory summary using authorized runtime creds."""
 
-        runtime_selection = LLMRuntimeSelection.from_mapping(selection)
-        if (
-            int(user_id) != int(runtime_user_id)
-            or int(runtime_selection.credential_ref.user_id) != int(runtime_user_id)
+        runtime_selection = _parse_runtime_selection(selection)
+        if not _runtime_selection_authorized_for_user(
+            runtime_selection,
+            user_id=user_id,
+            runtime_user_id=runtime_user_id,
         ):
             logger.warning("[MEMORY_RUNTIME] Refusing retrieval with mismatched user scope")
             return ""
@@ -193,8 +195,12 @@ class MemoryRuntimeService:
     ) -> None:
         """Run best-effort memory extraction from a completed turn snapshot."""
 
-        runtime_selection = LLMRuntimeSelection.from_mapping(selection)
-        if int(runtime_selection.credential_ref.user_id) != int(user_id):
+        runtime_selection = _parse_runtime_selection(selection)
+        if not _runtime_selection_authorized_for_user(
+            runtime_selection,
+            user_id=user_id,
+            runtime_user_id=user_id,
+        ):
             logger.warning("[MEMORY_RUNTIME] Refusing extraction with mismatched user scope")
             return
 
@@ -219,16 +225,18 @@ class MemoryRuntimeService:
             return
 
         memory_store = MemoryStore(db, embedding_provider)
-        memory_runtime_selection = LLMRuntimeSelection(
-            provider=memory_llm_selection.provider,
-            model=memory_llm_selection.extraction_model,
-            credential_ref=memory_llm_selection.credential_ref,
-            reasoning_effort=None,
+        gate_runtime_selection = _memory_runtime_selection_for_role(
+            memory_llm_selection,
+            role=MEMORY_EXTRACTION_GATE_ROLE,
+        )
+        extraction_runtime_selection = _memory_runtime_selection_for_role(
+            memory_llm_selection,
+            role=MEMORY_EXTRACTION_ROLE,
         )
 
         try:
             gate_client = self._client_resolver.get_client(
-                memory_runtime_selection,
+                gate_runtime_selection,
                 target=LLMCallTarget(
                     provider=memory_llm_selection.provider,
                     model=memory_llm_selection.gate_model,
@@ -239,7 +247,7 @@ class MemoryRuntimeService:
                 purpose=MEMORY_EXTRACTION_GATE_ROLE,
             )
             extraction_client = self._client_resolver.get_client(
-                memory_runtime_selection,
+                extraction_runtime_selection,
                 target=LLMCallTarget(
                     provider=memory_llm_selection.provider,
                     model=memory_llm_selection.extraction_model,
@@ -342,6 +350,62 @@ class MemoryRuntimeService:
             env_getter=self._env_getter,
             db=db,
         )
+
+
+def _parse_runtime_selection(
+    selection: Mapping[str, Any],
+) -> LLMRuntimeSelection | LLMRuntimeSelectionV2:
+    """Parse legacy or deployment-aware chat runtime selection snapshots."""
+
+    payload = dict(selection)
+    if payload.get("schema_version") == 2 or "deployment_ref" in payload:
+        return LLMRuntimeSelectionV2.from_mapping(payload)
+    return LLMRuntimeSelection.from_mapping(payload)
+
+
+def _runtime_selection_authorized_for_user(
+    selection: LLMRuntimeSelection | LLMRuntimeSelectionV2,
+    *,
+    user_id: int,
+    runtime_user_id: int,
+) -> bool:
+    """Check that a runtime snapshot belongs to the backend-selected user."""
+
+    if int(user_id) != int(runtime_user_id):
+        return False
+    if isinstance(selection, LLMRuntimeSelectionV2):
+        return True
+    return int(selection.credential_ref.user_id) == int(runtime_user_id)
+
+
+def _memory_runtime_selection_for_role(
+    selection: MemoryLLMRuntimeSelection,
+    *,
+    role: str,
+) -> LLMRuntimeSelection | LLMRuntimeSelectionV2:
+    """Build the role-specific memory LLM runtime identity."""
+
+    if role == MEMORY_EXTRACTION_GATE_ROLE:
+        deployment_ref = selection.gate_deployment_ref
+        model = selection.gate_model
+    elif role == MEMORY_EXTRACTION_ROLE:
+        deployment_ref = selection.extraction_deployment_ref
+        model = selection.extraction_model
+    else:
+        raise ValueError("Unsupported memory LLM role")
+
+    if deployment_ref is not None:
+        return LLMRuntimeSelectionV2(
+            deployment_ref=deployment_ref,
+            legacy_provider=selection.provider,
+            legacy_model=model,
+        )
+    return LLMRuntimeSelection(
+        provider=selection.provider,
+        model=selection.extraction_model,
+        credential_ref=selection.credential_ref,
+        reasoning_effort=None,
+    )
 
 
 class _TaskScope(NamedTuple):

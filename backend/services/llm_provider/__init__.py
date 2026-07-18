@@ -12,6 +12,8 @@ from .catalog_service import (
     LLMProviderCatalogService,
 )
 from .conversation_lifecycle_service import LLMConversationLifecycleService
+from .connection_authorization import LLMConnectionAuthorizer
+from .connection_service import LLMConnectionService
 from .credential_service import (
     LLMCredentialService,
     decrypt_api_key,
@@ -19,6 +21,8 @@ from .credential_service import (
     get_encryption_key,
 )
 from .environment_service import LLMProviderEnvironmentService
+from .effective_profile_service import EffectiveProfileService
+from .deployment_service import LLMDeploymentService
 from .failure_policy import (
     LLMRuntimeFailureDisposition,
     LLMRuntimeFailureKind,
@@ -41,33 +45,68 @@ from .runtime_services import (
 )
 from .selection_service import LLMProviderSelectionService
 from .types import (
+    AuthorizedLLMConnectionOperation,
     CredentialAuthorizationError,
     CredentialEncryptionError,
     CredentialNotFoundError,
     CredentialStatus,
+    DeploymentRef,
+    LLMAuthMode,
     LLMCredentialRef,
     LLMCallTarget,
+    LLMConnectionAccessContext,
+    LLMConnectionAuthorizationError,
+    LLMConnectionCredentialRef,
+    LLMConnectionNotFoundError,
+    LLMConnectionRevisionConflictError,
+    LLMConnectionState,
+    LLMConnectionStateTransitionError,
+    LLMConnectionValidationError,
+    LLMDeploymentNotFoundError,
+    LLMDeploymentValidationError,
     LLMProviderServiceError,
     LLMRuntimeSelection,
+    LLMRuntimeAccessContext,
+    LLMRuntimeSelectionV2,
     LLMSelectionStatus,
     ProviderConfigurationError,
     ProviderHealthCheckResult,
     ProviderSecret,
+    ResolvedAuth,
+    ResolvedConnectionTarget,
+    ResolvedLLMTarget,
 )
 
 __all__ = [
+    "AuthorizedLLMConnectionOperation",
     "CatalogModelSummary",
     "CatalogProviderSummary",
     "CredentialAuthorizationError",
     "CredentialEncryptionError",
     "CredentialNotFoundError",
     "CredentialStatus",
+    "DeploymentRef",
+    "LLMAuthMode",
     "LLMCallTarget",
+    "LLMConnectionAccessContext",
+    "LLMConnectionAuthorizationError",
+    "LLMConnectionAuthorizer",
+    "LLMConnectionCredentialRef",
+    "LLMConnectionNotFoundError",
+    "LLMConnectionRevisionConflictError",
+    "LLMConnectionService",
+    "LLMConnectionState",
+    "LLMConnectionStateTransitionError",
+    "LLMConnectionValidationError",
     "LLMConversationLifecycleService",
     "LLMCredentialRef",
     "LLMCredentialService",
+    "LLMDeploymentNotFoundError",
+    "LLMDeploymentValidationError",
+    "LLMDeploymentService",
     "LLMProviderCatalogService",
     "LLMProviderEnvironmentService",
+    "EffectiveProfileService",
     "LLMProviderHealthService",
     "LLMProviderMigrationService",
     "LLMProviderSelectionService",
@@ -80,11 +119,16 @@ __all__ = [
     "LLMRuntimeFailureKind",
     "LLMRuntimeConfigService",
     "LLMRuntimeSelection",
+    "LLMRuntimeAccessContext",
+    "LLMRuntimeSelectionV2",
     "LLMRuntimeServices",
     "LLMSelectionStatus",
     "ProviderConfigurationError",
     "ProviderHealthCheckResult",
     "ProviderSecret",
+    "ResolvedAuth",
+    "ResolvedConnectionTarget",
+    "ResolvedLLMTarget",
     "attach_runtime_services",
     "classify_llm_runtime_failure",
     "decrypt_api_key",

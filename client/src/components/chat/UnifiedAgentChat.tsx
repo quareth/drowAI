@@ -33,7 +33,6 @@ import { getSupportedReasoningEffortForPayload } from "@/features/llm-provider/c
 import type {
   LLMModelCatalogResponse,
   LLMSelection,
-  RuntimeModelSwitchPayload,
   SelectedLLMModel,
 } from "@/features/llm-provider/types";
 import { useUnifiedChat } from "@/hooks/useUnifiedChat";
@@ -452,30 +451,6 @@ export function UnifiedAgentChat({
     onError: (error: Error, selection) => {
       toast({
         title: `Model update failed: ${selection.provider}/${selection.model}`,
-        description: error.message,
-        variant: "destructive",
-      });
-    },
-  });
-
-  const switchTaskModel = useMutation({
-    mutationFn: async ({ taskId: taskIdentifier, provider, model }: RuntimeModelSwitchPayload) => {
-      const response = await apiRequest("POST", `/api/llm/tasks/${taskIdentifier}/switch`, { provider, model });
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(errText || "Failed to switch model at runtime");
-      }
-      return response.json();
-    },
-    onSuccess: () => {
-      toast({
-        title: "Runtime model switched",
-        description: "The running agent will use the new model.",
-      });
-    },
-    onError: (error: Error, variables) => {
-      toast({
-        title: `Runtime switch failed: ${variables.provider}/${variables.model}`,
         description: error.message,
         variant: "destructive",
       });
@@ -926,11 +901,8 @@ export function UnifiedAgentChat({
       }
       setSelectedLLMModel(selection);
       updateSelection.mutate(selection);
-      if (activeTaskId && !featureFlags.enableBasicChat) {
-        switchTaskModel.mutate({ taskId: activeTaskId, ...selection });
-      }
     },
-    [activeTaskId, switchTaskModel, updateSelection, selectedLLMModel],
+    [updateSelection, selectedLLMModel],
   );
 
   const handleDownloadTranscript = useCallback(async () => {

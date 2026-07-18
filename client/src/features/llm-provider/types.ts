@@ -124,7 +124,3 @@ export interface LLMProviderCredentialTestResponse {
 export interface LLMProviderCredentialDeleteResponse {
   success: boolean;
 }
-
-export interface RuntimeModelSwitchPayload extends SelectedLLMModel {
-  taskId: number;
-}

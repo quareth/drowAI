@@ -13,7 +13,21 @@ Boundaries:
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class LLMConnectionRefResponse(BaseModel):
+    """Opaque revisioned connection identity safe for API responses."""
+
+    connection_id: str
+    expected_revision: int
+
+
+class LLMDeploymentRef(BaseModel):
+    """Opaque revisioned deployment identity accepted by selection APIs."""
+
+    deployment_id: str
+    expected_revision: int
 
 
 class UserLLMProviderCredentialUpsert(BaseModel):
@@ -45,6 +59,8 @@ class LLMProviderCredentialStatusResponse(BaseModel):
     enabled: bool
     has_api_key: bool
     masked_api_key: Optional[str] = None
+    connection_ref: Optional[LLMConnectionRefResponse] = None
+    auth_mode: Optional[str] = None
 
 
 class LLMCatalogModelResponse(BaseModel):
@@ -66,6 +82,8 @@ class LLMCatalogModelResponse(BaseModel):
     tool_choice_modes: list[str] = Field(alias="toolChoiceModes")
     structured_output_strategies: list[str] = Field(alias="structuredOutputStrategies")
     pricing_status: str = Field(alias="pricingStatus")
+    deployment_ref: Optional[LLMDeploymentRef] = None
+    runnable: bool = False
 
 
 class LLMCatalogProviderResponse(BaseModel):
@@ -104,12 +122,66 @@ class LLMSelectionResponse(BaseModel):
     selection_status: LLMSelectionStatusResponse
 
 
-class ReportingLLMSelectionUpsert(BaseModel):
-    """Request body for storing the reporting provider/model selection."""
+class DeploymentLLMSelectionResponse(LLMSelectionResponse):
+    """Deployment-aware conversation selection response."""
+
+    deployment_ref: LLMDeploymentRef
+
+
+class LLMSelectionUpsert(BaseModel):
+    """Legacy provider/model or deployment-aware conversation selection."""
+
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    deployment_ref: Optional[LLMDeploymentRef] = None
+
+    @model_validator(mode="after")
+    def validate_identity(self) -> "LLMSelectionUpsert":
+        """Require one unambiguous selection identity."""
+
+        has_legacy = self.provider is not None or self.model is not None
+        if self.deployment_ref is not None:
+            if has_legacy:
+                raise ValueError("Use either deployment_ref or provider/model")
+            return self
+        if self.provider is None or self.model is None:
+            raise ValueError("provider and model are required without deployment_ref")
+        return self
+
+
+class LLMSelectionWriteResponse(BaseModel):
+    """Legacy-compatible conversation selection mutation response."""
 
     provider: str
     model: str
+
+
+class DeploymentLLMSelectionWriteResponse(LLMSelectionWriteResponse):
+    """Deployment-aware conversation selection mutation response."""
+
+    deployment_ref: LLMDeploymentRef
+
+
+class ReportingLLMSelectionUpsert(BaseModel):
+    """Request body for storing the reporting provider/model selection."""
+
+    provider: Optional[str] = None
+    model: Optional[str] = None
     reasoning_effort: Optional[str] = None
+    deployment_ref: Optional[LLMDeploymentRef] = None
+
+    @model_validator(mode="after")
+    def validate_identity(self) -> "ReportingLLMSelectionUpsert":
+        """Require one unambiguous reporting selection identity."""
+
+        has_legacy = self.provider is not None or self.model is not None
+        if self.deployment_ref is not None:
+            if has_legacy:
+                raise ValueError("Use either deployment_ref or provider/model")
+            return self
+        if self.provider is None or self.model is None:
+            raise ValueError("provider and model are required without deployment_ref")
+        return self
 
 
 class ReportingLLMSelectionResponse(BaseModel):
@@ -119,6 +191,12 @@ class ReportingLLMSelectionResponse(BaseModel):
     model: Optional[str] = None
     reasoning_effort: Optional[str] = None
     selection_status: LLMSelectionStatusResponse
+
+
+class ReportingDeploymentLLMSelectionResponse(ReportingLLMSelectionResponse):
+    """Deployment-aware reporting selection response."""
+
+    deployment_ref: LLMDeploymentRef
 
 
 class LLMProviderCredentialTestRequest(BaseModel):

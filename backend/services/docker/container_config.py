@@ -134,7 +134,10 @@ class ContainerConfigBuilder:
         # Add provider runtime environment if user_id is provided.
         if user_id:
             try:
-                provider_environment = self._provider_environment_builder(user_id, task_id)
+                raw_provider_environment = self._provider_environment_builder(user_id, task_id)
+                provider_environment = self.runtime_config.sanitize_llm_provider_environment(
+                    raw_provider_environment
+                )
                 environment.update(provider_environment)
                 key_status = _provider_key_status(provider_environment)
                 logger.info(
@@ -147,10 +150,10 @@ class ContainerConfigBuilder:
                 )
             except Exception as exc:
                 logger.warning(
-                    "No valid LLM provider environment for user %s task_id=%s: %s",
+                    "No valid LLM provider environment for user %s task_id=%s error_type=%s",
                     user_id,
                     task_id,
-                    exc,
+                    type(exc).__name__,
                 )
                 logger.warning("User needs to configure provider credentials before running containers")
         else:

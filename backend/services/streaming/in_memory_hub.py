@@ -64,6 +64,7 @@ class QueuedMessage:
     provider: Optional[str] = None
     model: Optional[str] = None
     credential_ref: Optional[Dict[str, Any]] = None
+    runtime_selection: Optional[Dict[str, Any]] = None
     reasoning_effort: Optional[str] = None
     deterministic_mode: bool = False
     # Phase 6: preserve the normalized (agent_mode, plan_mode) pair
@@ -435,6 +436,7 @@ class InMemoryStreamHub:
         provider: Optional[str] = None,
         model: Optional[str] = None,
         credential_ref: Optional[Dict[str, Any]] = None,
+        runtime_selection: Optional[Dict[str, Any]] = None,
         reasoning_effort: Optional[str] = None,
         deterministic_mode: bool = False,
         agent_mode: Optional[Any] = None,
@@ -463,6 +465,11 @@ class InMemoryStreamHub:
             provider=provider,
             model=model,
             credential_ref=dict(credential_ref) if isinstance(credential_ref, dict) else None,
+            runtime_selection=(
+                dict(runtime_selection)
+                if isinstance(runtime_selection, dict)
+                else None
+            ),
             reasoning_effort=reasoning_effort,
             deterministic_mode=bool(deterministic_mode),
             agent_mode=agent_mode,
@@ -614,16 +621,30 @@ class InMemoryStreamHub:
                     logger.error(f"User {queued_msg.user_id} not found for queued message")
                     return False
 
-                runtime_selection = LLMRuntimeConfigService(db).build_runtime_selection(
-                    user_id=user.id,
-                    provider=queued_msg.provider,
-                    model=queued_msg.model,
-                    reasoning_effort=queued_msg.reasoning_effort,
-                    require_enabled_credential=not (
-                        queued_msg.deterministic_mode or E2E_DETERMINISTIC_MODE
-                    ),
-                )
-                runtime_selection_payload = runtime_selection.to_dict()
+                runtime_config_service = LLMRuntimeConfigService(db)
+                if queued_msg.runtime_selection is not None:
+                    runtime_selection_payload = dict(queued_msg.runtime_selection)
+                    resolved_provider = queued_msg.provider
+                    resolved_model = queued_msg.model
+                else:
+                    runtime_selection = runtime_config_service.build_conversation_runtime_selection(
+                        user_id=user.id,
+                        provider=queued_msg.provider,
+                        model=queued_msg.model,
+                        reasoning_effort=queued_msg.reasoning_effort,
+                        require_enabled_credential=not (
+                            queued_msg.deterministic_mode or E2E_DETERMINISTIC_MODE
+                        ),
+                    )
+                    runtime_selection_payload = runtime_selection.to_dict()
+                    resolved_provider = (
+                        getattr(runtime_selection, "provider", None)
+                        or getattr(runtime_selection, "legacy_provider", None)
+                    )
+                    resolved_model = (
+                        getattr(runtime_selection, "model", None)
+                        or getattr(runtime_selection, "legacy_model", None)
+                    )
                 exclude_ids: set[int] = set()
                 if isinstance(queued_msg.user_message_id, int):
                     exclude_ids.add(queued_msg.user_message_id)
@@ -649,8 +670,8 @@ class InMemoryStreamHub:
                 await turn_execution_service.start_turn_generation(
                     task_id=queued_msg.task_id,
                     user_id=queued_msg.user_id,
-                    provider=runtime_selection.provider,
-                    model=runtime_selection.model,
+                    provider=resolved_provider,
+                    model=resolved_model,
                     runtime_selection=runtime_selection_payload,
                     reasoning_effort=queued_msg.reasoning_effort,
                     message=queued_msg.content,

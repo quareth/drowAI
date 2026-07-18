@@ -15,11 +15,19 @@ from core.llm.role_policy import ModelRoleRegistry, RoleKey
 
 from .catalog_service import LLMProviderCatalogService
 from .credential_service import LLMCredentialService
+from .deployment_service import LLMDeploymentService
 from .migration_service import LLMProviderMigrationService
 from .runtime_client_resolver import LLMRuntimeClientResolver
 from .runtime_services import LLMRuntimeServices
 from .selection_service import LLMProviderSelectionService
-from .types import LLMCallTarget, LLMCredentialRef, LLMRuntimeSelection
+from .types import (
+    DeploymentRef,
+    LLMCallTarget,
+    LLMCredentialRef,
+    LLMDeploymentNotFoundError,
+    LLMRuntimeSelection,
+    LLMRuntimeSelectionV2,
+)
 
 
 class LLMRuntimeConfigService:
@@ -93,10 +101,39 @@ class LLMRuntimeConfigService:
             reasoning_effort=reasoning_effort,
         )
 
+    def build_conversation_runtime_selection(
+        self,
+        *,
+        user_id: int,
+        provider: str | None = None,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+        require_enabled_credential: bool = True,
+    ) -> LLMRuntimeSelection | LLMRuntimeSelectionV2:
+        """Return the current conversation runtime identity, preferring deployments."""
+
+        if provider is None and model is None:
+            selection = self._selection_service.get_selection(user_id)
+            if selection.deployment_id is not None:
+                return self._selection_service.build_deployment_runtime_selection(
+                    user_id=user_id,
+                    reasoning_effort=reasoning_effort,
+                )
+        return self.build_runtime_selection(
+            user_id=user_id,
+            provider=provider,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            require_enabled_credential=require_enabled_credential,
+        )
+
     def build_runtime_services(self) -> LLMRuntimeServices:
         """Return live runtime dependencies for one invocation."""
 
-        client_resolver = LLMRuntimeClientResolver(self._credential_service)
+        client_resolver = LLMRuntimeClientResolver(
+            self._credential_service,
+            db=self._db,
+        )
         memory_runtime_service = None
         if is_semantic_memory_runtime_enabled():
             from backend.services.memory.runtime_service import MemoryRuntimeService
@@ -108,6 +145,43 @@ class LLMRuntimeConfigService:
         return LLMRuntimeServices(
             client_resolver=client_resolver,
             memory_runtime_service=memory_runtime_service,
+        )
+
+    def build_deployment_runtime_selection(
+        self,
+        *,
+        user_id: int,
+        deployment_id: str,
+        preferred_route_id: str | None = None,
+        reasoning_effort: str | None = None,
+        legacy_provider: str | None = None,
+        legacy_model: str | None = None,
+    ) -> LLMRuntimeSelectionV2:
+        """Build checkpoint-safe V2 identity from current owner-scoped rows."""
+
+        deployments = LLMDeploymentService(self._db)
+        deployment = deployments.get_deployment(
+            user_id=user_id,
+            deployment_id=deployment_id,
+        )
+        if preferred_route_id is not None:
+            route = deployments.get_route(
+                user_id=user_id,
+                route_id=preferred_route_id,
+            )
+            if route.deployment_id != deployment.id or not route.enabled:
+                raise LLMDeploymentNotFoundError(
+                    "Preferred deployment route is unavailable"
+                )
+        return LLMRuntimeSelectionV2(
+            deployment_ref=DeploymentRef(
+                deployment_id=str(deployment.id),
+                expected_revision=int(deployment.revision),
+            ),
+            preferred_route_id=preferred_route_id,
+            reasoning_effort=reasoning_effort,
+            legacy_provider=legacy_provider,
+            legacy_model=legacy_model,
         )
 
     def resolve_role_target(

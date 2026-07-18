@@ -17,10 +17,13 @@ from agent.providers.llm.core.identity import (
 )
 
 from .catalog_service import LLMProviderCatalogService
+from .connection_authorization import LLMConnectionAuthorizer
+from .connection_service import LLMConnectionService
 from .credential_service import LLMCredentialService
 from .guarded_transport import GuardedTransport, GuardedTransportError
 from .types import (
     CredentialNotFoundError,
+    LLMConnectionAccessContext,
     LLMConnectionOperation,
     ProviderConfigurationError,
     ProviderHealthCheckResult,
@@ -38,6 +41,7 @@ class LLMProviderHealthService:
         catalog_service: LLMProviderCatalogService | None = None,
         credential_service: LLMCredentialService | None = None,
         guarded_transport: GuardedTransport | None = None,
+        connection_authorizer: LLMConnectionAuthorizer | None = None,
     ) -> None:
         self._db = db
         self._catalog = catalog_service or LLMProviderCatalogService()
@@ -46,6 +50,9 @@ class LLMProviderHealthService:
             catalog_service=self._catalog,
         )
         self._guarded_transport = guarded_transport or GuardedTransport()
+        self._connection_authorizer = (
+            connection_authorizer or LLMConnectionAuthorizer(db)
+        )
 
     def test_credential(
         self,
@@ -60,6 +67,10 @@ class LLMProviderHealthService:
         self._catalog.require_provider(normalized_provider)
         resolved_key = (api_key or "").strip()
         if not resolved_key:
+            self._authorize_stored_health_operation(
+                user_id=user_id,
+                provider=normalized_provider,
+            )
             ref = self._credential_service.get_credential_ref(
                 user_id,
                 normalized_provider,
@@ -83,6 +94,32 @@ class LLMProviderHealthService:
                 f"{normalized_provider}"
             )
         return self._test_openai_key(resolved_key)
+
+    def _authorize_stored_health_operation(
+        self,
+        *,
+        user_id: int,
+        provider: str,
+    ) -> None:
+        """Authorize the designated default connection before stored-key tests."""
+
+        status = self._credential_service.get_masked_status(user_id, provider)
+        if status.connection_id is None:
+            raise CredentialNotFoundError(
+                f"{provider} credential is not configured"
+            )
+        connection = LLMConnectionService(self._db).get_owned(
+            user_id=user_id,
+            connection_id=status.connection_id,
+        )
+        self._connection_authorizer.authorize(
+            access_context=LLMConnectionAccessContext(
+                authenticated_user_id=user_id,
+            ),
+            connection_id=connection.id,
+            expected_revision=int(connection.revision),
+            operation=LLMConnectionOperation.HEALTH,
+        )
 
     def _test_openai_key(self, api_key: str) -> ProviderHealthCheckResult:
         try:

@@ -1,21 +1,15 @@
-"""Provider runtime environment construction for container compatibility.
+"""Non-secret provider metadata construction for task containers.
 
-This service centralizes provider credential environment variables used by
-task containers. It preserves current OpenAI `OPENAI_API_KEY` behavior while
-keeping Docker configuration code out of credential storage details.
+This service exposes selected provider/model identifiers for diagnostics while
+keeping all connection credentials in the backend LLM client boundary.
 """
 
 from __future__ import annotations
 
-import logging
-
 from sqlalchemy.orm import Session
-
-from agent.providers.llm.core.identity import OPENAI_PROVIDER_ID
 
 from .credential_service import LLMCredentialService
 from .runtime_config_service import LLMRuntimeConfigService
-logger = logging.getLogger(__name__)
 
 
 class LLMProviderEnvironmentService:
@@ -36,23 +30,17 @@ class LLMProviderEnvironmentService:
         )
 
     def build_environment(self, *, user_id: int, task_id: int | None = None) -> dict[str, str]:
-        """Return provider-specific container environment variables."""
+        """Return non-secret provider metadata for a task container."""
 
-        selection = self._runtime_config_service.build_runtime_selection(user_id=user_id)
-        environment = {
+        _ = task_id  # Compatibility parameter; secrets are never resolved per task.
+        selection = self._runtime_config_service.build_runtime_selection(
+            user_id=user_id,
+            require_enabled_credential=False,
+        )
+        return {
             "LLM_PROVIDER": selection.provider,
             "LLM_MODEL": selection.model,
         }
-        if selection.provider == OPENAI_PROVIDER_ID:
-            secret = self._credential_service.resolve_secret(
-                selection.credential_ref,
-                runtime_user_id=user_id,
-                task_id=task_id,
-                purpose="container_environment",
-            )
-            environment["OPENAI_API_KEY"] = secret.value
-
-        return environment
 
 
 __all__ = ["LLMProviderEnvironmentService"]

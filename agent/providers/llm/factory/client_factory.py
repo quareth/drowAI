@@ -204,6 +204,7 @@ class LLMClientFactory:
         api_key: str,
         provider: str | None = None,
         provider_model: ProviderModelRef | None = None,
+        model_profile: ModelProfile | None = None,
         **kwargs: Any,
     ) -> LLMClient:
         """Create a client for the requested provider/model.
@@ -247,6 +248,7 @@ class LLMClientFactory:
             return cls._create_provider_client(
                 resolution=resolution,
                 api_key=api_key,
+                model_profile=model_profile,
                 **kwargs,
             )
 
@@ -346,12 +348,18 @@ class LLMClientFactory:
         *,
         resolution: ProviderModelResolution,
         api_key: str,
+        model_profile: ModelProfile | None = None,
         **kwargs: Any,
     ) -> LLMClient:
         """Instantiate the provider adapter for a resolved provider/model."""
         lookup_ref = resolution.lookup_ref.normalized()
         registration = cls._get_provider_registration(lookup_ref.provider)
-        profile = require_model_profile(lookup_ref)
+        profile = model_profile or require_model_profile(lookup_ref)
+        if profile.ref.provider != lookup_ref.provider:
+            raise LLMConfigurationError(
+                "model_profile provider must match the requested provider",
+                provider=lookup_ref.provider,
+            )
         provider_class = registration.resolver(profile)
         if not isinstance(provider_class, type) or not issubclass(provider_class, LLMClient):
             raise LLMConfigurationError(

@@ -11,7 +11,12 @@ import pytest
 
 from agent.providers.llm.core.base import LLMResponse
 import backend.services.reporting.report_section_generator as generator_module
-from backend.services.llm_provider.types import LLMCredentialRef, LLMRuntimeSelection
+from backend.services.llm_provider.types import (
+    DeploymentRef,
+    LLMCredentialRef,
+    LLMRuntimeSelection,
+    LLMRuntimeSelectionV2,
+)
 from backend.services.reporting.contracts import (
     REPORT_GENERATION_ERROR_SECTION_GENERATION_FAILED,
     REPORT_SECTION_SCHEMA_VERSION,
@@ -237,6 +242,40 @@ async def test_generator_calls_runtime_client_with_structured_section_output() -
         "source": "reporting.engagement_report_section",
     }
     assert isinstance(result.metadata["duration_ms"], int)
+
+
+@pytest.mark.asyncio
+async def test_generator_accepts_deployment_runtime_selection() -> None:
+    client = _FakeClient(_section_payload())
+    resolver = _FakeResolver(client)
+    runtime_config = _FakeRuntimeConfigService(resolver)
+    generator = ReportSectionGenerator(
+        object(),
+        runtime_config_service=runtime_config,  # type: ignore[arg-type]
+        reporting_selection_service=_FakeReportingSelectionService(),  # type: ignore[arg-type]
+    )
+    selection = LLMRuntimeSelectionV2(
+        deployment_ref=DeploymentRef(
+            deployment_id="c5c11f0e-5cb7-4832-b6e0-1c66b76c10dd",
+            expected_revision=5,
+        ),
+        reasoning_effort="high",
+        legacy_provider="openai",
+        legacy_model="gpt-5-mini",
+    ).to_dict()
+
+    result = await generator.generate(
+        user_id=7,
+        task_id=42,
+        rendered_prompt=_rendered_prompt(),
+        runtime_selection=selection,
+    )
+
+    assert resolver.calls[0]["selection"].to_dict() == selection
+    assert resolver.calls[0]["kwargs"]["runtime_user_id"] == 7
+    assert resolver.calls[0]["kwargs"]["task_id"] == 42
+    assert result.metadata["provider"] == "openai"
+    assert result.metadata["reasoning_effort"] == "high"
 
 
 @pytest.mark.asyncio

@@ -15,7 +15,7 @@ from backend.services.llm_provider import LLMRuntimeConfigService
 from backend.services.llm_provider.reporting_selection_service import (
     ReportingLLMSelectionService,
 )
-from backend.services.llm_provider.types import LLMRuntimeSelection
+from backend.services.llm_provider.types import LLMRuntimeSelection, LLMRuntimeSelectionV2
 from backend.services.reporting.contracts import (
     GENERATION_METADATA_DURATION_MS_KEY,
     GENERATION_METADATA_MEMO_SCHEMA_VERSION_KEY,
@@ -96,7 +96,9 @@ class TaskClosureMemoGenerator:
         user_id: int,
         task_id: int,
         rendered_prompt: RenderedTaskClosureMemoPrompt,
-        runtime_selection: LLMRuntimeSelection | dict[str, Any] | None = None,
+        runtime_selection: (
+            LLMRuntimeSelection | LLMRuntimeSelectionV2 | dict[str, Any] | None
+        ) = None,
     ) -> TaskClosureMemoGenerationResult:
         """Call the configured LLM runtime and return structured memo output."""
 
@@ -105,10 +107,11 @@ class TaskClosureMemoGenerator:
 
         try:
             runtime_selection_value = (
-                LLMRuntimeSelection.from_mapping(runtime_selection)
+                _parse_runtime_selection(runtime_selection)
                 if runtime_selection is not None
-                else self._reporting_selection_service.build_runtime_selection(
-                    user_id=user_id
+                else _build_current_reporting_selection(
+                    self._reporting_selection_service,
+                    user_id=user_id,
                 )
             )
             runtime_services = self._runtime_config_service.build_runtime_services()
@@ -133,9 +136,9 @@ class TaskClosureMemoGenerator:
                 ),
             ) from exc
 
-        provider = str(getattr(runtime_selection_value, "provider", "unknown"))
+        provider = _selection_provider(runtime_selection_value)
         model = str(
-            getattr(client, "model", getattr(runtime_selection_value, "model", "unknown"))
+            getattr(client, "model", _selection_model(runtime_selection_value))
         )
         call_metadata = {
             **base_metadata,
@@ -197,6 +200,52 @@ class TaskClosureMemoGenerator:
 def _structured_payload(response: LLMResponse) -> Mapping[str, Any] | None:
     payload = getattr(response, "structured_output", None)
     return payload if isinstance(payload, Mapping) else None
+
+
+def _parse_runtime_selection(
+    value: LLMRuntimeSelection | LLMRuntimeSelectionV2 | Mapping[str, Any],
+) -> LLMRuntimeSelection | LLMRuntimeSelectionV2:
+    """Parse legacy or deployment-aware reporting runtime selection."""
+
+    if isinstance(value, (LLMRuntimeSelection, LLMRuntimeSelectionV2)):
+        return value
+    payload = dict(value)
+    if payload.get("schema_version") == 2 or "deployment_ref" in payload:
+        return LLMRuntimeSelectionV2.from_mapping(payload)
+    return LLMRuntimeSelection.from_mapping(payload)
+
+
+def _selection_provider(
+    selection: LLMRuntimeSelection | LLMRuntimeSelectionV2,
+) -> str:
+    """Return a safe provider snapshot for generation metadata."""
+
+    return str(
+        getattr(selection, "provider", None)
+        or getattr(selection, "legacy_provider", None)
+        or "unknown"
+    )
+
+
+def _selection_model(selection: LLMRuntimeSelection | LLMRuntimeSelectionV2) -> str:
+    """Return a safe model snapshot for generation metadata."""
+
+    return str(
+        getattr(selection, "model", None)
+        or getattr(selection, "legacy_model", None)
+        or "unknown"
+    )
+
+
+def _build_current_reporting_selection(
+    service: ReportingLLMSelectionService,
+    *,
+    user_id: int,
+) -> LLMRuntimeSelection | LLMRuntimeSelectionV2:
+    current_builder = getattr(service, "build_current_runtime_selection", None)
+    if callable(current_builder):
+        return current_builder(user_id=user_id)
+    return service.build_runtime_selection(user_id=user_id)
 
 
 def _metadata_with_duration(

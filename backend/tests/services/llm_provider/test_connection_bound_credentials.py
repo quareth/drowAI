@@ -1,0 +1,241 @@
+"""Tests for connection-bound typed LLM authentication resolution."""
+
+from __future__ import annotations
+
+from dataclasses import asdict
+
+import pytest
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from backend.models import (
+    LLMInferenceConnection,
+    User,
+    UserLLMProviderCredential,
+)
+from backend.services.llm_provider import credential_service as credential_module
+from backend.services.llm_provider.connection_service import LLMConnectionService
+from backend.services.llm_provider.credential_service import LLMCredentialService
+from backend.services.llm_provider.migration_service import (
+    deterministic_legacy_connection_id,
+)
+from backend.services.llm_provider.types import (
+    CredentialAuthorizationError,
+    CredentialNotFoundError,
+    LLMAuthMode,
+    LLMConnectionCredentialRef,
+    ResolvedAuth,
+)
+
+
+def _use_test_cipher(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        credential_module,
+        "encrypt_api_key",
+        lambda value: f"encrypted:{value}",
+    )
+    monkeypatch.setattr(
+        credential_module,
+        "decrypt_api_key",
+        lambda value: value.removeprefix("encrypted:"),
+    )
+
+
+def test_none_auth_resolves_without_dummy_credential(
+    llm_identity_db: Session,
+    identity_users: tuple[User, User],
+) -> None:
+    """An owned connection can use no auth without a placeholder secret row."""
+
+    owner, _ = identity_users
+    connections = LLMConnectionService(llm_identity_db)
+    connection = connections.create_draft(
+        user_id=owner.id,
+        display_name="Local unauthenticated endpoint",
+        connection_preset_id="openai",
+        runtime_family_id="openai_compatible",
+    )
+    ref = connections.authorize_credential_binding(
+        user_id=owner.id,
+        connection_id=connection.id,
+        expected_revision=1,
+    )
+
+    resolved = LLMCredentialService(llm_identity_db).resolve_connection_auth(
+        ref,
+        runtime_user_id=owner.id,
+        purpose="connection_test",
+        auth_mode=LLMAuthMode.NONE,
+    )
+
+    assert resolved == ResolvedAuth.none()
+    assert resolved.secret is None
+    assert ResolvedAuth.operator_managed().secret is None
+    assert llm_identity_db.execute(
+        select(UserLLMProviderCredential).where(
+            UserLLMProviderCredential.user_id == owner.id
+        )
+    ).scalar_one_or_none() is None
+
+
+def test_legacy_facade_targets_only_explicit_default_connection(
+    llm_identity_db: Session,
+    identity_users: tuple[User, User],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A second same-provider connection cannot inherit or replace legacy auth."""
+
+    _use_test_cipher(monkeypatch)
+    owner, _ = identity_users
+    credentials = LLMCredentialService(llm_identity_db)
+    status = credentials.upsert_api_key(
+        user_id=owner.id,
+        provider="openai",
+        api_key="sk-owner-only",
+    )
+    default_id = deterministic_legacy_connection_id(owner.id, "openai")
+    assert status.connection_id == str(default_id)
+    assert status.auth_mode is LLMAuthMode.API_KEY
+
+    connections = LLMConnectionService(llm_identity_db)
+    additional = connections.create_draft(
+        user_id=owner.id,
+        display_name="Additional OpenAI",
+        connection_preset_id="openai",
+        runtime_family_id="openai_native",
+    )
+    additional_ref = connections.authorize_credential_binding(
+        user_id=owner.id,
+        connection_id=additional.id,
+        expected_revision=1,
+    )
+    default = llm_identity_db.get(LLMInferenceConnection, default_id)
+    assert default is not None
+    assert default.legacy_default_provider == "openai"
+    assert additional.legacy_default_provider is None
+
+    default_ref = connections.authorize_credential_binding(
+        user_id=owner.id,
+        connection_id=default.id,
+        expected_revision=default.revision,
+    )
+    resolved = credentials.resolve_connection_auth(
+        default_ref,
+        runtime_user_id=owner.id,
+        purpose="legacy_provider_test",
+        auth_mode=LLMAuthMode.API_KEY,
+    )
+    assert resolved.mode is LLMAuthMode.API_KEY
+    assert resolved.secret is not None
+    assert resolved.secret.value == "sk-owner-only"
+    bearer = credentials.resolve_connection_auth(
+        default_ref,
+        runtime_user_id=owner.id,
+        purpose="legacy_bearer_test",
+        auth_mode=LLMAuthMode.BEARER,
+    )
+    assert bearer.mode is LLMAuthMode.BEARER
+    assert bearer.secret is not None
+    assert bearer.secret.value == "sk-owner-only"
+
+    with pytest.raises(CredentialAuthorizationError):
+        credentials.resolve_connection_auth(
+            additional_ref,
+            runtime_user_id=owner.id,
+            purpose="must_not_inherit",
+            auth_mode=LLMAuthMode.BEARER,
+        )
+
+    safe_status = asdict(status)
+    assert "sk-owner-only" not in repr(status)
+    assert "sk-owner-only" not in repr(resolved)
+    assert "sk-owner-only" not in repr(bearer)
+    assert "encrypted:sk-owner-only" not in repr(safe_status)
+    assert "endpoint" not in safe_status
+
+
+def test_legacy_delete_leaves_designation_unconfigured_without_fallback(
+    llm_identity_db: Session,
+    identity_users: tuple[User, User],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deleting legacy auth never selects another same-provider connection."""
+
+    _use_test_cipher(monkeypatch)
+    owner, _ = identity_users
+    credentials = LLMCredentialService(llm_identity_db)
+    credentials.upsert_api_key(
+        user_id=owner.id,
+        provider="openai",
+        api_key="sk-delete-me",
+    )
+    default_id = deterministic_legacy_connection_id(owner.id, "openai")
+    additional = LLMConnectionService(llm_identity_db).create_draft(
+        user_id=owner.id,
+        display_name="Never a fallback",
+        connection_preset_id="openai",
+        runtime_family_id="openai_native",
+    )
+
+    credentials.delete(user_id=owner.id, provider="openai")
+
+    default = llm_identity_db.get(LLMInferenceConnection, default_id)
+    assert default is not None
+    assert default.legacy_default_provider == "openai"
+    assert additional.legacy_default_provider is None
+    assert credentials.get_masked_status(owner.id, "openai").connection_id == str(
+        default_id
+    )
+    with pytest.raises(CredentialNotFoundError):
+        credentials.resolve_connection_auth(
+            LLMConnectionService(llm_identity_db).authorize_credential_binding(
+                user_id=owner.id,
+                connection_id=default_id,
+                expected_revision=default.revision,
+            ),
+            runtime_user_id=owner.id,
+            purpose="deleted_default",
+            auth_mode=LLMAuthMode.API_KEY,
+        )
+
+
+def test_connection_auth_rejects_foreign_owner_and_stale_revision(
+    llm_identity_db: Session,
+    identity_users: tuple[User, User],
+) -> None:
+    """Live connection ownership and revision are reloaded before auth lookup."""
+
+    owner, other = identity_users
+    connection = LLMConnectionService(llm_identity_db).create_draft(
+        user_id=owner.id,
+        display_name="Owned connection",
+        connection_preset_id="openai",
+        runtime_family_id="openai_compatible",
+    )
+    service = LLMCredentialService(llm_identity_db)
+
+    with pytest.raises(CredentialAuthorizationError):
+        service.resolve_connection_auth(
+            connection_ref=LLMConnectionCredentialRef(
+                connection_id=str(connection.id),
+                expected_revision=1,
+            ),
+            runtime_user_id=other.id,
+            purpose="foreign",
+            auth_mode=LLMAuthMode.NONE,
+        )
+
+    ref = LLMConnectionService(llm_identity_db).authorize_credential_binding(
+        user_id=owner.id,
+        connection_id=connection.id,
+        expected_revision=1,
+    )
+    connection.revision = 2
+    llm_identity_db.flush()
+    with pytest.raises(CredentialAuthorizationError):
+        service.resolve_connection_auth(
+            ref,
+            runtime_user_id=owner.id,
+            purpose="stale",
+            auth_mode=LLMAuthMode.NONE,
+        )

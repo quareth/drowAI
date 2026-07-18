@@ -20,7 +20,14 @@ from agent.providers.llm.core.identity import (
 from agent.providers.llm.profiles.registry import require_model_profile
 
 from backend.models.llm import UserEmbeddingSelection, UserMemoryLLMSelection
-from backend.services.llm_provider.types import LLMCredentialRef
+from backend.services.llm_provider.selection_deployment_resolver import (
+    LLMSelectionDeploymentResolver,
+)
+from backend.services.llm_provider.types import (
+    DeploymentRef,
+    LLMCredentialRef,
+    ProviderConfigurationError,
+)
 
 from .profiles import DEFAULT_OPENAI_EMBEDDING_MODEL, require_embedding_profile
 
@@ -47,10 +54,12 @@ class MemoryLLMRuntimeSelection:
     gate_model: str
     extraction_model: str
     credential_ref: LLMCredentialRef
+    gate_deployment_ref: DeploymentRef | None = None
+    extraction_deployment_ref: DeploymentRef | None = None
 
 
 class EmbeddingRuntimeSelectionService:
-    """Resolve MVP memory dependency selections from defaults and credentials."""
+    """Resolve durable embedding and memory text-LLM selections."""
 
     def __init__(
         self,
@@ -62,6 +71,9 @@ class EmbeddingRuntimeSelectionService:
         self._credential_ref_resolver = credential_ref_resolver
         self._env_getter = env_getter
         self._db = db
+        self._deployment_resolver = (
+            LLMSelectionDeploymentResolver(db) if db is not None else None
+        )
 
     def get_embedding_selection(self, *, user_id: int) -> UserEmbeddingSelection:
         """Return or create the durable memory embedding selection for a user."""
@@ -143,6 +155,42 @@ class EmbeddingRuntimeSelectionService:
             self._db.flush()
             return row
 
+        if row.gate_deployment_id is not None or row.extraction_deployment_id is not None:
+            if (
+                row.gate_deployment_id is None
+                or row.extraction_deployment_id is None
+                or self._deployment_resolver is None
+            ):
+                raise ProviderConfigurationError(
+                    "Memory LLM deployment selection is incomplete"
+                )
+            gate = self._deployment_resolver.resolve(
+                user_id=user_id,
+                deployment_id=row.gate_deployment_id,
+                role="memory gate",
+                require_structured_output=True,
+            )
+            extraction = self._deployment_resolver.resolve(
+                user_id=user_id,
+                deployment_id=row.extraction_deployment_id,
+                role="memory extraction",
+                require_structured_output=True,
+            )
+            if gate.provider != extraction.provider:
+                raise ProviderConfigurationError(
+                    "Memory gate and extraction deployments must use the same provider"
+                )
+            if (
+                row.provider != gate.provider
+                or row.gate_model != gate.model
+                or row.extraction_model != extraction.model
+            ):
+                row.provider = gate.provider
+                row.gate_model = gate.model
+                row.extraction_model = extraction.model
+                self._db.flush()
+            return row
+
         gate_model, extraction_model = _validate_memory_llm_selection(
             row.provider,
             row.gate_model,
@@ -183,6 +231,51 @@ class EmbeddingRuntimeSelectionService:
         row.provider = OPENAI_PROVIDER_ID
         row.gate_model = normalized_gate_model
         row.extraction_model = normalized_extraction_model
+        row.gate_deployment_id = None
+        row.extraction_deployment_id = None
+        self._db.flush()
+        return row
+
+    def set_memory_llm_deployment_selection(
+        self,
+        *,
+        user_id: int,
+        gate_deployment_id: str,
+        expected_gate_revision: int,
+        extraction_deployment_id: str,
+        expected_extraction_revision: int,
+    ) -> UserMemoryLLMSelection:
+        """Persist compatible gate/extraction deployment refs and snapshots."""
+
+        if self._db is None or self._deployment_resolver is None:
+            raise RuntimeError("Durable memory LLM selection requires a database session")
+        gate = self._deployment_resolver.resolve(
+            user_id=user_id,
+            deployment_id=gate_deployment_id,
+            expected_revision=expected_gate_revision,
+            role="memory gate",
+            require_structured_output=True,
+        )
+        extraction = self._deployment_resolver.resolve(
+            user_id=user_id,
+            deployment_id=extraction_deployment_id,
+            expected_revision=expected_extraction_revision,
+            role="memory extraction",
+            require_structured_output=True,
+        )
+        if gate.provider != extraction.provider:
+            raise ProviderConfigurationError(
+                "Memory gate and extraction deployments must use the same provider"
+            )
+        row = self._get_memory_llm_row(user_id)
+        if row is None:
+            row = UserMemoryLLMSelection(user_id=int(user_id))
+            self._db.add(row)
+        row.provider = gate.provider
+        row.gate_model = gate.model
+        row.extraction_model = extraction.model
+        row.gate_deployment_id = gate.deployment.id
+        row.extraction_deployment_id = extraction.deployment.id
         self._db.flush()
         return row
 
@@ -208,8 +301,9 @@ class EmbeddingRuntimeSelectionService:
         )
 
     def resolve_memory_llm_selection(self, *, user_id: int) -> MemoryLLMRuntimeSelection:
-        """Resolve the OpenAI-backed memory LLM dependency for the Remote Runtime MVP."""
+        """Resolve legacy or deployment-backed memory LLM dependencies."""
 
+        row = None
         if self._db is not None:
             try:
                 row = self.get_memory_llm_selection(user_id=int(user_id))
@@ -220,16 +314,51 @@ class EmbeddingRuntimeSelectionService:
                 provider, gate_model, extraction_model = self._default_memory_llm_provider_models()
         else:
             provider, gate_model, extraction_model = self._default_memory_llm_provider_models()
-        gate_model, extraction_model = _validate_memory_llm_selection(
-            provider,
-            gate_model,
-            extraction_model,
-        )
+        gate_ref = None
+        extraction_ref = None
+        if (
+            self._db is not None
+            and self._deployment_resolver is not None
+            and row is not None
+            and row.gate_deployment_id is not None
+            and row.extraction_deployment_id is not None
+        ):
+            gate = self._deployment_resolver.resolve(
+                user_id=user_id,
+                deployment_id=row.gate_deployment_id,
+                role="memory gate",
+                require_structured_output=True,
+            )
+            extraction = self._deployment_resolver.resolve(
+                user_id=user_id,
+                deployment_id=row.extraction_deployment_id,
+                role="memory extraction",
+                require_structured_output=True,
+            )
+            if gate.provider != extraction.provider:
+                raise ProviderConfigurationError(
+                    "Memory gate and extraction deployments must use the same provider"
+                )
+            provider = gate.provider
+            gate_model = gate.model
+            extraction_model = extraction.model
+            gate_ref = DeploymentRef(str(gate.deployment.id), int(gate.deployment.revision))
+            extraction_ref = DeploymentRef(
+                str(extraction.deployment.id), int(extraction.deployment.revision)
+            )
+        else:
+            gate_model, extraction_model = _validate_memory_llm_selection(
+                provider,
+                gate_model,
+                extraction_model,
+            )
         return MemoryLLMRuntimeSelection(
-            provider=OPENAI_PROVIDER_ID,
+            provider=provider,
             gate_model=gate_model,
             extraction_model=extraction_model,
-            credential_ref=self._credential_ref_resolver(int(user_id), OPENAI_PROVIDER_ID),
+            credential_ref=self._credential_ref_resolver(int(user_id), provider),
+            gate_deployment_ref=gate_ref,
+            extraction_deployment_ref=extraction_ref,
         )
 
     def _get_embedding_row(self, user_id: int) -> UserEmbeddingSelection | None:

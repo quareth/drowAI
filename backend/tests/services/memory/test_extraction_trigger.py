@@ -19,6 +19,20 @@ def _runtime_selection() -> dict[str, Any]:
     }
 
 
+def _deployment_runtime_selection() -> dict[str, Any]:
+    return {
+        "schema_version": 2,
+        "deployment_ref": {
+            "deployment_id": "cc8a325e-e6c7-4fa4-9218-40999b38e836",
+            "expected_revision": 4,
+        },
+        "preferred_route_id": None,
+        "reasoning_effort": "medium",
+        "legacy_provider": "openai",
+        "legacy_model": "gpt-5.2",
+    }
+
+
 def _install_worker_dependencies(monkeypatch, *, raise_on_extract: bool = False):
     state = {
         "session_created": 0,
@@ -185,6 +199,25 @@ def test_worker_passes_runtime_selection_snapshot_to_memory_service(monkeypatch)
     assert call["task_id"] == 2
     assert call["conversation_id"] == "c1"
     assert call["turn_id"] == "t1"
+
+
+def test_worker_accepts_deployment_runtime_selection_snapshot(monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_SEMANTIC_MEMORY_RUNTIME", "true")
+    state = _install_worker_dependencies(monkeypatch)
+    selection = _deployment_runtime_selection()
+
+    extraction_trigger.run_memory_extraction_once(
+        user_message="hello",
+        assistant_response="world",
+        user_id=1,
+        task_id=2,
+        conversation_id="c1",
+        turn_id="t1",
+        llm_runtime_selection=selection,
+    )
+
+    assert state["commit"] == 1
+    assert state["extract_calls"][0]["selection"] == selection
 
 
 def test_worker_rollbacks_on_error(monkeypatch) -> None:

@@ -1,5 +1,5 @@
 /**
- * Characterizes UnifiedAgentChat's current duplicate model mutation path.
+ * Verifies UnifiedAgentChat uses the canonical global model mutation path.
  */
 import { readFileSync } from "node:fs";
 
@@ -18,10 +18,9 @@ describe("UnifiedAgentChat deployment baseline", () => {
     expect(source).toContain('from "@/features/llm-provider/api"');
   });
 
-  it("documents the residual duplicate global-save and task-switch mutation", () => {
+  it("uses one user-global selection mutation without a task-switch request", () => {
     expect(source).toContain("updateSelection.mutate(selection)");
-    expect(source).toContain("switchTaskModel.mutate({ taskId: activeTaskId, ...selection })");
-    expect(source).toContain("!featureFlags.enableBasicChat");
-    expect(source).toContain('apiRequest("POST", `/api/llm/tasks/${taskIdentifier}/switch`');
+    expect(source).not.toContain("switchTaskModel");
+    expect(source).not.toContain("/api/llm/tasks/${taskIdentifier}/switch");
   });
 });
