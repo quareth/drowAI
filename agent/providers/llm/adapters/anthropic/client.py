@@ -103,11 +103,21 @@ class AnthropicMessagesClient(LLMClient):
             kwargs.get("reasoning_effort")
         )
         self._client = anthropic.AsyncAnthropic(api_key=api_key.strip())
+        self._close_lock = asyncio.Lock()
+        self._closed = False
 
     @property
     def model(self) -> str:
         """Return the provider request model."""
         return self._model
+
+    async def aclose(self) -> None:
+        """Close the owned Anthropic SDK client exactly once."""
+        async with self._close_lock:
+            if self._closed:
+                return
+            await self._client.close()
+            self._closed = True
 
     async def chat(
         self,

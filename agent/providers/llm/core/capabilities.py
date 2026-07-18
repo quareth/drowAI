@@ -10,6 +10,8 @@ from __future__ import annotations
 from enum import Enum
 from typing import Iterable
 
+from .exceptions import LLMCapabilityNotSupportedError
+
 
 class LLMCapability(str, Enum):
     """Provider-neutral capabilities exposed by providers or concrete models."""
@@ -56,10 +58,39 @@ def has_capability(
     return normalize_capability(capability) in normalized
 
 
+def require_capabilities(
+    capabilities: Iterable[CapabilityInput],
+    required: Iterable[CapabilityInput],
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+) -> frozenset[LLMCapability]:
+    """Return normalized capabilities or fail closed when requirements are missing."""
+
+    available = freeze_capabilities(capabilities)
+    required_set = freeze_capabilities(required)
+    missing = sorted(
+        (capability for capability in required_set if capability not in available),
+        key=lambda capability: capability.value,
+    )
+    if missing:
+        missing_names = ", ".join(capability.value for capability in missing)
+        subject = f"Provider '{provider}'" if provider else "Provider"
+        if model:
+            subject = f"{subject} model '{model}'"
+        raise LLMCapabilityNotSupportedError(
+            f"{subject} does not support required capabilities: {missing_names}",
+            provider=provider,
+            capability=missing[0].value,
+        )
+    return available
+
+
 __all__ = [
     "CapabilityInput",
     "LLMCapability",
     "freeze_capabilities",
     "has_capability",
     "normalize_capability",
+    "require_capabilities",
 ]

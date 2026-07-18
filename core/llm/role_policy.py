@@ -22,6 +22,7 @@ from .role_contracts import (
     InternalRoleModelBinding,
     POST_TOOL_ARTICULATOR_MODEL_REF_ENV,
     ProviderModelBinding,
+    ROLE_CONTEXT_COMPRESSOR,
     ROLE_CONVERSATION_MAIN,
     ROLE_INTENT_CLASSIFIER,
     ROLE_POST_TOOL_ARTICULATOR,
@@ -37,6 +38,7 @@ from .role_contracts import (
     internal_role_model_ref_env,
 )
 from .role_requirements import (
+    CONVERSATION_INHERITED_ROLE_KEYS,
     INTERNAL_ROLE_KEYS,
     USER_SELECTED_ROLE_KEYS,
     get_role_requirements,
@@ -102,6 +104,13 @@ class ModelRoleRegistry:
     ) -> RoleCallSettings:
         """Resolve model + effort + source for a role-owned call."""
 
+        if role in CONVERSATION_INHERITED_ROLE_KEYS:
+            return self._resolve_conversation_inherited_settings(
+                role=role,
+                conversation_model=conversation_model,
+                conversation_provider=conversation_provider,
+            )
+
         if role in USER_SELECTED_ROLE_KEYS:
             resolved_model = self._resolve_user_selected_model(
                 role=role,
@@ -142,6 +151,34 @@ class ModelRoleRegistry:
                 default_effort=self.internal_reasoning_default,
             ),
             source="internal_fixed",
+        )
+
+    def _resolve_conversation_inherited_settings(
+        self,
+        *,
+        role: RoleKey,
+        conversation_model: Optional[str],
+        conversation_provider: Optional[str],
+    ) -> RoleCallSettings:
+        """Resolve one role that explicitly inherits the conversation target."""
+
+        provider = _normalize_provider_id(conversation_provider)
+        model = _normalize_model_name(conversation_model)
+        if provider is None or model is None:
+            raise ValueError(
+                f"Role '{role}' requires an explicit conversation provider and model"
+            )
+        binding = ProviderModelBinding(provider=provider, model=model)
+        _validate_role_binding(
+            role=role,
+            binding=binding,
+            binding_kind="conversation-inherited",
+        )
+        return RoleCallSettings(
+            provider=binding.provider,
+            model=binding.model,
+            reasoning_effort=None,
+            source="user_selected",
         )
 
     def resolve(
@@ -230,11 +267,18 @@ class ModelRoleRegistry:
             env_name=internal_role_model_ref_env(role),
         )
         if env_ref is not None:
-            _validate_internal_role_binding(role=role, binding=env_ref)
+            _validate_role_binding(
+                role=role,
+                binding=env_ref,
+                binding_kind="internal",
+            )
             return env_ref
 
         provider = _normalize_provider_id(conversation_provider) or DEFAULT_PROVIDER_ID
-        resolver = self.internal_model_resolver or _resolve_profile_internal_model_binding
+        resolver = (
+            self.internal_model_resolver
+            or _resolve_profile_internal_model_binding
+        )
         if role in INTERNAL_ROLE_KEYS:
             return resolver(provider, role)
         raise ValueError(f"Unknown model role: {role}")
@@ -247,7 +291,7 @@ class ModelRoleRegistry:
         requested_effort: Optional[str],
         default_effort: ReasoningEffort,
     ) -> Optional[ReasoningEffort]:
-        """Resolve role reasoning without applying OpenAI defaults to other providers."""
+        """Resolve role reasoning without applying OpenAI defaults elsewhere."""
 
         if requested_effort is not None:
             return validate_reasoning_effort_for_model(
@@ -279,7 +323,9 @@ def _resolve_profile_internal_model_binding(
 ) -> ProviderModelBinding:
     """Resolve provider-owned internal role defaults through model profiles."""
     from agent.providers.llm.core.exceptions import LLMProfileNotFoundError
-    from agent.providers.llm.profiles.registry import resolve_provider_internal_role_model
+    from agent.providers.llm.profiles.registry import (
+        resolve_provider_internal_role_model,
+    )
 
     try:
         ref = resolve_provider_internal_role_model(provider, role)
@@ -336,10 +382,11 @@ def _parse_provider_model_ref_env(
     return ProviderModelBinding(provider=normalized_provider, model=normalized_model)
 
 
-def _validate_internal_role_binding(
+def _validate_role_binding(
     *,
     role: RoleKey,
     binding: ProviderModelBinding,
+    binding_kind: str,
 ) -> None:
     from agent.providers.llm.core.exceptions import LLMProfileNotFoundError
     from agent.providers.llm.core.identity import ProviderModelRef
@@ -351,19 +398,24 @@ def _validate_internal_role_binding(
         )
     except LLMProfileNotFoundError as exc:
         raise ValueError(
-            f"No model profile registered for internal role '{role}' target "
+            f"No model profile registered for {binding_kind} role '{role}' target "
             f"'{binding.provider}/{binding.model}'"
         ) from exc
     requirements = get_role_requirements(role)
     for capability in requirements.required_capabilities:
         if not profile.supports(capability):
             raise ValueError(
-                f"Internal role '{role}' target '{profile.ref}' must support "
+                f"{binding_kind.capitalize()} role '{role}' target "
+                f"'{profile.ref}' must support "
                 f"{capability}"
             )
-    if requirements.structured_output_required and not profile.structured_output_strategies:
+    if (
+        requirements.structured_output_required
+        and not profile.structured_output_strategies
+    ):
         raise ValueError(
-            f"Internal role '{role}' target '{profile.ref}' must support a "
+            f"{binding_kind.capitalize()} role '{role}' target "
+            f"'{profile.ref}' must support a "
             "structured output strategy"
         )
 
@@ -377,6 +429,7 @@ __all__ = [
     "ModelRoleRegistry",
     "POST_TOOL_ARTICULATOR_MODEL_REF_ENV",
     "ProviderModelBinding",
+    "ROLE_CONTEXT_COMPRESSOR",
     "ROLE_CONVERSATION_MAIN",
     "ROLE_INTENT_CLASSIFIER",
     "ROLE_POST_TOOL_OBSERVATION",

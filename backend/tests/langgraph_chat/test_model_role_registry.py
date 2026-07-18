@@ -143,14 +143,19 @@ def test_internal_roles_follow_selected_provider_not_selected_model() -> None:
         assert settings.source == "internal_fixed"
 
 
-def test_context_compressor_is_not_resolved_as_an_internal_model_role() -> None:
-    """Context compression targets the task-selected model outside role policy."""
-    with pytest.raises(ValueError, match="Unknown internal model role"):
-        ModelRoleRegistry().resolve_call_settings(
-            ROLE_CONTEXT_COMPRESSOR,
-            conversation_model="gpt-5.2",
-            conversation_provider="openai",
-        )
+def test_context_compressor_inherits_conversation_target_through_role_policy() -> None:
+    """Context compression uses the canonical explicit inheritance rule."""
+
+    settings = ModelRoleRegistry().resolve_call_settings(
+        ROLE_CONTEXT_COMPRESSOR,
+        conversation_model="gpt-5.2",
+        conversation_provider="openai",
+    )
+
+    assert settings.provider == "openai"
+    assert settings.model == "gpt-5.2"
+    assert settings.reasoning_effort is None
+    assert settings.source == "user_selected"
 
 
 def test_internal_roles_fail_when_selected_provider_has_no_binding() -> None:

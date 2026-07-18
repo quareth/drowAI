@@ -23,6 +23,7 @@ Token Usage Tracking:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, AsyncIterator, Dict, List, Optional
 
@@ -258,6 +259,8 @@ class OpenAIResponsesClient(LLMClient):
         )
         self._reasoning_effort = self._validate_reasoning_effort(effort)
         self._client = openai.AsyncOpenAI(api_key=api_key)
+        self._close_lock = asyncio.Lock()
+        self._closed = False
 
         logger.debug(
             "Initialized OpenAIResponsesClient: role=%s model=%s effort=%s source=%s",
@@ -271,6 +274,14 @@ class OpenAIResponsesClient(LLMClient):
     def model(self) -> str:
         """Return the model identifier."""
         return self._model
+
+    async def aclose(self) -> None:
+        """Close the owned OpenAI SDK client exactly once."""
+        async with self._close_lock:
+            if self._closed:
+                return
+            await self._client.close()
+            self._closed = True
 
     # -------------------------------------------------------------------------
     # Core API Methods

@@ -34,6 +34,7 @@ RoleKey = Literal[
     "post_tool_observation",
     "post_tool_articulator",
     "intent_classifier",
+    "context_compressor",
     "tool_output_compressor",
     "tool_category_selector",
 ]

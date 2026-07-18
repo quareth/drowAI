@@ -8,6 +8,8 @@ provider SDK client, or encryption behavior.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from enum import Enum
+from math import isfinite
 from typing import Any
 
 
@@ -135,6 +137,104 @@ class ProviderHealthCheckResult:
     model_count: int | None = None
 
 
+class LLMConnectionOperation(str, Enum):
+    """Code-owned outbound operation IDs admitted by guarded egress."""
+
+    HEALTH = "health"
+    INVENTORY = "inventory"
+    CAPABILITY_PROBE = "capability_probe"
+    LIFECYCLE_CREATE = "lifecycle_create"
+    LIFECYCLE_DELETE = "lifecycle_delete"
+    INFERENCE = "inference"
+
+
+@dataclass(frozen=True, slots=True)
+class RegisteredLLMOperationTarget:
+    """Code-owned provider endpoint selected by the operation registry."""
+
+    operation: LLMConnectionOperation
+    provider: str
+    method: str
+    url: str
+    expected_host: str
+    allowed_ports: frozenset[int]
+    allowed_path_prefixes: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ValidatedEgressTarget:
+    """Endpoint facts validated immediately before one guarded request."""
+
+    url: str
+    scheme: str
+    host: str
+    port: int
+    path: str
+    resolved_addresses: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class GuardedEgressTimeouts:
+    """Bounded connect, read/idle, and total guarded request durations."""
+
+    connect_seconds: float = 5.0
+    read_seconds: float = 15.0
+    total_seconds: float = 30.0
+
+    def __post_init__(self) -> None:
+        values = (
+            self.connect_seconds,
+            self.read_seconds,
+            self.total_seconds,
+        )
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not isfinite(value)
+            or value <= 0
+            for value in values
+        ):
+            raise ValueError("guarded egress timeouts must be positive")
+        if self.connect_seconds > self.total_seconds:
+            raise ValueError("connect timeout cannot exceed total timeout")
+        if self.read_seconds > self.total_seconds:
+            raise ValueError("read timeout cannot exceed total timeout")
+
+
+@dataclass(frozen=True, slots=True)
+class GuardedEgressBounds:
+    """Request, response, header, inventory, and decompression limits."""
+
+    max_request_bytes: int = 2 * 1024 * 1024
+    max_response_bytes: int = 4 * 1024 * 1024
+    max_header_bytes: int = 32 * 1024
+    max_inventory_items: int = 1_000
+    read_chunk_bytes: int = 64 * 1024
+
+    def __post_init__(self) -> None:
+        values = (
+            self.max_request_bytes,
+            self.max_response_bytes,
+            self.max_header_bytes,
+            self.max_inventory_items,
+            self.read_chunk_bytes,
+        )
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            for value in values
+        ):
+            raise ValueError("guarded egress bounds must be positive integers")
+
+
+@dataclass(frozen=True, slots=True)
+class GuardedHTTPResponse:
+    """Bounded response returned without upstream headers or endpoint details."""
+
+    status_code: int
+    body: bytes
+    audit_id: str
+
+
 class LLMProviderServiceError(Exception):
     """Base class for backend LLM provider service errors."""
 
@@ -160,7 +260,11 @@ __all__ = [
     "CredentialEncryptionError",
     "CredentialNotFoundError",
     "CredentialStatus",
+    "GuardedEgressBounds",
+    "GuardedEgressTimeouts",
+    "GuardedHTTPResponse",
     "LLMCallTarget",
+    "LLMConnectionOperation",
     "LLMCredentialRef",
     "LLMProviderServiceError",
     "LLMRuntimeSelection",
@@ -168,4 +272,6 @@ __all__ = [
     "ProviderConfigurationError",
     "ProviderHealthCheckResult",
     "ProviderSecret",
+    "RegisteredLLMOperationTarget",
+    "ValidatedEgressTarget",
 ]

@@ -6,6 +6,8 @@ import inspect
 import logging
 from typing import Optional
 
+from backend.services.llm_provider import LLMCredentialRef, ProviderSecret
+from backend.services.llm_provider.environment_service import LLMProviderEnvironmentService
 from backend.services import container_utils
 from backend.services.docker import container_config
 from backend.services.docker.container_config import ContainerConfigBuilder
@@ -13,6 +15,8 @@ from backend.services.docker.runtime_config import RuntimeConfig
 
 
 SECRET = "sk-test-execution-plane-container-secret-do-not-log"
+LEGACY_SECURITY_EXCEPTION = "legacy_security_exception"
+CONTAINER_SECRET_REMOVAL_GATE = "phase_2_phase_4_removal_gate"
 
 
 def test_container_config_delegates_llm_environment_without_logging_secret(caplog) -> None:
@@ -43,6 +47,55 @@ def test_container_config_delegates_llm_environment_without_logging_secret(caplo
     assert environment["LLM_MODEL"] == "gpt-5.2"
     assert environment["OPENAI_API_KEY"] == SECRET
     assert SECRET not in "\n".join(record.getMessage() for record in caplog.records)
+
+
+def test_legacy_security_exception_openai_key_is_injected_by_provider_environment_service() -> None:
+    """Current container env injects OPENAI_API_KEY until the Phase 2/4 removal gate."""
+
+    class _RuntimeConfigService:
+        def build_runtime_selection(self, *, user_id: int):
+            assert user_id == 34
+            return type(
+                "RuntimeSelection",
+                (),
+                {
+                    "provider": "openai",
+                    "model": "gpt-5.2",
+                    "credential_ref": LLMCredentialRef(
+                        user_id=34,
+                        provider="openai",
+                    ),
+                },
+            )()
+
+    class _CredentialService:
+        def resolve_secret(
+            self,
+            credential_ref: LLMCredentialRef,
+            *,
+            runtime_user_id: int,
+            task_id: int | None,
+            purpose: str,
+        ) -> ProviderSecret:
+            assert credential_ref == LLMCredentialRef(user_id=34, provider="openai")
+            assert runtime_user_id == 34
+            assert task_id == 12
+            assert purpose == "container_environment"
+            return ProviderSecret(provider="openai", value=SECRET)
+
+    environment = LLMProviderEnvironmentService(
+        object(),
+        credential_service=_CredentialService(),
+        runtime_config_service=_RuntimeConfigService(),
+    ).build_environment(user_id=34, task_id=12)
+
+    assert LEGACY_SECURITY_EXCEPTION == "legacy_security_exception"
+    assert CONTAINER_SECRET_REMOVAL_GATE == "phase_2_phase_4_removal_gate"
+    assert environment == {
+        "LLM_PROVIDER": "openai",
+        "LLM_MODEL": "gpt-5.2",
+        "OPENAI_API_KEY": SECRET,
+    }
 
 
 def test_container_config_has_no_router_credential_helper_imports() -> None:
