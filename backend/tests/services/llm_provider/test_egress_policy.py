@@ -8,6 +8,7 @@ from backend.services.llm_provider.egress_policy import (
     EgressPolicyError,
     FixedProviderEgressPolicy,
 )
+from backend.services.llm_provider.types import LLMEgressNetworkScope
 
 
 def _policy(*addresses: str) -> FixedProviderEgressPolicy:
@@ -34,6 +35,38 @@ def test_fixed_endpoint_validates_exact_origin_path_and_public_dns() -> None:
     assert target.port == 443
     assert target.path == "/v1/models"
     assert target.resolved_addresses == ("93.184.216.34",)
+
+
+@pytest.mark.parametrize("host", ("127.0.0.1", "localhost", "::1"))
+def test_explicit_loopback_scope_accepts_only_loopback_dns(host: str) -> None:
+    """Operator-selected local endpoints remain confined to the local machine."""
+
+    address = "::1" if host == "::1" else "127.0.0.1"
+    endpoint_host = f"[{host}]" if ":" in host else host
+    target = _policy(address).validate_endpoint(
+        f"http://{endpoint_host}:4000/v1/chat/completions",
+        expected_host=host,
+        allowed_ports=frozenset({4000}),
+        allowed_path_prefixes=("/v1/chat/completions",),
+        network_scope=LLMEgressNetworkScope.LOOPBACK,
+    )
+
+    assert target.scheme == "http"
+    assert target.network_scope is LLMEgressNetworkScope.LOOPBACK
+    assert target.resolved_addresses == (address,)
+
+
+def test_loopback_scope_rejects_non_loopback_dns() -> None:
+    """A local override cannot be rebound to a public or private network address."""
+
+    with pytest.raises(EgressPolicyError, match="loopback"):
+        _policy("93.184.216.34").validate_endpoint(
+            "http://localhost:4000/v1/models",
+            expected_host="localhost",
+            allowed_ports=frozenset({4000}),
+            allowed_path_prefixes=("/v1/models",),
+            network_scope=LLMEgressNetworkScope.LOOPBACK,
+        )
 
 
 @pytest.mark.parametrize(

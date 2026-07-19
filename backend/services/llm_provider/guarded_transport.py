@@ -115,6 +115,7 @@ class GuardedTransport:
                 expected_host=target.expected_host,
                 allowed_ports=target.allowed_ports,
                 allowed_path_prefixes=target.allowed_path_prefixes,
+                network_scope=target.network_scope,
             )
             self._egress_policy.revalidate(validated_target)
 

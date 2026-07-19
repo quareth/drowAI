@@ -157,6 +157,22 @@ def test_compatible_adapter_rejects_unsafe_endpoint_forms(endpoint: str) -> None
         _client(endpoint=endpoint)
 
 
+@pytest.mark.parametrize(
+    "endpoint",
+    (
+        "http://127.0.0.1:4000/v1",
+        "http://localhost:4000/v1",
+        "http://[::1]:4000/v1",
+    ),
+)
+def test_compatible_adapter_accepts_explicit_loopback_endpoint(endpoint: str) -> None:
+    """Direct compatible construction admits local development endpoints only."""
+
+    _client_instance, _sdk, constructor = _client(endpoint=endpoint)
+
+    assert constructor.call_args.kwargs["base_url"] == endpoint
+
+
 def test_compatible_adapter_supports_typed_no_auth() -> None:
     """No-auth endpoints do not require or invent a bearer credential."""
 

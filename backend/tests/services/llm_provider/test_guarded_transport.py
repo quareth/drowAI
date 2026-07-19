@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -17,9 +16,11 @@ from backend.services.llm_provider.guarded_transport import (
 from backend.services.llm_provider.operation_registry import (
     CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
     ConnectionOperationRegistry,
+    GPT_OSS_20B_PROVING_BASE_URL_ENV,
     GPT_OSS_20B_PROVING_PRESET_ID,
     HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
     NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+    OPENAI_COMPATIBLE_BASE_URL_ENV,
     OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
     VLLM_OPENAI_COMPATIBLE_PRESET_ID,
 )
@@ -259,7 +260,11 @@ def test_transport_builds_bearer_headers_for_reviewed_compatible_presets(
 
     session = _Session()
     registry = ConnectionOperationRegistry(
-        env_getter=lambda _name: "https://gpt-oss.example.test"
+        env_getter=lambda name: (
+            "https://gpt-oss.example.test"
+            if name == GPT_OSS_20B_PROVING_BASE_URL_ENV
+            else None
+        )
     )
     operation_target = registry.resolve(
         LLMConnectionOperation.HEALTH,
@@ -432,3 +437,43 @@ def test_scaled_preset_inference_uses_authorized_target_and_rejects_private_dns(
         )
 
     assert session.calls == []
+
+
+def test_transport_allows_explicit_operator_loopback_override() -> None:
+    """A trusted local override is used directly without ambient proxy inheritance."""
+
+    session = _Session()
+    registry = ConnectionOperationRegistry(
+        env_getter={
+            OPENAI_COMPATIBLE_BASE_URL_ENV: "http://127.0.0.1:4000"
+        }.get
+    )
+    policy = FixedProviderEgressPolicy(
+        dns_resolver=lambda _host, _port: ("127.0.0.1",)
+    )
+    transport = GuardedTransport(
+        registry=registry,
+        egress_policy=policy,
+        session_factory=lambda: session,
+    )
+
+    transport.execute(
+        LLMConnectionOperation.INFERENCE,
+        provider=NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+        secret=ProviderSecret(
+            provider=NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+            value="local-gateway-key",
+        ),
+        json_body={
+            "model": "openai/gpt-oss-20b",
+            "messages": [{"role": "user", "content": "ping"}],
+        },
+    )
+
+    assert session.trust_env is False
+    assert session.calls[0]["url"] == (
+        "http://127.0.0.1:4000/v1/chat/completions"
+    )
+    assert session.calls[0]["headers"]["authorization"] == (
+        "Bearer local-gateway-key"
+    )

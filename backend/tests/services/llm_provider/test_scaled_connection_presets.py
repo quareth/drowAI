@@ -16,15 +16,106 @@ from backend.services.llm_provider.operation_registry import (
     GPT_OSS_20B_PROVING_PRESET_ID,
     HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
     NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+    OPENAI_COMPATIBLE_BASE_URL_ENV,
     OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
     VLLM_OPENAI_COMPATIBLE_PRESET_ID,
     ConnectionOperationRegistry,
     OperationRegistryError,
 )
 from backend.services.llm_provider.types import (
+    LLMEgressNetworkScope,
     LLMConnectionOperation,
     LLMConnectionValidationError,
 )
+
+
+@pytest.mark.parametrize(
+    "preset_id",
+    (
+        HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+        NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+        OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
+        VLLM_OPENAI_COMPATIBLE_PRESET_ID,
+        CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+    ),
+)
+def test_operator_base_url_overrides_compatible_preset_targets(
+    preset_id: str,
+) -> None:
+    """One runtime-family override redirects every compatible route consistently."""
+
+    configured_environment = {
+        OPENAI_COMPATIBLE_BASE_URL_ENV: "http://127.0.0.1:4000"
+    }
+    registry = ConnectionOperationRegistry(env_getter=configured_environment.get)
+
+    target = registry.resolve(
+        LLMConnectionOperation.INFERENCE,
+        provider=preset_id,
+        base_url=(
+            "https://configured.example.test"
+            if preset_id
+            in {
+                OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
+                VLLM_OPENAI_COMPATIBLE_PRESET_ID,
+                CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+            }
+            else None
+        ),
+    )
+
+    assert target.url == "http://127.0.0.1:4000/v1/chat/completions"
+    assert target.expected_host == "127.0.0.1"
+    assert target.allowed_ports == frozenset({4000})
+    assert target.network_scope is LLMEgressNetworkScope.LOOPBACK
+
+
+@pytest.mark.parametrize(
+    "override",
+    (
+        "http://provider.example.test:4000",
+        "http://10.0.0.1:4000",
+        "http://169.254.169.254:4000",
+        "ftp://127.0.0.1:4000",
+        "http://user:password@127.0.0.1:4000",
+        "http://127.0.0.1:4000?token=secret",
+    ),
+)
+def test_operator_base_url_rejects_unsafe_targets(override: str) -> None:
+    """Operator overrides allow public HTTPS or an exact loopback destination only."""
+
+    registry = ConnectionOperationRegistry(
+        env_getter={OPENAI_COMPATIBLE_BASE_URL_ENV: override}.get
+    )
+
+    with pytest.raises(OperationRegistryError):
+        registry.resolve(
+            LLMConnectionOperation.INFERENCE,
+            provider=NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+        )
+
+
+def test_operator_public_gateway_accepts_versioned_base_url_once() -> None:
+    """A public HTTPS gateway may expose the standard API below a base path."""
+
+    registry = ConnectionOperationRegistry(
+        env_getter={
+            OPENAI_COMPATIBLE_BASE_URL_ENV: (
+                "https://gateway.example.test:8443/team/v1"
+            )
+        }.get
+    )
+
+    target = registry.resolve(
+        LLMConnectionOperation.INFERENCE,
+        provider=NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+    )
+
+    assert target.url == (
+        "https://gateway.example.test:8443/team/v1/chat/completions"
+    )
+    assert target.allowed_ports == frozenset({8443})
+    assert target.network_scope is LLMEgressNetworkScope.PUBLIC
 
 
 def test_scaled_presets_are_reviewed_data_on_existing_openai_compatible_protocol() -> None:

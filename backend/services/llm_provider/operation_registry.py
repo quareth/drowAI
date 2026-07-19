@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from ipaddress import ip_address
 import json
 import os
 from pathlib import Path
@@ -23,7 +24,11 @@ from agent.providers.llm.adapters.openai.compatible_chat import (
     OPENAI_COMPATIBLE_CHAT_ADAPTER_VERSION,
 )
 from agent.providers.llm.core.capabilities import LLMCapability, freeze_capabilities
-from .types import LLMConnectionOperation, RegisteredLLMOperationTarget
+from .types import (
+    LLMEgressNetworkScope,
+    LLMConnectionOperation,
+    RegisteredLLMOperationTarget,
+)
 
 GPT_OSS_20B_PROVING_PRESET_ID = "gpt_oss_20b_openai_compatible_proving"
 HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID = "huggingface_openai_compatible_chat"
@@ -40,8 +45,15 @@ PUBLIC_GPT_OSS_20B_PRESET_IDS = (
 GPT_OSS_20B_PROVING_E2E_ENV = "DROWAI_GPT_OSS_20B_PROVING_E2E"
 GPT_OSS_20B_PROVING_BASE_URL_ENV = "DROWAI_GPT_OSS_20B_PROVING_BASE_URL"
 GPT_OSS_20B_PROVING_API_KEY_ENV = "DROWAI_GPT_OSS_20B_PROVING_API_KEY"
+OPENAI_COMPATIBLE_BASE_URL_ENV = "DROWAI_OPENAI_COMPATIBLE_BASE_URL"
 FIXED_PROVIDER_ENDPOINT_POLICY_ID = "fixed_provider_v1"
 USER_HTTPS_BASE_URL_ENDPOINT_POLICY_ID = "user_https_base_url_v1"
+_HTTP_SCHEME = "http"
+_HTTPS_SCHEME = "https"
+_HTTP_DEFAULT_PORT = 80
+_HTTPS_DEFAULT_PORT = 443
+_OPENAI_API_VERSION_PATH = "/v1"
+_LOOPBACK_HOSTNAME = "localhost"
 DEFAULT_CONNECTION_PRESET_MANIFEST_PATH = Path(__file__).with_name(
     "connection_presets_manifest.json"
 )
@@ -64,6 +76,15 @@ class _OperationDefinition:
     method: str
     path_template: str
     requires_resource_id: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _ResolvedOperationOrigin:
+    """Validated operation origin plus its exact network confinement."""
+
+    base_url: str
+    port: int
+    network_scope: LLMEgressNetworkScope
 
 
 @dataclass(frozen=True, slots=True)
@@ -461,7 +482,7 @@ class ConnectionOperationRegistry:
             )
 
         origin = self._origin_for(normalized_provider, base_url=base_url)
-        url = _join_origin_path(origin, path)
+        url = _join_origin_path(origin.base_url, path)
         parsed = urlsplit(url)
         return RegisteredLLMOperationTarget(
             operation=normalized_operation,
@@ -469,30 +490,47 @@ class ConnectionOperationRegistry:
             method=definition.method,
             url=url,
             expected_host=str(parsed.hostname or ""),
-            allowed_ports=frozenset({443}),
+            allowed_ports=frozenset({origin.port}),
             allowed_path_prefixes=(parsed.path,),
+            network_scope=origin.network_scope,
         )
 
-    def _origin_for(self, provider: str, *, base_url: str | None) -> str:
+    def _origin_for(
+        self,
+        provider: str,
+        *,
+        base_url: str | None,
+    ) -> _ResolvedOperationOrigin:
         fixed_origin = _FIXED_PROVIDER_ORIGINS.get(provider)
         if fixed_origin is not None:
             if base_url is not None:
                 raise OperationRegistryError("Fixed provider target does not accept a base URL")
-            return fixed_origin
+            return _public_https_origin(fixed_origin, "Fixed provider target")
         preset = _CONNECTION_PRESETS.get(provider)
         if preset is None:
             raise OperationRegistryError("Provider has no fixed target")
+
+        operator_override = self._env_getter(OPENAI_COMPATIBLE_BASE_URL_ENV)
+        if operator_override is not None and operator_override != "":
+            return _validated_operator_base_url(operator_override)
+
         if preset.fixed_base_url is not None:
             if base_url is not None:
                 raise OperationRegistryError("Fixed preset target does not accept a base URL")
-            return _validated_https_base_url(preset.fixed_base_url, "Preset fixed base URL")
+            return _public_https_origin(
+                preset.fixed_base_url,
+                "Preset fixed base URL",
+            )
         if preset.endpoint_config_field is not None:
-            return self.validate_preset_base_url(preset.id, base_url)
+            return _public_https_origin(
+                self.validate_preset_base_url(preset.id, base_url),
+                "Preset endpoint base URL",
+            )
         if preset.base_url_env is None:
             raise OperationRegistryError("Preset has no endpoint target")
         if base_url is not None:
             raise OperationRegistryError("Fixed preset target does not accept a base URL")
-        return _validated_https_base_url(
+        return _public_https_origin(
             self._env_getter(preset.base_url_env),
             "Proving endpoint base URL",
         )
@@ -566,6 +604,79 @@ def _validated_https_base_url(value: str | None, label: str) -> str:
     return urlunsplit(("https", parsed.netloc, path, "", ""))
 
 
+def _public_https_origin(value: str | None, label: str) -> _ResolvedOperationOrigin:
+    """Return a validated public HTTPS origin with its registered port."""
+
+    base_url = _validated_https_base_url(value, label)
+    parsed = urlsplit(base_url)
+    return _ResolvedOperationOrigin(
+        base_url=base_url,
+        port=parsed.port or _HTTPS_DEFAULT_PORT,
+        network_scope=LLMEgressNetworkScope.PUBLIC,
+    )
+
+
+def _validated_operator_base_url(value: str) -> _ResolvedOperationOrigin:
+    """Validate an explicit operator override without admitting arbitrary HTTP."""
+
+    label = "OpenAI-compatible operator base URL"
+    if (
+        not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or any(character.isspace() for character in value)
+    ):
+        raise OperationRegistryError(f"{label} is invalid")
+    try:
+        parsed = urlsplit(value)
+        explicit_port = parsed.port
+    except ValueError as exc:
+        raise OperationRegistryError(f"{label} is invalid") from exc
+
+    host = str(parsed.hostname or "").lower()
+    is_loopback = _is_loopback_host(host)
+    if (
+        parsed.scheme not in {_HTTP_SCHEME, _HTTPS_SCHEME}
+        or not host
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or (parsed.scheme == _HTTP_SCHEME and not is_loopback)
+    ):
+        raise OperationRegistryError(f"{label} violates policy")
+
+    path = parsed.path.rstrip("/")
+    if path in {"", "/"}:
+        path = ""
+    elif not _valid_base_path(path):
+        raise OperationRegistryError(f"{label} path violates policy")
+
+    default_port = (
+        _HTTPS_DEFAULT_PORT if parsed.scheme == _HTTPS_SCHEME else _HTTP_DEFAULT_PORT
+    )
+    return _ResolvedOperationOrigin(
+        base_url=urlunsplit((parsed.scheme, parsed.netloc, path, "", "")),
+        port=explicit_port or default_port,
+        network_scope=(
+            LLMEgressNetworkScope.LOOPBACK
+            if is_loopback
+            else LLMEgressNetworkScope.PUBLIC
+        ),
+    )
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Return whether a URL hostname is explicitly local to this machine."""
+
+    if host == _LOOPBACK_HOSTNAME:
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
 def _valid_base_path(path: str) -> bool:
     if not path.startswith("/") or "\\" in path or "//" in path:
         return False
@@ -575,7 +686,13 @@ def _valid_base_path(path: str) -> bool:
 
 
 def _join_origin_path(origin: str, path: str) -> str:
-    return f"{origin.rstrip('/')}{path}"
+    normalized_origin = origin.rstrip("/")
+    normalized_path = path
+    if normalized_origin.endswith(_OPENAI_API_VERSION_PATH) and path.startswith(
+        f"{_OPENAI_API_VERSION_PATH}/"
+    ):
+        normalized_path = path[len(_OPENAI_API_VERSION_PATH) :]
+    return f"{normalized_origin}{normalized_path}"
 
 
 __all__ = [
@@ -588,6 +705,7 @@ __all__ = [
     "GPT_OSS_20B_PROVING_PRESET_ID",
     "HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID",
     "NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID",
+    "OPENAI_COMPATIBLE_BASE_URL_ENV",
     "OLLAMA_OPENAI_COMPATIBLE_PRESET_ID",
     "OperationRegistryError",
     "ProvingConnectionPreset",

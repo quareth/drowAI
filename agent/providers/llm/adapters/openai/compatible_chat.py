@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from enum import Enum
+from ipaddress import ip_address
 from types import SimpleNamespace
 from typing import Any, AsyncIterator, Callable, Dict, List, Mapping
 from urllib.parse import urlsplit
@@ -79,6 +80,9 @@ _ADAPTER_CAPABILITY_CEILING = frozenset(
         LLMCapability.USAGE_REPORTING,
     }
 )
+_HTTP_SCHEME = "http"
+_HTTPS_SCHEME = "https"
+_LOOPBACK_HOSTNAME = "localhost"
 CONSERVATIVE_OPENAI_COMPATIBLE_DIALECT = LLMDialectPolicy(
     policy_id="openai_compatible_chat.conservative_v1",
     adapter_id=OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
@@ -359,7 +363,7 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
 
 
 def _validate_endpoint(endpoint: str) -> str:
-    """Validate endpoint syntax without replacing the guarded-egress authority."""
+    """Validate HTTPS or an explicitly local development endpoint."""
 
     if (
         not isinstance(endpoint, str)
@@ -368,7 +372,7 @@ def _validate_endpoint(endpoint: str) -> str:
         or any(character.isspace() for character in endpoint)
     ):
         raise LLMConfigurationError(
-            "compatible endpoint must be a non-empty absolute HTTPS URL",
+            "compatible endpoint must be a non-empty absolute URL",
             provider="OpenAI-compatible",
         )
     try:
@@ -379,19 +383,33 @@ def _validate_endpoint(endpoint: str) -> str:
             "compatible endpoint is invalid",
             provider="OpenAI-compatible",
         ) from exc
+    host = str(parsed.hostname or "").lower()
     if (
-        parsed.scheme != "https"
+        parsed.scheme not in {_HTTP_SCHEME, _HTTPS_SCHEME}
         or not parsed.hostname
         or parsed.username is not None
         or parsed.password is not None
         or parsed.query
         or parsed.fragment
+        or (parsed.scheme == _HTTP_SCHEME and not _is_loopback_host(host))
     ):
         raise LLMConfigurationError(
-            "compatible endpoint must be HTTPS without userinfo, query, or fragment",
+            "compatible endpoint must be public HTTPS or loopback HTTP without "
+            "userinfo, query, or fragment",
             provider="OpenAI-compatible",
         )
     return endpoint
+
+
+def _is_loopback_host(host: str) -> bool:
+    """Return whether a hostname is explicitly confined to this machine."""
+
+    if host == _LOOPBACK_HOSTNAME:
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _validate_wire_model_id(wire_model_id: str) -> str:

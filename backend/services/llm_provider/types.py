@@ -439,6 +439,13 @@ class LLMConnectionOperation(str, Enum):
     INFERENCE = "inference"
 
 
+class LLMEgressNetworkScope(str, Enum):
+    """Network address classes admitted for one registered LLM target."""
+
+    PUBLIC = "public"
+    LOOPBACK = "loopback"
+
+
 @dataclass(frozen=True, slots=True)
 class RegisteredLLMOperationTarget:
     """Code-owned provider endpoint selected by the operation registry."""
@@ -450,6 +457,7 @@ class RegisteredLLMOperationTarget:
     expected_host: str
     allowed_ports: frozenset[int]
     allowed_path_prefixes: tuple[str, ...]
+    network_scope: LLMEgressNetworkScope = LLMEgressNetworkScope.PUBLIC
 
 
 @dataclass(frozen=True, slots=True)
@@ -474,6 +482,7 @@ class ValidatedEgressTarget:
     port: int
     path: str
     resolved_addresses: tuple[str, ...]
+    network_scope: LLMEgressNetworkScope = LLMEgressNetworkScope.PUBLIC
 
 
 @dataclass(frozen=True, slots=True)
@@ -614,6 +623,7 @@ __all__ = [
     "LLMCredentialRef",
     "LLMDeploymentNotFoundError",
     "LLMDeploymentValidationError",
+    "LLMEgressNetworkScope",
     "LLMProviderServiceError",
     "LLMRuntimeSelection",
     "LLMRuntimeAccessContext",

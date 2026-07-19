@@ -324,6 +324,21 @@ OpenAI-specific translation is isolated in adapter helpers:
 - OpenAI native JSON schema output:
   - `agent/providers/llm/adapters/openai/structured_output.py`
 
+## OpenAI-Compatible Implementation
+
+Curated GPT-OSS routes use the conservative `OpenAICompatibleChatClient`
+adapter and the same deployment-aware resolver and factory boundary as native
+providers. Connection presets supply the normal provider endpoint and exact
+wire model identifier; graph nodes do not construct endpoints or clients.
+
+Operators may set `DROWAI_OPENAI_COMPATIBLE_BASE_URL` to redirect these routes
+through any compatible gateway without gateway-specific application code. The
+configured base URL may include `/v1`; operation paths are composed once. The
+guarded transport still disables ambient HTTP proxy inheritance, credentials
+remain connection-owned, and redirects remain disabled. Public destinations
+require HTTPS and globally routable DNS. Local development permits HTTP only
+for a hostname or literal address that resolves entirely to loopback.
+
 ## Anthropic Implementation
 
 Anthropic is registered under provider id `anthropic`.
