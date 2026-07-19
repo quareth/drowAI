@@ -53,6 +53,9 @@ Target version: `0.1.0`.
 
 ### Fixed
 
+- OpenAI-compatible models that return requested function calls as JSON message
+  content are now safely normalized against the requested tool contracts,
+  avoiding spurious structured-validation failures.
 - Reviewed GPT-OSS routes now use one agent-capable compatible protocol contract
   across NVIDIA, Hugging Face, Ollama, and vLLM; arbitrary custom compatible
   endpoints remain conservative and fail closed.

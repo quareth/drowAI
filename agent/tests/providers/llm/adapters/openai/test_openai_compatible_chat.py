@@ -240,6 +240,100 @@ async def test_agent_dialect_sends_and_normalizes_usage_tracked_tool_calls() -> 
 
 
 @pytest.mark.asyncio
+async def test_agent_dialect_normalizes_valid_content_encoded_tool_call() -> None:
+    """Compatible models may encode a required call in content instead of tool_calls."""
+
+    client, sdk, _constructor = _client(
+        dialect_policy=AGENT_OPENAI_COMPATIBLE_DIALECT
+    )
+    sdk.chat.completions.create.return_value = _response(
+        '{"name":"functions.tool__net_nmap",'
+        '"arguments":{"target":"127.0.0.1"}}',
+        usage=SimpleNamespace(prompt_tokens=11, completion_tokens=4, total_tokens=15),
+    )
+
+    result = await client.chat_with_tools_with_usage(
+        "system",
+        "user",
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "tool__net_nmap",
+                    "description": "Run nmap",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"target": {"type": "string"}},
+                        "required": ["target"],
+                        "additionalProperties": False,
+                    },
+                },
+            }
+        ],
+        tool_choice="required",
+        max_tokens=128,
+    )
+
+    assert result.content is None
+    assert result.tool_calls is not None
+    assert result.tool_calls[0].name == "tool__net_nmap"
+    assert result.tool_calls[0].arguments == '{"target":"127.0.0.1"}'
+    assert result.usage is not None
+    assert result.usage.total_tokens == 15
+
+
+@pytest.mark.asyncio
+async def test_guarded_compatible_transport_normalizes_content_encoded_tool_call() -> None:
+    """The guarded runtime path normalizes the exact wire response seen from proxies."""
+
+    guarded_executor = MagicMock(
+        return_value=(
+            b'{"id":"tool-response","choices":[{"message":{'
+            b'"role":"assistant","content":"{\\"name\\":'
+            b'\\"functions.tool__net_nmap\\",\\"arguments\\":{'
+            b'\\"target\\":\\"127.0.0.1\\"}}","tool_calls":null},'
+            b'"finish_reason":"stop"}],"usage":{"prompt_tokens":11,'
+            b'"completion_tokens":4,"total_tokens":15}}'
+        )
+    )
+    client, _sdk, constructor = _client(
+        guarded_executor=guarded_executor,
+        dialect_policy=AGENT_OPENAI_COMPATIBLE_DIALECT,
+    )
+
+    result = await client.chat_with_tools_with_usage(
+        "system",
+        "user",
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "tool__net_nmap",
+                    "description": "Run nmap",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"target": {"type": "string"}},
+                        "required": ["target"],
+                        "additionalProperties": False,
+                    },
+                },
+            }
+        ],
+        tool_choice="required",
+        max_tokens=128,
+    )
+
+    assert constructor.call_count == 0
+    assert result.content is None
+    assert result.tool_calls is not None
+    assert result.tool_calls[0].name == "tool__net_nmap"
+    assert result.tool_calls[0].arguments == '{"target":"127.0.0.1"}'
+    assert result.usage is not None
+    assert result.usage.total_tokens == 15
+    assert guarded_executor.call_args.args[0]["tool_choice"] == "required"
+
+
+@pytest.mark.asyncio
 async def test_agent_dialect_decodes_guarded_sse_and_final_usage() -> None:
     """Guarded compatible streaming preserves content and provider usage events."""
 

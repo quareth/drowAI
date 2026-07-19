@@ -24,6 +24,7 @@ from ...core.base import (
     LLMResponse,
     LLMStreamingResponse,
     StructuredOutputSpec,
+    ToolCall,
     ToolChoiceInput,
     ToolCallResult,
     ToolSpecInput,
@@ -41,6 +42,10 @@ from ...contracts.structured_output import (
 )
 from ...contracts.recovery import (
     ResponseParseRetryState,
+)
+from ...contracts.tool_call_normalization import (
+    ContentEncodedToolCallError,
+    normalize_content_encoded_tool_calls,
 )
 from .structured_output import (
     StructuredOutputSchemaError,
@@ -206,6 +211,43 @@ class OpenAIChatClient(LLMClient):
                 return
             await self._client.close()
             self._closed = True
+
+    def _extract_requested_tool_calls(
+        self,
+        message: Any,
+        tools: List[ToolSpecInput],
+    ) -> tuple[Optional[List[ToolCall]], bool]:
+        """Prefer native calls, then normalize a request-authorized JSON envelope."""
+
+        native_calls = extract_openai_chat_tool_calls(message)
+        if native_calls:
+            return native_calls, False
+
+        try:
+            content_calls = normalize_content_encoded_tool_calls(
+                getattr(message, "content", None),
+                tools=tools,
+            )
+        except ContentEncodedToolCallError as exc:
+            _safe_inc("llm_content_encoded_tool_calls_rejected_openai_chat")
+            logger.warning(
+                "Content-encoded tool-call normalization rejected "
+                "(provider=openai_chat model=%s reason=%s)",
+                self._model,
+                exc.reason,
+            )
+            return None, False
+
+        if not content_calls:
+            return None, False
+        _safe_inc("llm_content_encoded_tool_calls_normalized_openai_chat")
+        logger.warning(
+            "Normalized content-encoded tool calls "
+            "(provider=openai_chat model=%s count=%s)",
+            self._model,
+            len(content_calls),
+        )
+        return content_calls, True
     
     # -------------------------------------------------------------------------
     # Core API Methods
@@ -763,8 +805,10 @@ class OpenAIChatClient(LLMClient):
                     partial_content=content if isinstance(content, str) else None,
                 )
                 
-                # Extract tool calls
-                tool_calls = extract_openai_chat_tool_calls(choice.message)
+                tool_calls, content_was_tool_call = self._extract_requested_tool_calls(
+                    choice.message,
+                    tools,
+                )
                 
                 logger.debug(
                     f"OpenAI chat_with_tools completed: model={self._model}, "
@@ -773,7 +817,7 @@ class OpenAIChatClient(LLMClient):
                 )
                 
                 return ToolCallResult(
-                    content=content,
+                    content=None if content_was_tool_call else content,
                     tool_calls=tool_calls,
                     raw=response,
                 )
@@ -869,8 +913,10 @@ class OpenAIChatClient(LLMClient):
                     partial_content=content if isinstance(content, str) else None,
                 )
                 
-                # Extract tool calls
-                tool_calls = extract_openai_chat_tool_calls(choice.message)
+                tool_calls, content_was_tool_call = self._extract_requested_tool_calls(
+                    choice.message,
+                    tools,
+                )
                 
                 # Extract usage data
                 logger.debug(
@@ -881,7 +927,7 @@ class OpenAIChatClient(LLMClient):
                 )
                 
                 return ToolCallResult(
-                    content=content,
+                    content=None if content_was_tool_call else content,
                     tool_calls=tool_calls,
                     raw=response,
                     usage=usage,
