@@ -51,3 +51,5 @@ Target version: `0.1.0`.
 
 - Provider settings now render one setup card per supported GPT-OSS route
   instead of duplicating cards for provider inventory models.
+- Chat requests now use usage-tracked non-streaming responses when a selected
+  model route cannot report token usage during streaming.

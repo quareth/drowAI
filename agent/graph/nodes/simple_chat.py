@@ -29,9 +29,10 @@ from ..utils.llm_resolver import (
     get_llm_reasoning_effort,
     resolve_llm_call_settings,
     resolve_llm_client,
+    supports_usage_aware_streaming,
 )
 from ..utils.retry_context import RetryContext, read_retry_context
-from ..utils.streaming_usage import require_final_stream_usage, require_usage_aware_streaming
+from ..utils.streaming_usage import require_final_stream_usage
 
 from .node_utils import _usage_to_dict
 
@@ -190,6 +191,57 @@ def _messages_from_bundle(
     return list(turns), current_user_turn
 
 
+def _simple_chat_call_kwargs(reasoning_effort: Optional[str]) -> Dict[str, Any]:
+    """Return provider-neutral call controls, omitting absent optional values."""
+
+    kwargs: Dict[str, Any] = {
+        "temperature": 0.2,
+        "max_tokens": LIMITS.final_answer,
+    }
+    if reasoning_effort is not None:
+        kwargs["reasoning_effort"] = reasoning_effort
+    return kwargs
+
+
+async def _run_non_streaming_chat(
+    llm_client: Any,
+    messages: List[Dict[str, Any]],
+    *,
+    reasoning_effort: Optional[str],
+    task_id: int,
+) -> tuple[str, Any]:
+    """Execute one usage-tracked non-streaming call with the legacy fallback."""
+
+    call_kwargs = _simple_chat_call_kwargs(reasoning_effort)
+    if hasattr(llm_client, "chat_messages_with_usage"):
+        try:
+            response = await wait_for_with_timeout(
+                llm_client.chat_messages_with_usage(messages, **call_kwargs),
+                timeout_sec=LLM_TIMEOUT_CONVERSATION_MAIN_SEC,
+                component="CONVERSATION_MAIN",
+                operation="simple_chat_non_stream_llm_call",
+                logger=logger,
+                task_id=task_id,
+                outcome="simple_chat_timeout",
+            )
+            return str(response.content or ""), response.usage
+        except LLMRefusalError:
+            raise
+        except Exception as exc:
+            logger.warning("[SIMPLE_CHAT] Usage-aware call failed: %s", exc)
+
+    content = await wait_for_with_timeout(
+        llm_client.chat_messages(messages, **call_kwargs),
+        timeout_sec=LLM_TIMEOUT_CONVERSATION_MAIN_SEC,
+        component="CONVERSATION_MAIN",
+        operation="simple_chat_non_stream_llm_call_fallback",
+        logger=logger,
+        task_id=task_id,
+        outcome="simple_chat_timeout",
+    )
+    return str(content or ""), None
+
+
 async def run_simple_chat(
     state: Mapping[str, Any] | InteractiveState,
     context: Optional[GraphRuntimeContext] = None,
@@ -260,25 +312,21 @@ async def run_simple_chat(
                 retry_guidance=retry_guidance,
             )
 
-            if has_writer:
+            use_streaming = has_writer and supports_usage_aware_streaming(
+                llm_client,
+                call_settings,
+            )
+            if use_streaming:
                 # === STREAMING PATH ===
                 logger.info("[SIMPLE_CHAT] Using streaming path")
                 emitter = EventEmitterFactory.create(writer, interactive, config, context)
                 emitter.emit_message_start()
 
                 chunks: List[str] = []
-                require_usage_aware_streaming(
-                    llm_client,
-                    call_settings,
-                    operation="simple_chat_stream",
-                    task_id=interactive.facts.task_id,
-                )
                 stream_response = await wait_for_with_timeout(
                     llm_client.stream_chat_messages_with_usage(
                         messages,
-                        temperature=0.2,
-                        max_tokens=LIMITS.final_answer,
-                        reasoning_effort=reasoning_effort,
+                        **_simple_chat_call_kwargs(reasoning_effort),
                     ),
                     timeout_sec=LLM_TIMEOUT_CONVERSATION_MAIN_SEC,
                     component="CONVERSATION_MAIN",
@@ -328,61 +376,25 @@ async def run_simple_chat(
             else:
                 # === NON-STREAMING PATH (fallback) ===
                 logger.info("[SIMPLE_CHAT] Using non-streaming fallback")
-                content = ""
-                last_usage = None
-                if hasattr(llm_client, "chat_messages_with_usage"):
-                    try:
-                        response = await wait_for_with_timeout(
-                            llm_client.chat_messages_with_usage(
-                                messages,
-                                temperature=0.2,
-                                max_tokens=LIMITS.final_answer,
-                                reasoning_effort=reasoning_effort,
-                            ),
-                            timeout_sec=LLM_TIMEOUT_CONVERSATION_MAIN_SEC,
-                            component="CONVERSATION_MAIN",
-                            operation="simple_chat_non_stream_llm_call",
-                            logger=logger,
-                            task_id=interactive.facts.task_id,
-                            outcome="simple_chat_timeout",
-                        )
-                        content = response.content
-                        last_usage = response.usage
-                    except LLMRefusalError:
-                        raise
-                    except Exception as exc:
-                        logger.warning("[SIMPLE_CHAT] Usage-aware call failed: %s", exc)
-                        content = await wait_for_with_timeout(
-                            llm_client.chat_messages(
-                                messages,
-                                temperature=0.2,
-                                max_tokens=LIMITS.final_answer,
-                                reasoning_effort=reasoning_effort,
-                            ),
-                            timeout_sec=LLM_TIMEOUT_CONVERSATION_MAIN_SEC,
-                            component="CONVERSATION_MAIN",
-                            operation="simple_chat_non_stream_llm_call_fallback",
-                            logger=logger,
-                            task_id=interactive.facts.task_id,
-                            outcome="simple_chat_timeout",
-                        )
-                else:
-                    content = await wait_for_with_timeout(
-                        llm_client.chat_messages(
-                            messages,
-                            temperature=0.2,
-                            max_tokens=LIMITS.final_answer,
-                            reasoning_effort=reasoning_effort,
-                        ),
-                        timeout_sec=LLM_TIMEOUT_CONVERSATION_MAIN_SEC,
-                        component="CONVERSATION_MAIN",
-                        operation="simple_chat_non_stream_llm_call",
-                        logger=logger,
-                        task_id=interactive.facts.task_id,
-                        outcome="simple_chat_timeout",
+                if has_writer:
+                    emitter = EventEmitterFactory.create(
+                        writer,
+                        interactive,
+                        config,
+                        context,
                     )
-
-                final_text = str(content or "").strip()
+                    emitter.emit_message_start()
+                content, last_usage = await _run_non_streaming_chat(
+                    llm_client,
+                    messages,
+                    reasoning_effort=reasoning_effort,
+                    task_id=interactive.facts.task_id,
+                )
+                final_text = content.strip()
+                if emitter is not None:
+                    if final_text:
+                        emitter.emit_message_delta(final_text)
+                    emitter.emit_section_end("final_answer")
 
                 usage_dict = _usage_to_dict(
                     last_usage,
@@ -397,7 +409,7 @@ async def run_simple_chat(
                     )
 
                 interactive.trace.reasoning.append(
-                    "Simple chat executed via LangGraph node."
+                    "Simple chat executed via LangGraph node (non-streaming)."
                 )
                 
     except LLMRefusalError:
