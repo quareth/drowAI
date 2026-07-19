@@ -16,9 +16,6 @@ from backend.services.llm_provider.types import (
     LLMConnectionOperation,
     ProviderHealthCheckResult,
 )
-from backend.tests.routers.test_settings_legacy_text_llm_retirement import (
-    test_settings_read_write_exclude_openai_text_llm_mirrors,
-)
 
 
 def _settings_client(user: User) -> tuple[TestClient, FastAPI]:
@@ -38,12 +35,6 @@ def _settings_client(user: User) -> tuple[TestClient, FastAPI]:
     app.dependency_overrides[settings_routes.get_current_user] = current_user
     app.dependency_overrides[settings_routes.get_db] = db_dependency
     return TestClient(app), app
-
-
-def test_settings_openai_mirror_facade_is_retired() -> None:
-    """Pre-Phase-2 settings mirrors are replaced by Phase 6 retirement behavior."""
-
-    test_settings_read_write_exclude_openai_text_llm_mirrors()
 
 
 def test_settings_test_openai_authorizes_default_connection_health_operation(

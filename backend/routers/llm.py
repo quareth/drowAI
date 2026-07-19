@@ -53,7 +53,6 @@ from ..schemas.llm import (
 from ..services.embeddings.selection_service import EmbeddingRuntimeSelectionService
 from ..services.llm_provider import (
     CredentialNotFoundError,
-    LLMCredentialRef,
     LLMCredentialService,
     LLMAuthMode,
     LLMConnectionAccessContext,

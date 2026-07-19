@@ -19,7 +19,6 @@ from backend.models.tenant import Tenant, TenantMembership
 from backend.routers.settings import get_user_openai_model, is_supported_openai_model
 from backend.services.llm_provider import (
     LLMCredentialService,
-    LLMProviderSelectionService,
     ProviderConfigurationError,
     ProviderHealthCheckResult,
 )

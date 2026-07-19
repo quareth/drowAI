@@ -195,8 +195,12 @@ class ReportingLLMSelectionService:
         self._db.flush()
         return selection
 
-    def build_runtime_selection(self, *, user_id: int) -> LLMRuntimeSelectionV2:
-        """Return a runnable deployment-backed reporting runtime selection."""
+    def build_runtime_selection(
+        self,
+        *,
+        user_id: int,
+    ) -> LLMRuntimeSelection | LLMRuntimeSelectionV2:
+        """Return a runnable deterministic or deployment-backed selection."""
 
         if E2E_DETERMINISTIC_MODE:
             return LLMRuntimeSelection(

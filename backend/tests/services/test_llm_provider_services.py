@@ -53,7 +53,6 @@ from backend.services.llm_provider import (
     ReportingLLMSelectionMissingError,
     ReportingLLMSelectionService,
     attach_runtime_services,
-    encrypt_api_key,
     strip_runtime_services,
 )
 from backend.services.llm_provider import runtime_client_resolver as resolver_module

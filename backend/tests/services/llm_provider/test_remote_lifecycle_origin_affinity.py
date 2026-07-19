@@ -7,7 +7,6 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.orm import Session
 
-from agent.providers.llm.core.capabilities import LLMCapability
 from backend.models import (
     LLMDeploymentRoute,
     LLMInferenceConnection,
