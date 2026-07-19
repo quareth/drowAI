@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
 from typing import Any, AsyncIterator
+from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid5
 
 from sqlalchemy import select
@@ -17,6 +18,9 @@ from sqlalchemy.orm import Session
 
 from agent.context.context_window_policy import estimate_chat_history_tokens
 from agent.context.token_counter_registry import estimate_json_tokens
+from agent.providers.llm.adapters.openai.compatible_chat import (
+    OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
+)
 from agent.providers.llm.core.base import (
     ChatMessage,
     LLMClient,
@@ -47,7 +51,8 @@ from .connection_authorization import LLMConnectionAuthorizer
 from .credential_service import LLMCredentialService
 from .deployment_service import LLMDeploymentService
 from .effective_profile_service import EffectiveProfileService, NativeRouteContract
-from .operation_registry import ConnectionOperationRegistry
+from .guarded_transport import GuardedTransport
+from .operation_registry import GPT_OSS_20B_PROVING_PRESET_ID, ConnectionOperationRegistry
 from .types import (
     DeploymentRef,
     LLMAuthMode,
@@ -55,6 +60,7 @@ from .types import (
     LLMConnectionAccessContext,
     LLMConnectionAuthorizationError,
     LLMConnectionCredentialRef,
+    LLMConnectionOperation,
     LLMCredentialRef,
     LLMDeploymentNotFoundError,
     LLMRuntimeAccessContext,
@@ -142,8 +148,13 @@ class LLMRuntimeClientResolver:
             target=target,
             purpose=purpose,
         )
+        factory_provider = (
+            resolved_target.effective_profile.ref.provider
+            if resolved_target.effective_profile is not None
+            else resolved_target.connection.connection_preset_id
+        )
         call_ref = ProviderModelRef(
-            resolved_target.connection.connection_preset_id,
+            factory_provider,
             resolved_target.exact_wire_model_id,
         )
         supported_reasoning_effort = legacy_reasoning_effort
@@ -177,6 +188,18 @@ class LLMRuntimeClientResolver:
             )
         ):
             factory_kwargs["model_profile"] = resolved_target.effective_profile
+        if resolved_target.adapter_id == OPENAI_COMPATIBLE_CHAT_ADAPTER_ID:
+            factory_kwargs["endpoint"] = _compatible_chat_base_url(
+                resolved_target.connection.endpoint
+            )
+            factory_kwargs["wire_model_id"] = resolved_target.exact_wire_model_id
+            if (
+                resolved_target.connection.connection_preset_id
+                == GPT_OSS_20B_PROVING_PRESET_ID
+            ):
+                factory_kwargs["guarded_executor"] = _guarded_inference_executor(
+                    secret=secret,
+                )
         client = LLMClientFactory.get_client(
             provider_model=call_ref,
             api_key=secret.value,
@@ -982,6 +1005,8 @@ def _target_ref(
 
 
 def _connection_auth_mode(connection: LLMInferenceConnection) -> LLMAuthMode:
+    if connection.connection_preset_id == GPT_OSS_20B_PROVING_PRESET_ID:
+        return LLMAuthMode.BEARER
     config = connection.non_secret_config
     configured_mode = config.get("auth_mode") if isinstance(config, dict) else None
     if configured_mode is not None:
@@ -1035,6 +1060,34 @@ def resolve_call_reasoning_effort(
     if isinstance(target, (RoleCallSettings, LLMCallTarget)):
         return target.reasoning_effort
     return runtime_selection.reasoning_effort
+
+
+def _compatible_chat_base_url(operation_url: str) -> str:
+    """Return the SDK base URL corresponding to a registered chat operation."""
+
+    parsed = urlsplit(operation_url)
+    path = parsed.path.rstrip("/")
+    suffix = "/chat/completions"
+    if path.endswith(suffix):
+        path = path[: -len(suffix)] or "/"
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
+def _guarded_inference_executor(*, secret: ProviderSecret):
+    """Return the guarded GPT-OSS Chat Completions executor for one client."""
+
+    transport = GuardedTransport()
+
+    def _execute(json_body: Mapping[str, Any]) -> bytes:
+        response = transport.execute(
+            LLMConnectionOperation.INFERENCE,
+            provider=GPT_OSS_20B_PROVING_PRESET_ID,
+            secret=secret,
+            json_body=json_body,
+        )
+        return response.body
+
+    return _execute
 
 
 def _resolve_supported_reasoning_effort(

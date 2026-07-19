@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from agent.providers.llm.core.capabilities import LLMCapability
 from agent.providers.llm.profiles.registry import ModelProfile
-from backend.models import LLMInferenceConnection, LLMModelDeployment
+from backend.models import LLMDeploymentRoute, LLMInferenceConnection, LLMModelDeployment
 
 from .deployment_service import LLMDeploymentService
 from .effective_profile_service import EffectiveProfileService
@@ -33,6 +33,7 @@ class SelectionDeploymentTarget:
 
     connection: LLMInferenceConnection
     deployment: LLMModelDeployment
+    route: LLMDeploymentRoute | None
     profile: ModelProfile
 
     @property
@@ -84,10 +85,19 @@ class LLMSelectionDeploymentResolver:
         connection = self._db.get(LLMInferenceConnection, deployment.connection_id)
         if connection is None or int(connection.user_id) != int(user_id):
             raise LLMDeploymentNotFoundError("Deployment connection was not found")
+        routes = tuple(
+            route
+            for route in self._deployments.list_routes(
+                user_id=user_id,
+                deployment_id=deployment.id,
+            )
+            if route.enabled
+        )
+        route = routes[0] if routes else None
         profile = self._profiles.resolve(
             connection=connection,
             deployment=deployment,
-            route=None,
+            route=route,
         )
         if not profile.supports(LLMCapability.CHAT):
             raise ProviderConfigurationError(
@@ -100,6 +110,7 @@ class LLMSelectionDeploymentResolver:
         return SelectionDeploymentTarget(
             connection=connection,
             deployment=deployment,
+            route=route,
             profile=profile,
         )
 

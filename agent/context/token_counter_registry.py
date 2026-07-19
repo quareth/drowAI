@@ -25,6 +25,9 @@ from agent.providers.llm.core.identity import (
 )
 
 TokenEstimatePrecision = Literal["exact", "approximate", "heuristic"]
+_OPENAI_GPT_OSS_UNVERIFIED_TOKENIZER_MODELS = frozenset(
+    {"gpt-oss-20b", "openai/gpt-oss-20b"}
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,6 +152,14 @@ def get_token_counter_for_model(*, provider: str, model: str) -> TokenCounter:
     normalized_provider = normalize_provider_id(provider)
     normalized_model = normalize_model_id(model)
     if normalized_provider == OPENAI_PROVIDER_ID:
+        if normalized_model in _OPENAI_GPT_OSS_UNVERIFIED_TOKENIZER_MODELS:
+            return _HeuristicCounter(
+                provider=normalized_provider,
+                model=normalized_model,
+                strategy="openai_gpt_oss_unverified_tokenizer_heuristic",
+                chars_per_token=3.5,
+                safety_margin=0.25,
+            )
         return _TiktokenCounter(provider=normalized_provider, model=normalized_model)
     if normalized_provider == ANTHROPIC_PROVIDER_ID:
         return _HeuristicCounter(

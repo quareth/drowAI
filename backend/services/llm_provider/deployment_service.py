@@ -19,6 +19,7 @@ from backend.models import (
 )
 
 from .connection_service import LLMConnectionService
+from .operation_registry import GPT_OSS_20B_PROVING_PRESET_ID, ConnectionOperationRegistry
 from .types import (
     LLMConnectionNotFoundError,
     LLMDeploymentNotFoundError,
@@ -74,6 +75,60 @@ class LLMDeploymentService:
         self._db.add(deployment)
         self._db.flush()
         return deployment
+
+    def create_gpt_oss_20b_proving_deployment(
+        self,
+        *,
+        user_id: int,
+        connection_id: UUID | str,
+        expected_connection_revision: int,
+    ) -> tuple[LLMModelDeployment, LLMDeploymentRoute]:
+        """Create the code-owned GPT-OSS proving deployment and chat route."""
+
+        try:
+            connection = self._connections.get_owned_at_revision(
+                user_id=user_id,
+                connection_id=connection_id,
+                expected_revision=expected_connection_revision,
+            )
+        except LLMConnectionNotFoundError as exc:
+            raise LLMDeploymentNotFoundError(
+                "Deployment connection was not found"
+            ) from exc
+        if connection.connection_preset_id != GPT_OSS_20B_PROVING_PRESET_ID:
+            raise LLMDeploymentValidationError(
+                "Connection is not a GPT-OSS proving preset connection"
+            )
+        preset = ConnectionOperationRegistry().get_proving_preset(
+            GPT_OSS_20B_PROVING_PRESET_ID
+        )
+        deployment = self.create_deployment(
+            user_id=user_id,
+            connection_id=connection.id,
+            expected_connection_revision=expected_connection_revision,
+            wire_model_id=preset.exact_wire_model_id,
+            canonical_model_id=preset.canonical_model_id,
+            display_name="GPT-OSS 20B",
+            discovery_source="preset",
+            source_metadata={
+                "preset_id": preset.id,
+                "wire_model_source": "code_owned_preset",
+            },
+        )
+        route = LLMDeploymentRoute(
+            id=uuid4(),
+            deployment_id=deployment.id,
+            adapter_id=preset.adapter_id,
+            adapter_version=preset.adapter_version,
+            api_surface=preset.api_surface,
+            dialect_policy_id=preset.dialect_policy_id,
+            billing_provider_id=None,
+            route_config={"preset_id": preset.id},
+            enabled=True,
+        )
+        self._db.add(route)
+        self._db.flush()
+        return deployment, route
 
     def get_deployment(
         self,

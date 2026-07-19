@@ -21,6 +21,7 @@ from .connection_authorization import LLMConnectionAuthorizer
 from .connection_service import LLMConnectionService
 from .credential_service import LLMCredentialService
 from .guarded_transport import GuardedTransport, GuardedTransportError
+from .inventory_service import GptOssProvingVerificationResult, LLMProviderInventoryService
 from .types import (
     CredentialNotFoundError,
     LLMConnectionAccessContext,
@@ -112,6 +113,18 @@ class LLMProviderHealthService:
             user_id=user_id,
             connection_id=status.connection_id,
         )
+
+    def verify_gpt_oss_20b_proving_connection(
+        self,
+        **kwargs,
+    ) -> GptOssProvingVerificationResult:
+        """Run the bounded GPT-OSS proving verification flow."""
+
+        return LLMProviderInventoryService(
+            self._db,
+            guarded_transport=self._guarded_transport,
+            connection_authorizer=self._connection_authorizer,
+        ).verify_gpt_oss_20b_proving_connection(**kwargs)
         self._connection_authorizer.authorize(
             access_context=LLMConnectionAccessContext(
                 authenticated_user_id=user_id,

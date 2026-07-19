@@ -12,6 +12,7 @@ from backend.database import Base
 from backend.models import (
     LLMDeploymentRoute,
     LLMConversation,
+    LLMCapabilityObservation,
     LLMInferenceConnection,
     LLMModelDeployment,
     Task,
@@ -45,6 +46,7 @@ def llm_identity_db() -> Iterator[Session]:
             LLMInferenceConnection.__table__,
             LLMModelDeployment.__table__,
             LLMDeploymentRoute.__table__,
+            LLMCapabilityObservation.__table__,
         ],
     )
     factory = sessionmaker(

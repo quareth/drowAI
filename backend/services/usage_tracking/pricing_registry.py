@@ -328,6 +328,15 @@ def get_pricing_quote(
     surface = str(api_surface or "").strip().lower() or None
 
     if provider == OPENAI_PROVIDER_ID:
+        if model == "gpt-oss-20b":
+            return PricingQuote(
+                provider=provider,
+                model=model,
+                status=PRICING_UNAVAILABLE,
+                schedule=None,
+                api_surface=surface,
+                reason="openai_gpt_oss_pricing_not_registered",
+            )
         schedule = _resolve_openai_exact_schedule(model)
         if schedule is not None:
             return PricingQuote(

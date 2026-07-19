@@ -19,6 +19,7 @@ import {
   getDefaultVisibleReasoningEffort,
   getSupportedReasoningEffortForPayload,
 } from "@/features/llm-provider/capability-controls";
+import ConnectionSettingsPanel from "@/features/llm-provider/ConnectionSettingsPanel";
 import ProviderCredentialCard from "@/features/llm-provider/ProviderCredentialCard";
 import ProviderModelMenu from "@/features/llm-provider/ProviderModelMenu";
 import type {
@@ -83,6 +84,11 @@ export function ProviderSettingsSection({
   });
 
   const providers = catalog?.providers ?? [];
+  const provingModels = providers.flatMap((provider) =>
+    provider.models
+      .filter((model) => Boolean(model.proving?.enabled))
+      .map((model) => ({ provider, model, proving: model.proving })),
+  );
   const selectedReportingModel =
     reportingSelection?.provider && reportingSelection.model
       ? {
@@ -184,6 +190,18 @@ export function ProviderSettingsSection({
               />
             </div>
           </section>
+
+          {provingModels.map(({ provider, model, proving }) => (
+            proving ? (
+              <ConnectionSettingsPanel
+                key={`${provider.id}:${model.id}:${proving.presetId}`}
+                model={model}
+                proving={proving}
+                onSuccess={handleProviderSuccess}
+                onError={onError}
+              />
+            ) : null
+          ))}
 
           <div className="grid gap-4 lg:grid-cols-2">
             {providers.map((provider) => (

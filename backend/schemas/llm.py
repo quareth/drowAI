@@ -30,6 +30,89 @@ class LLMDeploymentRef(BaseModel):
     expected_revision: int
 
 
+class LLMProvingUsageEvidenceResponse(BaseModel):
+    """Provider-reported token usage evidence from a proving probe."""
+
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+
+
+class LLMProvingVerificationResponse(BaseModel):
+    """Sanitized proving verification result safe for API and UI responses."""
+
+    status: str
+    code: str
+    message: str
+    retryable: bool
+    observed_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    model_present: Optional[bool] = None
+    usage: Optional[LLMProvingUsageEvidenceResponse] = None
+
+
+class LLMProvingRunnabilityResponse(BaseModel):
+    """Current deployment runnability metadata for the proving UI."""
+
+    status: str
+    selectable: bool
+    runnable: bool
+    reason: Optional[str] = None
+
+
+class LLMProvingCatalogMetadataResponse(BaseModel):
+    """Backend-owned GPT-OSS proving metadata projected into the catalog."""
+
+    preset_id: str = Field(alias="presetId")
+    display_name: str = Field(alias="displayName")
+    enabled: bool
+    auth_mode: str = Field(alias="authMode")
+    user_config_fields: list[str] = Field(alias="userConfigFields")
+    lifecycle_state: str = Field(alias="lifecycleState")
+    connection_ref: Optional[LLMConnectionRefResponse] = Field(
+        default=None,
+        alias="connectionRef",
+    )
+    deployment_ref: Optional[LLMDeploymentRef] = Field(
+        default=None,
+        alias="deploymentRef",
+    )
+    verification: Optional[LLMProvingVerificationResponse] = None
+    runnability: Optional[LLMProvingRunnabilityResponse] = None
+
+
+class LLMProvingConnectionCreateRequest(BaseModel):
+    """Request body for creating one GPT-OSS proving connection draft."""
+
+    api_key: Optional[str] = None
+    display_label: Optional[str] = None
+
+
+class LLMProvingConnectionTestRequest(BaseModel):
+    """Request body for running one bounded GPT-OSS proving check."""
+
+    api_key: Optional[str] = None
+    connection_ref: LLMConnectionRefResponse
+    deployment_ref: LLMDeploymentRef
+
+
+class LLMProvingConnectionEnableRequest(BaseModel):
+    """Request body for enabling a verified GPT-OSS proving connection."""
+
+    connection_ref: LLMConnectionRefResponse
+    deployment_ref: LLMDeploymentRef
+
+
+class LLMProvingConnectionStatusResponse(BaseModel):
+    """Current GPT-OSS proving connection state after a lifecycle mutation."""
+
+    lifecycle_state: str
+    connection_ref: LLMConnectionRefResponse
+    deployment_ref: LLMDeploymentRef
+    verification: Optional[LLMProvingVerificationResponse] = None
+    runnability: Optional[LLMProvingRunnabilityResponse] = None
+
+
 class UserLLMProviderCredentialUpsert(BaseModel):
     """Request body for creating or replacing a provider credential."""
 
@@ -67,6 +150,8 @@ class LLMCatalogModelResponse(BaseModel):
     """Public model metadata returned by the provider catalog."""
 
     id: str
+    canonical_model_id: str = Field(alias="canonicalModelId")
+    exact_wire_model_id: Optional[str] = Field(default=None, alias="exactWireModelId")
     label: str
     api_surface: str = Field(alias="apiSurface")
     capabilities: list[str]
@@ -84,6 +169,7 @@ class LLMCatalogModelResponse(BaseModel):
     pricing_status: str = Field(alias="pricingStatus")
     deployment_ref: Optional[LLMDeploymentRef] = None
     runnable: bool = False
+    proving: Optional[LLMProvingCatalogMetadataResponse] = None
 
 
 class LLMCatalogProviderResponse(BaseModel):

@@ -33,6 +33,7 @@ OPENAI_DEFAULT_MODEL_ID = "gpt-5.2"
 OPENAI_API_SURFACE_RESPONSES = "responses"
 OPENAI_API_SURFACE_CHAT_COMPLETIONS = "chat_completions"
 OPENAI_RESPONSES_MAX_OUTPUT_TOKENS = 32_000
+OPENAI_GPT_OSS_20B_MODEL_ID = "gpt-oss-20b"
 
 OPENAI_LISTABLE_MODEL_IDS: tuple[str, ...] = (
     "gpt-5",
@@ -49,6 +50,7 @@ OPENAI_LISTABLE_MODEL_IDS: tuple[str, ...] = (
     "gpt-5.6-sol",
     "gpt-5.6-terra",
     "gpt-5.6-luna",
+    OPENAI_GPT_OSS_20B_MODEL_ID,
 )
 
 OPENAI_NON_LISTABLE_RESPONSES_MODEL_IDS: tuple[str, ...] = (
@@ -90,6 +92,7 @@ OPENAI_LISTABLE_MODEL_LABELS: dict[str, str] = {
     "gpt-5.6-sol": "GPT-5.6 Sol",
     "gpt-5.6-terra": "GPT-5.6 Terra",
     "gpt-5.6-luna": "GPT-5.6 Luna",
+    OPENAI_GPT_OSS_20B_MODEL_ID: "GPT-OSS 20B",
 }
 
 OPENAI_INTERNAL_ROLE_MODELS: dict[str, str] = {
@@ -127,6 +130,14 @@ _OPENAI_RESPONSES_NON_STREAMING_MODEL_CAPABILITIES = (
 _OPENAI_RESPONSES_NO_NATIVE_STRUCTURED_OUTPUT_CAPABILITIES = (
     _OPENAI_RESPONSES_MODEL_CAPABILITIES
     - frozenset({LLMCapability.STRUCTURED_OUTPUT_NATIVE})
+)
+_OPENAI_COMPATIBLE_CHAT_CONSERVATIVE_CAPABILITIES = freeze_capabilities(
+    (
+        LLMCapability.CHAT,
+        LLMCapability.USAGE_REPORTING,
+        LLMCapability.CONTEXT_WINDOW,
+        LLMCapability.MAX_OUTPUT_TOKENS,
+    )
 )
 
 _OPENAI_REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high"})
@@ -224,7 +235,11 @@ def build_openai_provider_profile() -> ProviderProfile:
 def build_openai_model_profiles() -> tuple[ModelProfile, ...]:
     """Build exact OpenAI model profiles in registry insertion order."""
     profiles: list[ModelProfile] = [
-        _openai_responses_profile(model_id, listable=True)
+        (
+            _openai_compatible_chat_profile(model_id, listable=True)
+            if model_id == OPENAI_GPT_OSS_20B_MODEL_ID
+            else _openai_responses_profile(model_id, listable=True)
+        )
         for model_id in OPENAI_LISTABLE_MODEL_IDS
     ]
     profiles.extend(
@@ -320,6 +335,21 @@ def _openai_chat_profile(model_id: str) -> ModelProfile:
     )
 
 
+def _openai_compatible_chat_profile(model_id: str, *, listable: bool) -> ModelProfile:
+    """Build a conservative profile for an OpenAI-compatible chat deployment."""
+    return ModelProfile(
+        ref=ProviderModelRef(OPENAI_PROVIDER_ID, model_id),
+        display_name=OPENAI_LISTABLE_MODEL_LABELS.get(model_id, model_id),
+        api_surface=OPENAI_API_SURFACE_CHAT_COMPLETIONS,
+        capabilities=_OPENAI_COMPATIBLE_CHAT_CONSERVATIVE_CAPABILITIES,
+        context_window_tokens=DEFAULT_CONTEXT_WINDOW_TOKENS,
+        max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
+        listable=listable,
+        tool_choice_modes=frozenset(),
+        structured_output_strategies=frozenset(),
+    )
+
+
 def _openai_compatibility_template(family: str, *, api_surface: str) -> ModelProfile:
     """Build a non-catalog template for approved OpenAI family fallbacks."""
     capabilities = (
@@ -355,6 +385,7 @@ __all__ = [
     "OPENAI_API_SURFACE_RESPONSES",
     "OPENAI_DEFAULT_MODEL_ID",
     "OPENAI_EXACT_MODEL_IDS",
+    "OPENAI_GPT_OSS_20B_MODEL_ID",
     "OPENAI_LEGACY_CHAT_MODEL_IDS",
     "OPENAI_INTERNAL_ROLE_MODELS",
     "OPENAI_LISTABLE_MODEL_IDS",

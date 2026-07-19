@@ -306,7 +306,12 @@ def test_list_models(client):
         assert first_openai_model["structuredOutputStrategies"] == ["native_schema"]
         for provider in (openai_provider, anthropic_provider):
             for model in provider["models"]:
-                assert model["pricingStatus"] == "available", model["id"]
+                if model["id"] == "gpt-oss-20b":
+                    assert model["canonicalModelId"] == "openai/gpt-oss-20b"
+                    assert model["exactWireModelId"] is None
+                    assert model["pricingStatus"] == "unavailable"
+                else:
+                    assert model["pricingStatus"] == "available", model["id"]
         gpt55_model = next(model for model in openai_provider["models"] if model["id"] == "gpt-5.5")
         assert gpt55_model["visibleReasoningEfforts"] == ["low", "medium", "high", "xhigh"]
         assert gpt55_model["defaultReasoningEffort"] == "medium"

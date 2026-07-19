@@ -349,9 +349,13 @@ class TestLLMClientFactoryDefaultOpenAIRouting:
 
         registrations = LLMClientFactory.list_prefix_registrations()
         exact_profiles = list_model_profiles(provider_id=OPENAI_PROVIDER_ID)
+        legacy_profiles = tuple(
+            profile for profile in exact_profiles if profile.ref.model != "gpt-oss-20b"
+        )
 
-        assert set(registrations) == {profile.ref.model for profile in exact_profiles}
-        for profile in exact_profiles:
+        assert set(registrations) == {profile.ref.model for profile in legacy_profiles}
+        assert "gpt-oss-20b" not in registrations
+        for profile in legacy_profiles:
             if profile.api_surface == OPENAI_API_SURFACE_RESPONSES:
                 expected_client_cls = OpenAIResponsesClient
             elif profile.api_surface == OPENAI_API_SURFACE_CHAT_COMPLETIONS:

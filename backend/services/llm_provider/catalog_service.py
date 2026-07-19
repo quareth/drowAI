@@ -30,6 +30,7 @@ from agent.providers.llm.profiles.registry import (
     require_model_profile,
     require_provider_profile,
 )
+from backend.services.usage_tracking.pricing_registry import get_pricing_quote
 
 from .types import ProviderConfigurationError
 
@@ -39,6 +40,8 @@ class CatalogModelSummary:
     """Listable model metadata exposed to API routes."""
 
     id: str
+    canonical_model_id: str
+    exact_wire_model_id: str | None
     label: str
     api_surface: str
     capabilities: tuple[str, ...]
@@ -50,6 +53,7 @@ class CatalogModelSummary:
     default_visible_reasoning_effort: str | None
     tool_choice_modes: tuple[str, ...]
     structured_output_strategies: tuple[str, ...]
+    pricing_status: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,6 +189,8 @@ class LLMProviderCatalogService:
 
         return CatalogModelSummary(
             id=profile.ref.model,
+            canonical_model_id=str(profile.ref),
+            exact_wire_model_id=None,
             label=profile.display_name,
             api_surface=profile.api_surface,
             capabilities=_capability_values(profile.capabilities),
@@ -196,6 +202,10 @@ class LLMProviderCatalogService:
             default_visible_reasoning_effort=_default_visible_reasoning_effort(profile),
             tool_choice_modes=_ordered_values(profile.tool_choice_modes, _TOOL_CHOICE_MODE_ORDER),
             structured_output_strategies=tuple(sorted(profile.structured_output_strategies)),
+            pricing_status=get_pricing_quote(
+                profile.ref,
+                api_surface=profile.api_surface,
+            ).status,
         )
 
 

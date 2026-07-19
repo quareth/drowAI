@@ -9,6 +9,7 @@ objects.
 from __future__ import annotations
 
 import base64
+import hashlib
 import logging
 import os
 from uuid import UUID
@@ -29,6 +30,7 @@ from backend.config.generated_config import resolve_config_value, validate_encry
 
 from .catalog_service import LLMProviderCatalogService
 from .migration_service import LLMProviderMigrationService
+from .operation_registry import GPT_OSS_20B_PROVING_PRESET_ID
 from .types import (
     CredentialAuthorizationError,
     CredentialEncryptionError,
@@ -159,7 +161,7 @@ class LLMCredentialService:
 
         credential = self._get_credential(
             user_id=user_id,
-            provider=self._normalize_provider(provider),
+            provider=self._normalize_connection_provider(provider),
             migrate=True,
         )
         return bool(credential and credential.enabled and credential.has_api_key)
@@ -213,6 +215,94 @@ class LLMCredentialService:
             provider=normalized_provider,
         )
         return self._status_from_credential(credential, connection=connection)
+
+    def upsert_connection_api_key(
+        self,
+        *,
+        user_id: int,
+        connection_ref: LLMConnectionCredentialRef,
+        provider: str,
+        api_key: str,
+    ) -> CredentialStatus:
+        """Bind encrypted API-key material to one user-owned connection."""
+
+        connection = self._authorize_connection_ref(
+            connection_ref,
+            runtime_user_id=user_id,
+            task_id=None,
+        )
+        normalized_provider = self._normalize_connection_provider(provider)
+        if (
+            self._normalize_connection_provider(connection.connection_preset_id)
+            != normalized_provider
+        ):
+            raise CredentialAuthorizationError(
+                "Connection credential binding is invalid"
+            )
+        plaintext = (api_key or "").strip()
+        if not plaintext:
+            raise CredentialNotFoundError(
+                f"{normalized_provider} credential is not configured"
+            )
+
+        encrypted_key = encrypt_api_key(plaintext)
+        credential = self._get_credential(
+            user_id=user_id,
+            provider=normalized_provider,
+            migrate=False,
+        )
+        if credential is None:
+            credential = UserLLMProviderCredential(
+                user_id=user_id,
+                provider=normalized_provider,
+                encrypted_api_key=encrypted_key,
+                enabled=True,
+            )
+            self._db.add(credential)
+        else:
+            credential.encrypted_api_key = encrypted_key
+            credential.enabled = True
+
+        connection.legacy_default_provider = normalized_provider
+        connection.revision += 1
+        self._invalidate_decrypted_compat_cache(user_id)
+        self._db.flush()
+        return self._status_from_credential(credential, connection=connection)
+
+    def connection_credential_fingerprint(
+        self,
+        *,
+        user_id: int,
+        connection_ref: LLMConnectionCredentialRef,
+        provider: str,
+    ) -> str:
+        """Return a secret-safe fingerprint of the stored connection credential."""
+
+        connection = self._authorize_connection_ref(
+            connection_ref,
+            runtime_user_id=user_id,
+            task_id=None,
+        )
+        normalized_provider = self._normalize_connection_provider(provider)
+        if (
+            self._normalize_connection_provider(connection.connection_preset_id)
+            != normalized_provider
+        ):
+            raise CredentialAuthorizationError(
+                "Connection credential binding is invalid"
+            )
+        credential = self._get_credential(
+            user_id=user_id,
+            provider=normalized_provider,
+            migrate=False,
+        )
+        if credential is None or not credential.enabled or not credential.encrypted_api_key:
+            raise CredentialNotFoundError(
+                f"{normalized_provider} credential is not configured"
+            )
+        return hashlib.sha256(
+            str(credential.encrypted_api_key).encode("utf-8")
+        ).hexdigest()
 
     def upsert_encrypted_api_key(
         self,
@@ -339,9 +429,9 @@ class LLMCredentialService:
             raise CredentialAuthorizationError(
                 "Connection has no explicitly bound local credential"
             )
-        normalized_provider = self._normalize_provider(provider)
+        normalized_provider = self._normalize_connection_provider(provider)
         if (
-            self._normalize_provider(connection.connection_preset_id)
+            self._normalize_connection_provider(connection.connection_preset_id)
             != normalized_provider
         ):
             raise CredentialAuthorizationError(
@@ -559,6 +649,13 @@ class LLMCredentialService:
 
     def _normalize_provider(self, provider: str) -> str:
         normalized_provider = normalize_provider_id(provider)
+        self._catalog.require_provider(normalized_provider)
+        return normalized_provider
+
+    def _normalize_connection_provider(self, provider: str) -> str:
+        normalized_provider = normalize_provider_id(provider)
+        if normalized_provider == GPT_OSS_20B_PROVING_PRESET_ID:
+            return normalized_provider
         self._catalog.require_provider(normalized_provider)
         return normalized_provider
 

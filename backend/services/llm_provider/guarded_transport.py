@@ -15,7 +15,11 @@ from uuid import uuid4
 import requests
 
 from .egress_policy import EgressPolicyError, FixedProviderEgressPolicy
-from .operation_registry import ConnectionOperationRegistry, OperationRegistryError
+from .operation_registry import (
+    GPT_OSS_20B_PROVING_PRESET_ID,
+    ConnectionOperationRegistry,
+    OperationRegistryError,
+)
 from .types import (
     GuardedEgressBounds,
     GuardedEgressTimeouts,
@@ -216,7 +220,7 @@ def _provider_headers(
     headers = {"accept": "application/json"}
     if body is not None:
         headers["content-type"] = "application/json"
-    if provider == "openai":
+    if provider in {"openai", GPT_OSS_20B_PROVING_PRESET_ID}:
         headers["authorization"] = f"Bearer {secret}"
     elif provider == "anthropic":
         headers["anthropic-version"] = "2023-06-01"

@@ -16,7 +16,11 @@ from sqlalchemy.orm import Session
 
 from backend.models import LLMInferenceConnection
 
-from .operation_registry import ConnectionOperationRegistry, OperationRegistryError
+from .operation_registry import (
+    GPT_OSS_20B_PROVING_PRESET_ID,
+    ConnectionOperationRegistry,
+    OperationRegistryError,
+)
 from .types import (
     LLMConnectionCredentialRef,
     LLMConnectionNotFoundError,
@@ -72,6 +76,14 @@ class LLMConnectionService:
 
         owner_id = _positive_int(user_id, "user_id")
         preset_id = _registered_fixed_preset(connection_preset_id)
+        _validate_gpt_oss_proving_connection_contract(
+            owner_id=owner_id,
+            preset_id=preset_id,
+            runtime_family_id=runtime_family_id,
+            serving_operator_id=serving_operator_id,
+            non_secret_config=non_secret_config,
+            db=self._db,
+        )
         connection = LLMInferenceConnection(
             id=uuid4(),
             user_id=owner_id,
@@ -98,6 +110,26 @@ class LLMConnectionService:
         self._db.add(connection)
         self._db.flush()
         return connection
+
+    def create_gpt_oss_20b_proving_draft(
+        self,
+        *,
+        user_id: int,
+        display_label: str | None = None,
+    ) -> LLMInferenceConnection:
+        """Create the one allowed user-owned GPT-OSS proving connection draft."""
+
+        preset = ConnectionOperationRegistry().get_proving_preset(
+            GPT_OSS_20B_PROVING_PRESET_ID
+        )
+        return self.create_draft(
+            user_id=user_id,
+            display_name=display_label or preset.display_name,
+            connection_preset_id=preset.id,
+            runtime_family_id=preset.runtime_family_id,
+            serving_operator_id=preset.serving_operator_id,
+            non_secret_config=None,
+        )
 
     def get_owned(
         self,
@@ -294,6 +326,45 @@ def _registered_fixed_preset(value: str) -> str:
             "Connection preset is not registered"
         ) from exc
     return preset
+
+
+def _validate_gpt_oss_proving_connection_contract(
+    *,
+    owner_id: int,
+    preset_id: str,
+    runtime_family_id: str,
+    serving_operator_id: str | None,
+    non_secret_config: dict[str, Any] | None,
+    db: Session,
+) -> None:
+    if preset_id != GPT_OSS_20B_PROVING_PRESET_ID:
+        return
+    preset = ConnectionOperationRegistry().get_proving_preset(preset_id)
+    if runtime_family_id != preset.runtime_family_id:
+        raise LLMConnectionValidationError(
+            "GPT-OSS proving preset runtime family is code-owned"
+        )
+    if serving_operator_id != preset.serving_operator_id:
+        raise LLMConnectionValidationError(
+            "GPT-OSS proving preset serving operator is code-owned"
+        )
+    if non_secret_config:
+        raise LLMConnectionValidationError(
+            "GPT-OSS proving preset does not accept non-secret user endpoint config"
+        )
+    existing = db.execute(
+        select(LLMInferenceConnection).where(
+            LLMInferenceConnection.user_id == owner_id,
+            LLMInferenceConnection.connection_preset_id == preset_id,
+            LLMInferenceConnection.state.in_(
+                (LLMConnectionState.DRAFT.value, LLMConnectionState.ENABLED.value)
+            ),
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        raise LLMConnectionValidationError(
+            "GPT-OSS proving preset allows at most one draft or enabled connection per user"
+        )
 
 
 def _connection_uuid(value: UUID | str) -> UUID:

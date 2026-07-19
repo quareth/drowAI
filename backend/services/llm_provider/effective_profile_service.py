@@ -7,15 +7,23 @@ persisted route metadata cannot select a different executable adapter surface.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any
 
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from agent.providers.llm.core.capabilities import CapabilityInput, LLMCapability, freeze_capabilities
 from agent.providers.llm.core.identity import ProviderModelRef
 from agent.providers.llm.profiles.registry import ModelProfile, require_model_profile
 from backend.models import (
+    LLMCapabilityObservation,
     LLMDeploymentRoute,
     LLMInferenceConnection,
     LLMModelDeployment,
 )
 
+from .operation_registry import GPT_OSS_20B_PROVING_PRESET_ID, ConnectionOperationRegistry
 from .types import LLMDeploymentValidationError
 
 
@@ -27,6 +35,15 @@ class NativeRouteContract:
     adapter_version: str
     api_surface: str
     dialect_policy_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class CapabilityRunnability:
+    """Deployment capability runnability decision from observed evidence."""
+
+    runnable: bool
+    status: str
+    missing_capabilities: tuple[str, ...] = ()
 
 
 _NATIVE_ROUTES = {
@@ -54,6 +71,9 @@ _NATIVE_ROUTES = {
 class EffectiveProfileService:
     """Resolve curated model limits and verify persisted native route identity."""
 
+    def __init__(self, db: Session | None = None) -> None:
+        self._db = db
+
     def resolve(
         self,
         *,
@@ -63,11 +83,8 @@ class EffectiveProfileService:
     ) -> ModelProfile:
         """Return the effective profile or fail closed on route/profile drift."""
 
-        canonical_model = deployment.canonical_model_id or deployment.wire_model_id
-        profile = require_model_profile(
-            ProviderModelRef(connection.connection_preset_id, canonical_model)
-        )
-        contract = self.native_route_contract(profile)
+        profile = require_model_profile(_profile_ref(connection, deployment))
+        contract = self._route_contract(connection, profile)
         if route is not None and (
             route.adapter_id != contract.adapter_id
             or route.adapter_version != contract.adapter_version
@@ -78,6 +95,42 @@ class EffectiveProfileService:
                 "Deployment route does not match its registered adapter profile"
             )
         return profile
+
+    def classify_runnability(
+        self,
+        *,
+        deployment: LLMModelDeployment,
+        route: LLMDeploymentRoute | None,
+        required_capabilities: tuple[CapabilityInput, ...],
+        connection_id: str | None = None,
+        connection_revision: int | None = None,
+        credential_fingerprint: str | None = None,
+    ) -> CapabilityRunnability:
+        """Return whether route-scoped observations satisfy required capabilities."""
+
+        if self._db is None:
+            raise LLMDeploymentValidationError("Capability observation store is unavailable")
+        required = freeze_capabilities(required_capabilities)
+        supported = _supported_observations(
+            self._db,
+            deployment_id=deployment.id,
+            route_id=route.id if route is not None else None,
+            connection_id=connection_id,
+            connection_revision=connection_revision,
+            credential_fingerprint=credential_fingerprint,
+        )
+        missing = tuple(
+            capability.value
+            for capability in sorted(required, key=lambda item: item.value)
+            if capability.value not in supported
+        )
+        if missing:
+            return CapabilityRunnability(
+                runnable=False,
+                status="capability_unknown",
+                missing_capabilities=missing,
+            )
+        return CapabilityRunnability(runnable=True, status="runnable")
 
     @staticmethod
     def native_route_contract(profile: ModelProfile) -> NativeRouteContract:
@@ -90,5 +143,119 @@ class EffectiveProfileService:
             )
         return contract
 
+    @staticmethod
+    def _route_contract(
+        connection: LLMInferenceConnection,
+        profile: ModelProfile,
+    ) -> NativeRouteContract:
+        if connection.connection_preset_id == GPT_OSS_20B_PROVING_PRESET_ID:
+            preset = ConnectionOperationRegistry().get_proving_preset(
+                GPT_OSS_20B_PROVING_PRESET_ID
+            )
+            return NativeRouteContract(
+                adapter_id=preset.adapter_id,
+                adapter_version=preset.adapter_version,
+                api_surface=preset.api_surface,
+                dialect_policy_id=preset.dialect_policy_id,
+            )
+        return EffectiveProfileService.native_route_contract(profile)
 
-__all__ = ["EffectiveProfileService", "NativeRouteContract"]
+
+def _profile_ref(
+    connection: LLMInferenceConnection,
+    deployment: LLMModelDeployment,
+) -> ProviderModelRef:
+    canonical_model = deployment.canonical_model_id or deployment.wire_model_id
+    if (
+        connection.connection_preset_id == GPT_OSS_20B_PROVING_PRESET_ID
+        and canonical_model == "openai/gpt-oss-20b"
+    ):
+        return ProviderModelRef("openai", "gpt-oss-20b")
+    return ProviderModelRef(connection.connection_preset_id, canonical_model)
+
+
+def _supported_observations(
+    db: Session,
+    *,
+    deployment_id,
+    route_id,
+    connection_id: str | None = None,
+    connection_revision: int | None = None,
+    credential_fingerprint: str | None = None,
+) -> frozenset[str]:
+    rows = db.execute(
+        select(LLMCapabilityObservation).where(
+            LLMCapabilityObservation.deployment_id == deployment_id,
+            LLMCapabilityObservation.route_id == route_id,
+        )
+    ).scalars()
+    supported: set[str] = set()
+    now = datetime.now(timezone.utc)
+    for row in rows:
+        try:
+            capability = LLMCapability(str(row.capability))
+        except ValueError:
+            continue
+        if _is_expired(row.expires_at, now):
+            continue
+        if not _constraints_match(
+            row.constraints,
+            connection_id=connection_id,
+            connection_revision=connection_revision,
+            credential_fingerprint=credential_fingerprint,
+        ):
+            continue
+        if row.support_state == "supported":
+            supported.add(capability.value)
+    return frozenset(supported)
+
+
+def _is_expired(expires_at: Any, now: datetime) -> bool:
+    """Return whether an observation is outside its freshness window."""
+
+    if expires_at is None:
+        return False
+    if not isinstance(expires_at, datetime):
+        return True
+    comparable = expires_at
+    if comparable.tzinfo is None:
+        comparable = comparable.replace(tzinfo=timezone.utc)
+    return comparable <= now
+
+
+def _constraints_match(
+    constraints: Any,
+    *,
+    connection_id: str | None,
+    connection_revision: int | None,
+    credential_fingerprint: str | None,
+) -> bool:
+    """Match optional proving provenance constraints when requested."""
+
+    if (
+        connection_id is None
+        and connection_revision is None
+        and credential_fingerprint is None
+    ):
+        return True
+    if not isinstance(constraints, dict):
+        return False
+    if connection_id is not None and str(constraints.get("connection_id")) != str(
+        connection_id
+    ):
+        return False
+    if connection_revision is not None:
+        try:
+            observed_revision = int(constraints.get("connection_revision"))
+        except (TypeError, ValueError):
+            return False
+        if observed_revision != int(connection_revision):
+            return False
+    if credential_fingerprint is not None and str(
+        constraints.get("credential_fingerprint")
+    ) != str(credential_fingerprint):
+        return False
+    return True
+
+
+__all__ = ["CapabilityRunnability", "EffectiveProfileService", "NativeRouteContract"]

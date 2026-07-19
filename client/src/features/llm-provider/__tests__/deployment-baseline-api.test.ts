@@ -4,15 +4,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  createLLMProvingConnection,
   deleteLLMProviderCredential,
+  enableLLMProvingConnection,
   fetchLLMModelCatalog,
   fetchLLMProviderCredential,
   fetchLLMSelection,
   fetchReportingLLMSelection,
+  saveLLMDeploymentSelection,
   saveLLMProviderCredential,
   saveLLMSelection,
   saveReportingLLMSelection,
   testLLMProviderCredential,
+  testLLMProvingConnection,
 } from "../api";
 
 const mocked = vi.hoisted(() => ({
@@ -192,5 +196,130 @@ describe("deployment baseline LLM API helpers", () => {
         }),
       },
     );
+  });
+
+  it("centralizes proving connection and deployment route payloads in api.ts", async () => {
+    const connectionRef = {
+      connection_id: "11111111-1111-4111-8111-111111111111",
+      expected_revision: 1,
+    };
+    const deploymentRef = {
+      deployment_id: "22222222-2222-4222-8222-222222222222",
+      expected_revision: 1,
+    };
+    mocked.apiCall
+      .mockResolvedValueOnce({
+        lifecycle_state: "draft",
+        connection_ref: connectionRef,
+        deployment_ref: deploymentRef,
+      })
+      .mockResolvedValueOnce({
+        status: "passed",
+        code: "verified",
+        message: "ok",
+        retryable: false,
+        usage: {
+          prompt_tokens: 4,
+          completion_tokens: 2,
+          total_tokens: 6,
+        },
+      })
+      .mockResolvedValueOnce({
+        lifecycle_state: "enabled",
+        connection_ref: connectionRef,
+        deployment_ref: deploymentRef,
+      })
+      .mockResolvedValueOnce({
+        provider: "openai",
+        model: "gpt-oss-20b",
+        deployment_ref: deploymentRef,
+        selection_status: { status: "selectable", selectable: true, runnable: true },
+      });
+
+    await expect(
+      createLLMProvingConnection("preset-id", { api_key: "sk-test" }),
+    ).resolves.toEqual({
+      lifecycleState: "draft",
+      connectionRef,
+      deploymentRef,
+      verification: null,
+      runnability: null,
+    });
+    await expect(
+      testLLMProvingConnection("preset-id", {
+        api_key: "sk-test",
+        connection_ref: connectionRef,
+        deployment_ref: deploymentRef,
+      }),
+    ).resolves.toEqual({
+      status: "passed",
+      code: "verified",
+      message: "ok",
+      retryable: false,
+      observedAt: null,
+      expiresAt: null,
+      modelPresent: null,
+      usage: {
+        prompt_tokens: 4,
+        completion_tokens: 2,
+        total_tokens: 6,
+      },
+    });
+    await expect(
+      enableLLMProvingConnection("preset-id", {
+        connection_ref: connectionRef,
+        deployment_ref: deploymentRef,
+      }),
+    ).resolves.toEqual({
+      lifecycleState: "enabled",
+      connectionRef,
+      deploymentRef,
+      verification: null,
+      runnability: null,
+    });
+    await expect(
+      saveLLMDeploymentSelection({ deployment_ref: deploymentRef }),
+    ).resolves.toEqual({
+      provider: "openai",
+      model: "gpt-oss-20b",
+      deploymentRef,
+      selectionStatus: { status: "selectable", selectable: true, runnable: true },
+    });
+
+    expect(mocked.apiCall).toHaveBeenNthCalledWith(
+      1,
+      "/api/llm/proving-presets/preset-id/connection",
+      {
+        method: "POST",
+        body: JSON.stringify({ api_key: "sk-test" }),
+      },
+    );
+    expect(mocked.apiCall).toHaveBeenNthCalledWith(
+      2,
+      "/api/llm/proving-presets/preset-id/connection/test",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          api_key: "sk-test",
+          connection_ref: connectionRef,
+          deployment_ref: deploymentRef,
+        }),
+      },
+    );
+    expect(mocked.apiCall).toHaveBeenNthCalledWith(
+      3,
+      "/api/llm/proving-presets/preset-id/connection/enable",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          connection_ref: connectionRef,
+          deployment_ref: deploymentRef,
+        }),
+      },
+    );
+    expect(mocked.apiCall).toHaveBeenNthCalledWith(4, "/api/llm/selection", {
+      method: "PUT",
+      body: JSON.stringify({ deployment_ref: deploymentRef }),
+    });
   });
 });

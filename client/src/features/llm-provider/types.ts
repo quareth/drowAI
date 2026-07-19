@@ -31,10 +31,57 @@ export interface LLMProviderCredentialStatus {
   enabled: boolean;
   has_api_key: boolean;
   masked_api_key?: string | null;
+  connection_ref?: LLMConnectionRef | null;
+  auth_mode?: string | null;
+}
+
+export interface LLMConnectionRef {
+  connection_id: string;
+  expected_revision: number;
+}
+
+export interface LLMDeploymentRef {
+  deployment_id: string;
+  expected_revision: number;
+}
+
+export interface LLMProvingUsageEvidence {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+}
+
+export interface LLMProvingVerification {
+  status: string;
+  code: string;
+  message: string;
+  retryable: boolean;
+  observedAt?: string | null;
+  expiresAt?: string | null;
+  modelPresent?: boolean | null;
+  usage?: LLMProvingUsageEvidence | null;
+}
+
+export interface LLMProvingConnectionStatus {
+  lifecycleState: string;
+  connectionRef?: LLMConnectionRef | null;
+  deploymentRef?: LLMDeploymentRef | null;
+  verification?: LLMProvingVerification | null;
+  runnability?: LLMSelectionStatus | null;
+}
+
+export interface LLMProvingMetadata extends LLMProvingConnectionStatus {
+  presetId: string;
+  displayName: string;
+  enabled: boolean;
+  authMode: string;
+  userConfigFields: string[];
 }
 
 export interface LLMCatalogModel {
   id: ModelId;
+  canonicalModelId?: string;
+  exactWireModelId?: string | null;
   label: string;
   apiSurface: string;
   capabilities: string[];
@@ -47,6 +94,9 @@ export interface LLMCatalogModel {
   toolChoiceModes: string[];
   structuredOutputStrategies: string[];
   pricingStatus?: string;
+  deploymentRef?: LLMDeploymentRef | null;
+  runnable?: boolean;
+  proving?: LLMProvingMetadata | null;
 }
 
 export interface LLMCatalogProvider {
@@ -81,10 +131,16 @@ export interface LLMSelectionStatus {
 
 export interface LLMSelectionApiResponse extends SelectedLLMModel {
   selection_status?: LLMSelectionStatus;
+  deployment_ref?: LLMDeploymentRef | null;
 }
 
 export interface LLMSelection extends SelectedLLMModel {
   selectionStatus?: LLMSelectionStatus;
+  deploymentRef?: LLMDeploymentRef | null;
+}
+
+export interface LLMDeploymentSelection {
+  deployment_ref: LLMDeploymentRef;
 }
 
 export interface ReportingLLMSelectionApiResponse {
@@ -123,4 +179,20 @@ export interface LLMProviderCredentialTestResponse {
 
 export interface LLMProviderCredentialDeleteResponse {
   success: boolean;
+}
+
+export interface LLMProvingConnectionCreateRequest {
+  display_label?: string | null;
+  api_key?: string | null;
+}
+
+export interface LLMProvingConnectionTestRequest {
+  api_key?: string | null;
+  connection_ref?: LLMConnectionRef | null;
+  deployment_ref?: LLMDeploymentRef | null;
+}
+
+export interface LLMProvingConnectionEnableRequest {
+  connection_ref: LLMConnectionRef;
+  deployment_ref: LLMDeploymentRef;
 }

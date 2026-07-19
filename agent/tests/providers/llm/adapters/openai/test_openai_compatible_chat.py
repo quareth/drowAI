@@ -15,12 +15,12 @@ from agent.providers.llm.core.exceptions import LLMConfigurationError
 from agent.providers.llm.factory.client_factory import LLMClientFactory
 
 
-def _response(content: str = "ok") -> object:
+def _response(content: str = "ok", usage: object | None = None) -> object:
     """Build a minimal successful Chat Completions response."""
 
     message = SimpleNamespace(content=content, refusal=None, tool_calls=None)
     choice = SimpleNamespace(message=message, finish_reason="stop")
-    return SimpleNamespace(id="compatible-response", choices=[choice], usage=None)
+    return SimpleNamespace(id="compatible-response", choices=[choice], usage=usage)
 
 
 def _client(
@@ -76,6 +76,49 @@ async def test_compatible_adapter_rejects_unknown_request_parameters() -> None:
         await client.chat_messages(
             [{"role": "user", "content": "hello"}],
             frequency_penalty=0.5,
+        )
+
+    sdk.chat.completions.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_compatible_adapter_preserves_provider_reported_usage() -> None:
+    """Non-streaming usage proof uses provider-reported token counts only."""
+
+    client, sdk, _constructor = _client()
+    sdk.chat.completions.create.return_value = _response(
+        usage=SimpleNamespace(
+            prompt_tokens=5,
+            completion_tokens=2,
+            total_tokens=7,
+        )
+    )
+
+    response = await client.chat_messages_with_usage(
+        [{"role": "user", "content": "hello"}],
+        max_tokens=8,
+    )
+
+    assert response.content == "ok"
+    assert response.usage is not None
+    assert response.usage.prompt_tokens == 5
+    assert response.usage.completion_tokens == 2
+    assert response.usage.total_tokens == 7
+    assert sdk.chat.completions.create.await_args.kwargs["model"] == (
+        "Vendor/Model.Name-20B"
+    )
+
+
+@pytest.mark.asyncio
+async def test_compatible_adapter_rejects_streaming_usage_without_policy() -> None:
+    """Streaming usage remains disabled until the endpoint contract admits it."""
+
+    client, sdk, _constructor = _client()
+
+    with pytest.raises(LLMConfigurationError, match="streaming usage"):
+        await client.stream_chat_messages_with_usage(
+            [{"role": "user", "content": "hello"}],
+            max_tokens=8,
         )
 
     sdk.chat.completions.create.assert_not_awaited()

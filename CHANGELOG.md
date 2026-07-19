@@ -21,6 +21,10 @@ Target version: `0.1.0`.
   structured tool results, and task-scoped execution state.
 - Provider-neutral task execution through local Docker or managed runners,
   including per-task Kali runtimes and isolated workspaces.
+- GPT-OSS 20B appears in the curated LLM catalog with conservative capability
+  metadata, unavailable pricing, one code-owned proving connection preset, and
+  bounded health, capability verification, opt-in endpoint proof, deployment-aware
+  runtime routing, and a metadata-driven proving UI.
 - Local development and deployment workflows, architecture documentation,
   contribution guidance, and private vulnerability reporting.
 
