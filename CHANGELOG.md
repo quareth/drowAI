@@ -53,6 +53,8 @@ Target version: `0.1.0`.
 
 ### Fixed
 
+- Provider settings now use one consistent card, connection status, and API-key
+  control layout across native, hosted open-model, and self-hosted routes.
 - OpenAI-compatible models that return requested function calls as JSON message
   content are now safely normalized against the requested tool contracts,
   avoiding spurious structured-validation failures.

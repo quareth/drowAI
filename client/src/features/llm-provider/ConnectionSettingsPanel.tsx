@@ -6,7 +6,7 @@
  */
 import { useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle, Key, Loader2, ShieldCheck } from "lucide-react";
+import { CheckCircle, Key, Loader2 } from "lucide-react";
 
 import {
   createLLMManagedConnection,
@@ -30,9 +30,12 @@ import type {
   LLMProvingMetadata,
   LLMProvingVerification,
 } from "@/features/llm-provider/types";
+import {
+  ProviderApiKeyField,
+  ProviderSettingsCard,
+} from "@/features/llm-provider/ProviderSettingsCard";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
@@ -405,43 +408,60 @@ export function ConnectionSettingsPanel({
   const statusLabel = runnable ? "Ready" : connectionRef ? "Connected" : "Not connected";
 
   return (
-    <Card className="border-slate-700 bg-slate-900">
-      <CardHeader className="space-y-3">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-          <div className="min-w-0">
-            <CardTitle className="flex items-center text-base text-white">
-              <ShieldCheck className="mr-2 h-4 w-4" />
-              {connection.displayName}
-            </CardTitle>
-            {setupNote ? (
-              <p className="mt-2 text-xs text-slate-400">{setupNote}</p>
-            ) : null}
-            {showOperationalDetails ? (
-              <div className="mt-2 flex flex-wrap gap-2 text-xs">
-                <Badge className="bg-slate-700 text-slate-200">
-                  Lifecycle: {lifecycleState}
-                </Badge>
-                <Badge className="bg-slate-700 text-slate-200">
-                  Verification: {verification?.code ?? "not_tested"}
-                </Badge>
-                <Badge className="bg-slate-700 text-slate-200">
-                  Runnability: {runnabilityStatus}
-                </Badge>
-              </div>
-            ) : null}
-          </div>
+    <ProviderSettingsCard
+      title={connection.displayName}
+      setupNote={setupNote}
+      statusLabel={statusLabel}
+      statusPositive={Boolean(runnable || connectionRef)}
+      headerDetails={showOperationalDetails ? (
+        <div className="flex flex-wrap gap-2 text-xs">
+          <Badge className="bg-slate-700 text-slate-200">
+            Lifecycle: {lifecycleState}
+          </Badge>
+          <Badge className="bg-slate-700 text-slate-200">
+            Verification: {verification?.code ?? "not_tested"}
+          </Badge>
+          <Badge className="bg-slate-700 text-slate-200">
+            Runnability: {runnabilityStatus}
+          </Badge>
         </div>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {visibleConfigFields.map((field) => (
+      ) : null}
+    >
+      {visibleConfigFields.map((field) => (
+        field.name === "api_key" ? (
+          <ProviderApiKeyField
+            key={field.name}
+            id={`llm-connection-${field.name}-${connection.presetId}`}
+            value={fieldValues[field.name] ?? ""}
+            onChange={(value) =>
+              setFieldValues((current) => ({ ...current, [field.name]: value }))
+            }
+            placeholder={
+              connectionRef
+                ? "Enter a new API key to update"
+                : "Enter provider API key"
+            }
+            label={
+              usesProvingRoutes && showOperationalDetails
+                ? "Proving API Key"
+                : "API Key"
+            }
+          />
+        ) : (
           <div key={field.name}>
             <Label htmlFor={`llm-connection-${field.name}-${connection.presetId}`} className="text-white">
-              {usesProvingRoutes && showOperationalDetails && field.name === "api_key" ? "Proving API Key" : field.label}
+              {field.label}
             </Label>
             <div className="relative mt-2">
               <Input
                 id={`llm-connection-${field.name}-${connection.presetId}`}
-                type={field.fieldType === "password" ? "password" : field.fieldType === "url" ? "url" : "text"}
+                type={
+                  field.fieldType === "password"
+                    ? "password"
+                    : field.fieldType === "url"
+                      ? "url"
+                      : "text"
+                }
                 value={fieldValues[field.name] ?? ""}
                 onChange={(event) =>
                   setFieldValues((current) => ({
@@ -457,86 +477,75 @@ export function ConnectionSettingsPanel({
               ) : null}
             </div>
           </div>
-        ))}
+        )
+      ))}
 
-        <div className="flex flex-wrap gap-3">
-          {!showOperationalDetails ? (
+      <div className="flex flex-wrap gap-3">
+        {!showOperationalDetails ? (
+          <Button
+            type="button"
+            aria-label={`${connectionRef ? "Update" : "Connect"} ${connection.displayName}`}
+            onClick={() => { connectMutation.mutate(); }}
+            disabled={busy || !requiredFieldsComplete}
+            className="bg-blue-600 hover:bg-blue-700"
+          >
+            {connectMutation.isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Key className="h-4 w-4" />
+            )}
+            {connectionRef ? "Update" : "Connect"}
+          </Button>
+        ) : (
+          <>
             <Button
               type="button"
-              aria-label={`${connectionRef ? "Update" : "Connect"} ${connection.displayName}`}
-              onClick={() => { connectMutation.mutate(); }}
+              onClick={() => { createMutation.mutate(); }}
               disabled={busy || !requiredFieldsComplete}
               className="bg-blue-600 hover:bg-blue-700"
             >
-              {connectMutation.isPending ? (
+              {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Create draft
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => { testMutation.mutate(); }}
+              disabled={busy || !canTest}
+              className="border-slate-600 text-slate-200 hover:text-white"
+            >
+              {testMutation.isPending ? (
                 <Loader2 className="h-4 w-4 animate-spin" />
               ) : (
-                <Key className="h-4 w-4" />
+                <CheckCircle className="h-4 w-4" />
               )}
-              {connectionRef ? "Update" : "Connect"}
+              {usesProvingRoutes ? "Test proving" : "Test connection"}
             </Button>
-          ) : (
-            <>
-              <Button
-                type="button"
-                onClick={() => { createMutation.mutate(); }}
-                disabled={busy || !requiredFieldsComplete}
-                className="bg-blue-600 hover:bg-blue-700"
-              >
-                {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                Create draft
-              </Button>
+            {!usesProvingRoutes ? (
               <Button
                 type="button"
                 variant="outline"
-                onClick={() => { testMutation.mutate(); }}
-                disabled={busy || !canTest}
+                onClick={() => { refreshMutation.mutate(); }}
+                disabled={busy || !connectionRef}
                 className="border-slate-600 text-slate-200 hover:text-white"
               >
-                {testMutation.isPending ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <CheckCircle className="h-4 w-4" />
-                )}
-                {usesProvingRoutes ? "Test proving" : "Test connection"}
+                {refreshMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                Refresh inventory
               </Button>
-              {!usesProvingRoutes ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => { refreshMutation.mutate(); }}
-                  disabled={busy || !connectionRef}
-                  className="border-slate-600 text-slate-200 hover:text-white"
-                >
-                  {refreshMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                  Refresh inventory
-                </Button>
-              ) : null}
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => { enableMutation.mutate(); }}
-                disabled={busy || !canEnable}
-                className="border-slate-600 text-slate-200 hover:text-white"
-              >
-                Enable
-              </Button>
-            </>
-          )}
-          {!showOperationalDetails ? (
-            <Badge
-              className={
-                runnable || connectionRef
-                  ? "bg-green-600 text-white"
-                  : "bg-slate-700 text-gray-400"
-              }
+            ) : null}
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => { enableMutation.mutate(); }}
+              disabled={busy || !canEnable}
+              className="border-slate-600 text-slate-200 hover:text-white"
             >
-              {statusLabel}
-            </Badge>
-          ) : null}
-        </div>
-      </CardContent>
-    </Card>
+              Enable
+            </Button>
+          </>
+        )}
+      </div>
+    </ProviderSettingsCard>
   );
 }
 

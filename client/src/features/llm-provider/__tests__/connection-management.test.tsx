@@ -3,7 +3,7 @@
  * Verifies the intentionally limited GPT-OSS provider settings experience.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -464,6 +464,9 @@ describe("Connection management", () => {
     expect(await screen.findByText("NVIDIA")).toBeTruthy();
     expect(screen.getAllByText("NVIDIA")).toHaveLength(1);
     expect(screen.getByRole("button", { name: /update nvidia/i })).toBeTruthy();
+    const providerCard = screen.getByRole("group", { name: "NVIDIA provider settings" });
+    expect(within(providerCard).getByLabelText("NVIDIA status: Ready")).toBeTruthy();
+    expect(within(providerCard).getByRole("button", { name: "Show API key" })).toBeTruthy();
     expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Anthropic").length).toBeGreaterThan(0);
 
@@ -471,7 +474,7 @@ describe("Connection management", () => {
     expect(screen.queryByText("Mixtral 8x7B via NVIDIA NIM")).toBeNull();
     expect(screen.queryByText(/capability evidence|lifecycle|runnability/i)).toBeNull();
 
-    fireEvent.change(screen.getByLabelText("API key"), {
+    fireEvent.change(within(providerCard).getByLabelText("API Key"), {
       target: { value: "sk-nim" },
     });
     fireEvent.click(screen.getByRole("button", { name: /update nvidia/i }));
@@ -902,7 +905,10 @@ describe("Connection management", () => {
       />,
     );
 
-    fireEvent.change(await screen.findByLabelText("API Key"), {
+    const openAICard = await screen.findByRole("group", {
+      name: "OpenAI provider settings",
+    });
+    fireEvent.change(within(openAICard).getByLabelText("API Key"), {
       target: { value: "sk-openai" },
     });
     fireEvent.click(screen.getByRole("button", { name: /connect openai/i }));
@@ -917,7 +923,10 @@ describe("Connection management", () => {
       });
     });
 
-    fireEvent.change(screen.getByLabelText("API key"), {
+    const huggingFaceCard = screen.getByRole("group", {
+      name: "Hugging Face provider settings",
+    });
+    fireEvent.change(within(huggingFaceCard).getByLabelText("API Key"), {
       target: { value: "sk-hf" },
     });
     fireEvent.click(screen.getByRole("button", { name: /connect hugging face/i }));
@@ -994,7 +1003,7 @@ describe("Connection management", () => {
     expect(disclosure.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText("Ollama")).toBeTruthy();
     expect(screen.getByLabelText("Base URL")).toBeTruthy();
-    expect(screen.getByLabelText("API key")).toBeTruthy();
+    expect(screen.getByLabelText("API Key")).toBeTruthy();
     expect(screen.getByLabelText("Model name")).toBeTruthy();
     expect(screen.queryByLabelText("Display name")).toBeNull();
     expect(screen.queryByRole("button", { name: /create draft/i })).toBeNull();
@@ -1046,7 +1055,7 @@ describe("Connection management", () => {
     fireEvent.click(await screen.findByRole("button", {
       name: "Local & self-hosted",
     }));
-    fireEvent.change(await screen.findByLabelText("API key"), {
+    fireEvent.change(await screen.findByLabelText("API Key"), {
       target: { value: "sk-managed" },
     });
     fireEvent.change(screen.getByLabelText("Base URL"), {

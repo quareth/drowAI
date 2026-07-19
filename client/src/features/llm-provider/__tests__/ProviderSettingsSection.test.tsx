@@ -3,7 +3,7 @@
  * Verifies provider-neutral LLM credential settings flows.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -230,6 +230,10 @@ describe("ProviderCredentialCard", () => {
         onError={() => undefined}
       />,
     );
+
+    const providerCard = screen.getByRole("group", { name: "OpenAI provider settings" });
+    expect(within(providerCard).getByLabelText("OpenAI status: Connected")).toBeTruthy();
+    expect(within(providerCard).getByRole("button", { name: "Show API key" })).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText("API Key"), {
       target: { value: "sk-test-value" },
