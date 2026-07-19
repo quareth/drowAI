@@ -1,4 +1,4 @@
-"""Tests for the extracted LLM connection preset catalog."""
+"""Tests for the import-time LLM connection preset catalog."""
 
 from __future__ import annotations
 
@@ -476,6 +476,7 @@ def _write_text(path: Path, content: str) -> Path:
 def _set(target: object, key: str, value: object) -> object:
     target[key] = value
     return target
+
 
 def _mutated_manifest(mutator: object) -> object:
     manifest = deepcopy(_valid_manifest())

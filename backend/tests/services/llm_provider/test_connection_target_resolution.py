@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import ast
 from collections.abc import Callable
-import importlib
 import inspect
 from pathlib import Path
-from types import ModuleType
 import typing
 from urllib.parse import urlsplit
 
 import pytest
 
+from backend.services.llm_provider import _connection_target_resolution as resolution
 from backend.services.llm_provider._connection_operation_contracts import (
     OperationRegistryError,
 )
@@ -21,6 +20,7 @@ from backend.services.llm_provider.types import (
     LLMConnectionOperation,
     RegisteredLLMOperationTarget,
 )
+
 
 def test_native_default_https_returns_exact_registered_target() -> None:
     """A native default is read at resolution time and confined to HTTPS 443."""
@@ -64,6 +64,14 @@ def test_native_default_https_returns_exact_registered_target() -> None:
             "https://gateway.example.test/root",
             "https://gateway.example.test/root/v1/chat/completions",
             "https://gateway.example.test/root/v1",
+            "gateway.example.test",
+            443,
+            LLMEgressNetworkScope.PUBLIC,
+        ),
+        (
+            "https://gateway.example.test:443/team",
+            "https://gateway.example.test:443/team/v1/chat/completions",
+            "https://gateway.example.test:443/team/v1",
             "gateway.example.test",
             443,
             LLMEgressNetworkScope.PUBLIC,
@@ -257,6 +265,21 @@ def test_formatted_lifecycle_operation_path_is_composed_unchanged() -> None:
             None,
         ),
         (
+            "http://10.0.0.1:4000",
+            "Provider operator base URL violates policy",
+            None,
+        ),
+        (
+            "http://169.254.169.254:4000",
+            "Provider operator base URL violates policy",
+            None,
+        ),
+        (
+            "ftp://127.0.0.1:4000",
+            "Provider operator base URL violates policy",
+            None,
+        ),
+        (
             "http://user:password@127.0.0.1:4000",
             "Provider operator base URL violates policy",
             None,
@@ -286,6 +309,21 @@ def test_formatted_lifecycle_operation_path_is_composed_unchanged() -> None:
             "Provider operator base URL path violates policy",
             None,
         ),
+        (
+            "http://127.0.0.1:4000/a%2fb",
+            "Provider operator base URL path violates policy",
+            None,
+        ),
+        (
+            "http://127.0.0.1:4000/a\\b",
+            "Provider operator base URL path violates policy",
+            None,
+        ),
+        (
+            "http://127.0.0.1:4000/a//b",
+            "Provider operator base URL path violates policy",
+            None,
+        ),
     ),
 )
 def test_operator_override_rejections_keep_exact_errors(
@@ -309,7 +347,14 @@ def test_operator_override_rejections_keep_exact_errors(
     ("base_url", "expected_message", "expected_cause"),
     (
         (None, "Preset endpoint base URL is not configured", None),
+        ("", "Preset endpoint base URL is not configured", None),
+        (" ", "Preset endpoint base URL is not configured", None),
         (" https://tenant.example.test", "Preset endpoint base URL is not configured", None),
+        (
+            "http://tenant.example.test",
+            "Preset endpoint base URL violates policy",
+            None,
+        ),
         (
             "https://user:password@tenant.example.test",
             "Preset endpoint base URL violates policy",
@@ -337,6 +382,21 @@ def test_operator_override_rejections_keep_exact_errors(
         ),
         (
             "https://tenant.example.test/../admin",
+            "Preset endpoint base URL path violates policy",
+            None,
+        ),
+        (
+            "https://tenant.example.test/a%2fb",
+            "Preset endpoint base URL path violates policy",
+            None,
+        ),
+        (
+            "https://tenant.example.test/a\\b",
+            "Preset endpoint base URL path violates policy",
+            None,
+        ),
+        (
+            "https://tenant.example.test/a//b",
             "Preset endpoint base URL path violates policy",
             None,
         ),
@@ -396,7 +456,6 @@ def test_missing_proving_origin_reads_environment_once_and_fails_closed() -> Non
 def test_resolver_imports_and_types_enforce_the_internal_boundary() -> None:
     """The resolver has no facade import or untyped operation-definition seam."""
 
-    resolution = _resolution_module()
     source = Path(resolution.__file__).read_text(encoding="utf-8")
     tree = ast.parse(source)
     imported_modules = {
@@ -449,7 +508,6 @@ def _resolve(
     method: str = "POST",
     operation_path: str = "/v1/chat/completions",
 ) -> RegisteredLLMOperationTarget:
-    resolution = _resolution_module()
     return resolution._resolve_connection_operation_target(
         operation,
         provider,
@@ -462,7 +520,6 @@ def _resolve(
 
 
 def _native_origin() -> object:
-    resolution = _resolution_module()
     return resolution._NativeEndpointOriginInputs(
         default_base_url="https://api.example.test",
         base_url_env="TEST_NATIVE_BASE_URL",
@@ -471,7 +528,6 @@ def _native_origin() -> object:
 
 
 def _fixed_preset_origin() -> object:
-    resolution = _resolution_module()
     return resolution._PresetOriginInputs(
         fixed_base_url="https://fixed.example.test",
         base_url_env="TEST_FIXED_PRESET_BASE_URL",
@@ -481,7 +537,6 @@ def _fixed_preset_origin() -> object:
 
 
 def _proving_preset_origin() -> object:
-    resolution = _resolution_module()
     return resolution._PresetOriginInputs(
         fixed_base_url=None,
         base_url_env="TEST_PROVING_BASE_URL",
@@ -491,18 +546,11 @@ def _proving_preset_origin() -> object:
 
 
 def _configurable_preset_origin() -> object:
-    resolution = _resolution_module()
     return resolution._PresetOriginInputs(
         fixed_base_url=None,
         base_url_env=None,
         endpoint_config_field="base_url",
         client_base_path="/v1",
-    )
-
-
-def _resolution_module() -> ModuleType:
-    return importlib.import_module(
-        "backend.services.llm_provider._connection_target_resolution"
     )
 
 
