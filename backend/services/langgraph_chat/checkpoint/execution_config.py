@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Mapping, Optional
 
+from agent.graph.infrastructure.state_models import checkpoint_safe_llm_runtime_selection
 from backend.services.llm_provider.runtime_services import attach_runtime_services
 from backend.services.langgraph_chat.contracts import runtime_warmup_status_from_steps
 from backend.services.langgraph_chat.hitl_constants import GRAPH_RECURSION_LIMIT
@@ -114,15 +115,13 @@ def build_checkpoint_execution_config(
     """
     thread_id = format_graph_thread_id(graph_thread_id, task_id=task_id)
     configurable: Dict[str, Any] = {"thread_id": thread_id, "graph_name": graph_name}
-    if isinstance(llm_runtime_selection, Mapping):
-        selection_payload = dict(llm_runtime_selection)
+    selection_payload = checkpoint_safe_llm_runtime_selection(llm_runtime_selection)
+    if selection_payload:
         configurable["llm_runtime_selection"] = selection_payload
         runtime_projection: Dict[str, Any] = {
             "task_id": task_id,
             "graph_thread_id": graph_thread_id,
-            "provider": selection_payload.get("provider"),
-            "model": selection_payload.get("model"),
-            "credential_ref": selection_payload.get("credential_ref"),
+            "llm_runtime_selection": selection_payload,
             "reasoning_effort": selection_payload.get("reasoning_effort"),
         }
         if tenant_id is not None:

@@ -154,20 +154,22 @@ def test_checkpoint_runtime_hint_and_execution_config_remain_non_secret() -> Non
     }
 
     hint = CheckpointContinuationService._extract_checkpoint_runtime_hint(values)
+    selection = {
+        "schema_version": 2,
+        "deployment_ref": {
+            "deployment_id": "11111111-1111-4111-8111-111111111111",
+            "expected_revision": 1,
+        },
+        "reasoning_effort": "medium",
+        "legacy_provider": OPENAI_PROVIDER_ID,
+        "legacy_model": "gpt-5.2",
+    }
     config = build_checkpoint_execution_config(
         task_id=7,
         graph_name="simple_tool",
         graph_thread_id="a" * 32,
         user_id=11,
-        llm_runtime_selection={
-            "provider": OPENAI_PROVIDER_ID,
-            "model": "gpt-5.2",
-            "credential_ref": {
-                "user_id": 11,
-                "provider": OPENAI_PROVIDER_ID,
-            },
-            "reasoning_effort": "medium",
-        },
+        llm_runtime_selection=selection,
     )
 
     assert hint == {
@@ -175,18 +177,14 @@ def test_checkpoint_runtime_hint_and_execution_config_remain_non_secret() -> Non
         "model": "gpt-5.2",
         "reasoning_effort": "medium",
     }
-    assert config["configurable"]["llm_runtime_selection"]["model"] == "gpt-5.2"
+    assert config["configurable"]["llm_runtime_selection"] == selection
     assert config["configurable"]["runtime_projection"] == {
         "task_id": 7,
         "graph_thread_id": "a" * 32,
-        "provider": OPENAI_PROVIDER_ID,
-        "model": "gpt-5.2",
-        "credential_ref": {
-            "user_id": 11,
-            "provider": OPENAI_PROVIDER_ID,
-        },
+        "llm_runtime_selection": selection,
         "reasoning_effort": "medium",
         "user_id": 11,
     }
+    assert "credential_ref" not in repr(config)
     assert "sk-should-not-copy" not in repr(hint)
     assert "sk-should-not-copy" not in repr(config)

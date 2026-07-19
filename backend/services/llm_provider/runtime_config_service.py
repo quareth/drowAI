@@ -116,16 +116,25 @@ class LLMRuntimeConfigService:
         """Return the current conversation runtime identity, preferring deployments."""
 
         if provider is None and model is None:
-            selection = self._selection_service.get_selection(user_id)
-            if (
-                selection.deployment_id is not None
-                and self._deployment_preference_ready()
-            ):
-                return self._selection_service.build_deployment_runtime_selection(
+            if E2E_DETERMINISTIC_MODE:
+                return self.build_runtime_selection(
                     user_id=user_id,
                     reasoning_effort=reasoning_effort,
+                    require_enabled_credential=False,
                 )
-        return self.build_runtime_selection(
+            return self._selection_service.build_deployment_runtime_selection(
+                user_id=user_id,
+                reasoning_effort=reasoning_effort,
+            )
+        if E2E_DETERMINISTIC_MODE:
+            return self.build_runtime_selection(
+                user_id=user_id,
+                provider=provider,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                require_enabled_credential=False,
+            )
+        return self._build_provider_model_conversation_runtime_selection(
             user_id=user_id,
             provider=provider,
             model=model,
@@ -133,10 +142,48 @@ class LLMRuntimeConfigService:
             require_enabled_credential=require_enabled_credential,
         )
 
-    def _deployment_preference_ready(self) -> bool:
-        """Return whether rollout readiness allows deployment refs to win reads."""
+    def _build_provider_model_conversation_runtime_selection(
+        self,
+        *,
+        user_id: int,
+        provider: str | None,
+        model: str | None,
+        reasoning_effort: str | None,
+        require_enabled_credential: bool,
+    ) -> LLMRuntimeSelectionV2:
+        """Resolve explicit provider/model conversation inputs to V2 identity."""
 
-        return self._migration.prepare_deployment_backfill_readiness().ready
+        if provider is not None and model is not None:
+            resolved_provider = provider
+            resolved_model = model
+        else:
+            current = self._selection_service.get_selection(user_id)
+            resolved_provider = provider or current.provider
+            resolved_model = model or current.model
+        profile = self._catalog.require_selectable_model(
+            resolved_provider,
+            resolved_model,
+        )
+        provider_id = profile.ref.provider
+        model_id = profile.ref.model
+        if require_enabled_credential:
+            self._credential_service.get_credential_ref(user_id, provider_id)
+        deployment = self._migration.ensure_legacy_default_deployment_for_model(
+            user_id=user_id,
+            provider=provider_id,
+            wire_model_id=model_id,
+        )
+        if deployment is None:
+            raise ProviderConfigurationError(
+                "Conversation runtime selection requires a deployment binding"
+            )
+        return self.build_deployment_runtime_selection(
+            user_id=user_id,
+            deployment_id=str(deployment.id),
+            reasoning_effort=reasoning_effort,
+            legacy_provider=provider_id,
+            legacy_model=model_id,
+        )
 
     def build_runtime_services(self) -> LLMRuntimeServices:
         """Return live runtime dependencies for one invocation."""

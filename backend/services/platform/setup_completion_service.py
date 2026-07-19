@@ -274,7 +274,6 @@ class SetupProvisioningService:
             self._db.add(settings)
         settings.session_timeout = session_timeout
         settings.timezone = str(display.get("timezone") or "UTC")
-        settings.enable_ai = True
         self._db.flush()
 
     def _find_or_create_execution_site(

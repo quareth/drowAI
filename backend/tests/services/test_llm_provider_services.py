@@ -29,6 +29,7 @@ from backend.models import (
     UserLLMProviderCredential,
     UserLLMSelection,
     UserMemoryLLMSelection,
+    UserReportingLLMSelection,
     UserSettings,
 )
 from backend.services.container_utils import cache_api_key, get_cached_api_key
@@ -45,6 +46,7 @@ from backend.services.llm_provider import (
     LLMRuntimeConfigService,
     LLMRuntimeServices,
     LLMRuntimeSelection,
+    LLMRuntimeSelectionV2,
     ProviderConfigurationError,
     ProviderHealthCheckResult,
     ProviderSecret,
@@ -136,10 +138,9 @@ def test_credential_service_stores_encrypted_mirror_and_resolves_with_authorizat
         db.commit()
 
         credential = db.query(UserLLMProviderCredential).filter_by(user_id=user.id).one()
-        settings = db.query(UserSettings).filter_by(user_id=user.id).one()
         assert status.masked_api_key == "***"
         assert credential.encrypted_api_key != "sk-provider-secret"
-        assert credential.encrypted_api_key == settings.openai_api_key
+        assert db.query(UserSettings).filter_by(user_id=user.id).one_or_none() is None
         assert get_cached_api_key(user.id) is None
 
         service = LLMCredentialService(db)
@@ -162,7 +163,7 @@ def test_credential_service_stores_encrypted_mirror_and_resolves_with_authorizat
         db.close()
 
 
-def test_empty_legacy_openai_mirror_does_not_disable_provider_credential() -> None:
+def test_missing_legacy_openai_mirror_does_not_disable_provider_credential() -> None:
     db = SessionLocal()
     try:
         user = _create_user(db)
@@ -172,10 +173,6 @@ def test_empty_legacy_openai_mirror_does_not_disable_provider_credential() -> No
             provider=OPENAI_PROVIDER_ID,
             api_key="sk-canonical",
         )
-        db.commit()
-
-        settings = db.query(UserSettings).filter_by(user_id=user.id).one()
-        settings.openai_api_key = None
         db.commit()
 
         secret = service.resolve_secret(
@@ -197,42 +194,29 @@ def test_migration_service_copies_legacy_ciphertext_without_double_encrypting() 
     db = SessionLocal()
     try:
         user = _create_user(db)
-        encrypted = encrypt_api_key("sk-legacy")
-        settings = UserSettings(
-            user_id=user.id,
-            openai_api_key=encrypted,
-            openai_model="gpt-5-mini",
-        )
-        db.add(settings)
+        db.add(UserSettings(user_id=user.id))
         db.commit()
 
         LLMProviderMigrationService(db).backfill_legacy_openai_for_user(user.id)
         db.commit()
 
-        credential = db.query(UserLLMProviderCredential).filter_by(user_id=user.id).one()
-        selection = db.query(UserLLMSelection).filter_by(user_id=user.id).one()
-        assert credential.encrypted_api_key == encrypted
-        assert selection.provider == OPENAI_PROVIDER_ID
-        assert selection.model == "gpt-5-mini"
-        assert LLMCredentialService(db).get_openai_api_key_compat(user.id) == "sk-legacy"
+        assert db.query(UserLLMProviderCredential).filter_by(user_id=user.id).count() == 0
+        assert db.query(UserLLMSelection).filter_by(user_id=user.id).count() == 0
+        assert LLMCredentialService(db).get_openai_api_key_compat(user.id) == ""
     finally:
         db.close()
 
 
-def test_selection_service_reconciles_legacy_invalid_model_to_current_default() -> None:
+def test_selection_service_compat_model_uses_provider_selection_default() -> None:
     db = SessionLocal()
     try:
         user = _create_user(db)
-        db.add(UserSettings(user_id=user.id, openai_model="gpt-4o-mini"))
-        db.commit()
 
         model = LLMProviderSelectionService(db).get_openai_model_compat(user.id)
         db.commit()
 
-        settings = db.query(UserSettings).filter_by(user_id=user.id).one()
         selection = db.query(UserLLMSelection).filter_by(user_id=user.id).one()
         assert model == OPENAI_DEFAULT_MODEL_ID
-        assert settings.openai_model == OPENAI_DEFAULT_MODEL_ID
         assert selection.provider == OPENAI_PROVIDER_ID
         assert selection.model == OPENAI_DEFAULT_MODEL_ID
     finally:
@@ -290,8 +274,8 @@ def test_selection_read_preserves_unavailable_saved_provider_without_runtime_fal
 
         assert read.selection.provider == ANTHROPIC_PROVIDER_ID
         assert read.selection.model == saved_model
-        assert read.status.status == "adapter_unavailable"
-        assert read.status.selectable is False
+        assert read.status.status == "deployment_unmapped"
+        assert read.status.selectable is True
         assert read.status.runnable is False
 
         runtime_service = LLMRuntimeConfigService(
@@ -300,7 +284,7 @@ def test_selection_read_preserves_unavailable_saved_provider_without_runtime_fal
             selection_service=selection_service,
         )
         with pytest.raises(ProviderConfigurationError, match="adapter is not registered"):
-            runtime_service.build_runtime_selection(user_id=user.id)
+            runtime_service.build_conversation_runtime_selection(user_id=user.id)
 
         explicit_openai = runtime_service.build_runtime_selection(
             user_id=user.id,
@@ -420,12 +404,10 @@ def test_reporting_selection_builds_runtime_selection_with_enabled_credential() 
 
         selection = service.build_runtime_selection(user_id=user.id)
 
-        assert selection.provider == ANTHROPIC_PROVIDER_ID
-        assert selection.model == model
-        assert selection.credential_ref == LLMCredentialRef(
-            user_id=user.id,
-            provider=ANTHROPIC_PROVIDER_ID,
-        )
+        assert isinstance(selection, LLMRuntimeSelectionV2)
+        assert selection.legacy_provider == ANTHROPIC_PROVIDER_ID
+        assert selection.legacy_model == model
+        assert selection.deployment_ref.deployment_id
         assert "sk-ant-reporting" not in repr(selection.to_dict())
     finally:
         db.close()
@@ -436,16 +418,18 @@ def test_reporting_selection_runtime_requires_enabled_credential() -> None:
     try:
         user = _create_user(db, "llm-provider-reporting-no-credential")
         service = ReportingLLMSelectionService(db)
-        service.set_selection(
-            user_id=user.id,
-            provider=OPENAI_PROVIDER_ID,
-            model="gpt-5.2",
+        db.add(
+            UserReportingLLMSelection(
+                user_id=user.id,
+                provider=OPENAI_PROVIDER_ID,
+                model="gpt-5.2",
+            )
         )
         db.commit()
 
         read = service.get_selection_read(user.id)
 
-        assert read.status.status == "credential_missing"
+        assert read.status.status == "deployment_unmapped"
         assert read.status.runnable is False
         with pytest.raises(ProviderConfigurationError):
             service.build_runtime_selection(user_id=user.id)
@@ -1497,10 +1481,9 @@ def test_credential_disable_clears_legacy_mirror_and_prevents_resolution() -> No
         db.commit()
 
         credential = db.query(UserLLMProviderCredential).filter_by(user_id=user.id).one()
-        settings = db.query(UserSettings).filter_by(user_id=user.id).one()
         assert credential.enabled is False
         assert credential.encrypted_api_key == ""
-        assert settings.openai_api_key is None
+        assert db.query(UserSettings).filter_by(user_id=user.id).one_or_none() is None
         with pytest.raises(CredentialNotFoundError):
             service.get_credential_ref(user.id, OPENAI_PROVIDER_ID)
     finally:

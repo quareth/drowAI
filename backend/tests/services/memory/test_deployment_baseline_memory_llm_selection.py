@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+import pytest
+
 from agent.providers.llm.core.identity import OPENAI_PROVIDER_ID
 from backend.database import SessionLocal
-from backend.models import User
+from backend.models import User, UserLLMProviderCredential
 from backend.models.llm import UserEmbeddingSelection, UserMemoryLLMSelection
 from backend.services.embeddings.profiles import (
     DB_EMBEDDING_DIMENSIONS,
@@ -17,7 +19,7 @@ from backend.services.embeddings.selection_service import (
     DEFAULT_MEMORY_GATE_MODEL,
     EmbeddingRuntimeSelectionService,
 )
-from backend.services.llm_provider import LLMCredentialRef
+from backend.services.llm_provider import LLMCredentialRef, ProviderConfigurationError
 
 
 def _create_user(db, username_prefix: str = "deployment-memory-llm") -> User:
@@ -67,7 +69,6 @@ def test_memory_llm_defaults_are_independent_from_embedding_selection_defaults()
 
         embedding_row = service.get_embedding_selection(user_id=user.id)
         memory_row = service.get_memory_llm_selection(user_id=user.id)
-        memory_runtime = service.resolve_memory_llm_selection(user_id=user.id)
         db.commit()
 
         assert embedding_row.provider == OPENAI_PROVIDER_ID
@@ -76,16 +77,11 @@ def test_memory_llm_defaults_are_independent_from_embedding_selection_defaults()
         assert memory_row.provider == OPENAI_PROVIDER_ID
         assert memory_row.gate_model == DEFAULT_MEMORY_GATE_MODEL
         assert memory_row.extraction_model == DEFAULT_MEMORY_EXTRACTION_MODEL
-        assert memory_runtime.provider == OPENAI_PROVIDER_ID
-        assert memory_runtime.gate_model == DEFAULT_MEMORY_GATE_MODEL
-        assert memory_runtime.extraction_model == DEFAULT_MEMORY_EXTRACTION_MODEL
-        assert memory_runtime.credential_ref == LLMCredentialRef(
-            user_id=user.id,
-            provider=OPENAI_PROVIDER_ID,
-        )
-        assert credential_refs == [(user.id, OPENAI_PROVIDER_ID)]
-        assert memory_runtime.gate_model != embedding_row.model
-        assert memory_runtime.extraction_model != embedding_row.model
+        with pytest.raises(ProviderConfigurationError, match="deployment binding"):
+            service.resolve_memory_llm_selection(user_id=user.id)
+        assert credential_refs == []
+        assert memory_row.gate_model != embedding_row.model
+        assert memory_row.extraction_model != embedding_row.model
     finally:
         db.close()
 
@@ -101,6 +97,15 @@ def test_memory_llm_updates_do_not_mutate_embedding_selection() -> None:
             ),
             db=db,
         )
+        db.add(
+            UserLLMProviderCredential(
+                user_id=user.id,
+                provider=OPENAI_PROVIDER_ID,
+                encrypted_api_key="ciphertext",
+                enabled=True,
+            )
+        )
+        db.flush()
 
         embedding_row = service.get_embedding_selection(user_id=user.id)
         service.set_memory_llm_selection(

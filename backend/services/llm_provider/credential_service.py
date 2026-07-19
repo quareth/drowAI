@@ -1,6 +1,6 @@
 """Credential storage and resolution for provider-neutral LLM settings.
 
-This service centralizes encryption, masking, legacy OpenAI mirrors, and
+This service centralizes encryption, masking, provider compatibility, and
 runtime credential authorization. Decrypted provider secrets are returned only
 from explicit boundary methods and are never stored on long-lived service
 objects.
@@ -24,7 +24,6 @@ from backend.models import (
     LLMInferenceConnection,
     Task,
     UserLLMProviderCredential,
-    UserSettings,
 )
 from backend.config.generated_config import resolve_config_value, validate_encryption_key
 
@@ -204,10 +203,6 @@ class LLMCredentialService:
             credential.encrypted_api_key = encrypted_key
             credential.enabled = enabled
 
-        if sync_legacy_openai and normalized_provider == OPENAI_PROVIDER_ID:
-            settings = self._get_or_create_user_settings(user_id)
-            settings.openai_api_key = encrypted_key
-
         self._invalidate_decrypted_compat_cache(user_id)
         self._db.flush()
         connection = self._ensure_legacy_default_connection(
@@ -334,10 +329,6 @@ class LLMCredentialService:
             credential.encrypted_api_key = encrypted
             credential.enabled = enabled
 
-        if sync_legacy_openai and normalized_provider == OPENAI_PROVIDER_ID:
-            settings = self._get_or_create_user_settings(user_id)
-            settings.openai_api_key = encrypted
-
         self._invalidate_decrypted_compat_cache(user_id)
         self._db.flush()
         connection = self._ensure_legacy_default_connection(
@@ -347,7 +338,7 @@ class LLMCredentialService:
         return self._status_from_credential(credential, connection=connection)
 
     def disable(self, *, user_id: int, provider: str) -> CredentialStatus:
-        """Disable a provider credential and clear legacy OpenAI mirrors."""
+        """Disable the deterministic provider credential row."""
 
         normalized_provider = self._normalize_provider(provider)
         credential = self._get_credential(user_id=user_id, provider=normalized_provider, migrate=False)
@@ -363,10 +354,6 @@ class LLMCredentialService:
             credential.enabled = False
             credential.encrypted_api_key = ""
 
-        if normalized_provider == OPENAI_PROVIDER_ID:
-            settings = self._get_or_create_user_settings(user_id)
-            settings.openai_api_key = None
-
         self._invalidate_decrypted_compat_cache(user_id)
         self._db.flush()
         connection = self._ensure_legacy_default_connection(
@@ -376,7 +363,7 @@ class LLMCredentialService:
         return self._status_from_credential(credential, connection=connection)
 
     def delete(self, *, user_id: int, provider: str) -> None:
-        """Delete a provider credential and clear legacy OpenAI mirrors."""
+        """Delete the deterministic provider credential row."""
 
         normalized_provider = self._normalize_provider(provider)
         credential = self._get_credential(user_id=user_id, provider=normalized_provider, migrate=False)
@@ -386,10 +373,6 @@ class LLMCredentialService:
                 provider=normalized_provider,
             )
             self._db.delete(credential)
-
-        if normalized_provider == OPENAI_PROVIDER_ID:
-            settings = self._get_or_create_user_settings(user_id)
-            settings.openai_api_key = None
 
         self._invalidate_decrypted_compat_cache(user_id)
         self._db.flush()
@@ -537,13 +520,22 @@ class LLMCredentialService:
         if migrate and connection is None:
             return None
 
-        credential = self._db.execute(
-            select(UserLLMProviderCredential).where(
-                UserLLMProviderCredential.user_id == user_id,
-                UserLLMProviderCredential.provider == provider,
-            )
-        ).scalar_one_or_none()
-        return credential
+        credentials = list(
+            self._db.execute(
+                select(UserLLMProviderCredential)
+                .where(
+                    UserLLMProviderCredential.user_id == user_id,
+                    UserLLMProviderCredential.provider == provider,
+                )
+                .order_by(UserLLMProviderCredential.id.asc())
+            ).scalars()
+        )
+        if not credentials:
+            return None
+        for credential in credentials:
+            if credential.enabled and credential.has_api_key:
+                return credential
+        return credentials[0]
 
     def _ensure_legacy_default_connection(
         self,
@@ -637,16 +629,6 @@ class LLMCredentialService:
                     "Connection credential ref is not authorized for this task"
                 )
         return connection
-
-    def _get_or_create_user_settings(self, user_id: int) -> UserSettings:
-        settings = self._db.execute(
-            select(UserSettings).where(UserSettings.user_id == user_id)
-        ).scalar_one_or_none()
-        if settings is None:
-            settings = UserSettings(user_id=user_id)
-            self._db.add(settings)
-            self._db.flush()
-        return settings
 
     def _normalize_provider(self, provider: str) -> str:
         normalized_provider = normalize_provider_id(provider)

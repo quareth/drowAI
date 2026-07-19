@@ -142,11 +142,11 @@ def test_selection_reads_emit_unmapped_and_auth_missing_status_metrics(
         llm_identity_db
     ).get_openai_model_compat(owner.id)
 
-    assert read.status.status == "credential_missing"
+    assert read.status.status == "deployment_unmapped"
     assert compat_model == "gpt-5.2"
     assert (
         "llm_provider.selection_status.total",
-        {"status": "credential_missing"},
+        {"status": "deployment_unmapped"},
         1,
     ) in calls
     assert (

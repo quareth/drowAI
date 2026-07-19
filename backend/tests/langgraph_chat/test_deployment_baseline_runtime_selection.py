@@ -54,11 +54,12 @@ async def test_chat_submission_snapshots_selected_runtime_for_generation(
             db,
             credential_service=credential_service,
         )
-        selection_service.set_selection(
+        selection = selection_service.set_selection(
             user_id=user.id,
             provider=OPENAI_PROVIDER_ID,
             model="gpt-5.2",
         )
+        deployment_id = str(selection.deployment_id)
         db.commit()
 
         class FakeConversationManager:
@@ -127,13 +128,15 @@ async def test_chat_submission_snapshots_selected_runtime_for_generation(
         assert generation_call["provider"] == OPENAI_PROVIDER_ID
         assert generation_call["model"] == "gpt-5.2"
         assert generation_call["runtime_selection"] == {
-            "provider": OPENAI_PROVIDER_ID,
-            "model": "gpt-5.2",
-            "credential_ref": {
-                "user_id": user.id,
-                "provider": OPENAI_PROVIDER_ID,
+            "schema_version": 2,
+            "deployment_ref": {
+                "deployment_id": deployment_id,
+                "expected_revision": 1,
             },
+            "preferred_route_id": None,
             "reasoning_effort": None,
+            "legacy_provider": OPENAI_PROVIDER_ID,
+            "legacy_model": "gpt-5.2",
         }
         assert "sk-chat-runtime" not in repr(generation_call["runtime_selection"])
     finally:
@@ -231,7 +234,11 @@ async def test_explicit_chat_model_override_does_not_mutate_saved_selection(
         ).get_selection(user.id)
 
         assert generation_call["model"] == "gpt-5-mini"
-        assert generation_call["runtime_selection"]["model"] == "gpt-5-mini"
+        assert generation_call["runtime_selection"]["schema_version"] == 2
+        assert "deployment_ref" in generation_call["runtime_selection"]
+        assert generation_call["runtime_selection"]["legacy_provider"] == OPENAI_PROVIDER_ID
+        assert generation_call["runtime_selection"]["legacy_model"] == "gpt-5-mini"
+        assert "credential_ref" not in generation_call["runtime_selection"]
         assert saved_selection.model == "gpt-5.2"
     finally:
         db.close()

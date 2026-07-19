@@ -11,6 +11,7 @@ import inspect
 import logging
 from typing import TYPE_CHECKING, Any, Callable, Dict, Mapping, Optional
 
+from agent.graph.infrastructure.state_models import checkpoint_safe_llm_runtime_selection
 from backend.config import E2E_DETERMINISTIC_MODE
 from backend.database import SessionLocal
 from backend.services.chat.message_service import ChatMessageService
@@ -481,8 +482,11 @@ class CheckpointContinuationService:
             interrupt_metadata = {"interrupt": True, "graph_name": graph_name}
             if isinstance(execution_result.metadata, dict):
                 interrupt_metadata.update(execution_result.metadata)
-            if isinstance(llm_runtime_selection, Mapping):
-                interrupt_metadata["llm_runtime_selection"] = dict(llm_runtime_selection)
+            safe_runtime_selection = checkpoint_safe_llm_runtime_selection(
+                llm_runtime_selection,
+            )
+            if safe_runtime_selection:
+                interrupt_metadata["llm_runtime_selection"] = safe_runtime_selection
 
             return LangGraphChatResult(
                 final_text=None,
@@ -532,8 +536,11 @@ class CheckpointContinuationService:
             metadata["id"] = turn_id
         if isinstance(execution_result.metadata, dict):
             metadata.update(execution_result.metadata)
-        if isinstance(llm_runtime_selection, Mapping):
-            metadata["llm_runtime_selection"] = dict(llm_runtime_selection)
+        safe_runtime_selection = checkpoint_safe_llm_runtime_selection(
+            llm_runtime_selection,
+        )
+        if safe_runtime_selection:
+            metadata["llm_runtime_selection"] = safe_runtime_selection
 
         from backend.services.langgraph_chat.handlers.normal_chat_handler import (
             _extract_usage_from_state,

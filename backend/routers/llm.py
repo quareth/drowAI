@@ -1,7 +1,7 @@
 """LLM selection and task runtime control routes.
 
 This router exposes user-facing model selection along with task-scoped runtime
-controls such as model switching and conversation reset.
+controls such as conversation reset.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -85,7 +85,7 @@ from ..services.llm_provider.selection_deployment_resolver import (
     SelectionDeploymentTarget,
 )
 from ..services.llm_provider.types import ProviderSecret
-from ..services.tenant.authorization import ACTION_CHAT_READ, ACTION_CHAT_WRITE, ACTION_TASK_CONTROL
+from ..services.tenant.authorization import ACTION_CHAT_READ, ACTION_CHAT_WRITE
 from ..services.tenant.context import TenantRequestContext
 from ..services.tenant.dependencies import get_tenant_request_context
 from ..services.task.runtime_input_service import TaskRuntimeInputService
@@ -1220,6 +1220,9 @@ async def set_memory_llm_selection(
         db.commit()
         db.refresh(selection)
         return selection
+    except LLMProviderServiceError as exc:
+        db.rollback()
+        raise _provider_configuration_exception(exc) from exc
     except ValueError as exc:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1836,61 +1839,6 @@ async def enable_proving_connection(
     except LLMProviderServiceError as exc:
         db.rollback()
         raise _provider_configuration_exception(exc) from exc
-
-
-class TaskSwitchRequest(BaseModel):
-    provider: str | None = None
-    model: str
-
-
-@router.post("/tasks/{task_id}/switch", deprecated=True)
-async def switch_task_model(
-    task_id: int,
-    body: TaskSwitchRequest,
-    current_user: User = Depends(get_current_user),
-    tenant_context: TenantRequestContext = Depends(get_tenant_request_context),
-    db: Session = Depends(get_db),
-):
-    """Persist next-turn user selection for deprecated task-switch callers."""
-    enforce_tenant_action(tenant_context=tenant_context, action=ACTION_TASK_CONTROL)
-    get_tenant_task_or_404(db=db, task_id=task_id, tenant_context=tenant_context)
-    if not body.model or not isinstance(body.model, str):
-        raise HTTPException(status_code=400, detail="Model is required")
-    requested_provider: str | None = (
-        body.provider.strip()
-        if isinstance(body.provider, str) and body.provider.strip()
-        else None
-    )
-    requested_model = body.model.strip()
-    try:
-        selection_service = LLMProviderSelectionService(db)
-        if requested_provider is None:
-            requested_provider = selection_service.get_selection(current_user.id).provider
-        selection = selection_service.set_selection(
-            user_id=current_user.id,
-            provider=requested_provider,
-            model=requested_model,
-            require_enabled_credential=False,
-        )
-        db.commit()
-        db.refresh(selection)
-    except LLMProviderServiceError as exc:
-        db.rollback()
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    logger.info(
-        "User %s updated conversation selection via deprecated task %s switch facade",
-        current_user.id,
-        task_id,
-    )
-    return {
-        "success": True,
-        "deprecated": True,
-        "effective_from": "next_submitted_turn",
-        "provider": selection.provider,
-        "model": selection.model,
-        "signal_sent": False,
-    }
 
 
 @router.get("/tasks/{task_id}/conversation", response_model=LLMConversationResponse)

@@ -26,7 +26,10 @@ from agent.graph.context.builder import (
     update_prior_turn_references,
 )
 from agent.graph.context.runtime_state import refresh_bundle_from_working_memory
-from agent.graph.infrastructure.state_models import GraphRuntimeContext
+from agent.graph.infrastructure.state_models import (
+    GraphRuntimeContext,
+    checkpoint_safe_llm_runtime_selection,
+)
 from backend.services.metrics.utils import safe_inc
 from backend.services.langgraph_chat.checkpoint.thread_identity import format_graph_thread_id
 
@@ -68,6 +71,9 @@ def build_metadata(
 ) -> Dict[str, Any]:
     """Compose metadata payload inserted into the initial interactive state."""
     metadata_source = runtime_config.metadata or {}
+    safe_runtime_selection = checkpoint_safe_llm_runtime_selection(
+        chat_inputs.llm_runtime_selection,
+    )
 
     metadata = {
         "history_turns": len(list(chat_inputs.history)),
@@ -80,10 +86,8 @@ def build_metadata(
         metadata["provider"] = chat_inputs.provider
     if chat_inputs.model:
         metadata["model"] = chat_inputs.model
-    if chat_inputs.credential_ref:
-        metadata["credential_ref"] = dict(chat_inputs.credential_ref)
-    if chat_inputs.llm_runtime_selection:
-        metadata["llm_runtime_selection"] = dict(chat_inputs.llm_runtime_selection)
+    if safe_runtime_selection:
+        metadata["llm_runtime_selection"] = safe_runtime_selection
     provider = metadata_source.get("provider")
     if isinstance(provider, str) and provider.strip():
         metadata["provider"] = provider.strip()
@@ -137,20 +141,22 @@ def build_metadata(
         workspace_path=metadata_source.get("workspace_path"),
         provider=metadata.get("provider"),
         model=chat_inputs.model,
-        credential_ref=metadata.get("credential_ref"),
+        llm_runtime_selection=safe_runtime_selection,
         reasoning_effort=chat_inputs.reasoning_effort,
         turn_id=turn_id,
         turn_sequence=turn_sequence,
         reserved_message_id=reserved_message_id,
     )
-    metadata["graph_runtime_context"] = runtime_context.model_dump()
+    runtime_context_payload = runtime_context.model_dump()
+    runtime_context_payload.pop("credential_ref", None)
+    metadata["graph_runtime_context"] = runtime_context_payload
     if turn_sequence is not None:
         metadata["turn_sequence"] = turn_sequence
     if turn_id:
         metadata["turn_id"] = turn_id
     if reserved_message_id is not None:
         metadata["reserved_message_id"] = reserved_message_id
-    runtime_config.metadata.setdefault("graph_runtime_context", runtime_context.model_dump())
+    runtime_config.metadata["graph_runtime_context"] = runtime_context_payload
     if runtime_config.metadata.get("force_simple_chat"):
         metadata["force_simple_chat"] = True
     for key in (
@@ -317,31 +323,33 @@ def build_thread_config(
             f"Task {int(task_id)} checkpoint thread_id does not match graph_thread_id"
         )
     configurable["thread_id"] = expected_thread_id
-
-    configurable.setdefault(
-        "runtime_projection",
-        {
-            "task_id": runtime_config.chat_inputs.task_id,
-            "user_id": runtime_config.chat_inputs.user_id,
-            "graph_thread_id": runtime_config.metadata.get("graph_thread_id"),
-            "provider": runtime_config.chat_inputs.provider,
-            "model": runtime_config.chat_inputs.model,
-            "credential_ref": runtime_config.chat_inputs.credential_ref,
-            "reasoning_effort": runtime_config.chat_inputs.reasoning_effort,
-            "tenant_id": runtime_config.metadata.get("tenant_id"),
-            "runtime_placement_mode": runtime_config.metadata.get("runtime_placement_mode"),
-            "workspace_id": runtime_config.metadata.get("workspace_id"),
-            "actor_type": runtime_config.metadata.get("actor_type"),
-            "actor_id": runtime_config.metadata.get("actor_id"),
-            "runner_id": runtime_config.metadata.get("runner_id"),
-            "execution_site_id": runtime_config.metadata.get("execution_site_id"),
-            "workspace_path": runtime_config.metadata.get("workspace_path"),
-        },
+    safe_runtime_selection = checkpoint_safe_llm_runtime_selection(
+        runtime_config.llm_runtime_selection,
     )
-    if runtime_config.llm_runtime_selection is not None:
+
+    runtime_projection = {
+        "task_id": runtime_config.chat_inputs.task_id,
+        "user_id": runtime_config.chat_inputs.user_id,
+        "graph_thread_id": runtime_config.metadata.get("graph_thread_id"),
+        "provider": runtime_config.chat_inputs.provider,
+        "model": runtime_config.chat_inputs.model,
+        "reasoning_effort": runtime_config.chat_inputs.reasoning_effort,
+        "tenant_id": runtime_config.metadata.get("tenant_id"),
+        "runtime_placement_mode": runtime_config.metadata.get("runtime_placement_mode"),
+        "workspace_id": runtime_config.metadata.get("workspace_id"),
+        "actor_type": runtime_config.metadata.get("actor_type"),
+        "actor_id": runtime_config.metadata.get("actor_id"),
+        "runner_id": runtime_config.metadata.get("runner_id"),
+        "execution_site_id": runtime_config.metadata.get("execution_site_id"),
+        "workspace_path": runtime_config.metadata.get("workspace_path"),
+    }
+    if safe_runtime_selection:
+        runtime_projection["llm_runtime_selection"] = safe_runtime_selection
+    configurable.setdefault("runtime_projection", runtime_projection)
+    if safe_runtime_selection:
         configurable.setdefault(
             "llm_runtime_selection",
-            dict(runtime_config.llm_runtime_selection),
+            safe_runtime_selection,
         )
     if runtime_config.runtime_services is not None:
         configurable.setdefault("runtime_services", runtime_config.runtime_services)

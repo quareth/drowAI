@@ -33,7 +33,7 @@ from backend.services.llm_provider.runtime_config_service import (
 from backend.services.llm_provider.selection_service import (
     LLMProviderSelectionService,
 )
-from backend.services.llm_provider.types import LLMRuntimeSelection
+from backend.services.llm_provider.types import LLMRuntimeSelectionV2
 
 
 def test_backfill_is_deterministic_idempotent_and_preserves_exact_models(
@@ -226,7 +226,7 @@ def test_selection_without_credential_remains_unmapped_and_not_runnable(
     ).status
     assert status.selectable is True
     assert status.runnable is False
-    assert status.status == "credential_missing"
+    assert status.status == "deployment_unmapped"
 
 
 def test_existing_explicit_legacy_default_is_never_replaced(
@@ -399,11 +399,11 @@ def test_readiness_blocks_selection_refs_outside_legacy_default_connection(
     assert selection.deployment_id == other_deployment.id
 
 
-def test_conversation_runtime_does_not_prefer_deployment_ref_before_readiness(
+def test_conversation_runtime_prefers_deployment_ref_after_authority_switch(
     llm_identity_db: Session,
     identity_users: tuple[User, User],
 ) -> None:
-    """Runtime reads stay legacy-compatible until rollout readiness is true."""
+    """Runtime reads use saved deployment refs after the authority switch."""
 
     owner, _ = identity_users
     default_connection = LLMInferenceConnection(
@@ -467,9 +467,10 @@ def test_conversation_runtime_does_not_prefer_deployment_ref_before_readiness(
         llm_identity_db
     ).build_conversation_runtime_selection(user_id=owner.id)
 
-    assert isinstance(runtime, LLMRuntimeSelection)
-    assert runtime.provider == OPENAI_PROVIDER_ID
-    assert runtime.model == "gpt-5-mini"
+    assert isinstance(runtime, LLMRuntimeSelectionV2)
+    assert runtime.deployment_ref.deployment_id == str(other_deployment.id)
+    assert runtime.legacy_provider == OPENAI_PROVIDER_ID
+    assert runtime.legacy_model == "gpt-5-mini"
     assert selection.deployment_id == other_deployment.id
 
 
@@ -501,4 +502,4 @@ def test_readiness_records_auth_missing_selection_without_blocking_rollout(
     ).status
     assert status.selectable is True
     assert status.runnable is False
-    assert status.status == "credential_missing"
+    assert status.status == "deployment_unmapped"

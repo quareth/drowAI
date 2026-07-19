@@ -1,21 +1,20 @@
-"""Deployment baseline tests for the switch facade and container secrets."""
+"""Deployment baseline tests for retired task switch and container secrets."""
 
 from __future__ import annotations
 
 import inspect
 
-from backend.routers import llm as llm_routes
 from backend.services.llm_provider import environment_service
 
 
-def test_task_switch_route_is_deprecated_selection_facade_without_signal() -> None:
-    source = inspect.getsource(llm_routes.switch_task_model)
+def test_task_switch_facade_is_retired() -> None:
+    from backend.routers import llm as llm_routes
 
-    assert "LLMProviderSelectionService" in source
-    assert '"deprecated": True' in source
-    assert '"effective_from": "next_submitted_turn"' in source
-    assert '"signal_sent": False' in source
-    assert "append_and_signal" not in source
+    source = inspect.getsource(llm_routes)
+
+    assert not hasattr(llm_routes, "switch_task_model")
+    assert not hasattr(llm_routes, "TaskSwitchRequest")
+    assert '"/tasks/{task_id}/switch"' not in source
 
 
 def test_container_environment_service_has_no_llm_secret_resolution() -> None:

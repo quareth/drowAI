@@ -14,6 +14,13 @@ selection, and runtime-safe selection payloads. The agent provider layer owns
 provider/model metadata, provider-neutral LLM contracts, factory registration,
 and provider-specific adapters for OpenAI and Anthropic.
 
+The deployment-aware text-LLM implementation follows the
+[Deployment-aware LLM HLD](../devdocs/hldd/deployment-aware-llm-architecture-hld.md)
+as design context. This document describes the verified wired state.
+Deployment references are authoritative for active text-LLM selections;
+provider/model values remain compatibility snapshots and historical
+attribution fields.
+
 GPT-5.6 is represented by exact OpenAI profiles for `gpt-5.6-sol`,
 `gpt-5.6-terra`, and `gpt-5.6-luna`; the non-listable `gpt-5.6` API alias uses
 the Sol profile. Each profile has a 1,050,000-token context window, a
@@ -31,6 +38,8 @@ Owned by the model layer:
 - Public catalog metadata and selectable-model validation.
 - Encrypted per-user provider credentials.
 - Saved per-user conversation and reporting LLM selections.
+- User-owned inference connections, deployments, routes, and capability
+  observations for text-LLM resolution.
 - Runtime-safe provider/model/credential-ref payloads.
 - Role-aware call target resolution for multi-model execution.
 - Provider-neutral `LLMClient` interface.
@@ -69,7 +78,7 @@ Backend management and runtime wiring:
 
 - `backend/routers/llm.py`
   - Public model catalog, conversation/reporting selection, credential,
-    runtime switch, and conversation lifecycle routes.
+    deployment-aware memory dependency, and conversation lifecycle routes.
 - `backend/routers/chat/submit.py`
   - Builds the runtime LLM selection for chat turns.
 - `backend/services/llm_provider/catalog_service.py`
@@ -77,9 +86,11 @@ Backend management and runtime wiring:
 - `backend/services/llm_provider/credential_service.py`
   - Stores encrypted credentials and resolves short-lived provider secrets.
 - `backend/services/llm_provider/selection_service.py`
-  - Persists the user's default provider/model selection.
+  - Persists the user's default conversation deployment reference and
+    provider/model compatibility snapshot.
 - `backend/services/llm_provider/reporting_selection_service.py`
-  - Persists and validates the independent reporting provider/model selection.
+  - Persists and validates the independent reporting deployment reference and
+    provider/model/reasoning compatibility snapshot.
 - `backend/services/llm_provider/runtime_config_service.py`
   - Builds `LLMRuntimeSelection` and live `LLMRuntimeServices`.
 - `backend/services/llm_provider/runtime_client_resolver.py`
@@ -164,14 +175,30 @@ Durable state is split deliberately:
   - Encrypted provider credential row.
 - `LLMCredentialRef`
   - Non-secret `{user_id, provider}` pointer used in runtime payloads.
+- `LLMInferenceConnection`, `LLMModelDeployment`, `LLMDeploymentRoute`, and
+  `LLMCapabilityObservation`
+  - User-owned text-LLM endpoint identity, exact wire model, route metadata,
+    and capability evidence.
 - `UserLLMSelection`
-  - User's default conversation provider/model.
+  - User's default conversation deployment reference plus provider/model
+    compatibility snapshot.
 - `UserReportingLLMSelection`
-  - Independent provider/model/reasoning-effort selection for task memos and
-    engagement report sections.
+  - Independent reporting deployment reference plus provider/model/reasoning
+    compatibility snapshot for task memos and engagement report sections.
+- `UserMemoryLLMSelection`
+  - Memory gate/extraction deployment references plus provider/model
+    compatibility snapshots.
+- `UserEmbeddingSelection`
+  - Semantic-memory embedding provider/model, dimensions, and vector-family
+    identity. Embedding provider/model, dimensions, and vector-family fields
+    remain unchanged and are not deployment-aware in Phases 1-6.
 - `LLMRuntimeSelection`
-  - Non-secret runtime payload: provider, model, credential ref, and optional
-    reasoning effort.
+  - Legacy non-secret runtime payload: provider, model, credential ref, and
+    optional reasoning effort. New text-LLM turns use the V2 deployment form
+    outside deterministic tests.
+- `LLMRuntimeSelectionV2`
+  - Checkpoint-safe deployment reference, expected revision, optional route,
+    reasoning effort, and compatibility provider/model snapshot.
 - `LLMRuntimeServices`
   - Live invocation-only service bag containing the runtime client resolver.
 
@@ -200,12 +227,12 @@ sequenceDiagram
     participant Factory as LLMClientFactory
     participant Adapter as Provider adapter
 
-    API->>Runtime: build_runtime_selection(user, provider, model, effort)
-    Runtime-->>API: LLMRuntimeSelection + LLMRuntimeServices
+    API->>Runtime: build_conversation_runtime_selection(user, override, effort)
+    Runtime-->>API: LLMRuntimeSelectionV2 + LLMRuntimeServices
     API->>Graph: metadata + llm_runtime_selection + runtime_services
     Node->>Resolver: get_client(selection, role target, user, task)
-    Resolver->>Resolver: resolve credential ref to short-lived secret
-    Resolver->>Factory: get_client(provider_model, api_key)
+    Resolver->>Resolver: authorize deployment and resolve short-lived secret
+    Resolver->>Factory: get_client(effective provider/model, api_key)
     Factory-->>Resolver: LLMClient adapter
     Resolver-->>Node: budget-enforcing LLMClient
     Node->>Adapter: provider-neutral chat/tool/stream call
@@ -217,7 +244,9 @@ Raw API keys in metadata are not supported.
 
 `runtime_services` is a live object, so it is attached only to local invocation
 config and stripped before checkpoint/state inspection. The serializable state
-keeps provider/model and credential references only.
+keeps V2 deployment references plus compatibility provider/model snapshots
+only. Legacy provider/model checkpoints are no longer written for new
+non-deterministic turns.
 
 Reporting generation follows a separate saved-selection lifecycle from the
 default conversation selection. Authenticated `GET` and `PUT`
@@ -399,14 +428,28 @@ or router code should change.
 - Output budget and context-window checks run before provider API calls.
 - Provider adapters normalize errors into provider-neutral exceptions.
 
+## Deployment-Aware Implementation Notes
+
+- Active text-LLM execution resolves through deployment references. Provider
+  and model fields on text selections remain compatibility snapshots and are
+  not sufficient runtime authority.
+- `/api/settings` no longer exposes or accepts OpenAI text-LLM mirrors; OpenAI
+  credentials and selections are owned by provider/deployment services.
+- The legacy task-switch route is removed. Selection changes are user-global
+  and affect later workload invocations, not running or paused work.
+- Tenant-admin connection sharing, relay egress, and dynamic policy routing are
+  deferred. The current implementation is user-owned and fails closed instead
+  of falling back to another deployment.
+- Embedding provider/model, dimensions, and vector-family fields remain
+  unchanged. The provider-based embedding credential resolver remains available
+  for the unchanged embedding path.
+
 ## Operational Notes
 
 - Adapter availability affects catalog availability and selectability.
-- The default provider/model comes from the profile registry and selection
-  service defaults.
-- OpenAI legacy settings mirrors still exist for compatibility paths.
-- Runtime model switching writes a task-scoped control message carrying the new
-  non-secret runtime selection.
+- The default compatibility provider/model comes from the profile registry and
+  selection service defaults when a user has no saved text selection.
+- Text-LLM selections must map to a user-owned deployment to be runnable.
 - Multi-provider role routing requires credentials for every target provider.
 - Model profile limits should be updated before increasing runtime defaults.
 

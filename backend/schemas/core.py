@@ -37,9 +37,6 @@ class PasswordChangeRequest(BaseModel):
 
 
 class UserSettingsBase(BaseModel):
-    openai_api_key: Optional[str] = None
-    openai_model: str = "gpt-5.2"
-    enable_ai: bool = True
     shodan_api_key: Optional[str] = None
     session_timeout: int = 1800
     theme: str = "dark"
@@ -51,8 +48,6 @@ class UserSettingsCreate(UserSettingsBase):
 
 
 class UserSettingsUpdate(BaseModel):
-    openai_api_key: Optional[str] = None
-    openai_model: Optional[str] = None
     shodan_api_key: Optional[str] = None
     session_timeout: Optional[int] = None
     theme: Optional[str] = None

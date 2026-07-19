@@ -190,12 +190,16 @@ LangGraph execution is backend-orchestrated but runtime-facing.
 
 Flow:
 
-1. Chat route validates provider/model and reserves chat messages.
+1. Chat route reserves chat messages and enters backend generation.
 2. Background generation calls `run_langgraph_generation`.
-3. `LangGraphChatFacade` builds runtime config and selects the graph branch.
+3. `LangGraphChatFacade` resolves deployment-bound text-LLM selection before
+   graph execution and attaches only non-secret runtime metadata plus live
+   runtime services.
 4. Graph nodes call runtime/tool services through configured runtime context.
-5. Stream events publish live packets and persist replay rows.
-6. Completion callbacks finalize chat messages, tool rows, usage, and state.
+5. The LLM runtime resolver revalidates the deployment reference, owner,
+   revision, route, and credential before constructing a provider client.
+6. Stream events publish live packets and persist replay rows.
+7. Completion callbacks finalize chat messages, tool rows, usage, and state.
 
 Branches:
 

@@ -146,11 +146,12 @@ def _build_client(
             )
             deployment_id = str(deployment.id)
         else:
-            selection_service.set_selection(
+            selection = selection_service.set_selection(
                 user_id=user.id,
                 provider=selected_provider,
                 model=selected_model,
             )
+            deployment_id = str(selection.deployment_id) if selection.deployment_id else None
         db.commit()
         seeded = {
             "user_id": user.id,
@@ -227,12 +228,14 @@ def test_chat_route_ignores_client_mode_for_generation(monkeypatch) -> None:
         generation_call = captured_calls[0]
         assert generation_call["requested_mode"] is None
         assert generation_call["provider"] == "openai"
-        assert generation_call["runtime_selection"]["provider"] == "openai"
-        assert generation_call["runtime_selection"]["model"] == "gpt-5.2"
-        assert generation_call["runtime_selection"]["credential_ref"] == {
-            "user_id": seeded["user_id"],
-            "provider": "openai",
+        assert generation_call["runtime_selection"]["schema_version"] == 2
+        assert generation_call["runtime_selection"]["deployment_ref"] == {
+            "deployment_id": seeded["deployment_id"],
+            "expected_revision": 1,
         }
+        assert generation_call["runtime_selection"]["legacy_provider"] == "openai"
+        assert generation_call["runtime_selection"]["legacy_model"] == "gpt-5.2"
+        assert "credential_ref" not in generation_call["runtime_selection"]
         assert "api_key" not in generation_call["runtime_selection"]
         assert asyncio.create_task is original_create_task
     finally:
@@ -291,9 +294,11 @@ def test_chat_route_ignores_client_mode_for_queueing(monkeypatch) -> None:
         assert hub.queued_payload["kwargs"]["requested_mode"] is None
         assert hub.queued_payload["kwargs"]["provider"] == "openai"
         assert hub.queued_payload["kwargs"]["model"] == "gpt-5.2"
-        assert hub.queued_payload["kwargs"]["credential_ref"] == {
-            "user_id": seeded["user_id"],
-            "provider": "openai",
+        assert hub.queued_payload["kwargs"]["credential_ref"] is None
+        assert hub.queued_payload["kwargs"]["runtime_selection"]["schema_version"] == 2
+        assert hub.queued_payload["kwargs"]["runtime_selection"]["deployment_ref"] == {
+            "deployment_id": seeded["deployment_id"],
+            "expected_revision": 1,
         }
         assert "api_key" not in hub.queued_payload["kwargs"]
     finally:
@@ -317,8 +322,11 @@ def test_chat_route_accepts_provider_model_override_for_generation(monkeypatch) 
         call = captured_calls[0]
         assert call["provider"] == "openai"
         assert call["model"] == "gpt-5-mini"
-        assert call["runtime_selection"]["provider"] == "openai"
-        assert call["runtime_selection"]["model"] == "gpt-5-mini"
+        assert call["runtime_selection"]["schema_version"] == 2
+        assert call["runtime_selection"]["deployment_ref"]["expected_revision"] == 1
+        assert call["runtime_selection"]["legacy_provider"] == "openai"
+        assert call["runtime_selection"]["legacy_model"] == "gpt-5-mini"
+        assert "credential_ref" not in call["runtime_selection"]
         assert "api_key" not in call["runtime_selection"]
     finally:
         seeded["_cleanup"]()
@@ -342,12 +350,11 @@ def test_chat_route_accepts_explicit_anthropic_provider_model(monkeypatch) -> No
         call = captured_calls[0]
         assert call["provider"] == ANTHROPIC_PROVIDER_ID
         assert call["model"] == model
-        assert call["runtime_selection"]["provider"] == ANTHROPIC_PROVIDER_ID
-        assert call["runtime_selection"]["model"] == model
-        assert call["runtime_selection"]["credential_ref"] == {
-            "user_id": seeded["user_id"],
-            "provider": ANTHROPIC_PROVIDER_ID,
-        }
+        assert call["runtime_selection"]["schema_version"] == 2
+        assert call["runtime_selection"]["deployment_ref"]["expected_revision"] == 1
+        assert call["runtime_selection"]["legacy_provider"] == ANTHROPIC_PROVIDER_ID
+        assert call["runtime_selection"]["legacy_model"] == model
+        assert "credential_ref" not in call["runtime_selection"]
         assert "api_key" not in call["runtime_selection"]
     finally:
         seeded["_cleanup"]()
@@ -375,12 +382,14 @@ def test_chat_route_uses_saved_anthropic_provider_when_provider_omitted(monkeypa
         call = captured_calls[0]
         assert call["provider"] == ANTHROPIC_PROVIDER_ID
         assert call["model"] == model
-        assert call["runtime_selection"]["provider"] == ANTHROPIC_PROVIDER_ID
-        assert call["runtime_selection"]["model"] == model
-        assert call["runtime_selection"]["credential_ref"] == {
-            "user_id": seeded["user_id"],
-            "provider": ANTHROPIC_PROVIDER_ID,
+        assert call["runtime_selection"]["schema_version"] == 2
+        assert call["runtime_selection"]["deployment_ref"] == {
+            "deployment_id": seeded["deployment_id"],
+            "expected_revision": 1,
         }
+        assert call["runtime_selection"]["legacy_provider"] == ANTHROPIC_PROVIDER_ID
+        assert call["runtime_selection"]["legacy_model"] == model
+        assert "credential_ref" not in call["runtime_selection"]
         assert "api_key" not in call["runtime_selection"]
     finally:
         seeded["_cleanup"]()

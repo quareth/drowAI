@@ -23,6 +23,7 @@ from backend.models.llm import UserEmbeddingSelection, UserMemoryLLMSelection
 from backend.services.llm_provider.selection_deployment_resolver import (
     LLMSelectionDeploymentResolver,
 )
+from backend.services.llm_provider.migration_service import LLMProviderMigrationService
 from backend.services.llm_provider.types import (
     DeploymentRef,
     LLMCredentialRef,
@@ -74,6 +75,7 @@ class EmbeddingRuntimeSelectionService:
         self._deployment_resolver = (
             LLMSelectionDeploymentResolver(db) if db is not None else None
         )
+        self._migration = LLMProviderMigrationService(db) if db is not None else None
 
     def get_embedding_selection(self, *, user_id: int) -> UserEmbeddingSelection:
         """Return or create the durable memory embedding selection for a user."""
@@ -191,6 +193,11 @@ class EmbeddingRuntimeSelectionService:
                 self._db.flush()
             return row
 
+        if self._migration is not None:
+            self._migration.backfill_deployment_identity_for_user(int(user_id))
+            if row.gate_deployment_id is not None and row.extraction_deployment_id is not None:
+                return self.get_memory_llm_selection(user_id=user_id)
+
         gate_model, extraction_model = _validate_memory_llm_selection(
             row.provider,
             row.gate_model,
@@ -224,6 +231,22 @@ class EmbeddingRuntimeSelectionService:
             gate_model,
             extraction_model,
         )
+        if self._migration is None:
+            raise RuntimeError("Durable memory LLM selection requires a database session")
+        gate_deployment = self._migration.ensure_legacy_default_deployment_for_model(
+            user_id=int(user_id),
+            provider=OPENAI_PROVIDER_ID,
+            wire_model_id=normalized_gate_model,
+        )
+        extraction_deployment = self._migration.ensure_legacy_default_deployment_for_model(
+            user_id=int(user_id),
+            provider=OPENAI_PROVIDER_ID,
+            wire_model_id=normalized_extraction_model,
+        )
+        if gate_deployment is None or extraction_deployment is None:
+            raise ProviderConfigurationError(
+                "Memory LLM selection requires deployment bindings"
+            )
         row = self._get_memory_llm_row(user_id)
         if row is None:
             row = UserMemoryLLMSelection(user_id=int(user_id))
@@ -231,8 +254,8 @@ class EmbeddingRuntimeSelectionService:
         row.provider = OPENAI_PROVIDER_ID
         row.gate_model = normalized_gate_model
         row.extraction_model = normalized_extraction_model
-        row.gate_deployment_id = None
-        row.extraction_deployment_id = None
+        row.gate_deployment_id = gate_deployment.id
+        row.extraction_deployment_id = extraction_deployment.id
         self._db.flush()
         return row
 
@@ -347,6 +370,10 @@ class EmbeddingRuntimeSelectionService:
                 str(extraction.deployment.id), int(extraction.deployment.revision)
             )
         else:
+            if row is not None:
+                raise ProviderConfigurationError(
+                    "Memory LLM selection has no deployment binding"
+                )
             gate_model, extraction_model = _validate_memory_llm_selection(
                 provider,
                 gate_model,

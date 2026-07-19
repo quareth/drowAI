@@ -59,7 +59,7 @@ def _seed_user_task(db, *, username: str) -> tuple[User, Task]:
     db.add(user)
     db.commit()
     db.refresh(user)
-    db.add(UserSettings(user_id=user.id, openai_model="gpt-5.2"))
+    db.add(UserSettings(user_id=user.id))
     tenant = Tenant(
         slug=f"gpt-oss-proof-{uuid4().hex[:12]}",
         name="GPT-OSS proof tenant",

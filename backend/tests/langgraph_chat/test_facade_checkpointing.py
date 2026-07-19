@@ -24,6 +24,28 @@ from backend.services.langgraph_chat.exceptions import HITLError
 from backend.services.llm_provider.types import ProviderConfigurationError
 
 GRAPH_THREAD_ID = "a" * 32
+DEPLOYMENT_ID = "11111111-1111-4111-8111-111111111111"
+ALT_DEPLOYMENT_ID = "22222222-2222-4222-8222-222222222222"
+
+
+def _v2_selection(
+    *,
+    deployment_id: str = DEPLOYMENT_ID,
+    model: str = "gpt-5.2",
+    reasoning_effort: str | None = None,
+) -> Dict[str, Any]:
+    selection: Dict[str, Any] = {
+        "schema_version": 2,
+        "deployment_ref": {
+            "deployment_id": deployment_id,
+            "expected_revision": 1,
+        },
+        "legacy_provider": "openai",
+        "legacy_model": model,
+    }
+    if reasoning_effort is not None:
+        selection["reasoning_effort"] = reasoning_effort
+    return selection
 
 
 def test_build_checkpoint_execution_config_includes_required_fields() -> None:
@@ -41,12 +63,7 @@ def test_build_checkpoint_execution_config_includes_required_fields() -> None:
 def test_build_checkpoint_execution_config_carries_provider_runtime_for_invocation() -> None:
     """Resume config carries non-secret LLM runtime plus live invocation services."""
     runtime_services = object()
-    selection = {
-        "provider": "openai",
-        "model": "gpt-5.2",
-        "credential_ref": {"user_id": 9, "provider": "openai"},
-        "reasoning_effort": "medium",
-    }
+    selection = _v2_selection(reasoning_effort="medium")
 
     config = build_checkpoint_execution_config(
         task_id=7,
@@ -78,11 +95,10 @@ def test_build_checkpoint_execution_config_carries_provider_runtime_for_invocati
         "actor_id": "langgraph",
         "runner_id": "runner-a",
         "execution_site_id": "site-a",
-        "provider": "openai",
-        "model": "gpt-5.2",
-        "credential_ref": {"user_id": 9, "provider": "openai"},
+        "llm_runtime_selection": selection,
         "reasoning_effort": "medium",
     }
+    assert "credential_ref" not in repr(configurable)
     assert "api_key" not in repr(configurable)
 
 
@@ -156,12 +172,7 @@ async def test_continuation_rebuilds_runtime_dependencies_from_user_id(monkeypat
 
     class _Selection:
         def to_dict(self) -> Dict[str, Any]:
-            return {
-                "provider": "openai",
-                "model": "gpt-5.2",
-                "credential_ref": {"user_id": 77, "provider": "openai"},
-                "reasoning_effort": None,
-            }
+            return _v2_selection()
 
     class _RuntimeConfigService:
         def __init__(self, _db: Any) -> None:
@@ -208,14 +219,10 @@ async def test_continuation_rebuilds_runtime_dependencies_from_user_id(monkeypat
 
     assert result.metadata["interrupt"] is True
     configurable = captured_configs[0]["configurable"]
-    assert configurable["llm_runtime_selection"] == {
-        "provider": "openai",
-        "model": "gpt-5.2",
-        "credential_ref": {"user_id": 77, "provider": "openai"},
-        "reasoning_effort": None,
-    }
+    assert configurable["llm_runtime_selection"] == _v2_selection()
     assert configurable["runtime_projection"]["user_id"] == 77
     assert configurable["runtime_services"].client_resolver is not None
+    assert "credential_ref" not in repr(configurable)
     assert "api_key" not in repr(configurable)
 
 
@@ -240,12 +247,7 @@ async def test_continuation_runtime_services_remain_live_through_llm_resolution(
 
     class _Selection:
         def to_dict(self) -> Dict[str, Any]:
-            return {
-                "provider": "openai",
-                "model": "gpt-5.2",
-                "credential_ref": {"user_id": 77, "provider": "openai"},
-                "reasoning_effort": None,
-            }
+            return _v2_selection()
 
     class _Resolver:
         def __init__(self, db: _Session) -> None:
@@ -370,12 +372,11 @@ async def test_continuation_resolves_checkpoint_runtime_hint(monkeypatch) -> Non
 
     class _Selection:
         def to_dict(self) -> Dict[str, Any]:
-            return {
-                "provider": "openai",
-                "model": "gpt-4o-mini",
-                "credential_ref": {"user_id": 77, "provider": "openai"},
-                "reasoning_effort": "low",
-            }
+            return _v2_selection(
+                deployment_id=ALT_DEPLOYMENT_ID,
+                model="gpt-4o-mini",
+                reasoning_effort="low",
+            )
 
     class _RuntimeConfigService:
         def __init__(self, _db: Any) -> None:
@@ -449,12 +450,11 @@ async def test_continuation_resolves_checkpoint_runtime_hint(monkeypatch) -> Non
         {"provider": "openai", "model": "gpt-4o-mini", "reasoning_effort": "low"}
     ]
     configurable = captured_configs[0]["configurable"]
-    assert configurable["llm_runtime_selection"] == {
-        "provider": "openai",
-        "model": "gpt-4o-mini",
-        "credential_ref": {"user_id": 77, "provider": "openai"},
-        "reasoning_effort": "low",
-    }
+    assert configurable["llm_runtime_selection"] == _v2_selection(
+        deployment_id=ALT_DEPLOYMENT_ID,
+        model="gpt-4o-mini",
+        reasoning_effort="low",
+    )
     assert result.metadata["llm_runtime_selection"] == configurable[
         "llm_runtime_selection"
     ]

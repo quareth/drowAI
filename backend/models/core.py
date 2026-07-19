@@ -72,11 +72,6 @@ class UserSettings(Base):
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
 
-    # OpenAI Configuration
-    openai_api_key = Column(Text, nullable=True)  # Encrypted storage
-    openai_model = Column(String(50), default="gpt-5.2")
-    enable_ai = Column(Boolean, default=True)
-
     # Other API Keys
     shodan_api_key = Column(Text, nullable=True)
 

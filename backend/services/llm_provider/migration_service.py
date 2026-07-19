@@ -386,6 +386,49 @@ class LLMProviderMigrationService:
         )
         return connection
 
+    def ensure_legacy_default_deployment_for_model(
+        self,
+        *,
+        user_id: int,
+        provider: str,
+        wire_model_id: str,
+    ) -> LLMModelDeployment | None:
+        """Return/create the designated legacy-default deployment for a model."""
+
+        model = str(wire_model_id).strip()
+        if not _valid_wire_model_id(model):
+            return None
+        connection = self.ensure_legacy_default_connection_for_provider(
+            user_id=int(user_id),
+            provider=provider,
+        )
+        if connection is None:
+            return None
+        deployment = self._db.execute(
+            select(LLMModelDeployment).where(
+                LLMModelDeployment.connection_id == connection.id,
+                LLMModelDeployment.wire_model_id == model,
+            )
+        ).scalar_one_or_none()
+        if deployment is not None:
+            return deployment
+        deployment = LLMModelDeployment(
+            id=deterministic_legacy_deployment_id(connection.id, model),
+            connection_id=connection.id,
+            wire_model_id=model,
+            canonical_model_id=None,
+            display_name=model,
+            discovery_source="legacy_selection_write",
+            source_metadata=None,
+            lifecycle_state="active",
+            availability_state="unknown",
+            enabled=True,
+            revision=1,
+        )
+        self._db.add(deployment)
+        self._db.flush()
+        return deployment
+
     def _ensure_legacy_connection(
         self,
         *,
@@ -431,10 +474,13 @@ class LLMProviderMigrationService:
             return False
 
         existing = self._db.execute(
-            select(UserLLMProviderCredential).where(
+            select(UserLLMProviderCredential.id)
+            .where(
                 UserLLMProviderCredential.user_id == settings.user_id,
                 UserLLMProviderCredential.provider == OPENAI_PROVIDER_ID,
             )
+            .order_by(UserLLMProviderCredential.id.asc())
+            .limit(1)
         ).scalar_one_or_none()
         if existing is not None:
             return False

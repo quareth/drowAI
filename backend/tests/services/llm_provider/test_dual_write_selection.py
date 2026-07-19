@@ -1,4 +1,4 @@
-"""Tests for dual-written LLM selection deployment refs and legacy snapshots."""
+"""Tests for dual-written LLM selection deployment refs and compatibility fields."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from backend.models import (
     User,
     UserLLMSelection,
     UserReportingLLMSelection,
-    UserSettings,
 )
 from backend.services.llm_provider.reporting_selection_service import (
     ReportingLLMSelectionService,
@@ -55,7 +54,7 @@ def _active_openai_deployment(
     return deployment
 
 
-def test_conversation_read_prefers_deployment_ref_and_updates_legacy_snapshot(
+def test_conversation_read_prefers_deployment_ref_and_updates_selection_fields(
     llm_identity_db: Session,
     identity_users: tuple[User, User],
 ) -> None:
@@ -63,16 +62,13 @@ def test_conversation_read_prefers_deployment_ref_and_updates_legacy_snapshot(
 
     owner, _ = identity_users
     deployment = _active_openai_deployment(llm_identity_db, user_id=owner.id)
-    llm_identity_db.add_all(
-        [
-            UserSettings(user_id=owner.id, openai_model="gpt-5-mini"),
-            UserLLMSelection(
-                user_id=owner.id,
-                provider="anthropic",
-                model="claude-sonnet-4-6",
-                deployment_id=deployment.id,
-            ),
-        ]
+    llm_identity_db.add(
+        UserLLMSelection(
+            user_id=owner.id,
+            provider="anthropic",
+            model="claude-sonnet-4-6",
+            deployment_id=deployment.id,
+        )
     )
     llm_identity_db.flush()
 
@@ -81,12 +77,6 @@ def test_conversation_read_prefers_deployment_ref_and_updates_legacy_snapshot(
     assert selection.deployment_id == deployment.id
     assert selection.provider == "openai"
     assert selection.model == "gpt-5.2"
-    settings = (
-        llm_identity_db.query(UserSettings)
-        .filter(UserSettings.user_id == owner.id)
-        .one()
-    )
-    assert settings.openai_model == "gpt-5.2"
 
 
 def test_selection_read_prefers_deployment_ref_for_compatibility_fields(

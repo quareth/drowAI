@@ -765,18 +765,23 @@ class IntentClassifier:
         """Resolve the existing role-policy settings for this classifier turn."""
         chat_inputs = runtime_config.chat_inputs
         runtime_selection = runtime_config.llm_runtime_selection
+        conversation_provider = chat_inputs.provider
+        conversation_model = chat_inputs.model
+        if isinstance(runtime_selection, dict):
+            conversation_provider = (
+                runtime_selection.get("provider")
+                or runtime_selection.get("legacy_provider")
+                or conversation_provider
+            )
+            conversation_model = (
+                runtime_selection.get("model")
+                or runtime_selection.get("legacy_model")
+                or conversation_model
+            )
         return self._model_role_registry.resolve_call_settings(
             ROLE_INTENT_CLASSIFIER,
-            conversation_provider=(
-                runtime_selection.get("provider")
-                if isinstance(runtime_selection, dict)
-                else chat_inputs.provider
-            ),
-            conversation_model=(
-                runtime_selection.get("model")
-                if isinstance(runtime_selection, dict)
-                else chat_inputs.model
-            ),
+            conversation_provider=conversation_provider,
+            conversation_model=conversation_model,
             reasoning_effort=chat_inputs.reasoning_effort,
         )
 

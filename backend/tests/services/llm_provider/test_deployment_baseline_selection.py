@@ -13,7 +13,7 @@ from backend.models import (
     User,
     UserLLMSelection,
     UserMemoryLLMSelection,
-    UserSettings,
+    UserReportingLLMSelection,
 )
 from backend.services.embeddings.selection_service import (
     DEFAULT_MEMORY_EXTRACTION_MODEL,
@@ -21,7 +21,6 @@ from backend.services.embeddings.selection_service import (
     EmbeddingRuntimeSelectionService,
 )
 from backend.services.llm_provider import (
-    CredentialNotFoundError,
     LLMCredentialRef,
     LLMCredentialService,
     LLMProviderSelectionService,
@@ -43,32 +42,19 @@ def _create_user(db, username_prefix: str = "deployment-selection") -> User:
     return user
 
 
-def test_legacy_conversation_selection_writes_openai_mirror_without_credential() -> None:
+def test_legacy_conversation_selection_requires_deployment_binding() -> None:
     db = SessionLocal()
     try:
         user = _create_user(db)
         service = LLMProviderSelectionService(db)
 
-        selection = service.set_selection(
-            user_id=user.id,
-            provider="OpenAI",
-            model="GPT-5-MINI",
-            require_enabled_credential=False,
-        )
-        db.commit()
-
-        read = service.get_selection_read(user.id)
-        settings = db.query(UserSettings).filter_by(user_id=user.id).one()
-
-        assert selection.provider == OPENAI_PROVIDER_ID
-        assert selection.model == "gpt-5-mini"
-        assert read.selection.provider == OPENAI_PROVIDER_ID
-        assert read.selection.model == "gpt-5-mini"
-        assert read.status.status == "credential_missing"
-        assert read.status.selectable is True
-        assert read.status.runnable is False
-        assert settings.openai_model == "gpt-5-mini"
-        assert service.get_openai_model_compat(user.id) == "gpt-5-mini"
+        with pytest.raises(ProviderConfigurationError, match="deployment binding"):
+            service.set_selection(
+                user_id=user.id,
+                provider="OpenAI",
+                model="GPT-5-MINI",
+                require_enabled_credential=False,
+            )
     finally:
         db.close()
 
@@ -135,21 +121,23 @@ def test_missing_credentials_are_selectable_but_unrunnable_for_chat_and_reportin
 
         chat_read = LLMProviderSelectionService(db).get_selection_read(user.id)
         reporting_service = ReportingLLMSelectionService(db)
-        reporting_service.set_selection(
-            user_id=user.id,
-            provider=OPENAI_PROVIDER_ID,
-            model=OPENAI_DEFAULT_MODEL_ID,
+        db.add(
+            UserReportingLLMSelection(
+                user_id=user.id,
+                provider=OPENAI_PROVIDER_ID,
+                model=OPENAI_DEFAULT_MODEL_ID,
+            )
         )
         db.commit()
         reporting_read = reporting_service.get_selection_read(user.id)
 
-        assert chat_read.status.status == "credential_missing"
+        assert chat_read.status.status == "deployment_unmapped"
         assert chat_read.status.selectable is True
         assert chat_read.status.runnable is False
-        with pytest.raises(CredentialNotFoundError):
-            LLMRuntimeConfigService(db).build_runtime_selection(user_id=user.id)
+        with pytest.raises(ProviderConfigurationError):
+            LLMRuntimeConfigService(db).build_conversation_runtime_selection(user_id=user.id)
 
-        assert reporting_read.status.status == "credential_missing"
+        assert reporting_read.status.status == "deployment_unmapped"
         assert reporting_read.status.selectable is True
         assert reporting_read.status.runnable is False
         with pytest.raises(ProviderConfigurationError):
@@ -158,11 +146,22 @@ def test_missing_credentials_are_selectable_but_unrunnable_for_chat_and_reportin
         db.close()
 
 
-def test_reporting_and_memory_llm_selections_remain_provider_model_rows() -> None:
+def test_reporting_and_memory_llm_selections_retain_snapshots_with_deployment_refs() -> None:
     db = SessionLocal()
     try:
         user = _create_user(db, "deployment-selection-reporting-memory")
         credential_refs: list[tuple[int, str]] = []
+        credentials = LLMCredentialService(db)
+        credentials.upsert_api_key(
+            user_id=user.id,
+            provider=ANTHROPIC_PROVIDER_ID,
+            api_key="sk-anthropic",
+        )
+        credentials.upsert_api_key(
+            user_id=user.id,
+            provider=OPENAI_PROVIDER_ID,
+            api_key="sk-openai",
+        )
 
         reporting = ReportingLLMSelectionService(db).set_selection(
             user_id=user.id,
@@ -194,12 +193,17 @@ def test_reporting_and_memory_llm_selections_remain_provider_model_rows() -> Non
 
         assert reporting.provider == ANTHROPIC_PROVIDER_ID
         assert reporting.model == "claude-sonnet-5"
+        assert reporting.deployment_id is not None
         assert reporting.reasoning_effort == "high"
         assert memory.provider == OPENAI_PROVIDER_ID
         assert stored_memory.gate_model == DEFAULT_MEMORY_GATE_MODEL
+        assert stored_memory.gate_deployment_id is not None
+        assert stored_memory.extraction_deployment_id is not None
         assert resolved_memory.provider == OPENAI_PROVIDER_ID
         assert resolved_memory.gate_model == DEFAULT_MEMORY_GATE_MODEL
         assert resolved_memory.extraction_model == DEFAULT_MEMORY_EXTRACTION_MODEL
+        assert resolved_memory.gate_deployment_ref is not None
+        assert resolved_memory.extraction_deployment_ref is not None
         assert credential_refs == [(user.id, OPENAI_PROVIDER_ID)]
     finally:
         db.close()
