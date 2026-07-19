@@ -14,6 +14,12 @@ from urllib.parse import urlsplit
 
 import pytest
 
+from backend.services.llm_provider._connection_operation_contracts import (
+    OperationRegistryError as SharedOperationRegistryError,
+)
+from backend.services.llm_provider._connection_preset_catalog import (
+    ProvingConnectionPreset as CatalogProvingConnectionPreset,
+)
 from backend.services.llm_provider.guarded_transport import GuardedTransport
 from backend.services.llm_provider import operation_registry
 from backend.services.llm_provider.operation_registry import (
@@ -152,6 +158,8 @@ def test_facade_exports_exact_public_names_and_imports() -> None:
     assert operation_registry.ConnectionOperationRegistry is ConnectionOperationRegistry
     assert operation_registry.OperationRegistryError is OperationRegistryError
     assert operation_registry.ProvingConnectionPreset is ProvingConnectionPreset
+    assert OperationRegistryError is SharedOperationRegistryError
+    assert ProvingConnectionPreset is CatalogProvingConnectionPreset
     assert issubclass(OperationRegistryError, ValueError)
     assert tuple(field.name for field in fields(ProvingConnectionPreset)) == (
         EXPECTED_PRESET_FIELDS
@@ -694,13 +702,26 @@ def _load_operation_registry_copy(
     tmp_path: Path,
     manifest: dict[str, object],
 ) -> ModuleType:
-    module_path = tmp_path / "operation_registry.py"
-    manifest_path = tmp_path / "connection_presets_manifest.json"
+    package_path = tmp_path / "backend" / "services" / "llm_provider"
+    package_path.mkdir(parents=True)
+    module_path = package_path / "operation_registry.py"
+    catalog_path = package_path / "_connection_preset_catalog.py"
+    manifest_path = package_path / "connection_presets_manifest.json"
     module_path.write_text(
         Path(operation_registry.__file__).read_text(encoding="utf-8"),
         encoding="utf-8",
     )
+    catalog_module_name = (
+        "backend.services.llm_provider._connection_preset_catalog"
+    )
+    loaded_catalog = sys.modules[catalog_module_name]
+    catalog_path.write_text(
+        Path(loaded_catalog.__file__).read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    import backend.services.llm_provider as llm_provider_package
 
     module_name = (
         "backend.services.llm_provider._operation_registry_import_characterization"
@@ -709,11 +730,35 @@ def _load_operation_registry_copy(
     assert spec is not None
     assert spec.loader is not None
     module = importlib.util.module_from_spec(spec)
+    had_catalog_attribute = hasattr(
+        llm_provider_package,
+        "_connection_preset_catalog",
+    )
+    prior_catalog_attribute = getattr(
+        llm_provider_package,
+        "_connection_preset_catalog",
+        None,
+    )
+    sys.modules.pop(catalog_module_name)
+    if had_catalog_attribute:
+        delattr(llm_provider_package, "_connection_preset_catalog")
+    llm_provider_package.__path__.insert(0, str(package_path))
     sys.modules[module_name] = module
     try:
         spec.loader.exec_module(module)
     finally:
         sys.modules.pop(module_name, None)
+        sys.modules.pop(catalog_module_name, None)
+        llm_provider_package.__path__.remove(str(package_path))
+        sys.modules[catalog_module_name] = loaded_catalog
+        if had_catalog_attribute:
+            setattr(
+                llm_provider_package,
+                "_connection_preset_catalog",
+                prior_catalog_attribute,
+            )
+        elif hasattr(llm_provider_package, "_connection_preset_catalog"):
+            delattr(llm_provider_package, "_connection_preset_catalog")
     return module
 
 

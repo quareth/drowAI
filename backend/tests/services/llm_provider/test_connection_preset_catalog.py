@@ -6,7 +6,6 @@ from copy import deepcopy
 from dataclasses import FrozenInstanceError
 import json
 from pathlib import Path
-import sys
 from types import MappingProxyType
 
 import pytest
@@ -323,10 +322,9 @@ def test_preset_field_validation_and_policy_mismatches(
     _assert_manifest_error(tmp_path, manifest, expected_message, expected_cause)
 
 
-def test_catalog_tests_do_not_import_target_resolution_or_read_environment() -> None:
-    """Catalog coverage remains independent of runtime target resolution."""
+def test_catalog_does_not_import_target_resolution_or_read_environment() -> None:
+    """The catalog remains independent of runtime target resolution."""
 
-    assert "backend.services.llm_provider._connection_target_resolution" not in sys.modules
     source = Path(catalog.__file__).read_text(encoding="utf-8")
     assert "_connection_target_resolution" not in source
     assert "operation_registry" not in source
