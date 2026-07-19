@@ -498,7 +498,7 @@ describe("DeploymentPicker", () => {
     expect(screen.getByText("Hugging Face")).toBeTruthy();
     expect(screen.getByText("Team Hosted")).toBeTruthy();
     expect(screen.getByRole("heading", { name: "GPT-OSS 20B" })).toBeTruthy();
-    expect(screen.getByText("Wire: openai/gpt-oss-20b:fireworks-ai")).toBeTruthy();
+    expect(screen.queryByText("Wire: openai/gpt-oss-20b:fireworks-ai")).toBeNull();
     expect(screen.getAllByText(/Pricing: unavailable/i).length).toBeGreaterThan(0);
     expect(screen.queryByText("$0")).toBeNull();
     expect(screen.getByText("Current/default")).toBeTruthy();

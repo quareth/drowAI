@@ -378,7 +378,9 @@ def _connection_catalog_metadata(
 
     fields = _connection_config_fields(
         preset,
-        needs_wire_model=deployment is None,
+        needs_wire_model=(
+            deployment is None and preset.endpoint_config_field == "base_url"
+        ),
     )
     return {
         "presetId": preset.id,
@@ -405,15 +407,7 @@ def _connection_config_fields(preset, *, needs_wire_model: bool) -> list[dict[st
     fields: list[dict[str, object]] = []
     for name in preset.user_config_fields:
         if name == "display_label":
-            fields.append(
-                {
-                    "name": "display_label",
-                    "label": "Display label",
-                    "fieldType": "text",
-                    "required": False,
-                    "secret": False,
-                }
-            )
+            continue
         elif name == "api_key":
             fields.append(
                 {
@@ -452,6 +446,12 @@ def _connection_provider_label(preset) -> str:
 
     if preset.serving_operator_id == "huggingface":
         return "Hugging Face"
+    if preset.serving_operator_id == "nvidia_nim":
+        return "NVIDIA NIM"
+    if preset.serving_operator_id == "ollama_compatible":
+        return "Ollama"
+    if preset.serving_operator_id == "vllm":
+        return "vLLM"
     if preset.serving_operator_id == "organization_managed":
         return "Custom OpenAI-compatible"
     return preset.display_name

@@ -1,14 +1,14 @@
 /**
- * Provider-first chat model picker backed by the public LLM catalog.
+ * Model-first chat model picker backed by the public LLM catalog.
  *
- * Owns provider/model menu rendering and capability-aware reasoning effort
+ * Owns model/deployment menu rendering and capability-aware reasoning effort
  * choices without duplicating provider-specific model policy in the frontend.
  */
+import { useMemo } from "react";
 import { Check, ChevronDown } from "lucide-react";
 
 import {
   findSelectedCatalogEntry,
-  getSelectedModelDisplayLabel,
 } from "@/features/llm-provider/catalog";
 import {
   getVisibleReasoningEffortOptions,
@@ -43,11 +43,34 @@ export interface ProviderModelMenuProps {
   className?: string;
 }
 
+interface ModelChoice {
+  key: string;
+  label: string;
+  providerLabel: string;
+  selection: SelectedLLMModel;
+  model: LLMCatalogModel;
+  selectable: boolean;
+  statusLabel: string | null;
+}
+
+interface ModelGroup {
+  key: string;
+  label: string;
+  choices: ModelChoice[];
+}
+
 function isSameSelection(
   left: SelectedLLMModel | null | undefined,
   right: SelectedLLMModel,
 ): boolean {
-  return left?.provider === right.provider && left?.model === right.model;
+  const sameLegacy = left?.provider === right.provider && left?.model === right.model;
+  if (!sameLegacy) {
+    return false;
+  }
+  if (left?.deploymentRef || right.deploymentRef) {
+    return left?.deploymentRef?.deployment_id === right.deploymentRef?.deployment_id;
+  }
+  return true;
 }
 
 function isModelSelectable(provider: LLMCatalogProvider): boolean {
@@ -55,17 +78,190 @@ function isModelSelectable(provider: LLMCatalogProvider): boolean {
 }
 
 function ModelRowContent({
-  model,
+  label,
   selected,
+  statusLabel,
 }: {
-  model: LLMCatalogModel;
+  label: string;
   selected: boolean;
+  statusLabel?: string | null;
 }) {
   return (
     <div className="flex w-full min-w-0 items-center justify-between gap-2">
-      <span className="truncate">{model.label}</span>
+      <div className="flex min-w-0 flex-col">
+        <span className="truncate">{label}</span>
+        {statusLabel ? (
+          <span className="truncate text-[10px] text-slate-500">{statusLabel}</span>
+        ) : null}
+      </div>
       {selected ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : null}
     </div>
+  );
+}
+
+function buildModelGroups(providers: LLMCatalogProvider[]): ModelGroup[] {
+  const groups = new Map<string, ModelGroup>();
+
+  for (const provider of providers) {
+    const providerSelectable = isModelSelectable(provider);
+    for (const model of provider.models) {
+      const deploymentRef =
+        model.deploymentRef ??
+        model.connection?.deploymentRef ??
+        model.proving?.deploymentRef ??
+        null;
+      if (model.connection && !deploymentRef) {
+        continue;
+      }
+      const deploymentBacked = Boolean(model.connection || model.proving || model.deploymentRef);
+      const runnable =
+        model.connection?.runnability?.runnable ??
+        model.proving?.runnability?.runnable ??
+        model.runnable ??
+        false;
+      const selectable = providerSelectable && (!deploymentBacked || Boolean(deploymentRef && runnable));
+      const key = model.canonicalModelId?.trim() || `${provider.id}:${model.id}`;
+      const groupLabel = canonicalModelLabel(model);
+      const statusLabel = selectable
+        ? null
+        : providerSelectable
+          ? "Not ready"
+          : "Unavailable";
+      const choice: ModelChoice = {
+        key: `${provider.id}:${model.id}:${deploymentRef?.deployment_id ?? "legacy"}`,
+        label: deploymentRef ? deploymentChoiceLabel(provider, model) : model.label,
+        providerLabel: provider.label,
+        selection: {
+          provider: provider.id,
+          model: model.id,
+          ...(deploymentRef ? { deploymentRef } : {}),
+        },
+        model,
+        selectable,
+        statusLabel,
+      };
+      const existing = groups.get(key);
+      if (existing) {
+        existing.choices.push(choice);
+      } else {
+        groups.set(key, {
+          key,
+          label: groupLabel,
+          choices: [choice],
+        });
+      }
+    }
+  }
+
+  return Array.from(groups.values()).sort((left, right) =>
+    left.label.localeCompare(right.label),
+  );
+}
+
+function canonicalModelLabel(model: LLMCatalogModel): string {
+  return stripDeploymentQualifier(model.label.trim() || model.id);
+}
+
+function stripDeploymentQualifier(label: string): string {
+  const stripped = label.replace(/\s+via\s+.+$/i, "").trim();
+  return stripped || label;
+}
+
+function deploymentChoiceLabel(
+  provider: LLMCatalogProvider,
+  model: LLMCatalogModel,
+): string {
+  if (model.proving?.enabled) {
+    return "GPT-OSS proving";
+  }
+  return provider.label;
+}
+
+function selectedModelDisplayLabel(
+  groups: ModelGroup[],
+  selectedSelection: SelectedLLMModel | null,
+): string {
+  if (!selectedSelection) {
+    return "Select model";
+  }
+  for (const group of groups) {
+    const selectedChoice = group.choices.find((choice) =>
+      isSameSelection(selectedSelection, choice.selection),
+    );
+    if (selectedChoice) {
+      return group.choices.length > 1
+        ? `${group.label} / ${selectedChoice.label}`
+        : group.label;
+    }
+  }
+  return selectedSelection.model;
+}
+
+function renderChoice(
+  choice: ModelChoice,
+  selectedSelection: SelectedLLMModel | null,
+  selectedReasoningEffort: VisibleLLMReasoningEffort,
+  onModelChange: ProviderModelMenuProps["onModelChange"],
+) {
+  const selected = isSameSelection(selectedSelection, choice.selection);
+  const effortOptions = getVisibleReasoningEffortOptions(choice.model);
+
+  if (effortOptions.length > 0) {
+    return (
+      <DropdownMenuSub key={choice.key}>
+        <DropdownMenuSubTrigger
+          className="cursor-pointer text-xs [&>svg:last-child]:hidden"
+          onClick={(event) => {
+            if (!choice.selectable) {
+              event.preventDefault();
+              return;
+            }
+            event.preventDefault();
+            onModelChange(choice.selection);
+          }}
+        >
+          <ModelRowContent
+            label={choice.label}
+            selected={selected}
+            statusLabel={choice.statusLabel}
+          />
+        </DropdownMenuSubTrigger>
+        <DropdownMenuSubContent className="min-w-[160px]">
+          {effortOptions.map((effort) => (
+            <DropdownMenuItem
+              key={effort}
+              disabled={!choice.selectable}
+              className="cursor-pointer text-xs capitalize"
+              onSelect={() => {
+                onModelChange(choice.selection, { reasoningEffort: effort });
+              }}
+            >
+              <div className="flex w-full items-center justify-between">
+                <span>{effort}</span>
+                {selected && selectedReasoningEffort === effort ? (
+                  <Check className="h-3.5 w-3.5 text-emerald-400" />
+                ) : null}
+              </div>
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuSubContent>
+      </DropdownMenuSub>
+    );
+  }
+
+  return (
+    <DropdownMenuItem
+      key={choice.key}
+      disabled={!choice.selectable}
+      className="cursor-pointer text-xs"
+      onSelect={() => onModelChange(choice.selection)}
+    >
+      <ModelRowContent
+        label={choice.label}
+        selected={selected}
+        statusLabel={choice.statusLabel}
+      />
+    </DropdownMenuItem>
   );
 }
 
@@ -77,17 +273,14 @@ export function ProviderModelMenu({
   className,
 }: ProviderModelMenuProps) {
   const providers = catalog?.providers ?? [];
+  const groups = useMemo(() => buildModelGroups(providers), [providers]);
   const selectedEntry = findSelectedCatalogEntry(catalog, selectedSelection);
-  const selectedLabel = getSelectedModelDisplayLabel(
-    catalog,
-    selectedSelection,
-    { includeProvider: true },
-  );
+  const selectedLabel = selectedModelDisplayLabel(groups, selectedSelection);
   const showEffortBadge = modelSupportsReasoningEffort(selectedEntry?.model);
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild disabled={providers.length === 0}>
+      <DropdownMenuTrigger asChild disabled={groups.length === 0}>
         <button
           type="button"
           aria-label="Select model"
@@ -100,7 +293,7 @@ export function ProviderModelMenu({
           )}
         >
           <span className="truncate text-left">
-            {providers.length === 0 ? "No models available" : selectedLabel}
+            {groups.length === 0 ? "No models available" : selectedLabel}
           </span>
           <span className="flex items-center gap-1">
             {showEffortBadge ? (
@@ -113,84 +306,32 @@ export function ProviderModelMenu({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-[260px]">
-        {providers.map((provider) => {
-          const providerSelectable = isModelSelectable(provider);
-          const providerSelected = selectedSelection?.provider === provider.id;
+        {groups.map((group) => {
+          if (group.choices.length === 1) {
+            return renderChoice(
+              { ...group.choices[0], label: group.label },
+              selectedSelection,
+              selectedReasoningEffort,
+              onModelChange,
+            );
+          }
+
+          const selected = group.choices.some((choice) =>
+            isSameSelection(selectedSelection, choice.selection),
+          );
           return (
-            <DropdownMenuSub key={provider.id}>
+            <DropdownMenuSub key={group.key}>
               <DropdownMenuSubTrigger className="cursor-pointer text-xs [&>svg:last-child]:hidden">
-                <div className="flex w-full min-w-0 items-center justify-between gap-2">
-                  <div className="flex min-w-0 flex-col">
-                    <span className="truncate text-slate-200">{provider.label}</span>
-                    {!providerSelectable ? (
-                      <span className="truncate text-[10px] text-slate-500">Unavailable</span>
-                    ) : null}
-                  </div>
-                  {providerSelected ? <Check className="h-3.5 w-3.5 text-emerald-400" /> : null}
-                </div>
+                <ModelRowContent label={group.label} selected={selected} />
               </DropdownMenuSubTrigger>
-              <DropdownMenuSubContent className="min-w-[240px] !overflow-visible">
-                {provider.models.length === 0 ? (
-                  <DropdownMenuItem disabled className="text-xs">
-                    No models available
-                  </DropdownMenuItem>
-                ) : (
-                  provider.models.map((model) => {
-                    const selection = { provider: provider.id, model: model.id };
-                    const selected = isSameSelection(selectedSelection, selection);
-                    const effortOptions = getVisibleReasoningEffortOptions(model);
-                    const modelSelectable = providerSelectable;
-
-                    if (effortOptions.length > 0) {
-                      return (
-                        <DropdownMenuSub key={model.id}>
-                          <DropdownMenuSubTrigger
-                            className="cursor-pointer text-xs [&>svg:last-child]:hidden"
-                            onClick={(event) => {
-                              if (!modelSelectable) {
-                                event.preventDefault();
-                                return;
-                              }
-                              event.preventDefault();
-                              onModelChange(selection);
-                            }}
-                          >
-                            <ModelRowContent model={model} selected={selected} />
-                          </DropdownMenuSubTrigger>
-                          <DropdownMenuSubContent className="min-w-[160px]">
-                            {effortOptions.map((effort) => (
-                              <DropdownMenuItem
-                                key={effort}
-                                disabled={!modelSelectable}
-                                className="cursor-pointer text-xs capitalize"
-                                onSelect={() => {
-                                  onModelChange(selection, { reasoningEffort: effort });
-                                }}
-                              >
-                                <div className="flex w-full items-center justify-between">
-                                  <span>{effort}</span>
-                                  {selected && selectedReasoningEffort === effort ? (
-                                    <Check className="h-3.5 w-3.5 text-emerald-400" />
-                                  ) : null}
-                                </div>
-                              </DropdownMenuItem>
-                            ))}
-                          </DropdownMenuSubContent>
-                        </DropdownMenuSub>
-                      );
-                    }
-
-                    return (
-                      <DropdownMenuItem
-                        key={model.id}
-                        disabled={!modelSelectable}
-                        className="cursor-pointer text-xs"
-                        onSelect={() => onModelChange(selection)}
-                      >
-                        <ModelRowContent model={model} selected={selected} />
-                      </DropdownMenuItem>
-                    );
-                  })
+              <DropdownMenuSubContent className="min-w-[220px] !overflow-visible">
+                {group.choices.map((choice) =>
+                  renderChoice(
+                    choice,
+                    selectedSelection,
+                    selectedReasoningEffort,
+                    onModelChange,
+                  ),
                 )}
               </DropdownMenuSubContent>
             </DropdownMenuSub>

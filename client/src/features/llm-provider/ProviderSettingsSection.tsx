@@ -30,8 +30,10 @@ import ProviderModelMenu from "@/features/llm-provider/ProviderModelMenu";
 import type {
   LLMDeploymentRef,
   LLMDeploymentStatusOverride,
+  LLMConnectionMetadata,
   LLMSelection,
   LLMModelCatalogResponse,
+  LLMProvingMetadata,
   ReportingLLMSelection,
   SelectedLLMModel,
   VisibleLLMReasoningEffort,
@@ -65,6 +67,8 @@ export function ProviderSettingsSection({
   const [deploymentStatusOverrides, setDeploymentStatusOverrides] = useState<
     LLMDeploymentStatusOverride[]
   >([]);
+  const [advancedModelPreferencesOpen, setAdvancedModelPreferencesOpen] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const {
     data: catalog,
     error: catalogError,
@@ -118,15 +122,28 @@ export function ProviderSettingsSection({
   });
 
   const providers = catalog?.providers ?? [];
+  const showProvingSetup = isProvingSetupEnabled();
   const connectionModels = providers.flatMap((provider) =>
     provider.models
-      .filter((model) => Boolean(model.connection?.enabled || model.proving?.enabled))
+      .filter((model) => Boolean(
+        model.connection?.enabled || (showProvingSetup && model.proving?.enabled),
+      ))
       .map((model) => ({
         provider,
         model,
         connection: model.connection ?? model.proving,
         usesProvingRoutes: Boolean(model.proving?.enabled && !model.connection),
       })),
+  );
+  const hostedConnectionModels = connectionModels.filter(({ connection }) =>
+    connection ? isHostedConnection(connection) : false,
+  );
+  const advancedConnectionModels = connectionModels.filter(({ connection }) =>
+    connection ? !isHostedConnection(connection) : false,
+  );
+  const credentialProviders = providers.filter((provider) =>
+    isDirectHostedCredentialProvider(provider.id) ||
+    provider.models.every((model) => !model.connection && !model.proving),
   );
   const selectedReportingModel =
     reportingSelection?.provider && reportingSelection.model
@@ -212,60 +229,32 @@ export function ProviderSettingsSection({
         </Alert>
       ) : (
         <div className="space-y-4">
-          <section className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-              <div className="min-w-0">
-                <h3 className="text-sm font-semibold text-white">Reporting model</h3>
-                <p className="mt-1 text-xs text-slate-400">
-                  Used for task memos and engagement reports.
-                </p>
-                <p
-                  className={
-                    reportingStatus?.runnable === false
-                      ? "mt-2 text-xs text-amber-200"
-                      : "mt-2 text-xs text-emerald-200"
-                  }
-                  aria-live="polite"
-                >
-                  {reportingStatusMessage}
-                </p>
-              </div>
-              <ProviderModelMenu
-                catalog={catalog}
-                selectedSelection={selectedReportingModel}
-                selectedReasoningEffort={reportingReasoningEffort}
-                onModelChange={handleReportingModelChange}
-                className="h-8 min-w-[230px]"
-              />
-            </div>
-          </section>
-
-          <section className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-            <div className="mb-4">
-              <h3 className="text-sm font-semibold text-white">Workload deployment</h3>
-            </div>
-            <DeploymentPicker
-              catalog={catalog}
-              selectedDeploymentRef={chatSelection?.deploymentRef ?? null}
-              statusOverrides={deploymentStatusOverrides}
-              onSelectDeployment={(deploymentRef) => {
-                saveDeploymentSelection.mutate(deploymentRef);
-              }}
-              isPending={saveDeploymentSelection.isPending}
-            />
-          </section>
-
-          {connectionModels.length > 0 ? (
+          {(credentialProviders.length > 0 || hostedConnectionModels.length > 0) ? (
             <section className="space-y-3">
-              <h3 className="text-sm font-semibold text-white">Connection configuration</h3>
+              <h3 className="text-sm font-semibold text-white">AI providers</h3>
               <div className="space-y-4">
-                {connectionModels.map(({ provider, model, connection, usesProvingRoutes }) => (
+                {credentialProviders.length > 0 ? (
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    {credentialProviders.map((provider) => (
+                      <ProviderCredentialCard
+                        key={provider.id}
+                        provider={provider}
+                        setupNote={providerCredentialNote(provider.id)}
+                        onSuccess={handleProviderSuccess}
+                        onError={onError}
+                      />
+                    ))}
+                  </div>
+                ) : null}
+                {hostedConnectionModels.map(({ provider, model, connection, usesProvingRoutes }) => (
                   connection ? (
                     <ConnectionSettingsPanel
                       key={`${provider.id}:${model.id}:${connection.presetId}`}
                       model={model}
                       connection={connection}
                       usesProvingRoutes={usesProvingRoutes}
+                      setupNote={connectionSetupNote(connection.presetId)}
+                      showOperationalDetails={usesProvingRoutes}
                       onDeploymentStatusChange={handleDeploymentStatusChange}
                       onSuccess={handleProviderSuccess}
                       onError={onError}
@@ -276,16 +265,96 @@ export function ProviderSettingsSection({
             </section>
           ) : null}
 
-          <div className="grid gap-4 lg:grid-cols-2">
-            {providers.map((provider) => (
-              <ProviderCredentialCard
-                key={provider.id}
-                provider={provider}
-                onSuccess={handleProviderSuccess}
-                onError={onError}
-              />
-            ))}
-          </div>
+          <section className="space-y-3">
+            <Button
+              type="button"
+              variant="outline"
+              aria-expanded={advancedModelPreferencesOpen}
+              onClick={() => setAdvancedModelPreferencesOpen((current) => !current)}
+              className="border-slate-700 text-slate-200 hover:text-white"
+            >
+              Advanced model preferences
+            </Button>
+            {advancedModelPreferencesOpen ? (
+              <div className="space-y-4">
+                <section className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0">
+                      <h3 className="text-sm font-semibold text-white">Reporting model</h3>
+                      <p className="mt-1 text-xs text-slate-400">
+                        Used for task memos and engagement reports.
+                      </p>
+                      <p
+                        className={
+                          reportingStatus?.runnable === false
+                            ? "mt-2 text-xs text-amber-200"
+                            : "mt-2 text-xs text-emerald-200"
+                        }
+                        aria-live="polite"
+                      >
+                        {reportingStatusMessage}
+                      </p>
+                    </div>
+                    <ProviderModelMenu
+                      catalog={catalog}
+                      selectedSelection={selectedReportingModel}
+                      selectedReasoningEffort={reportingReasoningEffort}
+                      onModelChange={handleReportingModelChange}
+                      className="h-8 min-w-[230px]"
+                    />
+                  </div>
+                </section>
+
+                <section className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+                  <div className="mb-4">
+                    <h3 className="text-sm font-semibold text-white">Workload deployment</h3>
+                  </div>
+                  <DeploymentPicker
+                    catalog={catalog}
+                    selectedDeploymentRef={chatSelection?.deploymentRef ?? null}
+                    statusOverrides={deploymentStatusOverrides}
+                    onSelectDeployment={(deploymentRef) => {
+                      saveDeploymentSelection.mutate(deploymentRef);
+                    }}
+                    isPending={saveDeploymentSelection.isPending}
+                  />
+                </section>
+              </div>
+            ) : null}
+          </section>
+
+          {advancedConnectionModels.length > 0 ? (
+            <section className="space-y-3">
+              <Button
+                type="button"
+                variant="outline"
+                aria-expanded={advancedOpen}
+                onClick={() => setAdvancedOpen((current) => !current)}
+                className="border-slate-700 text-slate-200 hover:text-white"
+              >
+                Advanced/self-hosted endpoints
+              </Button>
+              {advancedOpen ? (
+                <div className="space-y-4">
+                  {advancedConnectionModels.map(({ provider, model, connection, usesProvingRoutes }) => (
+                    connection ? (
+                      <ConnectionSettingsPanel
+                        key={`${provider.id}:${model.id}:${connection.presetId}`}
+                        model={model}
+                        connection={connection}
+                        usesProvingRoutes={usesProvingRoutes}
+                        setupNote="Endpoint URL is required for this self-hosted or custom deployment."
+                        showOperationalDetails={false}
+                        onDeploymentStatusChange={handleDeploymentStatusChange}
+                        onSuccess={handleProviderSuccess}
+                        onError={onError}
+                      />
+                    ) : null
+                  ))}
+                </div>
+              ) : null}
+            </section>
+          ) : null}
         </div>
       )}
     </div>
@@ -301,3 +370,46 @@ function coerceVisibleReasoningEffort(
 }
 
 export default ProviderSettingsSection;
+
+function isHostedConnection(
+  connection: LLMConnectionMetadata | LLMProvingMetadata,
+): boolean {
+  return !connection.configFields?.some((field) => field.name === "base_url");
+}
+
+function connectionSetupNote(presetId: string): string | null {
+  if (presetId === "huggingface_openai_compatible_chat") {
+    return "Credits and pay-as-you-go usage apply.";
+  }
+  if (presetId === "nvidia_nim_openai_compatible_chat") {
+    return "Free development and prototyping access has usage limits.";
+  }
+  return "Enter an API key. Endpoint and model details are managed by DrowAI.";
+}
+
+function providerCredentialNote(providerId: string): string | null {
+  if (providerId === "openai") {
+    return "Usage is billed by OpenAI for the selected model.";
+  }
+  if (providerId === "anthropic") {
+    return "Usage is billed by Anthropic for the selected model.";
+  }
+  return null;
+}
+
+function isDirectHostedCredentialProvider(providerId: string): boolean {
+  return providerId === "openai" || providerId === "anthropic";
+}
+
+function isProvingSetupEnabled(): boolean {
+  if (import.meta.env.VITE_DROWAI_SHOW_PROVING_SETUP === "true") {
+    return true;
+  }
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return (
+    window.location.pathname.includes("llm-proving") ||
+    new URLSearchParams(window.location.search).get("llm_proving") === "1"
+  );
+}

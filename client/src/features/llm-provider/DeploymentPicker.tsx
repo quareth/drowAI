@@ -143,8 +143,6 @@ export function DeploymentPicker({
                           <div className="grid gap-x-4 gap-y-1 text-xs text-slate-400 sm:grid-cols-2">
                             <p>Context: {candidate.contextWindowTokens} tokens</p>
                             <p>Output: {candidate.maxOutputTokens} tokens</p>
-                            <p>API: {candidate.apiSurface}</p>
-                            <p>Wire: {candidate.exactWireModelId ?? candidate.modelId}</p>
                             <p>Pricing: {formatPricingStatus(candidate.pricingStatus)}</p>
                           </div>
                           {candidate.reason ? (

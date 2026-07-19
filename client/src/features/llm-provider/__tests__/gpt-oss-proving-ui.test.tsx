@@ -115,6 +115,7 @@ function renderWithQueryClient(component: ReactNode) {
 }
 
 beforeEach(() => {
+  window.history.replaceState(null, "", "/settings?llm_proving=1");
   mocked.fetchLLMModelCatalog.mockResolvedValue(catalog);
   mocked.fetchLLMSelection.mockResolvedValue({
     provider: "registered-provider",
@@ -131,6 +132,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  window.history.replaceState(null, "", "/");
   cleanup();
   vi.clearAllMocks();
 });
@@ -177,9 +179,11 @@ describe("GPT-OSS proving UI", () => {
     expect(
       (await screen.findAllByText("GPT-OSS 20B OpenAI-compatible proving")).length,
     ).toBeGreaterThan(0);
-    expect(screen.getAllByText("Lifecycle: draft").length).toBeGreaterThan(0);
     expect(screen.getByText("Verification: not_tested")).toBeTruthy();
-    expect(screen.getAllByText("Runnability: capability_unknown").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Context: 128000 tokens")).toBeNull();
+    expect(screen.queryByText("Pricing: unavailable")).toBeNull();
+    expect(screen.queryByRole("button", { name: /select gpt-oss 20b/i })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Advanced model preferences" }));
     expect(screen.getByText("Context: 128000 tokens")).toBeTruthy();
     expect(screen.getByText("Pricing: unavailable")).toBeTruthy();
     expect(screen.queryByText("$0")).toBeNull();
@@ -212,8 +216,6 @@ describe("GPT-OSS proving UI", () => {
         },
       );
     });
-    expect(await screen.findByText("Verification: verified")).toBeTruthy();
-
     fireEvent.click(screen.getByRole("button", { name: /enable/i }));
     await waitFor(() => {
       expect(mocked.enableLLMProvingConnection).toHaveBeenCalledWith(

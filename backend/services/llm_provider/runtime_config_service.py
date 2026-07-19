@@ -108,6 +108,7 @@ class LLMRuntimeConfigService:
         self,
         *,
         user_id: int,
+        deployment_ref: DeploymentRef | None = None,
         provider: str | None = None,
         model: str | None = None,
         reasoning_effort: str | None = None,
@@ -115,6 +116,12 @@ class LLMRuntimeConfigService:
     ) -> LLMRuntimeSelection | LLMRuntimeSelectionV2:
         """Return the current conversation runtime identity, preferring deployments."""
 
+        if deployment_ref is not None:
+            return self._selection_service.build_explicit_deployment_runtime_selection(
+                user_id=user_id,
+                deployment_ref=deployment_ref,
+                reasoning_effort=reasoning_effort,
+            )
         if provider is None and model is None:
             if E2E_DETERMINISTIC_MODE:
                 return self.build_runtime_selection(

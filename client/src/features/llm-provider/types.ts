@@ -23,6 +23,7 @@ export type VisibleLLMReasoningEffort = "low" | "medium" | "high" | "xhigh" | "m
 export interface SelectedLLMModel {
   provider: ProviderId;
   model: ModelId;
+  deploymentRef?: LLMDeploymentRef | null;
 }
 
 export interface LLMProviderCredentialStatus {

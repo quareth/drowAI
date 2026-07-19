@@ -23,11 +23,13 @@ import { apiRequest } from "@/lib/queryClient";
 import {
   fetchLLMModelCatalog,
   fetchLLMSelection,
+  saveLLMDeploymentSelection,
   saveLLMSelection,
 } from "@/features/llm-provider/api";
 import {
   getBlockingSelectionStatus,
   getFirstCatalogDefaultSelection,
+  sameDeploymentRef,
 } from "@/features/llm-provider/catalog";
 import { getSupportedReasoningEffortForPayload } from "@/features/llm-provider/capability-controls";
 import type {
@@ -84,6 +86,23 @@ import {
 import type { MessageBubbleRetryState } from "./MessageBubble";
 
 const deterministicE2EMode = import.meta.env.VITE_E2E_DETERMINISTIC_MODE === "true";
+
+function hasSameLLMSelectionIdentity(
+  nextSelection: SelectedLLMModel | LLMSelection,
+  currentSelection: SelectedLLMModel | null,
+): boolean {
+  if (
+    !currentSelection
+    || nextSelection.provider !== currentSelection.provider
+    || nextSelection.model !== currentSelection.model
+  ) {
+    return false;
+  }
+  if (nextSelection.deploymentRef || currentSelection.deploymentRef) {
+    return sameDeploymentRef(nextSelection.deploymentRef, currentSelection.deploymentRef);
+  }
+  return true;
+}
 
 interface UnifiedAgentChatProps {
   taskId: number | null;
@@ -175,19 +194,19 @@ export function UnifiedAgentChat({
     useState<ReasoningEffort>("medium");
   const [isTranscriptExporting, setIsTranscriptExporting] = useState(false);
   useEffect(() => {
-    if (
-      llmSelection?.model
-      && (
-        llmSelection.provider !== selectedLLMModel?.provider
-        || llmSelection.model !== selectedLLMModel?.model
-      )
-    ) {
-      setSelectedLLMModel({
-        provider: llmSelection.provider,
-        model: llmSelection.model,
+    if (llmSelection?.model) {
+      setSelectedLLMModel((currentSelection) => {
+        if (hasSameLLMSelectionIdentity(llmSelection, currentSelection)) {
+          return currentSelection;
+        }
+        return {
+          provider: llmSelection.provider,
+          model: llmSelection.model,
+          ...(llmSelection.deploymentRef ? { deploymentRef: llmSelection.deploymentRef } : {}),
+        };
       });
     }
-  }, [llmSelection, selectedLLMModel]);
+  }, [llmSelection]);
 
   useEffect(() => {
     if (!selectedLLMModel && isLLMSelectionFetched && !llmSelection?.model) {
@@ -347,6 +366,7 @@ export function UnifiedAgentChat({
         conversation_id: currentConversationId ?? undefined,
         provider: selectedLLMModel?.provider,
         model: selectedLLMModel?.model,
+        deployment_ref: selectedLLMModel?.deploymentRef ?? undefined,
         agent_mode: agentModeTransport.agent_mode,
         plan_mode: agentModeTransport.plan_mode,
         client_message_id: clientMessageId,
@@ -440,7 +460,12 @@ export function UnifiedAgentChat({
   );
 
   const updateSelection = useMutation({
-    mutationFn: saveLLMSelection,
+    mutationFn: (selection: SelectedLLMModel) => {
+      if (selection.deploymentRef) {
+        return saveLLMDeploymentSelection({ deployment_ref: selection.deploymentRef });
+      }
+      return saveLLMSelection(selection);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/llm/selection"] });
       toast({
@@ -890,13 +915,7 @@ export function UnifiedAgentChat({
       if (options?.reasoningEffort) {
         setSelectedReasoningEffort(options.reasoningEffort);
       }
-      if (
-        !selection.model
-        || (
-          selection.provider === selectedLLMModel?.provider
-          && selection.model === selectedLLMModel?.model
-        )
-      ) {
+      if (!selection.model || hasSameLLMSelectionIdentity(selection, selectedLLMModel)) {
         return;
       }
       setSelectedLLMModel(selection);

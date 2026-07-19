@@ -225,6 +225,36 @@ class LLMProviderSelectionService:
             legacy_model=selection.model,
         )
 
+    def build_explicit_deployment_runtime_selection(
+        self,
+        *,
+        user_id: int,
+        deployment_ref: DeploymentRef,
+        reasoning_effort: str | None = None,
+    ) -> LLMRuntimeSelectionV2:
+        """Build V2 identity for an explicit owner-scoped deployment ref."""
+
+        target = self._deployment_resolver.resolve(
+            user_id=user_id,
+            deployment_id=deployment_ref.deployment_id,
+            expected_revision=deployment_ref.expected_revision,
+            role="conversation",
+        )
+        status = self._classify_deployment_target(user_id=user_id, target=target)
+        if not status.runnable:
+            raise ProviderConfigurationError(
+                status.reason or "Conversation deployment is not runnable"
+            )
+        return LLMRuntimeSelectionV2(
+            deployment_ref=DeploymentRef(
+                deployment_id=str(target.deployment.id),
+                expected_revision=int(target.deployment.revision),
+            ),
+            reasoning_effort=reasoning_effort,
+            legacy_provider=target.provider,
+            legacy_model=target.model,
+        )
+
     def get_openai_model_compat(self, user_id: int) -> str:
         """Compatibility helper for old OpenAI model callers."""
 

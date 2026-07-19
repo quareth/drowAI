@@ -1,8 +1,8 @@
 /**
  * Reusable credential editor for one LLM provider.
  *
- * Handles non-secret credential status, save, test, and delete actions through
- * provider-neutral LLM APIs without echoing stored keys back to the browser.
+ * Handles non-secret credential status and one-action connect/disconnect
+ * operations through provider-neutral LLM APIs without echoing stored keys.
  */
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -22,6 +22,7 @@ import { Label } from "@/components/ui/label";
 
 export interface ProviderCredentialCardProps {
   provider: LLMCatalogProvider;
+  setupNote?: string | null;
   onSuccess: (title: string, description: string) => void;
   onError: (title: string, error: Error) => void;
 }
@@ -37,6 +38,7 @@ function getCredentialPlaceholder(provider: LLMCatalogProvider): string {
 
 export function ProviderCredentialCard({
   provider,
+  setupNote = null,
   onSuccess,
   onError,
 }: ProviderCredentialCardProps) {
@@ -53,49 +55,29 @@ export function ProviderCredentialCard({
     ]);
   };
 
-  const saveMutation = useMutation({
+  const connectMutation = useMutation({
     mutationFn: async () => {
       const trimmedKey = apiKey.trim();
       if (!trimmedKey) {
-        throw new Error("Enter an API key before saving.");
+        throw new Error("Enter an API key before connecting.");
       }
-      return saveLLMProviderCredential(provider.id, {
+      const status = await saveLLMProviderCredential(provider.id, {
         api_key: trimmedKey,
         enabled: true,
       });
+      await testLLMProviderCredential(provider.id, { api_key: trimmedKey });
+      return status;
     },
     onSuccess: async () => {
       setApiKey("");
       await invalidateCredentialState();
       onSuccess(
-        `${provider.label} credential saved`,
-        "The stored credential status has been updated.",
+        `${provider.label} connected`,
+        "The provider credential is ready for runtime use.",
       );
     },
     onError: (error) => onError(
-      `${provider.label} credential save failed`,
-      error instanceof Error ? error : new Error(String(error)),
-    ),
-  });
-
-  const testMutation = useMutation({
-    mutationFn: async () => {
-      const trimmedKey = apiKey.trim();
-      return testLLMProviderCredential(
-        provider.id,
-        trimmedKey ? { api_key: trimmedKey } : {},
-      );
-    },
-    onSuccess: (result) => {
-      onSuccess(
-        `${provider.label} connection verified`,
-        result.model_count != null
-          ? `Connection verified. Found ${result.model_count} available models.`
-          : result.message,
-      );
-    },
-    onError: (error) => onError(
-      `${provider.label} connection test failed`,
+      `${provider.label} connection failed`,
       error instanceof Error ? error : new Error(String(error)),
     ),
   });
@@ -117,8 +99,7 @@ export function ProviderCredentialCard({
   });
 
   const hasStoredCredential = provider.credential.enabled && provider.credential.has_api_key;
-  const canTest = Boolean(apiKey.trim()) || hasStoredCredential;
-  const isBusy = saveMutation.isPending || testMutation.isPending || deleteMutation.isPending;
+  const isBusy = connectMutation.isPending || deleteMutation.isPending;
 
   return (
     <Card className="bg-slate-900 border-slate-700">
@@ -132,20 +113,18 @@ export function ProviderCredentialCard({
             {hasStoredCredential ? (
               <>
                 <CheckCircle className="h-4 w-4 text-green-500" />
-                <Badge className="bg-green-600 text-white">Configured</Badge>
+                <Badge className="bg-green-600 text-white">Connected</Badge>
               </>
             ) : (
               <>
                 <AlertCircle className="h-4 w-4 text-yellow-500" />
-                <Badge variant="secondary" className="bg-slate-700 text-gray-400">Not Set</Badge>
+                <Badge variant="secondary" className="bg-slate-700 text-gray-400">Not connected</Badge>
               </>
             )}
           </div>
         </div>
-        {provider.credential.masked_api_key ? (
-          <p className="text-xs text-slate-400">
-            Stored key: <span className="font-mono">{provider.credential.masked_api_key}</span>
-          </p>
+        {setupNote ? (
+          <p className="text-xs text-slate-400">{setupNote}</p>
         ) : null}
       </CardHeader>
       <CardContent className="space-y-4">
@@ -178,43 +157,34 @@ export function ProviderCredentialCard({
 
         <div className="flex flex-wrap gap-3">
           <Button
-            onClick={() => { saveMutation.mutate(); }}
+            aria-label={`${hasStoredCredential ? "Update" : "Connect"} ${provider.label}`}
+            onClick={() => { connectMutation.mutate(); }}
             disabled={isBusy || !apiKey.trim()}
             className="bg-blue-600 hover:bg-blue-700"
           >
-            {saveMutation.isPending ? (
+            {connectMutation.isPending ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
               <Key className="h-4 w-4" />
             )}
-            Save
+            {hasStoredCredential ? "Update" : "Connect"}
           </Button>
-          <Button
-            onClick={() => { testMutation.mutate(); }}
-            disabled={isBusy || !canTest}
-            variant="outline"
-            className="border-slate-600 text-gray-300 hover:text-white"
-          >
-            {testMutation.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <CheckCircle className="h-4 w-4" />
-            )}
-            Test
-          </Button>
-          <Button
-            onClick={() => { deleteMutation.mutate(); }}
-            disabled={isBusy || !hasStoredCredential}
-            variant="outline"
-            className="border-slate-600 text-gray-300 hover:text-white"
-          >
-            {deleteMutation.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Trash2 className="h-4 w-4" />
-            )}
-            Delete
-          </Button>
+          {hasStoredCredential ? (
+            <Button
+              aria-label={`Disconnect ${provider.label}`}
+              onClick={() => { deleteMutation.mutate(); }}
+              disabled={isBusy}
+              variant="outline"
+              className="border-slate-600 text-gray-300 hover:text-white"
+            >
+              {deleteMutation.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="h-4 w-4" />
+              )}
+              Disconnect
+            </Button>
+          ) : null}
         </div>
       </CardContent>
     </Card>

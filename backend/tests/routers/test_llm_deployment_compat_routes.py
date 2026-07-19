@@ -37,6 +37,8 @@ from backend.services.llm_provider.credential_service import encrypt_api_key
 from backend.services.llm_provider.operation_registry import (
     CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
     HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+    NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+    OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
 )
 
 
@@ -208,6 +210,51 @@ def test_models_and_credentials_expose_backfilled_opaque_refs_and_runnability() 
         assert selection.json()["deployment_ref"]["deployment_id"] == model[
             "deploymentRef"
         ]["deployment_id"]
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_connection_catalog_keeps_hosted_setup_api_key_first_and_endpoint_advanced() -> None:
+    """Hosted presets expose only API keys while self-hosted presets require endpoints."""
+
+    user = _user("llm-hosted-setup-catalog")
+    client, app = _client(user)
+    try:
+        response = client.get("/api/llm/models")
+        assert response.status_code == 200, response.text
+        providers = {item["id"]: item for item in response.json()["providers"]}
+
+        huggingface = providers[HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID]["models"][0][
+            "connection"
+        ]
+        nvidia = providers[NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID]["models"][0][
+            "connection"
+        ]
+        ollama = providers[OLLAMA_OPENAI_COMPATIBLE_PRESET_ID]["models"][0][
+            "connection"
+        ]
+
+        assert huggingface["configFields"] == [
+            {
+                "name": "api_key",
+                "label": "API key",
+                "fieldType": "password",
+                "required": True,
+                "secret": True,
+            }
+        ]
+        assert nvidia["configFields"] == huggingface["configFields"]
+        assert "base_url" not in huggingface["userConfigFields"]
+        assert "base_url" not in nvidia["userConfigFields"]
+        assert [field["name"] for field in ollama["configFields"]] == [
+            "base_url",
+            "api_key",
+            "wire_model_id",
+        ]
+        assert ollama["configFields"][0]["label"] == "Base URL"
+        serialized_hosted = str({"huggingface": huggingface, "nvidia": nvidia}).lower()
+        assert "wire model" not in serialized_hosted
+        assert "adapter" not in serialized_hosted
     finally:
         app.dependency_overrides.clear()
 

@@ -28,7 +28,7 @@
     },
     {
       "id": "huggingface_openai_compatible_chat",
-      "display_name": "Hugging Face OpenAI-compatible router",
+      "display_name": "Hugging Face Router",
       "canonical_model_id": "",
       "exact_wire_model_id": "",
       "runtime_family_id": "openai_compatible_chat",
@@ -50,7 +50,7 @@
     },
     {
       "id": "nvidia_nim_openai_compatible_chat",
-      "display_name": "NVIDIA NIM OpenAI-compatible endpoint",
+      "display_name": "NVIDIA NIM hosted endpoint",
       "canonical_model_id": "",
       "exact_wire_model_id": "",
       "runtime_family_id": "openai_compatible_chat",
@@ -72,7 +72,7 @@
     },
     {
       "id": "ollama_openai_compatible_chat",
-      "display_name": "Ollama-compatible HTTPS endpoint",
+      "display_name": "Ollama endpoint",
       "canonical_model_id": "",
       "exact_wire_model_id": "",
       "runtime_family_id": "openai_compatible_chat",
@@ -94,7 +94,7 @@
     },
     {
       "id": "vllm_openai_compatible_chat",
-      "display_name": "vLLM OpenAI-compatible HTTPS endpoint",
+      "display_name": "vLLM endpoint",
       "canonical_model_id": "",
       "exact_wire_model_id": "",
       "runtime_family_id": "openai_compatible_chat",

@@ -44,9 +44,10 @@ export async function fetchLLMSelection(): Promise<LLMSelection> {
 export async function saveLLMSelection(
   selection: SelectedLLMModel,
 ): Promise<SelectedLLMModel> {
+  const { provider, model } = selection;
   return apiCall<SelectedLLMModel>("/api/llm/selection", {
     method: "PUT",
-    body: JSON.stringify(selection),
+    body: JSON.stringify({ provider, model }),
   });
 }
 

@@ -10,11 +10,17 @@ MAX_MESSAGE_LEN = 4000
 CHAT_HISTORY_CONTRACT_VERSION = "2026-03-01.chat-history.v2"
 
 
+class ChatDeploymentRef(BaseModel):
+    deployment_id: str
+    expected_revision: int
+
+
 class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[str] = None
     provider: Optional[str] = None
     model: Optional[str] = None
+    deployment_ref: Optional[ChatDeploymentRef] = None
     stream: Optional[bool] = True
     mode: Optional[str] = None
     reasoning_effort: Optional[str] = None

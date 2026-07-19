@@ -159,16 +159,24 @@ describe("ProviderSettingsSection", () => {
       />,
     );
 
+    expect(await screen.findByRole("heading", { name: "AI providers" })).toBeTruthy();
     expect(await screen.findByText("OpenAI")).toBeTruthy();
     expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Anthropic").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Reporting model")).toBeNull();
+    expect(screen.queryByText("Workload deployment")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Advanced model preferences" }).getAttribute(
+        "aria-expanded",
+      ),
+    ).toBe("false");
     expect(screen.queryByRole("combobox", { name: /selected provider/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /save model selection/i })).toBeNull();
   });
 });
 
 describe("ProviderCredentialCard", () => {
-  it("saves, tests, and deletes provider credentials without using legacy OpenAI settings", async () => {
+  it("connects, verifies, and disconnects provider credentials without using legacy OpenAI settings", async () => {
     mocked.saveLLMProviderCredential.mockResolvedValue(openAIProvider.credential);
     mocked.testLLMProviderCredential.mockResolvedValue({
       provider: "openai",
@@ -189,21 +197,19 @@ describe("ProviderCredentialCard", () => {
     fireEvent.change(screen.getByLabelText("API Key"), {
       target: { value: "sk-test-value" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /update openai/i }));
 
     await waitFor(() => {
       expect(mocked.saveLLMProviderCredential).toHaveBeenCalledWith("openai", {
         api_key: "sk-test-value",
         enabled: true,
       });
+      expect(mocked.testLLMProviderCredential).toHaveBeenCalledWith("openai", {
+        api_key: "sk-test-value",
+      });
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /^test$/i }));
-    await waitFor(() => {
-      expect(mocked.testLLMProviderCredential).toHaveBeenCalledWith("openai", {});
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /disconnect openai/i }));
     await waitFor(() => {
       expect(mocked.deleteLLMProviderCredential).toHaveBeenCalledWith("openai");
     });
