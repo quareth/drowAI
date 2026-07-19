@@ -4,25 +4,33 @@
  * Composes reusable provider credential cards for OpenAI, Anthropic, and
  * future registered providers.
  */
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Loader2 } from "lucide-react";
 
 import {
   fetchLLMModelCatalog,
+  fetchLLMSelection,
   fetchReportingLLMSelection,
+  saveLLMDeploymentSelection,
   saveReportingLLMSelection,
 } from "@/features/llm-provider/api";
 import {
   findSelectedCatalogEntry,
+  sameDeploymentRef,
 } from "@/features/llm-provider/catalog";
 import {
   getDefaultVisibleReasoningEffort,
   getSupportedReasoningEffortForPayload,
 } from "@/features/llm-provider/capability-controls";
 import ConnectionSettingsPanel from "@/features/llm-provider/ConnectionSettingsPanel";
+import DeploymentPicker from "@/features/llm-provider/DeploymentPicker";
 import ProviderCredentialCard from "@/features/llm-provider/ProviderCredentialCard";
 import ProviderModelMenu from "@/features/llm-provider/ProviderModelMenu";
 import type {
+  LLMDeploymentRef,
+  LLMDeploymentStatusOverride,
+  LLMSelection,
   LLMModelCatalogResponse,
   ReportingLLMSelection,
   SelectedLLMModel,
@@ -38,6 +46,7 @@ export interface ProviderSettingsSectionProps {
 }
 
 const catalogQueryKey = ["/api/llm/models"] as const;
+const selectionQueryKey = ["/api/llm/selection"] as const;
 const reportingSelectionQueryKey = ["/api/llm/reporting-selection"] as const;
 
 function toErrorMessage(error: unknown): string {
@@ -53,6 +62,9 @@ export function ProviderSettingsSection({
   onError,
 }: ProviderSettingsSectionProps) {
   const queryClient = useQueryClient();
+  const [deploymentStatusOverrides, setDeploymentStatusOverrides] = useState<
+    LLMDeploymentStatusOverride[]
+  >([]);
   const {
     data: catalog,
     error: catalogError,
@@ -62,6 +74,11 @@ export function ProviderSettingsSection({
   } = useQuery<LLMModelCatalogResponse>({
     queryKey: catalogQueryKey,
     queryFn: fetchLLMModelCatalog,
+    enabled: queryEnabled,
+  });
+  const { data: chatSelection } = useQuery<LLMSelection>({
+    queryKey: selectionQueryKey,
+    queryFn: fetchLLMSelection,
     enabled: queryEnabled,
   });
   const { data: reportingSelection } = useQuery<ReportingLLMSelection>({
@@ -82,12 +99,34 @@ export function ProviderSettingsSection({
       onError("Reporting model update failed", error);
     },
   });
+  const saveDeploymentSelection = useMutation({
+    mutationFn: (deploymentRef: LLMDeploymentRef) =>
+      saveLLMDeploymentSelection({ deployment_ref: deploymentRef }),
+    onSuccess: () => {
+      void Promise.all([
+        queryClient.invalidateQueries({ queryKey: selectionQueryKey }),
+        queryClient.invalidateQueries({ queryKey: catalogQueryKey }),
+      ]);
+      onSuccess(
+        "Workload deployment updated",
+        "Chat requests will use the selected deployment.",
+      );
+    },
+    onError: (error: Error) => {
+      onError("Workload deployment update failed", error);
+    },
+  });
 
   const providers = catalog?.providers ?? [];
-  const provingModels = providers.flatMap((provider) =>
+  const connectionModels = providers.flatMap((provider) =>
     provider.models
-      .filter((model) => Boolean(model.proving?.enabled))
-      .map((model) => ({ provider, model, proving: model.proving })),
+      .filter((model) => Boolean(model.connection?.enabled || model.proving?.enabled))
+      .map((model) => ({
+        provider,
+        model,
+        connection: model.connection ?? model.proving,
+        usesProvingRoutes: Boolean(model.proving?.enabled && !model.connection),
+      })),
   );
   const selectedReportingModel =
     reportingSelection?.provider && reportingSelection.model
@@ -128,6 +167,16 @@ export function ProviderSettingsSection({
   const handleProviderSuccess = (title: string, description: string) => {
     void queryClient.invalidateQueries({ queryKey: reportingSelectionQueryKey });
     onSuccess(title, description);
+  };
+
+  const handleDeploymentStatusChange = (status: LLMDeploymentStatusOverride) => {
+    setDeploymentStatusOverrides((currentStatuses) => {
+      const nextStatuses = currentStatuses.filter(
+        (currentStatus) => !sameDeploymentRef(currentStatus.deploymentRef, status.deploymentRef),
+      );
+      nextStatuses.push(status);
+      return nextStatuses;
+    });
   };
 
   return (
@@ -191,17 +240,41 @@ export function ProviderSettingsSection({
             </div>
           </section>
 
-          {provingModels.map(({ provider, model, proving }) => (
-            proving ? (
-              <ConnectionSettingsPanel
-                key={`${provider.id}:${model.id}:${proving.presetId}`}
-                model={model}
-                proving={proving}
-                onSuccess={handleProviderSuccess}
-                onError={onError}
-              />
-            ) : null
-          ))}
+          <section className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+            <div className="mb-4">
+              <h3 className="text-sm font-semibold text-white">Workload deployment</h3>
+            </div>
+            <DeploymentPicker
+              catalog={catalog}
+              selectedDeploymentRef={chatSelection?.deploymentRef ?? null}
+              statusOverrides={deploymentStatusOverrides}
+              onSelectDeployment={(deploymentRef) => {
+                saveDeploymentSelection.mutate(deploymentRef);
+              }}
+              isPending={saveDeploymentSelection.isPending}
+            />
+          </section>
+
+          {connectionModels.length > 0 ? (
+            <section className="space-y-3">
+              <h3 className="text-sm font-semibold text-white">Connection configuration</h3>
+              <div className="space-y-4">
+                {connectionModels.map(({ provider, model, connection, usesProvingRoutes }) => (
+                  connection ? (
+                    <ConnectionSettingsPanel
+                      key={`${provider.id}:${model.id}:${connection.presetId}`}
+                      model={model}
+                      connection={connection}
+                      usesProvingRoutes={usesProvingRoutes}
+                      onDeploymentStatusChange={handleDeploymentStatusChange}
+                      onSuccess={handleProviderSuccess}
+                      onError={onError}
+                    />
+                  ) : null
+                ))}
+              </div>
+            </section>
+          ) : null}
 
           <div className="grid gap-4 lg:grid-cols-2">
             {providers.map((provider) => (

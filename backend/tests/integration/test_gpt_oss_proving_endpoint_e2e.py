@@ -229,7 +229,7 @@ def test_gpt_oss_proving_route_flow_is_owner_scoped_and_secret_safe(
             )
             assert connection is not None
             assert connection.user_id == user.id
-            assert connection.legacy_default_provider == GPT_OSS_20B_PROVING_PRESET_ID
+            assert connection.legacy_default_provider is None
             credential = (
                 db.query(UserLLMProviderCredential)
                 .filter(

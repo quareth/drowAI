@@ -113,6 +113,14 @@ class LLMProviderHealthService:
             user_id=user_id,
             connection_id=status.connection_id,
         )
+        self._connection_authorizer.authorize(
+            access_context=LLMConnectionAccessContext(
+                authenticated_user_id=user_id,
+            ),
+            connection_id=connection.id,
+            expected_revision=int(connection.revision),
+            operation=LLMConnectionOperation.HEALTH,
+        )
 
     def verify_gpt_oss_20b_proving_connection(
         self,
@@ -125,14 +133,6 @@ class LLMProviderHealthService:
             guarded_transport=self._guarded_transport,
             connection_authorizer=self._connection_authorizer,
         ).verify_gpt_oss_20b_proving_connection(**kwargs)
-        self._connection_authorizer.authorize(
-            access_context=LLMConnectionAccessContext(
-                authenticated_user_id=user_id,
-            ),
-            connection_id=connection.id,
-            expected_revision=int(connection.revision),
-            operation=LLMConnectionOperation.HEALTH,
-        )
 
     def _test_openai_key(self, api_key: str) -> ProviderHealthCheckResult:
         try:

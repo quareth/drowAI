@@ -378,6 +378,7 @@ class ResolvedConnectionTarget:
     transport_origin: str
     endpoint_policy_id: str
     endpoint: str = field(repr=False)
+    operation_target: "RegisteredLLMOperationTarget" = field(repr=False)
     resolved_auth: ResolvedAuth = field(repr=False)
 
 
@@ -458,6 +459,9 @@ class AuthorizedLLMConnectionOperation:
     connection_id: str
     connection_revision: int
     operation_target: RegisteredLLMOperationTarget
+    audit_actor_type: str = "authenticated_user"
+    audit_actor_id: str | None = None
+    audit_correlation_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

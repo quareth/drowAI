@@ -30,7 +30,7 @@ from backend.config.generated_config import resolve_config_value, validate_encry
 
 from .catalog_service import LLMProviderCatalogService
 from .migration_service import LLMProviderMigrationService
-from .operation_registry import GPT_OSS_20B_PROVING_PRESET_ID
+from .operation_registry import ConnectionOperationRegistry
 from .types import (
     CredentialAuthorizationError,
     CredentialEncryptionError,
@@ -263,7 +263,8 @@ class LLMCredentialService:
             credential.encrypted_api_key = encrypted_key
             credential.enabled = True
 
-        connection.legacy_default_provider = normalized_provider
+        if not self._is_reviewed_connection_preset(connection.connection_preset_id):
+            connection.legacy_default_provider = normalized_provider
         connection.revision += 1
         self._invalidate_decrypted_compat_cache(user_id)
         self._db.flush()
@@ -424,7 +425,7 @@ class LLMCredentialService:
         if mode is LLMAuthMode.OPERATOR_MANAGED:
             return ResolvedAuth.operator_managed()
 
-        provider = connection.legacy_default_provider
+        provider = self._connection_auth_provider(connection)
         if not provider:
             raise CredentialAuthorizationError(
                 "Connection has no explicitly bound local credential"
@@ -654,10 +655,28 @@ class LLMCredentialService:
 
     def _normalize_connection_provider(self, provider: str) -> str:
         normalized_provider = normalize_provider_id(provider)
-        if normalized_provider == GPT_OSS_20B_PROVING_PRESET_ID:
+        if normalized_provider in ConnectionOperationRegistry().list_connection_preset_ids():
             return normalized_provider
         self._catalog.require_provider(normalized_provider)
         return normalized_provider
+
+    @staticmethod
+    def _is_reviewed_connection_preset(provider: str | None) -> bool:
+        if provider is None:
+            return False
+        return (
+            normalize_provider_id(provider)
+            in ConnectionOperationRegistry().list_connection_preset_ids()
+        )
+
+    def _connection_auth_provider(
+        self,
+        connection: LLMInferenceConnection,
+    ) -> str | None:
+        preset_id = self._normalize_connection_provider(connection.connection_preset_id)
+        if self._is_reviewed_connection_preset(preset_id):
+            return preset_id
+        return connection.legacy_default_provider
 
     @staticmethod
     def _status_from_credential(

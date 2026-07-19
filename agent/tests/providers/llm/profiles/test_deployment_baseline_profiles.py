@@ -21,6 +21,7 @@ from agent.providers.llm.profiles.registry import (
     OPENAI_API_SURFACE_RESPONSES,
     OPENAI_DEFAULT_MODEL_ID,
     OPENAI_EXACT_MODEL_IDS,
+    OPENAI_GPT_OSS_20B_MODEL_ID,
     OPENAI_INTERNAL_ROLE_MODELS,
     OPENAI_LEGACY_CHAT_MODEL_IDS,
     OPENAI_LISTABLE_MODEL_IDS,
@@ -63,7 +64,12 @@ def test_openai_profiles_preserve_default_listability_and_api_surfaces() -> None
 
     for model_id in OPENAI_LISTABLE_MODEL_IDS:
         profile = exact_profiles[model_id]
-        assert profile.api_surface == OPENAI_API_SURFACE_RESPONSES
+        expected_surface = (
+            OPENAI_API_SURFACE_CHAT_COMPLETIONS
+            if model_id == OPENAI_GPT_OSS_20B_MODEL_ID
+            else OPENAI_API_SURFACE_RESPONSES
+        )
+        assert profile.api_surface == expected_surface
         assert profile.listable is True
         assert profile.compatibility_family is None
 

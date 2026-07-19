@@ -25,6 +25,10 @@ Target version: `0.1.0`.
   metadata, unavailable pricing, one code-owned proving connection preset, and
   bounded health, capability verification, opt-in endpoint proof, deployment-aware
   runtime routing, and a metadata-driven proving UI.
+- Deployment-aware LLM management now uses reviewed catalog and connection
+  preset manifests, supports scaled compatible connection/deployment inventory
+  with custom model registration, service-authorized refresh, usage/pricing
+  attribution, and searchable deployment selection UI.
 - Local development and deployment workflows, architecture documentation,
   contribution guidance, and private vulnerability reporting.
 

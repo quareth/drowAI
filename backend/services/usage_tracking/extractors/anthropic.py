@@ -5,7 +5,10 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import Mock
 
-from backend.services.usage_tracking.extraction import UsageExtractionTarget
+from backend.services.usage_tracking.extraction import (
+    UsageExtractionTarget,
+    response_usage_attribution,
+)
 from backend.services.usage_tracking.models import (
     ProviderUsageComponents,
     UsageData,
@@ -20,11 +23,11 @@ class AnthropicMessagesUsageExtractor:
     def extract(self, response: Any, target: UsageExtractionTarget) -> UsageData:
         """Extract normalized usage and Anthropic billing components."""
         usage = getattr(response, "usage", None)
-        api_surface = "messages"
+        api_surface = target.api_surface
         if not usage:
             return UsageData.empty(
                 target.model,
-                provider="anthropic",
+                provider=target.provider,
                 api_surface=api_surface,
             )
 
@@ -54,15 +57,23 @@ class AnthropicMessagesUsageExtractor:
             completion_tokens=output_tokens,
             total_tokens=prompt_tokens + output_tokens,
             model=target.model,
-            provider="anthropic",
+            provider=target.provider,
             cached_tokens=0,
             reasoning_tokens=reasoning_tokens,
             api_surface=api_surface,
-            cache_reporting=classify_cache_reporting("anthropic", api_surface),
+            cache_reporting=classify_cache_reporting(
+                target.parser_provider or target.provider,
+                api_surface,
+            ),
             provider_usage_components=ProviderUsageComponents(
-                provider="anthropic",
+                provider=target.provider,
                 api_surface=api_surface,
                 components=components,
+            ),
+            usage_attribution=response_usage_attribution(
+                response,
+                target,
+                usage_completeness="actual",
             ),
         )
 

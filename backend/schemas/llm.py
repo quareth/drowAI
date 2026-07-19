@@ -81,6 +81,41 @@ class LLMProvingCatalogMetadataResponse(BaseModel):
     runnability: Optional[LLMProvingRunnabilityResponse] = None
 
 
+class LLMConnectionConfigFieldResponse(BaseModel):
+    """Backend-declared non-secret or secret connection configuration field."""
+
+    name: str
+    label: str
+    field_type: str = Field(alias="fieldType")
+    required: bool = True
+    secret: bool = False
+
+
+class LLMConnectionCatalogMetadataResponse(BaseModel):
+    """Backend-owned connection preset metadata projected into the catalog."""
+
+    preset_id: str = Field(alias="presetId")
+    display_name: str = Field(alias="displayName")
+    enabled: bool
+    auth_mode: str = Field(alias="authMode")
+    user_config_fields: list[str] = Field(alias="userConfigFields")
+    config_fields: list[LLMConnectionConfigFieldResponse] = Field(
+        default_factory=list,
+        alias="configFields",
+    )
+    lifecycle_state: str = Field(alias="lifecycleState")
+    connection_ref: Optional[LLMConnectionRefResponse] = Field(
+        default=None,
+        alias="connectionRef",
+    )
+    deployment_ref: Optional[LLMDeploymentRef] = Field(
+        default=None,
+        alias="deploymentRef",
+    )
+    verification: Optional[LLMProvingVerificationResponse] = None
+    runnability: Optional[LLMProvingRunnabilityResponse] = None
+
+
 class LLMProvingConnectionCreateRequest(BaseModel):
     """Request body for creating one GPT-OSS proving connection draft."""
 
@@ -109,6 +144,48 @@ class LLMProvingConnectionStatusResponse(BaseModel):
     lifecycle_state: str
     connection_ref: LLMConnectionRefResponse
     deployment_ref: LLMDeploymentRef
+    verification: Optional[LLMProvingVerificationResponse] = None
+    runnability: Optional[LLMProvingRunnabilityResponse] = None
+
+
+class LLMManagedConnectionCreateRequest(BaseModel):
+    """Request body for creating a reviewed connection preset draft."""
+
+    api_key: Optional[str] = None
+    display_label: Optional[str] = None
+    base_url: Optional[str] = None
+    wire_model_id: Optional[str] = None
+    model_label: Optional[str] = None
+    canonical_model_id: Optional[str] = None
+
+
+class LLMManagedConnectionTestRequest(BaseModel):
+    """Request body for testing one reviewed connection preset."""
+
+    api_key: Optional[str] = None
+    connection_ref: LLMConnectionRefResponse
+
+
+class LLMManagedConnectionRefreshRequest(BaseModel):
+    """Request body for refreshing one reviewed connection inventory."""
+
+    api_key: Optional[str] = None
+    connection_ref: LLMConnectionRefResponse
+
+
+class LLMManagedConnectionEnableRequest(BaseModel):
+    """Request body for enabling one reviewed connection preset."""
+
+    connection_ref: LLMConnectionRefResponse
+    deployment_ref: Optional[LLMDeploymentRef] = None
+
+
+class LLMManagedConnectionStatusResponse(BaseModel):
+    """Current reviewed connection state after a lifecycle mutation."""
+
+    lifecycle_state: str
+    connection_ref: LLMConnectionRefResponse
+    deployment_ref: Optional[LLMDeploymentRef] = None
     verification: Optional[LLMProvingVerificationResponse] = None
     runnability: Optional[LLMProvingRunnabilityResponse] = None
 
@@ -167,8 +244,9 @@ class LLMCatalogModelResponse(BaseModel):
     tool_choice_modes: list[str] = Field(alias="toolChoiceModes")
     structured_output_strategies: list[str] = Field(alias="structuredOutputStrategies")
     pricing_status: str = Field(alias="pricingStatus")
-    deployment_ref: Optional[LLMDeploymentRef] = None
+    deployment_ref: Optional[LLMDeploymentRef] = Field(default=None, alias="deploymentRef")
     runnable: bool = False
+    connection: Optional[LLMConnectionCatalogMetadataResponse] = None
     proving: Optional[LLMProvingCatalogMetadataResponse] = None
 
 

@@ -6,7 +6,6 @@ policy, registered operation permission, and optional task/tenant scope.
 
 from __future__ import annotations
 
-from urllib.parse import urlsplit
 from uuid import UUID
 
 from sqlalchemy import select
@@ -15,8 +14,12 @@ from sqlalchemy.orm import Session
 from backend.models import LLMInferenceConnection
 from backend.services.task.access_service import get_tenant_task
 
-from .connection_service import FIXED_PROVIDER_ENDPOINT_POLICY_ID
-from .operation_registry import ConnectionOperationRegistry, OperationRegistryError
+from .operation_registry import (
+    FIXED_PROVIDER_ENDPOINT_POLICY_ID,
+    ConnectionOperationRegistry,
+    OperationRegistryError,
+)
+from .runtime_services import LLMServiceOperationContext
 from .types import (
     AuthorizedLLMConnectionOperation,
     LLMConnectionAccessContext,
@@ -30,6 +33,12 @@ _DRAFT_OPERATIONS = frozenset(
         LLMConnectionOperation.HEALTH,
         LLMConnectionOperation.INVENTORY,
         LLMConnectionOperation.CAPABILITY_PROBE,
+    }
+)
+_SERVICE_OPERATIONS = frozenset(
+    {
+        LLMConnectionOperation.HEALTH,
+        LLMConnectionOperation.INVENTORY,
     }
 )
 
@@ -87,25 +96,80 @@ class LLMConnectionAuthorizer:
                     "Task context is not authorized",
                 )
 
+        return self._authorize_loaded_connection(
+            connection=connection,
+            expected_revision=expected_revision,
+            operation=operation,
+            resource_id=resource_id,
+            require_enabled=False,
+            allowed_operations=None,
+            audit_actor_type="authenticated_user",
+            audit_actor_id=str(access_context.authenticated_user_id),
+            audit_correlation_id=None,
+        )
+
+    def authorize_service_operation(
+        self,
+        *,
+        service_context: LLMServiceOperationContext,
+        connection_id: UUID | str,
+        expected_revision: int,
+        operation: LLMConnectionOperation | str,
+        resource_id: str | None = None,
+    ) -> AuthorizedLLMConnectionOperation:
+        """Authorize one bounded trusted service operation from live state."""
+
+        if not isinstance(service_context, LLMServiceOperationContext):
+            raise TypeError("service_context must be LLMServiceOperationContext")
+        identifier = _connection_uuid(connection_id)
+        connection = self._db.execute(
+            select(LLMInferenceConnection)
+            .where(LLMInferenceConnection.id == identifier)
+            .execution_options(populate_existing=True)
+        ).scalar_one_or_none()
+        if connection is None:
+            raise _authorization_error(
+                "connection_unavailable",
+                "Connection is unavailable",
+            )
+        return self._authorize_loaded_connection(
+            connection=connection,
+            expected_revision=expected_revision,
+            operation=operation,
+            resource_id=resource_id,
+            require_enabled=True,
+            allowed_operations=_SERVICE_OPERATIONS,
+            audit_actor_type="service",
+            audit_actor_id=service_context.service_actor,
+            audit_correlation_id=service_context.correlation_id
+            or service_context.job_id,
+        )
+
+    def _authorize_loaded_connection(
+        self,
+        *,
+        connection: LLMInferenceConnection,
+        expected_revision: int,
+        operation: LLMConnectionOperation | str,
+        resource_id: str | None,
+        require_enabled: bool,
+        allowed_operations: frozenset[LLMConnectionOperation] | None,
+        audit_actor_type: str,
+        audit_actor_id: str | None,
+        audit_correlation_id: str | None,
+    ) -> AuthorizedLLMConnectionOperation:
         revision = _expected_revision(expected_revision)
         if int(connection.revision) != revision:
             raise _authorization_error(
                 "stale_connection_revision",
                 "Connection revision is stale",
             )
-
-        try:
-            normalized_operation = (
-                operation
-                if isinstance(operation, LLMConnectionOperation)
-                else LLMConnectionOperation(str(operation).strip().lower())
-            )
-        except ValueError as exc:
+        normalized_operation = _normalize_operation(operation)
+        if allowed_operations is not None and normalized_operation not in allowed_operations:
             raise _authorization_error(
                 "operation_not_permitted",
                 "Connection operation is not permitted",
-            ) from exc
-
+            )
         try:
             state = LLMConnectionState(connection.state)
         except ValueError as exc:
@@ -113,28 +177,47 @@ class LLMConnectionAuthorizer:
                 "connection_not_enabled",
                 "Connection is not enabled for this operation",
             ) from exc
-        if state is LLMConnectionState.DISABLED or (
-            state is LLMConnectionState.DRAFT
-            and normalized_operation not in _DRAFT_OPERATIONS
-        ):
+        if require_enabled:
+            state_denied = state is not LLMConnectionState.ENABLED
+        else:
+            state_denied = state is LLMConnectionState.DISABLED or (
+                state is LLMConnectionState.DRAFT
+                and normalized_operation not in _DRAFT_OPERATIONS
+            )
+        if state_denied:
             raise _authorization_error(
                 "connection_not_enabled",
                 "Connection is not enabled for this operation",
             )
 
+        expected_endpoint_policy = FIXED_PROVIDER_ENDPOINT_POLICY_ID
+        try:
+            preset = self._operations.get_connection_preset(
+                connection.connection_preset_id
+            )
+            expected_endpoint_policy = preset.endpoint_policy_id
+        except OperationRegistryError:
+            preset = None
+
         if (
             connection.transport_origin != "backend"
-            or connection.endpoint_policy_id != FIXED_PROVIDER_ENDPOINT_POLICY_ID
+            or connection.endpoint_policy_id != expected_endpoint_policy
         ):
             raise _authorization_error(
                 "endpoint_policy_denied",
                 "Connection endpoint policy is not permitted",
             )
 
+        base_url = (
+            connection.endpoint_url
+            if preset is not None and preset.endpoint_config_field is not None
+            else None
+        )
         try:
             target = self._operations.resolve(
                 normalized_operation,
                 provider=connection.connection_preset_id,
+                base_url=base_url,
                 resource_id=resource_id,
             )
         except OperationRegistryError as exc:
@@ -144,12 +227,8 @@ class LLMConnectionAuthorizer:
             ) from exc
 
         if connection.endpoint_url is not None:
-            parsed = urlsplit(target.url)
-            expected_origin = f"{parsed.scheme}://{parsed.netloc}"
-            if connection.endpoint_url not in {
-                expected_origin,
-                f"{expected_origin}/",
-            }:
+            endpoint_base = connection.endpoint_url.rstrip("/")
+            if not target.url.startswith(f"{endpoint_base}/"):
                 raise _authorization_error(
                     "endpoint_policy_denied",
                     "Connection endpoint policy is not permitted",
@@ -159,6 +238,9 @@ class LLMConnectionAuthorizer:
             connection_id=str(connection.id),
             connection_revision=int(connection.revision),
             operation_target=target,
+            audit_actor_type=audit_actor_type,
+            audit_actor_id=audit_actor_id,
+            audit_correlation_id=audit_correlation_id,
         )
 
 
@@ -179,6 +261,22 @@ def _expected_revision(value: int) -> int:
             "Connection revision is stale",
         )
     return value
+
+
+def _normalize_operation(
+    value: LLMConnectionOperation | str,
+) -> LLMConnectionOperation:
+    try:
+        return (
+            value
+            if isinstance(value, LLMConnectionOperation)
+            else LLMConnectionOperation(str(value).strip().lower())
+        )
+    except ValueError as exc:
+        raise _authorization_error(
+            "operation_not_permitted",
+            "Connection operation is not permitted",
+        ) from exc
 
 
 def _authorization_error(

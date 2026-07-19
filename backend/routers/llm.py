@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from typing import Dict, Any
+import json
 import logging
 from pydantic import BaseModel
 
@@ -20,6 +21,11 @@ from ..database import get_db
 from ..models import User, LLMCapabilityObservation, LLMConversation, LLMConversationResponse
 from ..schemas.llm import (
     LLMModelCatalogResponse,
+    LLMManagedConnectionCreateRequest,
+    LLMManagedConnectionEnableRequest,
+    LLMManagedConnectionRefreshRequest,
+    LLMManagedConnectionStatusResponse,
+    LLMManagedConnectionTestRequest,
     LLMProvingConnectionCreateRequest,
     LLMProvingConnectionEnableRequest,
     LLMProvingConnectionStatusResponse,
@@ -50,12 +56,16 @@ from ..services.llm_provider import (
     LLMCredentialRef,
     LLMCredentialService,
     LLMAuthMode,
+    LLMConnectionAccessContext,
+    LLMConnectionAuthorizer,
     LLMConnectionService,
     LLMConnectionCredentialRef,
+    LLMConnectionOperation,
     LLMConnectionState,
     LLMConversationLifecycleService,
     LLMDeploymentService,
     EffectiveProfileService,
+    LLMInventoryService,
     LLMProviderCatalogService,
     LLMProviderHealthService,
     LLMProviderMigrationService,
@@ -64,11 +74,17 @@ from ..services.llm_provider import (
     ProviderConfigurationError,
     ReportingLLMSelectionService,
 )
+from ..services.llm_provider.guarded_transport import GuardedTransport, GuardedTransportError
 from ..services.llm_provider.operation_registry import (
     GPT_OSS_20B_PROVING_PRESET_ID,
     ConnectionOperationRegistry,
     OperationRegistryError,
 )
+from ..services.llm_provider.selection_deployment_resolver import (
+    LLMSelectionDeploymentResolver,
+    SelectionDeploymentTarget,
+)
+from ..services.llm_provider.types import ProviderSecret
 from ..services.tenant.authorization import ACTION_CHAT_READ, ACTION_CHAT_WRITE, ACTION_TASK_CONTROL
 from ..services.tenant.context import TenantRequestContext
 from ..services.tenant.dependencies import get_tenant_request_context
@@ -181,10 +197,10 @@ def _catalog_deployment_fields(
 
     target = deployment_map.get((provider, model))
     if target is None:
-        return {"deployment_ref": None, "runnable": False}
+        return {"deploymentRef": None, "runnable": False}
     connection, deployment = target
     return {
-        "deployment_ref": {
+        "deploymentRef": {
             "deployment_id": str(deployment.id),
             "expected_revision": int(deployment.revision),
         },
@@ -194,6 +210,321 @@ def _catalog_deployment_fields(
             and deployment.enabled
             and deployment.lifecycle_state == "active"
         ),
+    }
+
+
+def _catalog_connection_provider_rows(
+    db: Session,
+    *,
+    user_id: int,
+) -> list[dict[str, object]]:
+    """Project reviewed connection presets and user deployments into catalog rows."""
+
+    registry = ConnectionOperationRegistry()
+    connections = LLMConnectionService(db).list_for_user(user_id=user_id)
+    by_preset: dict[str, list[object]] = {}
+    for connection in connections:
+        by_preset.setdefault(connection.connection_preset_id, []).append(connection)
+
+    rows: list[dict[str, object]] = []
+    deployments = LLMDeploymentService(db)
+    for preset_id in registry.list_connection_preset_ids():
+        if preset_id == GPT_OSS_20B_PROVING_PRESET_ID:
+            continue
+        try:
+            preset = registry.get_connection_preset(preset_id)
+        except OperationRegistryError:
+            continue
+        models: list[dict[str, object]] = []
+        for connection in by_preset.get(preset.id, []):
+            owned_deployments = deployments.list_deployments(
+                user_id=user_id,
+                connection_id=connection.id,
+            )
+            if not owned_deployments:
+                models.append(
+                    _connection_catalog_model(
+                        db,
+                        user_id=user_id,
+                        preset=preset,
+                        connection=connection,
+                        deployment=None,
+                    )
+                )
+                continue
+            for deployment in owned_deployments:
+                models.append(
+                    _connection_catalog_model(
+                        db,
+                        user_id=user_id,
+                        preset=preset,
+                        connection=connection,
+                        deployment=deployment,
+                    )
+                )
+        if not models:
+            models.append(
+                _connection_catalog_model(
+                    db,
+                    user_id=user_id,
+                    preset=preset,
+                    connection=None,
+                    deployment=None,
+                )
+            )
+        rows.append(
+            {
+                "id": preset.id,
+                "label": _connection_provider_label(preset),
+                "capabilities": sorted(
+                    capability.value for capability in preset.capability_ceiling
+                ),
+                "available": True,
+                "selectable": True,
+                "credential": {
+                    "user_id": user_id,
+                    "provider": preset.id,
+                    "enabled": any(
+                        connection.state == LLMConnectionState.ENABLED.value
+                        for connection in by_preset.get(preset.id, [])
+                    ),
+                    "has_api_key": bool(by_preset.get(preset.id)),
+                    "masked_api_key": None,
+                    "connection_ref": (
+                        _connection_ref(by_preset[preset.id][0])
+                        if by_preset.get(preset.id)
+                        else None
+                    ),
+                    "auth_mode": "bearer",
+                },
+                "models": models,
+                "defaultModel": str(models[0]["id"]),
+            }
+        )
+    return rows
+
+
+def _connection_catalog_model(
+    db: Session,
+    *,
+    user_id: int,
+    preset,
+    connection,
+    deployment,
+) -> dict[str, object]:
+    """Return one deployment-aware catalog model row for a connection preset."""
+
+    route = None
+    if deployment is not None:
+        try:
+            route = _first_route_for_deployment(
+                db,
+                user_id=user_id,
+                deployment_id=deployment.id,
+            )
+        except HTTPException:
+            route = None
+    runnability = _connection_runnability(
+        db,
+        user_id=user_id,
+        connection=connection,
+        deployment=deployment,
+        route=route,
+    )
+    wire_model_id = getattr(deployment, "wire_model_id", None)
+    model_id = wire_model_id or preset.id
+    label = getattr(deployment, "display_name", None) or preset.display_name
+    deployment_ref = _deployment_ref_from_row(deployment) if deployment is not None else None
+    return {
+        "id": model_id,
+        "canonicalModelId": (
+            getattr(deployment, "canonical_model_id", None)
+            or preset.canonical_model_id
+            or model_id
+        ),
+        "exactWireModelId": wire_model_id,
+        "label": label,
+        "apiSurface": preset.api_surface,
+        "capabilities": sorted(capability.value for capability in preset.capability_ceiling),
+        "contextWindowTokens": 128000,
+        "maxOutputTokens": 10000,
+        "reasoningEfforts": [],
+        "visibleReasoningEfforts": [],
+        "defaultReasoningEffort": None,
+        "defaultVisibleReasoningEffort": None,
+        "toolChoiceModes": ["auto"],
+        "structuredOutputStrategies": [],
+        "pricingStatus": "unavailable",
+        "deploymentRef": deployment_ref,
+        "runnable": bool(runnability["runnable"]),
+        "connection": _connection_catalog_metadata(
+            preset=preset,
+            connection=connection,
+            deployment=deployment,
+            runnability=runnability,
+        ),
+        "proving": None,
+    }
+
+
+def _connection_catalog_metadata(
+    *,
+    preset,
+    connection,
+    deployment,
+    runnability: dict[str, object],
+) -> dict[str, object]:
+    """Return generic backend-declared connection management metadata."""
+
+    fields = _connection_config_fields(
+        preset,
+        needs_wire_model=deployment is None,
+    )
+    return {
+        "presetId": preset.id,
+        "displayName": preset.display_name,
+        "enabled": True,
+        "authMode": preset.auth_mode,
+        "userConfigFields": [field["name"] for field in fields],
+        "configFields": fields,
+        "lifecycleState": (
+            connection.state if connection is not None else "not_created"
+        ),
+        "connectionRef": _connection_ref(connection) if connection is not None else None,
+        "deploymentRef": (
+            _deployment_ref_from_row(deployment) if deployment is not None else None
+        ),
+        "verification": _not_tested_verification(),
+        "runnability": runnability,
+    }
+
+
+def _connection_config_fields(preset, *, needs_wire_model: bool) -> list[dict[str, object]]:
+    """Return typed field metadata for one reviewed connection preset."""
+
+    fields: list[dict[str, object]] = []
+    for name in preset.user_config_fields:
+        if name == "display_label":
+            fields.append(
+                {
+                    "name": "display_label",
+                    "label": "Display label",
+                    "fieldType": "text",
+                    "required": False,
+                    "secret": False,
+                }
+            )
+        elif name == "api_key":
+            fields.append(
+                {
+                    "name": "api_key",
+                    "label": "API key",
+                    "fieldType": "password",
+                    "required": True,
+                    "secret": True,
+                }
+            )
+        elif name == "base_url":
+            fields.append(
+                {
+                    "name": "base_url",
+                    "label": "Base URL",
+                    "fieldType": "url",
+                    "required": True,
+                    "secret": False,
+                }
+            )
+    if needs_wire_model:
+        fields.append(
+            {
+                "name": "wire_model_id",
+                "label": "Wire model ID",
+                "fieldType": "text",
+                "required": True,
+                "secret": False,
+            }
+        )
+    return fields
+
+
+def _connection_provider_label(preset) -> str:
+    """Return a concise product label for a connection preset provider group."""
+
+    if preset.serving_operator_id == "huggingface":
+        return "Hugging Face"
+    if preset.serving_operator_id == "organization_managed":
+        return "Custom OpenAI-compatible"
+    return preset.display_name
+
+
+def _connection_runnability(
+    db: Session,
+    *,
+    user_id: int,
+    connection,
+    deployment,
+    route,
+) -> dict[str, object]:
+    """Return current runnability metadata for generic connection deployments."""
+
+    if connection is None:
+        return {
+            "status": "not_created",
+            "selectable": True,
+            "runnable": False,
+            "reason": "Connection configuration is required.",
+        }
+    if deployment is None:
+        return {
+            "status": "deployment_missing",
+            "selectable": True,
+            "runnable": False,
+            "reason": "Deployment model registration is required.",
+        }
+    if route is None or not route.enabled:
+        return {
+            "status": "capability_unknown",
+            "selectable": True,
+            "runnable": False,
+            "reason": "Capability evidence is required.",
+        }
+    credential_service = LLMCredentialService(db)
+    try:
+        profile = EffectiveProfileService().resolve(
+            connection=connection,
+            deployment=deployment,
+            route=route,
+        )
+        status_obj = LLMSelectionDeploymentResolver(db).classify_runnability(
+            user_id=user_id,
+            target=SelectionDeploymentTarget(
+                connection=connection,
+                deployment=deployment,
+                route=route,
+                profile=profile,
+            ),
+            credential_available=credential_service.has_enabled_credential,
+            credential_fingerprint=(
+                credential_service.connection_credential_fingerprint
+            ),
+            missing_credential_reason="Stored connection credential is required.",
+            required_capabilities=(LLMCapability.CHAT,),
+            capability_missing_reason="Capability evidence is required.",
+        )
+    except LLMProviderServiceError as exc:
+        return {
+            "status": "invalid_selection",
+            "selectable": False,
+            "runnable": False,
+            "reason": str(exc),
+        }
+    if status_obj is not None:
+        return status_obj.to_dict()
+    return {
+        "status": "runnable",
+        "selectable": True,
+        "runnable": True,
+        "reason": None,
     }
 
 
@@ -355,6 +686,88 @@ def _proving_status_response(
     }
 
 
+def _managed_connection_status_response(
+    db: Session,
+    *,
+    user_id: int,
+    connection,
+    deployment,
+) -> dict[str, object]:
+    """Return one public reviewed connection lifecycle response."""
+
+    route = None
+    if deployment is not None:
+        try:
+            route = _first_route_for_deployment(
+                db,
+                user_id=user_id,
+                deployment_id=deployment.id,
+            )
+        except HTTPException:
+            route = None
+    return {
+        "lifecycle_state": connection.state,
+        "connection_ref": _connection_ref(connection),
+        "deployment_ref": (
+            _deployment_ref_from_row(deployment) if deployment is not None else None
+        ),
+        "verification": _not_tested_verification(),
+        "runnability": _connection_runnability(
+            db,
+            user_id=user_id,
+            connection=connection,
+            deployment=deployment,
+            route=route,
+        ),
+    }
+
+
+def _managed_connection_secret(
+    db: Session,
+    *,
+    user_id: int,
+    connection,
+    api_key: str | None,
+    purpose: str,
+) -> str:
+    """Return a supplied or stored connection API key for guarded operations."""
+
+    supplied = api_key.strip() if isinstance(api_key, str) else ""
+    if supplied:
+        return supplied
+    resolved = LLMCredentialService(db).resolve_connection_auth(
+        LLMConnectionCredentialRef(
+            connection_id=str(connection.id),
+            expected_revision=int(connection.revision),
+        ),
+        runtime_user_id=user_id,
+        purpose=purpose,
+        auth_mode=LLMAuthMode.BEARER,
+    )
+    return resolved.secret.value if resolved.secret is not None else ""
+
+
+def _inventory_model_ids_from_response(body: bytes) -> tuple[str, ...]:
+    """Parse model identifiers from a bounded OpenAI-compatible inventory body."""
+
+    try:
+        payload = json.loads(body)
+    except (TypeError, ValueError, UnicodeDecodeError) as exc:
+        raise ProviderConfigurationError("Provider inventory response is invalid") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+        raise ProviderConfigurationError("Provider inventory response is invalid")
+    model_ids: list[str] = []
+    for item in payload["data"]:
+        if not isinstance(item, dict):
+            continue
+        model_id = item.get("id")
+        if isinstance(model_id, str) and model_id.strip():
+            model_ids.append(model_id.strip())
+    if not model_ids:
+        raise ProviderConfigurationError("Provider inventory response did not include models")
+    return tuple(model_ids)
+
+
 def _refresh_proving_observation_revision(
     db: Session,
     *,
@@ -493,8 +906,7 @@ async def list_models(
         for provider in providers
     }
     deployment_map = _catalog_deployment_map(db, user_id=current_user.id)
-    response = {
-        "providers": [
+    provider_rows = [
             {
                 "id": provider.id,
                 "label": provider.label,
@@ -544,7 +956,10 @@ async def list_models(
             }
             for provider in providers
         ]
-    }
+    provider_rows.extend(
+        _catalog_connection_provider_rows(db, user_id=current_user.id)
+    )
+    response = {"providers": provider_rows}
     db.commit()
     return response
 
@@ -910,6 +1325,297 @@ async def test_provider_credential(
         ) from exc
     except LLMProviderServiceError as exc:
         raise _provider_configuration_exception(exc) from exc
+
+
+@router.post(
+    "/connection-presets/{preset_id}/connection",
+    response_model=LLMManagedConnectionStatusResponse,
+)
+async def create_managed_connection(
+    preset_id: str,
+    body: LLMManagedConnectionCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Create a reviewed non-proving connection draft and optional deployment."""
+
+    try:
+        preset = ConnectionOperationRegistry().get_connection_preset(preset_id)
+        if preset.id == GPT_OSS_20B_PROVING_PRESET_ID:
+            raise HTTPException(
+                status_code=400,
+                detail="Use proving preset routes for GPT-OSS proving",
+            )
+        api_key = body.api_key.strip() if isinstance(body.api_key, str) else ""
+        if not api_key:
+            raise HTTPException(status_code=400, detail="Connection API key is required")
+        non_secret_config = {"auth_mode": "bearer"}
+        if preset.endpoint_config_field is not None:
+            non_secret_config[preset.endpoint_config_field] = body.base_url
+        connection = LLMConnectionService(db).create_draft(
+            user_id=current_user.id,
+            display_name=body.display_label or preset.display_name,
+            connection_preset_id=preset.id,
+            runtime_family_id=preset.runtime_family_id,
+            serving_operator_id=preset.serving_operator_id,
+            non_secret_config=non_secret_config,
+        )
+        LLMCredentialService(db).upsert_connection_api_key(
+            user_id=current_user.id,
+            connection_ref=LLMConnectionCredentialRef(
+                connection_id=str(connection.id),
+                expected_revision=int(connection.revision),
+            ),
+            provider=preset.id,
+            api_key=api_key,
+        )
+        db.refresh(connection)
+        deployment = None
+        wire_model_id = (
+            body.wire_model_id
+            or preset.exact_wire_model_id
+            or preset.canonical_model_id
+        )
+        if wire_model_id:
+            deployment, _route = LLMInventoryService(db).register_custom_model(
+                user_id=current_user.id,
+                connection_id=connection.id,
+                expected_connection_revision=int(connection.revision),
+                wire_model_id=wire_model_id,
+                display_name=body.model_label or wire_model_id,
+                canonical_model_id=body.canonical_model_id or preset.canonical_model_id or None,
+                requested_capabilities=(),
+            )
+        response = _managed_connection_status_response(
+            db,
+            user_id=current_user.id,
+            connection=connection,
+            deployment=deployment,
+        )
+        db.commit()
+        return response
+    except HTTPException:
+        db.rollback()
+        raise
+    except (OperationRegistryError, LLMProviderServiceError) as exc:
+        db.rollback()
+        raise _provider_configuration_exception(
+            ProviderConfigurationError(str(exc))
+        ) from exc
+
+
+@router.post(
+    "/connection-presets/{preset_id}/connection/test",
+    response_model=LLMProvingVerificationResponse,
+)
+async def test_managed_connection(
+    preset_id: str,
+    body: LLMManagedConnectionTestRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Run a guarded health check for a reviewed connection preset."""
+
+    try:
+        preset = ConnectionOperationRegistry().get_connection_preset(preset_id)
+        if preset.id == GPT_OSS_20B_PROVING_PRESET_ID:
+            raise HTTPException(
+                status_code=400,
+                detail="Use proving preset routes for GPT-OSS proving",
+            )
+        connection = LLMConnectionService(db).get_owned_at_revision(
+            user_id=current_user.id,
+            connection_id=body.connection_ref.connection_id,
+            expected_revision=body.connection_ref.expected_revision,
+        )
+        if connection.connection_preset_id != preset.id:
+            raise HTTPException(status_code=400, detail="Connection preset mismatch")
+        api_key = _managed_connection_secret(
+            db,
+            user_id=current_user.id,
+            connection=connection,
+            api_key=body.api_key,
+            purpose="connection-preset-health-check",
+        )
+        authorized = LLMConnectionAuthorizer(db).authorize(
+            access_context=LLMConnectionAccessContext(
+                authenticated_user_id=current_user.id,
+            ),
+            connection_id=connection.id,
+            expected_revision=int(connection.revision),
+            operation=LLMConnectionOperation.HEALTH,
+        )
+        GuardedTransport().execute(
+            LLMConnectionOperation.HEALTH,
+            provider=preset.id,
+            secret=ProviderSecret(provider=preset.id, value=api_key),
+            operation_target=authorized.operation_target,
+        )
+        db.commit()
+        return {
+            "status": "passed",
+            "code": "verified",
+            "message": "Connection endpoint verified",
+            "retryable": False,
+            "observed_at": None,
+            "expires_at": None,
+            "model_present": None,
+            "usage": None,
+        }
+    except HTTPException:
+        db.rollback()
+        raise
+    except GuardedTransportError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (OperationRegistryError, LLMProviderServiceError) as exc:
+        db.rollback()
+        raise _provider_configuration_exception(
+            ProviderConfigurationError(str(exc))
+        ) from exc
+
+
+@router.post(
+    "/connection-presets/{preset_id}/connection/refresh",
+    response_model=LLMManagedConnectionStatusResponse,
+)
+async def refresh_managed_connection_inventory(
+    preset_id: str,
+    body: LLMManagedConnectionRefreshRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Refresh reviewed connection inventory through guarded backend egress."""
+
+    try:
+        preset = ConnectionOperationRegistry().get_connection_preset(preset_id)
+        if preset.id == GPT_OSS_20B_PROVING_PRESET_ID:
+            raise HTTPException(
+                status_code=400,
+                detail="Use proving preset routes for GPT-OSS proving",
+            )
+        connection = LLMConnectionService(db).get_owned_at_revision(
+            user_id=current_user.id,
+            connection_id=body.connection_ref.connection_id,
+            expected_revision=body.connection_ref.expected_revision,
+        )
+        if connection.connection_preset_id != preset.id:
+            raise HTTPException(status_code=400, detail="Connection preset mismatch")
+        api_key = _managed_connection_secret(
+            db,
+            user_id=current_user.id,
+            connection=connection,
+            api_key=body.api_key,
+            purpose="connection-preset-inventory-refresh",
+        )
+        authorized = LLMConnectionAuthorizer(db).authorize(
+            access_context=LLMConnectionAccessContext(
+                authenticated_user_id=current_user.id,
+            ),
+            connection_id=connection.id,
+            expected_revision=int(connection.revision),
+            operation=LLMConnectionOperation.INVENTORY,
+        )
+        response = GuardedTransport().execute(
+            LLMConnectionOperation.INVENTORY,
+            provider=preset.id,
+            secret=ProviderSecret(provider=preset.id, value=api_key),
+            operation_target=authorized.operation_target,
+        )
+        deployments = LLMInventoryService(db).refresh_inventory(
+            user_id=current_user.id,
+            connection_id=connection.id,
+            expected_connection_revision=int(connection.revision),
+            discovered_model_ids=_inventory_model_ids_from_response(response.body),
+        )
+        status_response = _managed_connection_status_response(
+            db,
+            user_id=current_user.id,
+            connection=connection,
+            deployment=deployments[0] if len(deployments) == 1 else None,
+        )
+        db.commit()
+        return status_response
+    except HTTPException:
+        db.rollback()
+        raise
+    except GuardedTransportError as exc:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (OperationRegistryError, LLMProviderServiceError) as exc:
+        db.rollback()
+        raise _provider_configuration_exception(
+            ProviderConfigurationError(str(exc))
+        ) from exc
+
+
+@router.post(
+    "/connection-presets/{preset_id}/connection/enable",
+    response_model=LLMManagedConnectionStatusResponse,
+)
+async def enable_managed_connection(
+    preset_id: str,
+    body: LLMManagedConnectionEnableRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Enable a reviewed non-proving connection and return current status."""
+
+    try:
+        preset = ConnectionOperationRegistry().get_connection_preset(preset_id)
+        if preset.id == GPT_OSS_20B_PROVING_PRESET_ID:
+            raise HTTPException(
+                status_code=400,
+                detail="Use proving preset routes for GPT-OSS proving",
+            )
+        connections = LLMConnectionService(db)
+        connection = connections.get_owned_at_revision(
+            user_id=current_user.id,
+            connection_id=body.connection_ref.connection_id,
+            expected_revision=body.connection_ref.expected_revision,
+        )
+        if connection.connection_preset_id != preset.id:
+            raise HTTPException(status_code=400, detail="Connection preset mismatch")
+        deployment = None
+        if body.deployment_ref is not None:
+            deployment = LLMDeploymentService(db).get_deployment(
+                user_id=current_user.id,
+                deployment_id=body.deployment_ref.deployment_id,
+            )
+            if int(deployment.revision) != body.deployment_ref.expected_revision:
+                raise HTTPException(status_code=400, detail="Deployment revision is stale")
+            if str(deployment.connection_id) != str(connection.id):
+                raise HTTPException(status_code=400, detail="Deployment connection mismatch")
+        if connection.state == LLMConnectionState.DRAFT.value:
+            connection = connections.transition_state(
+                user_id=current_user.id,
+                connection_id=connection.id,
+                expected_revision=int(connection.revision),
+                target_state=LLMConnectionState.DISABLED,
+            )
+        if connection.state == LLMConnectionState.DISABLED.value:
+            connection = connections.transition_state(
+                user_id=current_user.id,
+                connection_id=connection.id,
+                expected_revision=int(connection.revision),
+                target_state=LLMConnectionState.ENABLED,
+            )
+        response = _managed_connection_status_response(
+            db,
+            user_id=current_user.id,
+            connection=connection,
+            deployment=deployment,
+        )
+        db.commit()
+        return response
+    except HTTPException:
+        db.rollback()
+        raise
+    except (OperationRegistryError, LLMProviderServiceError) as exc:
+        db.rollback()
+        raise _provider_configuration_exception(
+            ProviderConfigurationError(str(exc))
+        ) from exc
 
 
 @router.post(

@@ -15,9 +15,9 @@ to re-parse ``source`` strings to infer cache capability.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import date, datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -165,6 +165,80 @@ class ProviderUsageComponents:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class UsageAttributionContext:
+    """Deployment and billing identity attached to one normalized usage row."""
+
+    connection_id: str | None = None
+    connection_revision: int | None = None
+    deployment_id: str | None = None
+    deployment_revision: int | None = None
+    route_id: str | None = None
+    canonical_model_id: str | None = None
+    requested_model_id: str | None = None
+    reported_model_id: str | None = None
+    serving_operator_id: str | None = None
+    billing_provider_id: str | None = None
+    adapter_id: str | None = None
+    adapter_version: str | None = None
+    api_surface: str | None = None
+    dialect_policy_id: str | None = None
+    provider_request_id: str | None = None
+    usage_completeness: str = "actual"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.usage_completeness, str) or not self.usage_completeness.strip():
+            raise ValueError("usage_completeness must be a non-empty string")
+        object.__setattr__(
+            self,
+            "usage_completeness",
+            self.usage_completeness.strip().lower(),
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON-safe attribution snapshot without empty fields."""
+
+        result: Dict[str, Any] = {"usage_completeness": self.usage_completeness}
+        for field_info in fields(self):
+            if field_info.name == "usage_completeness":
+                continue
+            value = getattr(self, field_info.name)
+            if value is None:
+                continue
+            if isinstance(value, str):
+                if not value.strip():
+                    continue
+                result[field_info.name] = value.strip()
+            else:
+                result[field_info.name] = value
+        return result
+
+    @classmethod
+    def from_mapping(cls, value: Any) -> Optional["UsageAttributionContext"]:
+        """Build attribution from the canonical JSON shape when present."""
+
+        if isinstance(value, UsageAttributionContext):
+            return value
+        if not isinstance(value, Mapping):
+            return None
+        allowed = {field_info.name for field_info in fields(cls)}
+        data = {key: item for key, item in value.items() if key in allowed}
+        return cls(**data) if data else None
+
+    def with_updates(self, **updates: Any) -> "UsageAttributionContext":
+        """Return a copy with non-empty update values applied."""
+
+        data = self.to_dict()
+        allowed = {field_info.name for field_info in fields(self)}
+        for key, value in updates.items():
+            if key not in allowed or value is None:
+                continue
+            if isinstance(value, str) and not value.strip():
+                continue
+            data[key] = value
+        return UsageAttributionContext(**data)
+
+
 @dataclass(slots=True, frozen=True)
 class UsageData:
     """Immutable container for token usage from a single LLM call.
@@ -195,6 +269,7 @@ class UsageData:
             breakdown for billing semantics that cannot be represented by
             normalized prompt/completion/cached fields alone.
         pricing_date: Optional effective date used for scheduled model pricing.
+        usage_attribution: Optional deployment and billing identity snapshot.
     """
 
     prompt_tokens: int
@@ -208,6 +283,7 @@ class UsageData:
     cache_reporting: str = CACHE_REPORTING_UNKNOWN
     provider_usage_components: Optional[ProviderUsageComponents] = None
     pricing_date: Optional[date] = None
+    usage_attribution: Optional[UsageAttributionContext] = None
     
     @classmethod
     def from_openai_chat_response(cls, response: Any, model: str) -> UsageData:
@@ -369,6 +445,8 @@ class UsageData:
             result["provider_usage_components"] = (
                 self.provider_usage_components.to_dict()
             )
+        if self.usage_attribution is not None:
+            result["usage_attribution"] = self.usage_attribution.to_dict()
         return result
 
 

@@ -12,11 +12,17 @@ import ProviderSettingsSection from "../ProviderSettingsSection";
 import type { LLMCatalogProvider, LLMModelCatalogResponse } from "../types";
 
 const mocked = vi.hoisted(() => ({
+  createLLMManagedConnection: vi.fn(),
   deleteLLMProviderCredential: vi.fn(),
+  enableLLMManagedConnection: vi.fn(),
   fetchLLMModelCatalog: vi.fn(),
+  fetchLLMSelection: vi.fn(),
   fetchReportingLLMSelection: vi.fn(),
+  refreshLLMManagedConnectionInventory: vi.fn(),
+  saveLLMDeploymentSelection: vi.fn(),
   saveLLMProviderCredential: vi.fn(),
   saveReportingLLMSelection: vi.fn(),
+  testLLMManagedConnection: vi.fn(),
   testLLMProviderCredential: vi.fn(),
 }));
 
@@ -106,6 +112,12 @@ function renderWithQueryClient(component: ReactNode) {
 }
 
 beforeEach(() => {
+  mocked.fetchLLMSelection.mockResolvedValue({
+    provider: "openai",
+    model: "gpt-5.2",
+    deploymentRef: null,
+    selectionStatus: { status: "selectable", selectable: true, runnable: true },
+  });
   mocked.fetchReportingLLMSelection.mockResolvedValue({
     provider: null,
     model: null,

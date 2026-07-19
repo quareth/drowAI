@@ -10,6 +10,10 @@ import { apiCall } from "@/lib/api-config";
 import type {
   LLMModelCatalogResponse,
   LLMDeploymentSelection,
+  LLMManagedConnectionCreateRequest,
+  LLMManagedConnectionEnableRequest,
+  LLMManagedConnectionRefreshRequest,
+  LLMManagedConnectionTestRequest,
   LLMProvingConnectionCreateRequest,
   LLMProvingConnectionEnableRequest,
   LLMProvingConnectionStatus,
@@ -156,6 +160,66 @@ export async function enableLLMProvingConnection(
   return mapProvingConnectionStatus(
     await apiCall<Record<string, unknown>>(
       `/api/llm/proving-presets/${encodeURIComponent(presetId)}/connection/enable`,
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      },
+    ),
+  );
+}
+
+export async function createLLMManagedConnection(
+  presetId: string,
+  request: LLMManagedConnectionCreateRequest = {},
+): Promise<LLMProvingConnectionStatus> {
+  return mapProvingConnectionStatus(
+    await apiCall<Record<string, unknown>>(
+      `/api/llm/connection-presets/${encodeURIComponent(presetId)}/connection`,
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      },
+    ),
+  );
+}
+
+export async function testLLMManagedConnection(
+  presetId: string,
+  request: LLMManagedConnectionTestRequest,
+): Promise<LLMProvingVerification> {
+  return mapProvingVerification(
+    await apiCall<Record<string, unknown>>(
+      `/api/llm/connection-presets/${encodeURIComponent(presetId)}/connection/test`,
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      },
+    ),
+  );
+}
+
+export async function refreshLLMManagedConnectionInventory(
+  presetId: string,
+  request: LLMManagedConnectionRefreshRequest,
+): Promise<LLMProvingConnectionStatus> {
+  return mapProvingConnectionStatus(
+    await apiCall<Record<string, unknown>>(
+      `/api/llm/connection-presets/${encodeURIComponent(presetId)}/connection/refresh`,
+      {
+        method: "POST",
+        body: JSON.stringify(request),
+      },
+    ),
+  );
+}
+
+export async function enableLLMManagedConnection(
+  presetId: string,
+  request: LLMManagedConnectionEnableRequest,
+): Promise<LLMProvingConnectionStatus> {
+  return mapProvingConnectionStatus(
+    await apiCall<Record<string, unknown>>(
+      `/api/llm/connection-presets/${encodeURIComponent(presetId)}/connection/enable`,
       {
         method: "POST",
         body: JSON.stringify(request),

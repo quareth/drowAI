@@ -16,7 +16,6 @@ import requests
 
 from .egress_policy import EgressPolicyError, FixedProviderEgressPolicy
 from .operation_registry import (
-    GPT_OSS_20B_PROVING_PRESET_ID,
     ConnectionOperationRegistry,
     OperationRegistryError,
 )
@@ -26,6 +25,7 @@ from .types import (
     GuardedHTTPResponse,
     LLMConnectionOperation,
     ProviderSecret,
+    RegisteredLLMOperationTarget,
 )
 
 
@@ -83,6 +83,7 @@ class GuardedTransport:
         secret: ProviderSecret,
         resource_id: str | None = None,
         json_body: Mapping[str, Any] | None = None,
+        operation_target: RegisteredLLMOperationTarget | None = None,
     ) -> GuardedHTTPResponse:
         """Execute a registered operation without accepting raw URLs or headers."""
 
@@ -91,10 +92,17 @@ class GuardedTransport:
         response: Any = None
         session: _SessionLike | None = None
         try:
-            target = self._registry.resolve(
+            target = operation_target or self._registry.resolve(
                 operation,
                 provider=provider,
                 resource_id=resource_id,
+            )
+            _validate_operation_target(
+                target,
+                operation=operation,
+                provider=provider,
+                resource_id=resource_id,
+                audit_id=audit_id,
             )
             _validate_secret(
                 secret,
@@ -191,6 +199,44 @@ def _validate_secret(
         )
 
 
+def _validate_operation_target(
+    target: RegisteredLLMOperationTarget,
+    *,
+    operation: LLMConnectionOperation | str,
+    provider: str,
+    resource_id: str | None,
+    audit_id: str,
+) -> None:
+    """Accept only a typed registry target matching the requested operation."""
+
+    try:
+        requested_operation = (
+            operation
+            if isinstance(operation, LLMConnectionOperation)
+            else LLMConnectionOperation(str(operation))
+        )
+    except ValueError:
+        raise GuardedTransportError(
+            "Guarded outbound operation failed",
+            audit_id=audit_id,
+        ) from None
+    if not isinstance(target, RegisteredLLMOperationTarget):
+        raise GuardedTransportError(
+            "Guarded outbound operation failed",
+            audit_id=audit_id,
+        )
+    if target.operation != requested_operation or target.provider != provider:
+        raise GuardedTransportError(
+            "Guarded outbound operation failed",
+            audit_id=audit_id,
+        )
+    if resource_id is not None:
+        raise GuardedTransportError(
+            "Guarded outbound operation failed",
+            audit_id=audit_id,
+        )
+
+
 def _validate_request_body(
     body: Mapping[str, Any] | None,
     *,
@@ -220,7 +266,7 @@ def _provider_headers(
     headers = {"accept": "application/json"}
     if body is not None:
         headers["content-type"] = "application/json"
-    if provider in {"openai", GPT_OSS_20B_PROVING_PRESET_ID}:
+    if provider == "openai" or _is_bearer_api_key_connection_preset(provider):
         headers["authorization"] = f"Bearer {secret}"
     elif provider == "anthropic":
         headers["anthropic-version"] = "2023-06-01"
@@ -228,6 +274,16 @@ def _provider_headers(
     else:
         raise ValueError("Unsupported fixed provider")
     return headers
+
+
+def _is_bearer_api_key_connection_preset(provider: str) -> bool:
+    """Return whether a reviewed preset declares bearer API-key auth."""
+
+    try:
+        preset = ConnectionOperationRegistry().get_connection_preset(provider)
+    except OperationRegistryError:
+        return False
+    return preset.auth_mode == "bearer_api_key"
 
 
 def _validate_response_status(status_code: int, *, audit_id: str) -> None:

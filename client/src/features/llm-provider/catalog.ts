@@ -8,6 +8,9 @@
 import type {
   LLMCatalogModel,
   LLMCatalogProvider,
+  LLMDeploymentCandidate,
+  LLMDeploymentRef,
+  LLMDeploymentStatusOverride,
   LLMSelection,
   LLMSelectionStatus,
   LLMModelCatalogResponse,
@@ -124,4 +127,79 @@ export function getBlockingSelectionStatus(
   return savedSelection.selectionStatus.runnable === false
     ? savedSelection.selectionStatus
     : null;
+}
+
+export function getDeploymentCandidates(
+  catalog: LLMModelCatalogResponse | null | undefined,
+  statusOverrides: LLMDeploymentStatusOverride[] = [],
+): LLMDeploymentCandidate[] {
+  if (!catalog) {
+    return [];
+  }
+
+  return catalog.providers.flatMap((provider) =>
+    provider.models.flatMap((model) => {
+      const connection = model.connection ?? model.proving ?? null;
+      const deploymentRef = model.deploymentRef ?? connection?.deploymentRef ?? null;
+      if (!deploymentRef) {
+        return [];
+      }
+      const override = statusOverrides.find((candidateOverride) =>
+        sameDeploymentRef(candidateOverride.deploymentRef, deploymentRef),
+      );
+      const runnability = connection?.runnability ?? null;
+      const runnable = override?.runnable ?? runnability?.runnable ?? model.runnable ?? false;
+      const lifecycleState =
+        override?.lifecycleState
+        ?? connection?.lifecycleState
+        ?? (runnable ? "enabled" : "unknown");
+
+      return [{
+        providerId: provider.id,
+        providerLabel: provider.label,
+        modelId: model.id,
+        modelLabel: model.label,
+        canonicalModelId: model.canonicalModelId,
+        exactWireModelId: model.exactWireModelId,
+        apiSurface: model.apiSurface,
+        capabilities: model.capabilities,
+        contextWindowTokens: model.contextWindowTokens,
+        maxOutputTokens: model.maxOutputTokens,
+        pricingStatus: model.pricingStatus,
+        deploymentRef,
+        lifecycleState,
+        runnable,
+        status: override?.status ?? runnability?.status ?? (runnable ? "runnable" : "unknown"),
+        reason: override?.reason ?? runnability?.reason ?? null,
+      }];
+    }),
+  );
+}
+
+export function sameDeploymentRef(
+  left: LLMDeploymentRef | null | undefined,
+  right: LLMDeploymentRef | null | undefined,
+): boolean {
+  return Boolean(left && right && left.deployment_id === right.deployment_id);
+}
+
+export function isDeploymentCandidateSelectable(
+  candidate: LLMDeploymentCandidate,
+): boolean {
+  return candidate.runnable === true && candidate.lifecycleState === "enabled";
+}
+
+export function getSingleEligibleDeployment(
+  candidates: LLMDeploymentCandidate[],
+): LLMDeploymentCandidate | null {
+  const eligible = candidates.filter(isDeploymentCandidateSelectable);
+  return eligible.length === 1 ? eligible[0] : null;
+}
+
+export function formatPricingStatus(status: string | null | undefined): string {
+  const normalized = status?.trim().toLowerCase();
+  if (!normalized || normalized === "unknown" || normalized === "unavailable") {
+    return "unavailable";
+  }
+  return status as string;
 }

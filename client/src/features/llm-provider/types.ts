@@ -76,6 +76,24 @@ export interface LLMProvingMetadata extends LLMProvingConnectionStatus {
   enabled: boolean;
   authMode: string;
   userConfigFields: string[];
+  configFields?: LLMConnectionConfigField[];
+}
+
+export interface LLMConnectionConfigField {
+  name: string;
+  label: string;
+  fieldType: "text" | "password" | "url" | (string & {});
+  required: boolean;
+  secret: boolean;
+}
+
+export interface LLMConnectionMetadata extends LLMProvingConnectionStatus {
+  presetId: string;
+  displayName: string;
+  enabled: boolean;
+  authMode: string;
+  userConfigFields: string[];
+  configFields: LLMConnectionConfigField[];
 }
 
 export interface LLMCatalogModel {
@@ -96,6 +114,7 @@ export interface LLMCatalogModel {
   pricingStatus?: string;
   deploymentRef?: LLMDeploymentRef | null;
   runnable?: boolean;
+  connection?: LLMConnectionMetadata | null;
   proving?: LLMProvingMetadata | null;
 }
 
@@ -141,6 +160,33 @@ export interface LLMSelection extends SelectedLLMModel {
 
 export interface LLMDeploymentSelection {
   deployment_ref: LLMDeploymentRef;
+}
+
+export interface LLMDeploymentStatusOverride {
+  deploymentRef: LLMDeploymentRef;
+  lifecycleState?: string | null;
+  runnable?: boolean | null;
+  status?: string | null;
+  reason?: string | null;
+}
+
+export interface LLMDeploymentCandidate {
+  providerId: ProviderId;
+  providerLabel: string;
+  modelId: ModelId;
+  modelLabel: string;
+  canonicalModelId?: string;
+  exactWireModelId?: string | null;
+  apiSurface: string;
+  capabilities: string[];
+  contextWindowTokens: number;
+  maxOutputTokens: number;
+  pricingStatus?: string | null;
+  deploymentRef: LLMDeploymentRef;
+  lifecycleState: string;
+  runnable: boolean;
+  status: string;
+  reason?: string | null;
 }
 
 export interface ReportingLLMSelectionApiResponse {
@@ -195,4 +241,28 @@ export interface LLMProvingConnectionTestRequest {
 export interface LLMProvingConnectionEnableRequest {
   connection_ref: LLMConnectionRef;
   deployment_ref: LLMDeploymentRef;
+}
+
+export interface LLMManagedConnectionCreateRequest {
+  display_label?: string | null;
+  api_key?: string | null;
+  base_url?: string | null;
+  wire_model_id?: string | null;
+  model_label?: string | null;
+  canonical_model_id?: string | null;
+}
+
+export interface LLMManagedConnectionTestRequest {
+  api_key?: string | null;
+  connection_ref?: LLMConnectionRef | null;
+}
+
+export interface LLMManagedConnectionRefreshRequest {
+  api_key?: string | null;
+  connection_ref: LLMConnectionRef;
+}
+
+export interface LLMManagedConnectionEnableRequest {
+  connection_ref: LLMConnectionRef;
+  deployment_ref?: LLMDeploymentRef | null;
 }

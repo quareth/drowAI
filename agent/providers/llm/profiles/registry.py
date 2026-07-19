@@ -13,6 +13,7 @@ from typing import Iterable, Mapping
 
 from core.llm.role_requirements import get_role_requirements
 
+from ..catalog.manifest_loader import build_model_profiles_from_manifest, load_catalog_manifest
 from ..contracts.structured_output_strategy import freeze_structured_output_strategies
 from ..contracts.tool_contracts import freeze_tool_choice_modes
 from ..core.capabilities import CapabilityInput, LLMCapability, freeze_capabilities, normalize_capability
@@ -79,6 +80,12 @@ class ModelProfile:
     default_reasoning_effort: str | None = None
     tool_choice_modes: frozenset[str] = field(default_factory=frozenset)
     structured_output_strategies: frozenset[str] = field(default_factory=frozenset)
+    canonical_model_id: str | None = None
+    lifecycle: str = "active"
+    support_tier: str = "mainstream"
+    aliases: tuple[str, ...] = field(default_factory=tuple)
+    pricing_schedule_ref: str | None = None
+    pricing_provenance: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "ref", self.ref.normalized())
@@ -104,6 +111,23 @@ class ModelProfile:
             raise ValueError("max_output_tokens must be positive")
         if not isinstance(self.listable, bool):
             raise TypeError("listable must be declared as a bool")
+        canonical_model_id = self.canonical_model_id
+        if canonical_model_id is None:
+            canonical_model_id = f"{self.ref.provider}:{self.ref.model}"
+        object.__setattr__(self, "canonical_model_id", str(canonical_model_id).strip())
+        object.__setattr__(self, "lifecycle", str(self.lifecycle).strip().lower())
+        object.__setattr__(self, "support_tier", str(self.support_tier).strip().lower())
+        object.__setattr__(
+            self,
+            "aliases",
+            tuple(str(alias).strip() for alias in self.aliases if str(alias).strip()),
+        )
+        pricing_schedule_ref = self.pricing_schedule_ref
+        if pricing_schedule_ref is not None:
+            object.__setattr__(self, "pricing_schedule_ref", str(pricing_schedule_ref).strip())
+        pricing_provenance = self.pricing_provenance
+        if pricing_provenance is not None:
+            object.__setattr__(self, "pricing_provenance", str(pricing_provenance).strip())
 
     def supports(self, capability: CapabilityInput) -> bool:
         """Return True when the concrete model/API surface supports a capability."""
@@ -135,6 +159,8 @@ class _CompatibilityRule:
 class ModelProfileRegistry:
     """Immutable lookup registry for provider and model profiles."""
 
+    __slots__ = ("_providers", "_models", "_compatibility_rules", "_frozen")
+
     def __init__(
         self,
         *,
@@ -142,11 +168,30 @@ class ModelProfileRegistry:
         models: Iterable[ModelProfile],
         compatibility_rules: Iterable[_CompatibilityRule],
     ) -> None:
-        self._providers = {profile.id: profile for profile in providers}
-        self._models = {profile.ref: profile for profile in models}
-        self._compatibility_rules = tuple(
-            sorted(compatibility_rules, key=lambda rule: len(rule.family_prefix), reverse=True)
+        object.__setattr__(
+            self,
+            "_providers",
+            MappingProxyType({profile.id: profile for profile in providers}),
         )
+        object.__setattr__(
+            self,
+            "_models",
+            MappingProxyType({profile.ref: profile for profile in models}),
+        )
+        object.__setattr__(
+            self,
+            "_compatibility_rules",
+            tuple(
+                sorted(compatibility_rules, key=lambda rule: len(rule.family_prefix), reverse=True)
+            ),
+        )
+        object.__setattr__(self, "_frozen", True)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        """Prevent runtime mutation after construction."""
+        if getattr(self, "_frozen", False):
+            raise AttributeError("ModelProfileRegistry is immutable")
+        object.__setattr__(self, name, value)
 
     def require_provider_profile(self, provider_id: str) -> ProviderProfile:
         """Return a provider profile or raise an explicit profile error."""
@@ -289,34 +334,56 @@ def _validate_internal_role_model(role: str, profile: ModelProfile) -> None:
 from .anthropic import (  # noqa: E402
     ANTHROPIC_API_SURFACE_MESSAGES,
     ANTHROPIC_DEFAULT_MODEL_ID,
-    ANTHROPIC_EXACT_MODEL_IDS,
     ANTHROPIC_INTERNAL_ROLE_MODELS,
-    ANTHROPIC_LISTABLE_MODEL_IDS,
-    ANTHROPIC_NON_LISTABLE_MODEL_IDS,
-    build_anthropic_model_profiles,
     build_anthropic_provider_profile,
 )
 from .openai import (  # noqa: E402
     OPENAI_API_SURFACE_CHAT_COMPLETIONS,
     OPENAI_API_SURFACE_RESPONSES,
     OPENAI_DEFAULT_MODEL_ID,
-    OPENAI_EXACT_MODEL_IDS,
     OPENAI_GPT_OSS_20B_MODEL_ID,
     OPENAI_INTERNAL_ROLE_MODELS,
-    OPENAI_LEGACY_CHAT_MODEL_IDS,
-    OPENAI_LISTABLE_MODEL_IDS,
-    OPENAI_NON_LISTABLE_RESPONSES_MODEL_IDS,
     OPENAI_RESPONSES_MAX_OUTPUT_TOKENS,
     build_openai_compatibility_rules,
-    build_openai_model_profiles,
     build_openai_provider_profile,
+)
+
+
+CATALOG_MANIFEST = load_catalog_manifest()
+
+OPENAI_LISTABLE_MODEL_IDS: tuple[str, ...] = CATALOG_MANIFEST.model_ids(
+    OPENAI_PROVIDER_ID,
+    listable=True,
+)
+OPENAI_NON_LISTABLE_RESPONSES_MODEL_IDS: tuple[str, ...] = CATALOG_MANIFEST.model_ids(
+    OPENAI_PROVIDER_ID,
+    listable=False,
+    api_surface=OPENAI_API_SURFACE_RESPONSES,
+)
+OPENAI_LEGACY_CHAT_MODEL_IDS: tuple[str, ...] = CATALOG_MANIFEST.model_ids(
+    OPENAI_PROVIDER_ID,
+    support_tier="compatibility",
+)
+OPENAI_EXACT_MODEL_IDS: tuple[str, ...] = CATALOG_MANIFEST.model_ids(
+    OPENAI_PROVIDER_ID,
+)
+ANTHROPIC_LISTABLE_MODEL_IDS: tuple[str, ...] = CATALOG_MANIFEST.model_ids(
+    ANTHROPIC_PROVIDER_ID,
+    listable=True,
+)
+ANTHROPIC_NON_LISTABLE_MODEL_IDS: tuple[str, ...] = CATALOG_MANIFEST.model_ids(
+    ANTHROPIC_PROVIDER_ID,
+    listable=False,
+)
+ANTHROPIC_EXACT_MODEL_IDS: tuple[str, ...] = CATALOG_MANIFEST.model_ids(
+    ANTHROPIC_PROVIDER_ID,
 )
 
 
 def _build_default_registry() -> ModelProfileRegistry:
     return ModelProfileRegistry(
         providers=(build_openai_provider_profile(), build_anthropic_provider_profile()),
-        models=(*build_openai_model_profiles(), *build_anthropic_model_profiles()),
+        models=build_model_profiles_from_manifest(CATALOG_MANIFEST, ModelProfile),
         compatibility_rules=build_openai_compatibility_rules(),
     )
 

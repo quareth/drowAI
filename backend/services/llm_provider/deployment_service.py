@@ -19,7 +19,11 @@ from backend.models import (
 )
 
 from .connection_service import LLMConnectionService
-from .operation_registry import GPT_OSS_20B_PROVING_PRESET_ID, ConnectionOperationRegistry
+from .operation_registry import (
+    GPT_OSS_20B_PROVING_PRESET_ID,
+    ConnectionOperationRegistry,
+    OperationRegistryError,
+)
 from .types import (
     LLMConnectionNotFoundError,
     LLMDeploymentNotFoundError,
@@ -124,6 +128,75 @@ class LLMDeploymentService:
             dialect_policy_id=preset.dialect_policy_id,
             billing_provider_id=None,
             route_config={"preset_id": preset.id},
+            enabled=True,
+        )
+        self._db.add(route)
+        self._db.flush()
+        return deployment, route
+
+    def create_preset_deployment(
+        self,
+        *,
+        user_id: int,
+        connection_id: UUID | str,
+        expected_connection_revision: int,
+        wire_model_id: str,
+        display_name: str,
+        canonical_model_id: str | None = None,
+    ) -> tuple[LLMModelDeployment, LLMDeploymentRoute]:
+        """Create a deployment and route from reviewed connection preset data."""
+
+        try:
+            connection = self._connections.get_owned_at_revision(
+                user_id=user_id,
+                connection_id=connection_id,
+                expected_revision=expected_connection_revision,
+            )
+        except LLMConnectionNotFoundError as exc:
+            raise LLMDeploymentNotFoundError(
+                "Deployment connection was not found"
+            ) from exc
+        registry = ConnectionOperationRegistry()
+        try:
+            preset = registry.get_connection_preset(connection.connection_preset_id)
+        except OperationRegistryError as exc:
+            raise LLMDeploymentValidationError(
+                "Connection preset is not registered for deployment creation"
+            ) from exc
+        if connection.runtime_family_id != preset.runtime_family_id:
+            raise LLMDeploymentValidationError(
+                "Connection runtime family does not match its preset"
+            )
+        if connection.serving_operator_id != preset.serving_operator_id:
+            raise LLMDeploymentValidationError(
+                "Connection serving operator does not match its preset"
+            )
+
+        deployment = self.create_deployment(
+            user_id=user_id,
+            connection_id=connection.id,
+            expected_connection_revision=expected_connection_revision,
+            wire_model_id=wire_model_id,
+            canonical_model_id=canonical_model_id,
+            display_name=display_name,
+            discovery_source="preset",
+            source_metadata={
+                "preset_id": preset.id,
+                "wire_model_source": "user_selected_preset_model",
+            },
+        )
+        route = LLMDeploymentRoute(
+            id=uuid4(),
+            deployment_id=deployment.id,
+            adapter_id=preset.adapter_id,
+            adapter_version=preset.adapter_version,
+            api_surface=preset.api_surface,
+            dialect_policy_id=preset.dialect_policy_id,
+            billing_provider_id=preset.billing_provider_id,
+            route_config={
+                "preset_id": preset.id,
+                "discovery_strategy": preset.discovery_strategy,
+            },
             enabled=True,
         )
         self._db.add(route)

@@ -36,6 +36,7 @@ from backend.models import (
 from backend.services.llm_provider.connection_service import LLMConnectionService
 from backend.services.llm_provider.deployment_service import LLMDeploymentService
 from backend.services.llm_provider.operation_registry import (
+    CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
     GPT_OSS_20B_PROVING_BASE_URL_ENV,
     GPT_OSS_20B_PROVING_PRESET_ID,
 )
@@ -115,8 +116,16 @@ def identity_users(llm_identity_db: Session) -> tuple[User, User]:
 class _CredentialService:
     """Connection-auth double that records the runtime resolver request."""
 
-    def __init__(self, db: Session) -> None:
+    def __init__(
+        self,
+        db: Session,
+        *,
+        provider: str = GPT_OSS_20B_PROVING_PRESET_ID,
+        secret: str = "sk-gpt-oss-runtime",
+    ) -> None:
         self._db = db
+        self.provider = provider
+        self.secret = secret
         self.calls: list[dict[str, Any]] = []
 
     def resolve_connection_auth(
@@ -140,10 +149,10 @@ class _CredentialService:
         mode = auth_mode if isinstance(auth_mode, LLMAuthMode) else LLMAuthMode(auth_mode)
         return ResolvedAuth.with_secret(
             mode=mode,
-            provider=GPT_OSS_20B_PROVING_PRESET_ID,
+            provider=self.provider,
             secret=ProviderSecret(
-                provider=GPT_OSS_20B_PROVING_PRESET_ID,
-                value="sk-gpt-oss-runtime",
+                provider=self.provider,
+                value=self.secret,
             ),
         )
 
@@ -191,8 +200,9 @@ async def test_gpt_oss_runtime_uses_shared_authorities_without_fallback(
     )
     guarded_calls: list[dict[str, Any]] = []
 
-    def fake_execute(self, operation, provider, secret, json_body=None):
+    def fake_execute(self, operation, provider, secret, json_body=None, operation_target=None):
         del self
+        del operation_target
         guarded_calls.append(
             {
                 "operation": LLMConnectionOperation(operation),
@@ -344,3 +354,120 @@ async def test_gpt_oss_runtime_uses_shared_authorities_without_fallback(
     quote = get_pricing_quote(ProviderModelRef("openai", "gpt-oss-20b"))
     assert quote.status == PRICING_UNAVAILABLE
     assert quote.schedule is None
+
+
+@pytest.mark.asyncio
+async def test_custom_compatible_runtime_uses_guarded_executor_without_sdk_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    llm_identity_db: Session,
+    identity_users: tuple[User, User],
+) -> None:
+    _FakeAsyncOpenAI.instances.clear()
+    monkeypatch.setattr(
+        "agent.providers.llm.adapters.openai.compatible_chat.openai.AsyncOpenAI",
+        _FakeAsyncOpenAI,
+    )
+    guarded_calls: list[dict[str, Any]] = []
+
+    def fake_execute(self, operation, provider, secret, json_body=None, operation_target=None):
+        del self
+        guarded_calls.append(
+            {
+                "operation": LLMConnectionOperation(operation),
+                "provider": provider,
+                "secret": secret.value,
+                "url": operation_target.url if operation_target is not None else None,
+                "json_body": dict(json_body or {}),
+            }
+        )
+        return GuardedHTTPResponse(
+            status_code=200,
+            body=json.dumps(
+                {
+                    "choices": [{"message": {"content": "custom ok"}}],
+                    "usage": {
+                        "prompt_tokens": 5,
+                        "completion_tokens": 2,
+                        "total_tokens": 7,
+                    },
+                }
+            ).encode(),
+            audit_id="custom-runtime-guarded-audit",
+        )
+
+    monkeypatch.setattr(
+        "backend.services.llm_provider.runtime_client_resolver.GuardedTransport.execute",
+        fake_execute,
+    )
+    owner, _ = identity_users
+    connections = LLMConnectionService(llm_identity_db)
+    connection = connections.create_draft(
+        user_id=owner.id,
+        display_name="Team endpoint",
+        connection_preset_id=CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+        runtime_family_id="openai_compatible_chat",
+        serving_operator_id="organization_managed",
+        non_secret_config={
+            "base_url": "https://llm.example.test/team",
+            "auth_mode": "bearer",
+        },
+    )
+    deployment, route = LLMDeploymentService(llm_identity_db).create_preset_deployment(
+        user_id=owner.id,
+        connection_id=connection.id,
+        expected_connection_revision=1,
+        wire_model_id="team/tool-model",
+        display_name="Team Tool Model",
+        canonical_model_id=None,
+    )
+    connections.transition_state(
+        user_id=owner.id,
+        connection_id=connection.id,
+        expected_revision=connection.revision,
+        target_state=LLMConnectionState.DISABLED,
+    )
+    connections.transition_state(
+        user_id=owner.id,
+        connection_id=connection.id,
+        expected_revision=connection.revision,
+        target_state=LLMConnectionState.ENABLED,
+    )
+
+    credentials = _CredentialService(
+        llm_identity_db,
+        provider=CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+        secret="sk-custom-runtime",
+    )
+    resolver = LLMRuntimeClientResolver(credentials, db=llm_identity_db)
+    client = resolver.get_client(
+        LLMRuntimeSelectionV2(
+            deployment_ref=DeploymentRef(str(deployment.id), int(deployment.revision)),
+            preferred_route_id=str(route.id),
+        ),
+        access_context=LLMRuntimeAccessContext(runtime_user_id=owner.id),
+        purpose="custom-runtime-test",
+        resolution_role="conversation_main",
+    )
+
+    response = await client.chat_messages_with_usage(
+        [{"role": "user", "content": "hello"}],
+        max_tokens=3,
+    )
+
+    assert response.content == "custom ok"
+    assert _FakeAsyncOpenAI.instances == []
+    assert credentials.calls[0]["auth_mode"] is LLMAuthMode.BEARER
+    assert guarded_calls == [
+        {
+            "operation": LLMConnectionOperation.INFERENCE,
+            "provider": CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+            "secret": "sk-custom-runtime",
+            "url": "https://llm.example.test/team/v1/chat/completions",
+            "json_body": {
+                "model": "team/tool-model",
+                "messages": [{"role": "user", "content": "hello"}],
+                "temperature": 0.1,
+                "max_tokens": 3,
+            },
+        }
+    ]

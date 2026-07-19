@@ -19,8 +19,10 @@ from backend.models import LLMDeploymentRoute, LLMInferenceConnection, LLMModelD
 
 from .deployment_service import LLMDeploymentService
 from .effective_profile_service import EffectiveProfileService
+from .operation_registry import ConnectionOperationRegistry
 from .types import (
     LLMAuthMode,
+    LLMConnectionCredentialRef,
     LLMDeploymentNotFoundError,
     LLMSelectionStatus,
     ProviderConfigurationError,
@@ -114,17 +116,24 @@ class LLMSelectionDeploymentResolver:
             profile=profile,
         )
 
-    @staticmethod
     def classify_runnability(
+        self,
         *,
         user_id: int,
         target: SelectionDeploymentTarget,
         credential_available: Callable[[int, str], bool],
+        credential_fingerprint: Callable[..., str],
         missing_credential_reason: str,
+        required_capabilities: tuple[LLMCapability, ...] = (LLMCapability.CHAT,),
+        capability_missing_reason: str = "Capability evidence is required.",
     ) -> LLMSelectionStatus | None:
         """Return a non-runnable status for current connection/auth facts."""
 
         connection = target.connection
+        is_connection_preset = (
+            connection.connection_preset_id
+            in ConnectionOperationRegistry().list_connection_preset_ids()
+        )
         config = connection.non_secret_config
         configured_mode = config.get("auth_mode") if isinstance(config, dict) else None
         try:
@@ -144,16 +153,35 @@ class LLMSelectionDeploymentResolver:
                 runnable=False,
                 reason=str(exc),
             )
-        if auth_mode in {LLMAuthMode.API_KEY, LLMAuthMode.BEARER} and not (
-            connection.legacy_default_provider
-            and credential_available(user_id, connection.legacy_default_provider)
-        ):
-            return LLMSelectionStatus(
-                status="credential_missing",
-                selectable=True,
-                runnable=False,
-                reason=missing_credential_reason,
-            )
+        credential_hash = None
+        if auth_mode in {LLMAuthMode.API_KEY, LLMAuthMode.BEARER}:
+            if is_connection_preset:
+                try:
+                    credential_hash = credential_fingerprint(
+                        user_id=user_id,
+                        connection_ref=LLMConnectionCredentialRef(
+                            connection_id=str(connection.id),
+                            expected_revision=int(connection.revision),
+                        ),
+                        provider=connection.connection_preset_id,
+                    )
+                except Exception:
+                    return LLMSelectionStatus(
+                        status="credential_missing",
+                        selectable=True,
+                        runnable=False,
+                        reason=missing_credential_reason,
+                    )
+            elif not (
+                connection.legacy_default_provider
+                and credential_available(user_id, connection.legacy_default_provider)
+            ):
+                return LLMSelectionStatus(
+                    status="credential_missing",
+                    selectable=True,
+                    runnable=False,
+                    reason=missing_credential_reason,
+                )
         if connection.state != "enabled":
             return LLMSelectionStatus(
                 status="connection_unavailable",
@@ -161,6 +189,22 @@ class LLMSelectionDeploymentResolver:
                 runnable=False,
                 reason="Deployment connection is not enabled",
             )
+        if is_connection_preset:
+            decision = EffectiveProfileService(self._db).classify_runnability(
+                deployment=target.deployment,
+                route=target.route,
+                required_capabilities=required_capabilities,
+                connection_id=str(connection.id),
+                connection_revision=int(connection.revision),
+                credential_fingerprint=credential_hash,
+            )
+            if not decision.runnable:
+                return LLMSelectionStatus(
+                    status=decision.status,
+                    selectable=True,
+                    runnable=False,
+                    reason=capability_missing_reason,
+                )
         return None
 
 

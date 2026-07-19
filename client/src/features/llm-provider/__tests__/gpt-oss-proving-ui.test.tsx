@@ -11,14 +11,19 @@ import ProviderSettingsSection from "../ProviderSettingsSection";
 import type { LLMDeploymentRef, LLMModelCatalogResponse } from "../types";
 
 const mocked = vi.hoisted(() => ({
+  createLLMManagedConnection: vi.fn(),
   createLLMProvingConnection: vi.fn(),
   deleteLLMProviderCredential: vi.fn(),
+  enableLLMManagedConnection: vi.fn(),
   enableLLMProvingConnection: vi.fn(),
   fetchLLMModelCatalog: vi.fn(),
+  fetchLLMSelection: vi.fn(),
   fetchReportingLLMSelection: vi.fn(),
+  refreshLLMManagedConnectionInventory: vi.fn(),
   saveLLMProviderCredential: vi.fn(),
   saveLLMDeploymentSelection: vi.fn(),
   saveReportingLLMSelection: vi.fn(),
+  testLLMManagedConnection: vi.fn(),
   testLLMProviderCredential: vi.fn(),
   testLLMProvingConnection: vi.fn(),
 }));
@@ -111,6 +116,12 @@ function renderWithQueryClient(component: ReactNode) {
 
 beforeEach(() => {
   mocked.fetchLLMModelCatalog.mockResolvedValue(catalog);
+  mocked.fetchLLMSelection.mockResolvedValue({
+    provider: "registered-provider",
+    model: "gpt-oss-20b",
+    deploymentRef: null,
+    selectionStatus: { status: "capability_unknown", selectable: true, runnable: false },
+  });
   mocked.fetchReportingLLMSelection.mockResolvedValue({
     provider: null,
     model: null,
@@ -164,16 +175,16 @@ describe("GPT-OSS proving UI", () => {
     );
 
     expect(await screen.findByText("GPT-OSS 20B OpenAI-compatible proving")).toBeTruthy();
-    expect(screen.getByText("Lifecycle: draft")).toBeTruthy();
+    expect(screen.getAllByText("Lifecycle: draft").length).toBeGreaterThan(0);
     expect(screen.getByText("Verification: not_tested")).toBeTruthy();
-    expect(screen.getByText("Runnability: capability_unknown")).toBeTruthy();
+    expect(screen.getAllByText("Runnability: capability_unknown").length).toBeGreaterThan(0);
     expect(screen.getByText("Context: 128000 tokens")).toBeTruthy();
     expect(screen.getByText("Pricing: unavailable")).toBeTruthy();
     expect(screen.queryByText("$0")).toBeNull();
     expect(screen.queryByLabelText(/endpoint/i)).toBeNull();
     expect(screen.queryByText(/marketplace/i)).toBeNull();
     expect(
-      (screen.getByRole("button", { name: /select deployment/i }) as HTMLButtonElement)
+      (screen.getByRole("button", { name: /select gpt-oss 20b/i }) as HTMLButtonElement)
         .disabled,
     ).toBe(true);
 
@@ -212,7 +223,7 @@ describe("GPT-OSS proving UI", () => {
       );
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /select deployment/i }));
+    fireEvent.click(screen.getByRole("button", { name: /select gpt-oss 20b/i }));
     await waitFor(() => {
       expect(mocked.saveLLMDeploymentSelection).toHaveBeenCalledWith({
         deployment_ref: deploymentRef,

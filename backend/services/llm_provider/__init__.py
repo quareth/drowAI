@@ -29,6 +29,7 @@ from .failure_policy import (
     classify_llm_runtime_failure,
 )
 from .health_service import LLMProviderHealthService
+from .inventory_service import LLMInventoryService
 from .migration_service import LLMProviderMigrationService
 from .runtime_client_resolver import LLMRuntimeClientResolver, resolve_call_target
 from .runtime_config_service import LLMRuntimeConfigService
@@ -38,7 +39,9 @@ from .reporting_selection_service import (
     ReportingLLMSelectionService,
 )
 from .runtime_services import (
+    LLM_INVENTORY_REFRESH_SERVICE_ACTOR,
     LLMRuntimeServices,
+    LLMServiceOperationContext,
     attach_runtime_services,
     get_runtime_services,
     strip_runtime_services,
@@ -58,6 +61,7 @@ from .types import (
     LLMConnectionAuthorizationError,
     LLMConnectionCredentialRef,
     LLMConnectionNotFoundError,
+    LLMConnectionOperation,
     LLMConnectionRevisionConflictError,
     LLMConnectionState,
     LLMConnectionStateTransitionError,
@@ -93,6 +97,7 @@ __all__ = [
     "LLMConnectionAuthorizer",
     "LLMConnectionCredentialRef",
     "LLMConnectionNotFoundError",
+    "LLMConnectionOperation",
     "LLMConnectionRevisionConflictError",
     "LLMConnectionService",
     "LLMConnectionState",
@@ -104,6 +109,8 @@ __all__ = [
     "LLMDeploymentNotFoundError",
     "LLMDeploymentValidationError",
     "LLMDeploymentService",
+    "LLMInventoryService",
+    "LLM_INVENTORY_REFRESH_SERVICE_ACTOR",
     "LLMProviderCatalogService",
     "LLMProviderEnvironmentService",
     "EffectiveProfileService",
@@ -122,6 +129,7 @@ __all__ = [
     "LLMRuntimeAccessContext",
     "LLMRuntimeSelectionV2",
     "LLMRuntimeServices",
+    "LLMServiceOperationContext",
     "LLMSelectionStatus",
     "ProviderConfigurationError",
     "ProviderHealthCheckResult",

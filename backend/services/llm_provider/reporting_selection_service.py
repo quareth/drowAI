@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from agent.providers.llm.core.capabilities import LLMCapability
 from agent.providers.llm.core.identity import normalize_provider_id
 from agent.providers.llm.core.reasoning_policy import (
     validate_reasoning_effort_for_provider_model,
@@ -152,6 +153,23 @@ class ReportingLLMSelectionService:
             role="reporting",
             require_structured_output=True,
         )
+        status = self._deployment_resolver.classify_runnability(
+            user_id=int(user_id),
+            target=target,
+            credential_available=self._credential_service.has_enabled_credential,
+            credential_fingerprint=(
+                self._credential_service.connection_credential_fingerprint
+            ),
+            missing_credential_reason=(
+                "Deployment credential is required for reporting generation"
+            ),
+            required_capabilities=(LLMCapability.CHAT,),
+            capability_missing_reason="Capability evidence is required",
+        )
+        if status is not None and not status.runnable:
+            raise ProviderConfigurationError(
+                status.reason or "Reporting deployment is not runnable."
+            )
         normalized_effort = _normalize_reasoning_effort(
             provider=target.profile.ref.provider,
             model=target.profile.ref.model,
@@ -315,9 +333,14 @@ class ReportingLLMSelectionService:
                 user_id=int(selection.user_id),
                 target=target,
                 credential_available=self._credential_service.has_enabled_credential,
+                credential_fingerprint=(
+                    self._credential_service.connection_credential_fingerprint
+                ),
                 missing_credential_reason=(
                     "Deployment credential is required for reporting generation"
                 ),
+                required_capabilities=(LLMCapability.CHAT,),
+                capability_missing_reason="Capability evidence is required",
             )
             if deployment_status is not None:
                 return deployment_status

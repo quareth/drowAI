@@ -102,11 +102,9 @@ def pricing_quote_for_usage(usage: "UsageData") -> PricingQuote:
     components = _provider_components_mapping(
         getattr(usage, "provider_usage_components", None)
     )
+    provider, model = _pricing_provider_model_for_usage(usage)
     return get_pricing_quote(
-        ProviderModelRef(
-            str(getattr(usage, "provider", OPENAI_PROVIDER_ID) or OPENAI_PROVIDER_ID),
-            str(getattr(usage, "model", "unknown") or "unknown"),
-        ),
+        ProviderModelRef(provider, model),
         api_surface=str(getattr(usage, "api_surface", "") or "") or None,
         provider_usage_components=components,
         effective_date=getattr(usage, "pricing_date", None),
@@ -121,11 +119,11 @@ def pricing_status_for_usage(usage: "UsageData") -> str:
 def calculate_cost(usage: "UsageData") -> float:
     """Calculate USD cost for usage while preserving float compatibility."""
     components = calculate_cost_components(
-        usage.model,
+        _pricing_provider_model_for_usage(usage)[1],
         prompt_tokens=usage.prompt_tokens,
         completion_tokens=usage.completion_tokens,
         cached_tokens=usage.cached_tokens,
-        provider=getattr(usage, "provider", OPENAI_PROVIDER_ID),
+        provider=_pricing_provider_model_for_usage(usage)[0],
         api_surface=getattr(usage, "api_surface", None),
         provider_usage_components=getattr(usage, "provider_usage_components", None),
         effective_date=getattr(usage, "pricing_date", None),
@@ -141,17 +139,17 @@ def calculate_cost_breakdown(usage: "UsageData") -> Dict[str, Any]:
     """Calculate detailed cost breakdown and quote status for usage data."""
     quote = pricing_quote_for_usage(usage)
     components = calculate_cost_components(
-        usage.model,
+        _pricing_provider_model_for_usage(usage)[1],
         prompt_tokens=usage.prompt_tokens,
         completion_tokens=usage.completion_tokens,
         cached_tokens=usage.cached_tokens,
-        provider=getattr(usage, "provider", OPENAI_PROVIDER_ID),
+        provider=_pricing_provider_model_for_usage(usage)[0],
         api_surface=getattr(usage, "api_surface", None),
         provider_usage_components=getattr(usage, "provider_usage_components", None),
         effective_date=getattr(usage, "pricing_date", None),
     )
     canonical_components = canonical_usage_components(
-        provider=getattr(usage, "provider", OPENAI_PROVIDER_ID),
+        provider=_pricing_provider_model_for_usage(usage)[0],
         prompt_tokens=usage.prompt_tokens,
         completion_tokens=usage.completion_tokens,
         cached_tokens=usage.cached_tokens,
@@ -177,6 +175,7 @@ def calculate_cost_breakdown(usage: "UsageData") -> Dict[str, Any]:
         ),
         "pricing_status": quote.status,
         "pricing_reason": quote.reason,
+        "pricing_revision": quote.pricing_revision,
         "model": usage.model,
         "provider": usage.provider,
     }
@@ -274,6 +273,11 @@ def usage_from_persisted_record(record: Any) -> "UsageData":
     provider_components = ProviderUsageComponents.from_mapping(
         metadata_dict.get("provider_usage_components")
     )
+    from .models import UsageAttributionContext
+
+    usage_attribution = UsageAttributionContext.from_mapping(
+        metadata_dict.get("usage_attribution")
+    )
     api_surface = str(metadata_dict.get("api_surface") or "").strip().lower()
     if api_surface in {"", "unknown"} and provider_components is not None:
         api_surface = provider_components.api_surface
@@ -296,7 +300,27 @@ def usage_from_persisted_record(record: Any) -> "UsageData":
         api_surface=api_surface or "unknown",
         provider_usage_components=provider_components,
         pricing_date=pricing_date,
+        usage_attribution=usage_attribution,
     )
+
+
+def _pricing_provider_model_for_usage(usage: "UsageData") -> tuple[str, str]:
+    attribution = getattr(usage, "usage_attribution", None)
+    billing_provider = getattr(attribution, "billing_provider_id", None)
+    canonical_model = getattr(attribution, "canonical_model_id", None)
+    requested_model = getattr(attribution, "requested_model_id", None)
+    provider = str(
+        billing_provider
+        or getattr(usage, "provider", OPENAI_PROVIDER_ID)
+        or OPENAI_PROVIDER_ID
+    )
+    model = str(
+        canonical_model
+        or requested_model
+        or getattr(usage, "model", "unknown")
+        or "unknown"
+    )
+    return provider, model
 
 
 def _component_cost(quote: PricingQuote, component: str, tokens: int) -> float:

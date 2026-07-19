@@ -27,7 +27,6 @@ from backend.services.metrics.utils import safe_inc_labeled
 
 from .catalog_service import LLMProviderCatalogService
 from .credential_service import LLMCredentialService
-from .effective_profile_service import EffectiveProfileService
 from .migration_service import LLMProviderMigrationService
 from .operation_registry import GPT_OSS_20B_PROVING_PRESET_ID
 from .selection_deployment_resolver import (
@@ -38,7 +37,6 @@ from .types import (
     CredentialNotFoundError,
     DeploymentRef,
     LLMRuntimeSelectionV2,
-    LLMConnectionCredentialRef,
     LLMSelectionStatus,
     ProviderConfigurationError,
 )
@@ -387,47 +385,26 @@ class LLMProviderSelectionService:
             user_id=user_id,
             target=target,
             credential_available=self._credential_service.has_enabled_credential,
+            credential_fingerprint=(
+                self._credential_service.connection_credential_fingerprint
+            ),
             missing_credential_reason="Deployment credential is required",
+            required_capabilities=(
+                (
+                    LLMCapability.CHAT,
+                    LLMCapability.USAGE_REPORTING,
+                )
+                if target.connection.connection_preset_id == GPT_OSS_20B_PROVING_PRESET_ID
+                else (LLMCapability.CHAT,)
+            ),
+            capability_missing_reason=(
+                "Successful proving verification is required"
+                if target.connection.connection_preset_id == GPT_OSS_20B_PROVING_PRESET_ID
+                else "Capability evidence is required"
+            ),
         )
         if unavailable is not None:
             return unavailable
-        if target.connection.connection_preset_id == GPT_OSS_20B_PROVING_PRESET_ID:
-            try:
-                credential_fingerprint = (
-                    self._credential_service.connection_credential_fingerprint(
-                        user_id=user_id,
-                        connection_ref=LLMConnectionCredentialRef(
-                            connection_id=str(target.connection.id),
-                            expected_revision=int(target.connection.revision),
-                        ),
-                        provider=GPT_OSS_20B_PROVING_PRESET_ID,
-                    )
-                )
-            except Exception as exc:
-                return LLMSelectionStatus(
-                    status="credential_missing",
-                    selectable=True,
-                    runnable=False,
-                    reason=str(exc),
-                )
-            runnability = EffectiveProfileService(self._db).classify_runnability(
-                deployment=target.deployment,
-                route=target.route,
-                required_capabilities=(
-                    LLMCapability.CHAT,
-                    LLMCapability.USAGE_REPORTING,
-                ),
-                connection_id=str(target.connection.id),
-                connection_revision=int(target.connection.revision),
-                credential_fingerprint=credential_fingerprint,
-            )
-            if not runnability.runnable:
-                return LLMSelectionStatus(
-                    status=runnability.status,
-                    selectable=True,
-                    runnable=False,
-                    reason="Successful proving verification is required",
-                )
         return LLMSelectionStatus(status="selectable", selectable=True, runnable=True)
 
     @staticmethod

@@ -193,13 +193,10 @@ class LLMRuntimeClientResolver:
                 resolved_target.connection.endpoint
             )
             factory_kwargs["wire_model_id"] = resolved_target.exact_wire_model_id
-            if (
-                resolved_target.connection.connection_preset_id
-                == GPT_OSS_20B_PROVING_PRESET_ID
-            ):
-                factory_kwargs["guarded_executor"] = _guarded_inference_executor(
-                    secret=secret,
-                )
+            factory_kwargs["guarded_executor"] = _guarded_inference_executor(
+                operation_target=resolved_target.connection.operation_target,
+                secret=secret,
+            )
         client = LLMClientFactory.get_client(
             provider_model=call_ref,
             api_key=secret.value,
@@ -341,6 +338,7 @@ class LLMRuntimeClientResolver:
                 transport_origin=connection.transport_origin,
                 endpoint_policy_id=str(connection.endpoint_policy_id),
                 endpoint=authorized.operation_target.url,
+                operation_target=authorized.operation_target,
                 resolved_auth=resolved_auth,
             ),
             deployment_id=str(deployment.id),
@@ -478,6 +476,7 @@ class LLMRuntimeClientResolver:
                 transport_origin=connection.transport_origin,
                 endpoint_policy_id=str(connection.endpoint_policy_id),
                 endpoint=authorized.operation_target.url,
+                operation_target=authorized.operation_target,
                 resolved_auth=resolved_auth,
             ),
             deployment_id=str(deployment_id),
@@ -542,6 +541,7 @@ class LLMRuntimeClientResolver:
                 transport_origin="backend",
                 endpoint_policy_id="fixed_provider_v1",
                 endpoint=operation_target.url,
+                operation_target=operation_target,
                 resolved_auth=ResolvedAuth.with_secret(
                     mode=LLMAuthMode.API_KEY,
                     provider=secret.provider,
@@ -1073,17 +1073,18 @@ def _compatible_chat_base_url(operation_url: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
-def _guarded_inference_executor(*, secret: ProviderSecret):
-    """Return the guarded GPT-OSS Chat Completions executor for one client."""
+def _guarded_inference_executor(*, operation_target, secret: ProviderSecret):
+    """Return the guarded compatible Chat Completions executor for one client."""
 
     transport = GuardedTransport()
 
     def _execute(json_body: Mapping[str, Any]) -> bytes:
         response = transport.execute(
             LLMConnectionOperation.INFERENCE,
-            provider=GPT_OSS_20B_PROVING_PRESET_ID,
+            provider=operation_target.provider,
             secret=secret,
             json_body=json_body,
+            operation_target=operation_target,
         )
         return response.body
 

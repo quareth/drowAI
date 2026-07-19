@@ -14,10 +14,19 @@ from backend.services.llm_provider.guarded_transport import (
     GuardedTransport,
     GuardedTransportError,
 )
-from backend.services.llm_provider.operation_registry import ConnectionOperationRegistry
+from backend.services.llm_provider.operation_registry import (
+    CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+    ConnectionOperationRegistry,
+    GPT_OSS_20B_PROVING_PRESET_ID,
+    HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+    NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+    OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
+    VLLM_OPENAI_COMPATIBLE_PRESET_ID,
+)
 from backend.services.llm_provider.types import (
     GuardedEgressBounds,
     GuardedEgressTimeouts,
+    LLMConnectionOperation,
     ProviderSecret,
 )
 
@@ -206,6 +215,72 @@ def test_transport_builds_only_code_owned_anthropic_headers() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("preset_id", "base_url", "expected_url"),
+    (
+        (
+            GPT_OSS_20B_PROVING_PRESET_ID,
+            None,
+            "https://gpt-oss.example.test/v1/models",
+        ),
+        (
+            HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+            None,
+            "https://router.huggingface.co/v1/models",
+        ),
+        (
+            NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+            None,
+            "https://integrate.api.nvidia.com/v1/models",
+        ),
+        (
+            OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
+            "https://ollama.example.test/team",
+            "https://ollama.example.test/team/v1/models",
+        ),
+        (
+            VLLM_OPENAI_COMPATIBLE_PRESET_ID,
+            "https://vllm.example.test/team",
+            "https://vllm.example.test/team/v1/models",
+        ),
+        (
+            CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+            "https://custom.example.test/team",
+            "https://custom.example.test/team/v1/models",
+        ),
+    ),
+)
+def test_transport_builds_bearer_headers_for_reviewed_compatible_presets(
+    preset_id: str,
+    base_url: str | None,
+    expected_url: str,
+) -> None:
+    """All reviewed OpenAI-compatible presets use the manifest-declared bearer auth."""
+
+    session = _Session()
+    registry = ConnectionOperationRegistry(
+        env_getter=lambda _name: "https://gpt-oss.example.test"
+    )
+    operation_target = registry.resolve(
+        LLMConnectionOperation.HEALTH,
+        provider=preset_id,
+        base_url=base_url,
+    )
+
+    _transport(session).execute(
+        LLMConnectionOperation.HEALTH,
+        provider=preset_id,
+        secret=ProviderSecret(provider=preset_id, value="sk-preset"),
+        operation_target=operation_target,
+    )
+
+    assert session.calls[0]["url"] == expected_url
+    assert session.calls[0]["headers"] == {
+        "accept": "application/json",
+        "authorization": "Bearer sk-preset",
+    }
+
+
 @pytest.mark.parametrize("status_code", [301, 302, 307, 308])
 def test_transport_rejects_redirect_responses(status_code: int) -> None:
     """Redirects are neither followed nor exposed as credential-forwarding targets."""
@@ -322,6 +397,38 @@ def test_transport_rejects_provider_mismatched_secret_before_request() -> None:
             "health",
             provider="openai",
             secret=ProviderSecret(provider="anthropic", value="sk-ant-secret"),
+        )
+
+    assert session.calls == []
+
+
+def test_scaled_preset_inference_uses_authorized_target_and_rejects_private_dns() -> None:
+    """Custom compatible inference keeps user endpoints behind guarded egress."""
+
+    session = _Session()
+    registry = ConnectionOperationRegistry()
+    operation_target = registry.resolve(
+        "inference",
+        provider=CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+        base_url="https://llm.example.test/team",
+    )
+
+    with pytest.raises(GuardedTransportError):
+        _transport(
+            session,
+            dns_answers=[("127.0.0.1",), ("127.0.0.1",)],
+        ).execute(
+            "inference",
+            provider=CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+            secret=ProviderSecret(
+                provider=CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+                value="sk-custom",
+            ),
+            json_body={
+                "model": "team/model",
+                "messages": [{"role": "user", "content": "ping"}],
+            },
+            operation_target=operation_target,
         )
 
     assert session.calls == []
