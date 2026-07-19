@@ -732,6 +732,8 @@ describe("Connection management", () => {
     expect(screen.getAllByRole("heading", { level: 3 })[0].textContent).toBe("Reporting model");
     expect(screen.getAllByRole("heading", { level: 3 })[1].textContent).toBe("AI providers");
     expect(screen.getByRole("heading", { name: "Open models" })).toBeTruthy();
+    expect(screen.getByText("Connect open models through hosted providers.")).toBeTruthy();
+    expect(screen.queryByText("Connect GPT-OSS 20B to a hosted service.")).toBeNull();
     expect(screen.getByText("Reporting model")).toBeTruthy();
     expect(screen.queryByText("Workload deployment")).toBeNull();
     expect(screen.queryByRole("button", { name: "Advanced model preferences" })).toBeNull();

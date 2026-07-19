@@ -214,7 +214,7 @@ export function ProviderSettingsSection({
               <div>
                 <h3 className="text-sm font-semibold text-white">Open models</h3>
                 <p className="mt-1 text-xs text-slate-400">
-                  Connect GPT-OSS 20B to a hosted service.
+                  Connect open models through hosted providers.
                 </p>
               </div>
               <div className="grid gap-4 lg:grid-cols-2">
