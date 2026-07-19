@@ -15,10 +15,10 @@ const credentialCardSource = readFileSync(
 );
 
 describe("deployment baseline provider settings", () => {
-  it("loads provider settings from the public model catalog only", () => {
+  it("loads the public catalog and reporting preference", () => {
     expect(settingsSource).toContain("fetchLLMModelCatalog");
-    expect(settingsSource).not.toContain("fetchReportingLLMSelection");
-    expect(settingsSource).not.toContain("saveReportingLLMSelection");
+    expect(settingsSource).toContain("fetchReportingLLMSelection");
+    expect(settingsSource).toContain("saveReportingLLMSelection");
     expect(settingsSource).toContain('from "@/features/llm-provider/api"');
     expect(settingsSource).toContain("queryKey: catalogQueryKey");
   });
@@ -30,8 +30,9 @@ describe("deployment baseline provider settings", () => {
     expect(settingsSource).toContain("key={provider.id}");
   });
 
-  it("keeps reporting and deployment selection controls out of settings", () => {
-    expect(settingsSource).not.toContain("Reporting model");
+  it("keeps reporting selection while excluding deployment administration", () => {
+    expect(settingsSource).toContain("Reporting model");
+    expect(settingsSource).toContain("saveReportingSelection.mutate({");
     expect(settingsSource).not.toContain("Workload deployment");
     expect(settingsSource).not.toContain("Advanced model preferences");
     expect(settingsSource).not.toContain("Capability evidence");

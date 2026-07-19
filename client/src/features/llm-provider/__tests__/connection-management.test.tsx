@@ -726,9 +726,10 @@ describe("Connection management", () => {
     );
 
     expect(await screen.findByRole("heading", { name: "AI providers" })).toBeTruthy();
-    expect(screen.getAllByRole("heading", { level: 3 })[0].textContent).toBe("AI providers");
+    expect(screen.getAllByRole("heading", { level: 3 })[0].textContent).toBe("Reporting model");
+    expect(screen.getAllByRole("heading", { level: 3 })[1].textContent).toBe("AI providers");
     expect(screen.getByRole("heading", { name: "Open models" })).toBeTruthy();
-    expect(screen.queryByText("Reporting model")).toBeNull();
+    expect(screen.getByText("Reporting model")).toBeTruthy();
     expect(screen.queryByText("Workload deployment")).toBeNull();
     expect(screen.queryByRole("button", { name: "Advanced model preferences" })).toBeNull();
     expect(
@@ -962,7 +963,7 @@ describe("Connection management", () => {
       expect(mocked.fetchLLMModelCatalog).toHaveBeenCalled();
     });
     expect(screen.queryByRole("button", { name: "Advanced model preferences" })).toBeNull();
-    expect(screen.queryByText("Reporting model")).toBeNull();
+    expect(screen.getByText("Reporting model")).toBeTruthy();
     expect(screen.queryByText("Workload deployment")).toBeNull();
     expect(screen.queryByPlaceholderText("Search deployments")).toBeNull();
     expect(screen.queryByText(/capability evidence|lifecycle|runnability/i)).toBeNull();

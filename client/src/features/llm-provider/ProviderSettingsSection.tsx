@@ -5,17 +5,30 @@
  * GPT-OSS 20B hosted and self-hosted routes.
  */
 import { useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Loader2 } from "lucide-react";
 
-import { fetchLLMModelCatalog } from "@/features/llm-provider/api";
+import {
+  fetchLLMModelCatalog,
+  fetchReportingLLMSelection,
+  saveReportingLLMSelection,
+} from "@/features/llm-provider/api";
+import { findSelectedCatalogEntry } from "@/features/llm-provider/catalog";
+import {
+  getDefaultVisibleReasoningEffort,
+  getSupportedReasoningEffortForPayload,
+} from "@/features/llm-provider/capability-controls";
 import ConnectionSettingsPanel from "@/features/llm-provider/ConnectionSettingsPanel";
 import ProviderCredentialCard from "@/features/llm-provider/ProviderCredentialCard";
+import ProviderModelMenu from "@/features/llm-provider/ProviderModelMenu";
 import type {
   LLMCatalogModel,
   LLMCatalogProvider,
   LLMConnectionMetadata,
   LLMModelCatalogResponse,
+  ReportingLLMSelection,
+  SelectedLLMModel,
+  VisibleLLMReasoningEffort,
 } from "@/features/llm-provider/types";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -27,6 +40,7 @@ export interface ProviderSettingsSectionProps {
 }
 
 const catalogQueryKey = ["/api/llm/models"] as const;
+const reportingSelectionQueryKey = ["/api/llm/reporting-selection"] as const;
 interface ConnectionSettingsEntry {
   model: LLMCatalogModel;
   connection: LLMConnectionMetadata;
@@ -64,6 +78,24 @@ export function ProviderSettingsSection({
     queryFn: fetchLLMModelCatalog,
     enabled: queryEnabled,
   });
+  const { data: reportingSelection } = useQuery<ReportingLLMSelection>({
+    queryKey: reportingSelectionQueryKey,
+    queryFn: fetchReportingLLMSelection,
+    enabled: queryEnabled,
+  });
+  const saveReportingSelection = useMutation({
+    mutationFn: saveReportingLLMSelection,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: reportingSelectionQueryKey });
+      onSuccess(
+        "Reporting model updated",
+        "Task memos and engagement reports will use this model.",
+      );
+    },
+    onError: (error: Error) => {
+      onError("Reporting model update failed", error);
+    },
+  });
   const providers = catalog?.providers ?? [];
   const connectionModels = getConnectionSettingsEntries(providers);
   const hostedConnectionModels = connectionModels.filter(({ connection }) =>
@@ -75,6 +107,34 @@ export function ProviderSettingsSection({
   const credentialProviders = providers.filter((provider) =>
     isDirectHostedCredentialProvider(provider.id),
   );
+  const selectedReportingModel =
+    reportingSelection?.provider && reportingSelection.model
+      ? {
+          provider: reportingSelection.provider,
+          model: reportingSelection.model,
+        }
+      : null;
+  const selectedReportingEntry = findSelectedCatalogEntry(catalog, selectedReportingModel);
+  const reportingReasoningEffort =
+    coerceVisibleReasoningEffort(reportingSelection?.reasoningEffort) ??
+    getDefaultVisibleReasoningEffort(selectedReportingEntry?.model) ??
+    "medium";
+
+  const handleReportingModelChange = (
+    selection: SelectedLLMModel,
+    options?: { reasoningEffort?: VisibleLLMReasoningEffort },
+  ) => {
+    const reasoningEffort = getSupportedReasoningEffortForPayload(
+      catalog,
+      selection,
+      options?.reasoningEffort ?? reportingReasoningEffort,
+    );
+    saveReportingSelection.mutate({
+      provider: selection.provider,
+      model: selection.model,
+      reasoning_effort: reasoningEffort ?? null,
+    });
+  };
 
   const handleProviderSuccess = (title: string, description: string) => {
     void queryClient.invalidateQueries({ queryKey: catalogQueryKey });
@@ -114,6 +174,24 @@ export function ProviderSettingsSection({
         </Alert>
       ) : (
         <div className="space-y-6">
+          <section className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div className="min-w-0">
+                <h3 className="text-sm font-semibold text-white">Reporting model</h3>
+                <p className="mt-1 text-xs text-slate-400">
+                  Used for task memos and engagement reports.
+                </p>
+              </div>
+              <ProviderModelMenu
+                catalog={catalog}
+                selectedSelection={selectedReportingModel}
+                selectedReasoningEffort={reportingReasoningEffort}
+                onModelChange={handleReportingModelChange}
+                className="h-8 min-w-[230px]"
+              />
+            </div>
+          </section>
+
           {credentialProviders.length > 0 ? (
             <section className="space-y-3">
               <h3 className="text-sm font-semibold text-white">AI providers</h3>
@@ -187,6 +265,14 @@ export function ProviderSettingsSection({
       )}
     </div>
   );
+}
+
+function coerceVisibleReasoningEffort(
+  value: unknown,
+): VisibleLLMReasoningEffort | null {
+  return value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max"
+    ? value
+    : null;
 }
 
 export default ProviderSettingsSection;

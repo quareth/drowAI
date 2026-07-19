@@ -119,10 +119,10 @@ beforeEach(() => {
     selectionStatus: { status: "selectable", selectable: true, runnable: true },
   });
   mocked.fetchReportingLLMSelection.mockResolvedValue({
-    provider: null,
-    model: null,
-    reasoningEffort: null,
-    selectionStatus: { runnable: false, reason: "No reporting model selected." },
+    provider: "openai",
+    model: "gpt-5.2",
+    reasoningEffort: "medium",
+    selectionStatus: { runnable: true, reason: null },
   });
 });
 
@@ -148,7 +148,7 @@ describe("ProviderSettingsSection", () => {
     expect(screen.queryByText("No providers available")).toBeNull();
   });
 
-  it("renders provider credential cards from the catalog without model selection controls", async () => {
+  it("renders reporting selection above provider credentials without internal controls", async () => {
     mocked.fetchLLMModelCatalog.mockResolvedValue(catalog);
 
     renderWithQueryClient(
@@ -159,16 +159,56 @@ describe("ProviderSettingsSection", () => {
       />,
     );
 
-    expect(await screen.findByRole("heading", { name: "AI providers" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Reporting model" })).toBeTruthy();
+    const sectionHeadings = screen.getAllByRole("heading", { level: 3 });
+    expect(sectionHeadings[0].textContent).toBe("Reporting model");
+    expect(sectionHeadings[1].textContent).toBe("AI providers");
+    expect(screen.getByRole("button", { name: "Select model" })).toBeTruthy();
     expect(await screen.findByText("OpenAI")).toBeTruthy();
     expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Anthropic").length).toBeGreaterThan(0);
-    expect(screen.queryByText("Reporting model")).toBeNull();
     expect(screen.queryByText("Workload deployment")).toBeNull();
     expect(screen.queryByRole("button", { name: "Advanced model preferences" })).toBeNull();
     expect(screen.queryByText(/capability evidence|lifecycle|runnability/i)).toBeNull();
     expect(screen.queryByRole("combobox", { name: /selected provider/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /save model selection/i })).toBeNull();
+  });
+
+  it("persists a reporting model selected from the top control", async () => {
+    mocked.fetchLLMModelCatalog.mockResolvedValue(catalog);
+    mocked.saveReportingLLMSelection.mockResolvedValue({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      reasoningEffort: null,
+      selectionStatus: { runnable: true, reason: null },
+    });
+
+    renderWithQueryClient(
+      <ProviderSettingsSection
+        queryEnabled
+        onSuccess={() => undefined}
+        onError={() => undefined}
+      />,
+    );
+
+    fireEvent.pointerDown(await screen.findByRole("button", { name: "Select model" }));
+    const anthropicMenuItem = screen
+      .getAllByText("Anthropic")
+      .find((element) => element.closest("[role='menuitem']"))
+      ?.closest("[role='menuitem']") as HTMLElement;
+    expect(anthropicMenuItem).toBeTruthy();
+    fireEvent.pointerEnter(anthropicMenuItem, { pointerType: "mouse" });
+    fireEvent.pointerMove(anthropicMenuItem, { pointerType: "mouse" });
+    fireEvent.mouseMove(anthropicMenuItem);
+    fireEvent.click(await screen.findByText("Claude Sonnet 4.6"));
+
+    await waitFor(() => {
+      expect(mocked.saveReportingLLMSelection).toHaveBeenCalledWith({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        reasoning_effort: null,
+      });
+    });
   });
 });
 
