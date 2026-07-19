@@ -275,6 +275,7 @@ async def test_gpt_oss_runtime_uses_shared_authorities_without_fallback(
         ),
         purpose="gpt-oss-runtime-test",
         resolution_role="conversation_main",
+        resolution_source="user_selected",
     )
 
     assert isinstance(client, BudgetEnforcingLLMClient)

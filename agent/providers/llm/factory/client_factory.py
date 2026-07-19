@@ -382,6 +382,7 @@ class LLMClientFactory:
                 resolution.provider_request_model,
             )
             kwargs.pop("resolution_role", None)
+            kwargs.pop("resolution_source", None)
             if not isinstance(base_url, str) or not base_url.strip():
                 raise LLMConfigurationError(
                     "OpenAI-compatible adapter requires a base URL",
