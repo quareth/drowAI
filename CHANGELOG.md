@@ -38,9 +38,9 @@ Target version: `0.1.0`.
 
 - Dependency security updates refresh the frontend and backend toolchains,
   replace python-jose with PyJWT, and require Node.js 20.19 or newer.
-- The chat model selector is now model-first for deployment-aware LLMs, with
-  GPT-OSS 20B grouped under one model entry and hosted provider setup simplified
-  to API-key-first flows with clearer access and pricing labels.
+- The chat model selector now groups deployment-aware LLMs by publisher first,
+  with GPT-OSS 20B shown once under OpenAI and hosted serving operators shown
+  only as explicit deployment choices.
 - The canonical local launcher is now `scripts/local_dev.py`; startup can
   interactively provision its PostgreSQL login role, database, and pgvector
   extension before running migrations.

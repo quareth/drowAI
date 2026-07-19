@@ -82,7 +82,7 @@ afterEach(() => {
 });
 
 describe("ProviderModelMenu", () => {
-  it("opens with model rows and selects an Anthropic model from catalog data", async () => {
+  it("opens with publisher groups and selects an Anthropic model from catalog data", async () => {
     const onModelChange = vi.fn();
     render(
       <ProviderModelMenu
@@ -95,9 +95,16 @@ describe("ProviderModelMenu", () => {
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Select model" }));
 
+    const anthropicPublisher = await screen.findByText("Anthropic");
+    expect(await screen.findByText("OpenAI")).toBeTruthy();
+    expect(screen.queryByText("Claude Sonnet 4.6")).toBeNull();
+
+    const anthropicPublisherItem = anthropicPublisher.closest("[role='menuitem']") as HTMLElement;
+    fireEvent.pointerEnter(anthropicPublisherItem, { pointerType: "mouse" });
+    fireEvent.pointerMove(anthropicPublisherItem, { pointerType: "mouse" });
+    fireEvent.mouseMove(anthropicPublisherItem);
+
     const anthropicModel = await screen.findByText("Claude Sonnet 4.6");
-    expect(screen.queryByText("OpenAI")).toBeNull();
-    expect(screen.queryByText("Anthropic")).toBeNull();
     fireEvent.click(anthropicModel);
 
     await waitFor(() => {
@@ -120,9 +127,20 @@ describe("ProviderModelMenu", () => {
     );
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Select model" }));
-    const openAIModel = (await screen.findAllByText("GPT-5 mini")).find((element) =>
-      element.closest("[role='menuitem']"),
-    ) as HTMLElement;
+
+    const openAIPublisher = await screen.findByText("OpenAI");
+    const openAIPublisherItem = openAIPublisher.closest("[role='menuitem']") as HTMLElement;
+    fireEvent.pointerEnter(openAIPublisherItem, { pointerType: "mouse" });
+    fireEvent.pointerMove(openAIPublisherItem, { pointerType: "mouse" });
+    fireEvent.mouseMove(openAIPublisherItem);
+
+    let openAIModel: HTMLElement | undefined;
+    await waitFor(() => {
+      openAIModel = screen
+        .getAllByText("GPT-5 mini")
+        .find((element) => element.closest("[role='menuitem']")) as HTMLElement | undefined;
+      expect(openAIModel).toBeTruthy();
+    });
     const openAIModelItem = openAIModel.closest("[role='menuitem']") as HTMLElement;
     fireEvent.pointerEnter(openAIModelItem, { pointerType: "mouse" });
     fireEvent.pointerMove(openAIModelItem, { pointerType: "mouse" });
@@ -162,6 +180,12 @@ describe("ProviderModelMenu", () => {
     );
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Select model" }));
+
+    const anthropicPublisher = await screen.findByText("Anthropic");
+    const anthropicPublisherItem = anthropicPublisher.closest("[role='menuitem']") as HTMLElement;
+    fireEvent.pointerEnter(anthropicPublisherItem, { pointerType: "mouse" });
+    fireEvent.pointerMove(anthropicPublisherItem, { pointerType: "mouse" });
+    fireEvent.mouseMove(anthropicPublisherItem);
 
     const anthropicRow = await screen.findByText("Claude Sonnet 4.6");
     expect(await screen.findByText("Unavailable")).toBeTruthy();
@@ -296,6 +320,15 @@ describe("ProviderModelMenu", () => {
     );
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Select model" }));
+
+    const openAIPublisher = await screen.findByText("OpenAI");
+    expect(screen.queryByText("Hugging Face")).toBeNull();
+    expect(screen.queryByText("NVIDIA NIM")).toBeNull();
+
+    const openAIPublisherItem = openAIPublisher.closest("[role='menuitem']") as HTMLElement;
+    fireEvent.pointerEnter(openAIPublisherItem, { pointerType: "mouse" });
+    fireEvent.pointerMove(openAIPublisherItem, { pointerType: "mouse" });
+    fireEvent.mouseMove(openAIPublisherItem);
 
     const gptOssRows = await screen.findAllByText("GPT-OSS 20B");
     expect(gptOssRows).toHaveLength(1);

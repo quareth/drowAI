@@ -1,5 +1,5 @@
 /**
- * Model-first chat model picker backed by the public LLM catalog.
+ * Publisher-first chat model picker backed by the public LLM catalog.
  *
  * Owns model/deployment menu rendering and capability-aware reasoning effort
  * choices without duplicating provider-specific model policy in the frontend.
@@ -7,9 +7,7 @@
 import { useMemo } from "react";
 import { Check, ChevronDown } from "lucide-react";
 
-import {
-  findSelectedCatalogEntry,
-} from "@/features/llm-provider/catalog";
+import { findSelectedCatalogEntry } from "@/features/llm-provider/catalog";
 import {
   getVisibleReasoningEffortOptions,
   modelSupportsReasoningEffort,
@@ -59,6 +57,12 @@ interface ModelGroup {
   choices: ModelChoice[];
 }
 
+interface PublisherGroup {
+  key: string;
+  label: string;
+  models: ModelGroup[];
+}
+
 function isSameSelection(
   left: SelectedLLMModel | null | undefined,
   right: SelectedLLMModel,
@@ -99,8 +103,11 @@ function ModelRowContent({
   );
 }
 
-function buildModelGroups(providers: LLMCatalogProvider[]): ModelGroup[] {
-  const groups = new Map<string, ModelGroup>();
+function buildPublisherGroups(providers: LLMCatalogProvider[]): PublisherGroup[] {
+  const publisherGroups = new Map<string, PublisherGroup>();
+  const providerLabels = new Map(
+    providers.map((provider) => [provider.id.toLowerCase(), provider.label]),
+  );
 
   for (const provider of providers) {
     const providerSelectable = isModelSelectable(provider);
@@ -119,8 +126,12 @@ function buildModelGroups(providers: LLMCatalogProvider[]): ModelGroup[] {
         model.proving?.runnability?.runnable ??
         model.runnable ??
         false;
+      if (deploymentBacked && !runnable) {
+        continue;
+      }
       const selectable = providerSelectable && (!deploymentBacked || Boolean(deploymentRef && runnable));
-      const key = model.canonicalModelId?.trim() || `${provider.id}:${model.id}`;
+      const publisherKey = canonicalPublisherKey(provider, model);
+      const modelKey = model.canonicalModelId?.trim() || `${provider.id}:${model.id}`;
       const groupLabel = canonicalModelLabel(model);
       const statusLabel = selectable
         ? null
@@ -140,22 +151,98 @@ function buildModelGroups(providers: LLMCatalogProvider[]): ModelGroup[] {
         selectable,
         statusLabel,
       };
-      const existing = groups.get(key);
-      if (existing) {
-        existing.choices.push(choice);
+
+      const publisher = publisherGroups.get(publisherKey);
+      if (publisher) {
+        appendModelChoice(publisher.models, modelKey, groupLabel, choice);
       } else {
-        groups.set(key, {
-          key,
-          label: groupLabel,
-          choices: [choice],
+        publisherGroups.set(publisherKey, {
+          key: publisherKey,
+          label: canonicalPublisherLabel(publisherKey, providerLabels),
+          models: [{
+            key: modelKey,
+            label: groupLabel,
+            choices: [choice],
+          }],
         });
       }
     }
   }
 
-  return Array.from(groups.values()).sort((left, right) =>
-    left.label.localeCompare(right.label),
-  );
+  return Array.from(publisherGroups.values()).map((publisher) => ({
+    ...publisher,
+    models: publisher.models.sort((left, right) => left.label.localeCompare(right.label)),
+  }));
+}
+
+function appendModelChoice(
+  models: ModelGroup[],
+  modelKey: string,
+  groupLabel: string,
+  choice: ModelChoice,
+) {
+  const existing = models.find((model) => model.key === modelKey);
+  if (existing) {
+    existing.choices.push(choice);
+    return;
+  }
+  models.push({
+    key: modelKey,
+    label: groupLabel,
+    choices: [choice],
+  });
+}
+
+function canonicalPublisherKey(
+  provider: LLMCatalogProvider,
+  model: LLMCatalogModel,
+): string {
+  return splitCanonicalModelId(model.canonicalModelId)?.publisher ?? provider.id;
+}
+
+function canonicalPublisherLabel(
+  publisherKey: string,
+  providerLabels: Map<string, string>,
+): string {
+  const knownLabel = providerLabels.get(publisherKey.toLowerCase());
+  if (knownLabel) {
+    return knownLabel;
+  }
+  const knownPublisherLabels: Record<string, string> = {
+    anthropic: "Anthropic",
+    openai: "OpenAI",
+  };
+  return knownPublisherLabels[publisherKey.toLowerCase()] ?? titleCaseIdentifier(publisherKey);
+}
+
+function splitCanonicalModelId(
+  canonicalModelId: string | null | undefined,
+): { publisher: string; model: string } | null {
+  const normalized = canonicalModelId?.trim();
+  if (!normalized) {
+    return null;
+  }
+  const slashIndex = normalized.indexOf("/");
+  const colonIndex = normalized.indexOf(":");
+  const separatorIndex =
+    slashIndex >= 0 && colonIndex >= 0
+      ? Math.min(slashIndex, colonIndex)
+      : Math.max(slashIndex, colonIndex);
+  if (separatorIndex <= 0) {
+    return null;
+  }
+  return {
+    publisher: normalized.slice(0, separatorIndex),
+    model: normalized.slice(separatorIndex + 1),
+  };
+}
+
+function titleCaseIdentifier(identifier: string): string {
+  return identifier
+    .split(/[_-]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function canonicalModelLabel(model: LLMCatalogModel): string {
@@ -178,23 +265,62 @@ function deploymentChoiceLabel(
 }
 
 function selectedModelDisplayLabel(
-  groups: ModelGroup[],
+  publishers: PublisherGroup[],
   selectedSelection: SelectedLLMModel | null,
 ): string {
   if (!selectedSelection) {
     return "Select model";
   }
-  for (const group of groups) {
-    const selectedChoice = group.choices.find((choice) =>
-      isSameSelection(selectedSelection, choice.selection),
-    );
-    if (selectedChoice) {
-      return group.choices.length > 1
-        ? `${group.label} / ${selectedChoice.label}`
-        : group.label;
+  for (const publisher of publishers) {
+    for (const group of publisher.models) {
+      const selectedChoice = group.choices.find((choice) =>
+        isSameSelection(selectedSelection, choice.selection),
+      );
+      if (selectedChoice) {
+        return group.choices.length > 1
+          ? `${group.label} / ${selectedChoice.label}`
+          : group.label;
+      }
     }
   }
   return selectedSelection.model;
+}
+
+function renderModelGroup(
+  group: ModelGroup,
+  selectedSelection: SelectedLLMModel | null,
+  selectedReasoningEffort: VisibleLLMReasoningEffort,
+  onModelChange: ProviderModelMenuProps["onModelChange"],
+) {
+  if (group.choices.length === 1) {
+    return renderChoice(
+      { ...group.choices[0], label: group.label },
+      selectedSelection,
+      selectedReasoningEffort,
+      onModelChange,
+    );
+  }
+
+  const selected = group.choices.some((choice) =>
+    isSameSelection(selectedSelection, choice.selection),
+  );
+  return (
+    <DropdownMenuSub key={group.key}>
+      <DropdownMenuSubTrigger className="cursor-pointer text-xs [&>svg:last-child]:hidden">
+        <ModelRowContent label={group.label} selected={selected} />
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="min-w-[220px] !overflow-visible">
+        {group.choices.map((choice) =>
+          renderChoice(
+            choice,
+            selectedSelection,
+            selectedReasoningEffort,
+            onModelChange,
+          ),
+        )}
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  );
 }
 
 function renderChoice(
@@ -273,14 +399,14 @@ export function ProviderModelMenu({
   className,
 }: ProviderModelMenuProps) {
   const providers = catalog?.providers ?? [];
-  const groups = useMemo(() => buildModelGroups(providers), [providers]);
+  const publishers = useMemo(() => buildPublisherGroups(providers), [providers]);
   const selectedEntry = findSelectedCatalogEntry(catalog, selectedSelection);
-  const selectedLabel = selectedModelDisplayLabel(groups, selectedSelection);
+  const selectedLabel = selectedModelDisplayLabel(publishers, selectedSelection);
   const showEffortBadge = modelSupportsReasoningEffort(selectedEntry?.model);
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild disabled={groups.length === 0}>
+      <DropdownMenuTrigger asChild disabled={publishers.length === 0}>
         <button
           type="button"
           aria-label="Select model"
@@ -293,7 +419,7 @@ export function ProviderModelMenu({
           )}
         >
           <span className="truncate text-left">
-            {groups.length === 0 ? "No models available" : selectedLabel}
+            {publishers.length === 0 ? "No models available" : selectedLabel}
           </span>
           <span className="flex items-center gap-1">
             {showEffortBadge ? (
@@ -306,28 +432,21 @@ export function ProviderModelMenu({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-[260px]">
-        {groups.map((group) => {
-          if (group.choices.length === 1) {
-            return renderChoice(
-              { ...group.choices[0], label: group.label },
-              selectedSelection,
-              selectedReasoningEffort,
-              onModelChange,
-            );
-          }
-
-          const selected = group.choices.some((choice) =>
-            isSameSelection(selectedSelection, choice.selection),
+        {publishers.map((publisher) => {
+          const selected = publisher.models.some((group) =>
+            group.choices.some((choice) =>
+              isSameSelection(selectedSelection, choice.selection),
+            ),
           );
           return (
-            <DropdownMenuSub key={group.key}>
+            <DropdownMenuSub key={publisher.key}>
               <DropdownMenuSubTrigger className="cursor-pointer text-xs [&>svg:last-child]:hidden">
-                <ModelRowContent label={group.label} selected={selected} />
+                <ModelRowContent label={publisher.label} selected={selected} />
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent className="min-w-[220px] !overflow-visible">
-                {group.choices.map((choice) =>
-                  renderChoice(
-                    choice,
+                {publisher.models.map((group) =>
+                  renderModelGroup(
+                    group,
                     selectedSelection,
                     selectedReasoningEffort,
                     onModelChange,
