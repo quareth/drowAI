@@ -18,6 +18,7 @@ from ..emission.reasoning_section import reasoning_section
 from ..utils.llm_resolver import (
     ROLE_REASONING_MAIN,
     get_llm_reasoning_effort,
+    has_llm_runtime_services,
     resolve_llm_client,
 )
 from ..utils.scope_parser import UserScope
@@ -26,6 +27,7 @@ from ..utils.todo_sync import sync_todos_with_plan
 from agent.graph.config.token_limits import LIMITS
 from agent.providers.llm.core.exceptions import (
     LLMConfigurationError,
+    LLMProviderError,
     LLMRefusalError,
 )
 from core.llm import LLM_TIMEOUT_REASONING_MAIN_SEC, wait_for_with_timeout
@@ -79,12 +81,16 @@ def resolve_planner_llm(
             role=ROLE_REASONING_MAIN,
         )
         reasoning_effort = get_llm_reasoning_effort(llm_client)
+    except LLMConfigurationError:
+        if has_llm_runtime_services(config):
+            raise
+        llm_client = None
+        reasoning_effort = None
     except Exception as exc:
-        if not isinstance(exc, LLMConfigurationError):
-            logger.warning(
-                "[PLANNER] Failed to resolve LLMClient, using fallback planner: %s",
-                exc,
-            )
+        logger.warning(
+            "[PLANNER] Failed to resolve LLMClient, using fallback planner: %s",
+            exc,
+        )
         llm_client = None
         reasoning_effort = None
     return PlannerLLMResolution(
@@ -405,6 +411,8 @@ async def run_planning_generation(
             return retry_result.result
 
         except LLMRefusalError:
+            raise
+        except LLMProviderError:
             raise
         except Exception as exc:
             logger.error(f"Planning LLM call failed: {exc}")

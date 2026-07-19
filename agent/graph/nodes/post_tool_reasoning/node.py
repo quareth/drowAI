@@ -39,7 +39,11 @@ from ..working_memory import (
 from ...memory.findings import build_relevant_findings_for_prompt
 from ...utils.event_identity import resolve_sub_turn_index, resolve_turn_sequence
 from ...utils import iteration_memory as _iteration_memory
-from agent.providers.llm.core.exceptions import LLMConfigurationError, LLMRefusalError
+from agent.providers.llm.core.exceptions import (
+    LLMConfigurationError,
+    LLMProviderError,
+    LLMRefusalError,
+)
 from agent.tools.capability_surface import render_capability_surface
 from backend.services.metrics.utils import safe_inc
 from backend.services.usage_tracking.models import ProviderUsageComponents, UsageData
@@ -907,6 +911,8 @@ async def post_tool_reasoning(
                 reasoning_effort=articulation_reasoning_effort,
             )
         except LLMRefusalError:
+            raise
+        except LLMProviderError:
             raise
         except Exception as exc:
             logger.error(

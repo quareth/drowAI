@@ -29,7 +29,7 @@ def test_manifest_loads_one_active_revision_with_required_catalog_metadata() -> 
     assert manifest.active_revision == manifest.last_known_good_revision
 
     gpt_oss = manifest.require_model(OPENAI_PROVIDER_ID, OPENAI_GPT_OSS_20B_MODEL_ID)
-    assert gpt_oss.canonical_model_id == "openai:gpt-oss-20b"
+    assert gpt_oss.canonical_model_id == "openai/gpt-oss-20b"
     assert gpt_oss.lifecycle == "active"
     assert gpt_oss.support_tier == "proving"
     assert gpt_oss.context_window_tokens > 0
@@ -42,7 +42,7 @@ def test_manifest_loads_one_active_revision_with_required_catalog_metadata() -> 
 def test_registry_builds_immutable_profiles_from_reviewed_manifest() -> None:
     profile = require_model_profile(ProviderModelRef("OpenAI", "GPT-OSS-20B"))
 
-    assert profile.canonical_model_id == "openai:gpt-oss-20b"
+    assert profile.canonical_model_id == "openai/gpt-oss-20b"
     assert profile.lifecycle == "active"
     assert profile.support_tier == "proving"
     assert profile.aliases == ("openai-compatible-chat:gpt-oss-20b",)

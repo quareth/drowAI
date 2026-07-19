@@ -90,15 +90,10 @@ class LLMSelectionDeploymentResolver:
         connection = self._db.get(LLMInferenceConnection, deployment.connection_id)
         if connection is None or int(connection.user_id) != int(user_id):
             raise LLMDeploymentNotFoundError("Deployment connection was not found")
-        routes = tuple(
-            route
-            for route in self._deployments.list_routes(
-                user_id=user_id,
-                deployment_id=deployment.id,
-            )
-            if route.enabled
+        route = self._deployments.select_enabled_route(
+            user_id=user_id,
+            deployment_id=deployment.id,
         )
-        route = routes[0] if routes else None
         profile = self._profiles.resolve(
             connection=connection,
             deployment=deployment,

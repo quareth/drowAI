@@ -28,7 +28,9 @@ def test_gpt_oss_catalog_projection_separates_canonical_and_wire_ids() -> None:
         "chat",
         "context_window",
         "max_output_tokens",
+        "streaming",
+        "streaming_usage_reporting",
+        "structured_output_native",
+        "tools",
         "usage_reporting",
     }
-    assert "streaming" not in gpt_oss.capabilities
-    assert "tools" not in gpt_oss.capabilities

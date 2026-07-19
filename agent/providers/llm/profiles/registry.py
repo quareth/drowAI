@@ -86,6 +86,7 @@ class ModelProfile:
     aliases: tuple[str, ...] = field(default_factory=tuple)
     pricing_schedule_ref: str | None = None
     pricing_provenance: str | None = None
+    role_model_policy: str = "provider_defaults"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "ref", self.ref.normalized())
@@ -117,6 +118,10 @@ class ModelProfile:
         object.__setattr__(self, "canonical_model_id", str(canonical_model_id).strip())
         object.__setattr__(self, "lifecycle", str(self.lifecycle).strip().lower())
         object.__setattr__(self, "support_tier", str(self.support_tier).strip().lower())
+        role_model_policy = str(self.role_model_policy).strip().lower()
+        if role_model_policy not in {"provider_defaults", "selected_model"}:
+            raise ValueError("role_model_policy must be provider_defaults or selected_model")
+        object.__setattr__(self, "role_model_policy", role_model_policy)
         object.__setattr__(
             self,
             "aliases",

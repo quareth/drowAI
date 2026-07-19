@@ -83,6 +83,7 @@ def test_context_compressor_is_canonical_with_capacity_requirements() -> None:
         "chat",
         "context_window",
         "max_output_tokens",
+        "usage_reporting",
     )
 
 

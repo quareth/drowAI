@@ -218,6 +218,7 @@ class TurnExecutionService:
         completion_source: str,
         context_window_metadata: Optional[Dict[str, Any]],
         model: Optional[str] = None,
+        runtime_selection: Optional[Mapping[str, Any]] = None,
         emit_token_metrics: bool = False,
         base_metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -259,6 +260,12 @@ class TurnExecutionService:
             except Exception:
                 pass
 
+        usage_runtime_selection = runtime_selection
+        if not isinstance(usage_runtime_selection, Mapping):
+            metadata_selection = result_metadata.get("llm_runtime_selection")
+            usage_runtime_selection = (
+                metadata_selection if isinstance(metadata_selection, Mapping) else None
+            )
         record_usage_list_best_effort(
             task_id=task_id,
             user_id=user_id,
@@ -266,11 +273,7 @@ class TurnExecutionService:
             source="langgraph",
             conversation_id=resolved_conversation_id,
             model=model,
-            runtime_selection=(
-                result_metadata.get("llm_runtime_selection")
-                if isinstance(result_metadata.get("llm_runtime_selection"), Mapping)
-                else None
-            ),
+            runtime_selection=usage_runtime_selection,
         )
         workflow_completed_fn = mark_turn_workflow_completed or mark_turn_workflow_completed_best_effort
         completed_metadata: Dict[str, Any] = {"completion_source": completion_source}

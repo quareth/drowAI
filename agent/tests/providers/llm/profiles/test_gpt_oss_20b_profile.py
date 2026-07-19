@@ -13,7 +13,7 @@ from agent.providers.llm.profiles.registry import (
 )
 
 
-def test_gpt_oss_20b_profile_uses_conservative_canonical_metadata() -> None:
+def test_gpt_oss_20b_profile_declares_reviewed_agent_contract() -> None:
     profile = require_model_profile(ProviderModelRef(OPENAI_PROVIDER_ID, "gpt-oss-20b"))
 
     assert str(profile.ref) == "openai/gpt-oss-20b"
@@ -25,19 +25,24 @@ def test_gpt_oss_20b_profile_uses_conservative_canonical_metadata() -> None:
     assert profile.capabilities == frozenset(
         {
             LLMCapability.CHAT,
+            LLMCapability.STREAMING,
+            LLMCapability.TOOLS,
+            LLMCapability.STRUCTURED_OUTPUT_NATIVE,
             LLMCapability.USAGE_REPORTING,
+            LLMCapability.STREAMING_USAGE_REPORTING,
             LLMCapability.CONTEXT_WINDOW,
             LLMCapability.MAX_OUTPUT_TOKENS,
         }
     )
-    assert not profile.supports(LLMCapability.STREAMING)
-    assert not profile.supports(LLMCapability.TOOLS)
+    assert profile.supports(LLMCapability.STREAMING)
+    assert profile.supports(LLMCapability.TOOLS)
     assert not profile.supports(LLMCapability.PARALLEL_TOOLS)
-    assert not profile.supports(LLMCapability.STRUCTURED_OUTPUT_NATIVE)
+    assert profile.supports(LLMCapability.STRUCTURED_OUTPUT_NATIVE)
     assert not profile.supports(LLMCapability.REASONING_EFFORT)
     assert profile.reasoning_efforts == frozenset()
-    assert profile.tool_choice_modes == frozenset()
-    assert profile.structured_output_strategies == frozenset()
+    assert profile.tool_choice_modes == frozenset({"auto", "required"})
+    assert profile.structured_output_strategies == frozenset({"native_schema"})
+    assert profile.role_model_policy == "selected_model"
 
 
 def test_gpt_oss_20b_is_public_catalog_metadata() -> None:

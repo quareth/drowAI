@@ -143,6 +143,37 @@ def test_internal_roles_follow_selected_provider_not_selected_model() -> None:
         assert settings.source == "internal_fixed"
 
 
+@pytest.mark.parametrize(
+    "role",
+    (
+        ROLE_CONVERSATION_MAIN,
+        ROLE_REASONING_MAIN,
+        ROLE_POST_TOOL_OBSERVATION,
+        ROLE_POST_TOOL_ARTICULATOR,
+        ROLE_INTENT_CLASSIFIER,
+        ROLE_CONTEXT_COMPRESSOR,
+        ROLE_TOOL_OUTPUT_COMPRESSOR,
+        ROLE_TOOL_CATEGORY_SELECTOR,
+    ),
+)
+def test_gpt_oss_uses_selected_model_for_every_role(role: str) -> None:
+    """Open-model agent roles never escape to provider-owned internal models."""
+
+    settings = ModelRoleRegistry().resolve_call_settings(
+        role,
+        conversation_provider="openai",
+        conversation_model="gpt-oss-20b",
+        reasoning_provider="openai",
+        reasoning_model="gpt-5.2-pro",
+        reasoning_effort=None,
+    )
+
+    assert settings.provider == "openai"
+    assert settings.model == "gpt-oss-20b"
+    assert settings.reasoning_effort is None
+    assert settings.source == "user_selected"
+
+
 def test_context_compressor_inherits_conversation_target_through_role_policy() -> None:
     """Context compression uses the canonical explicit inheritance rule."""
 

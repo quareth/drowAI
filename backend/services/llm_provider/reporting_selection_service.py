@@ -247,6 +247,9 @@ class ReportingLLMSelectionService:
                 deployment_id=str(target.deployment.id),
                 expected_revision=int(target.deployment.revision),
             ),
+            preferred_route_id=(
+                str(target.route.id) if target.route is not None else None
+            ),
             reasoning_effort=selection.reasoning_effort,
             legacy_provider=selection.provider,
             legacy_model=selection.model,

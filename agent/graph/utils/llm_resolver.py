@@ -362,6 +362,13 @@ def supports_usage_aware_streaming(
     return profile.supports(LLMCapability.STREAMING_USAGE_REPORTING)
 
 
+def has_llm_runtime_services(config: Optional[Mapping[str, Any]]) -> bool:
+    """Return whether a graph invocation supplied the live LLM runtime boundary."""
+
+    configurable = _configurable(config)
+    return configurable.get("runtime_services") is not None
+
+
 def _is_valid_string(value: Any) -> bool:
     """Check if value is a non-empty string.
     
@@ -379,6 +386,7 @@ __all__ = [
     "resolve_llm_client_with_settings",
     "resolve_llm_call_settings",
     "get_llm_reasoning_effort",
+    "has_llm_runtime_services",
     "supports_usage_aware_streaming",
     "DEFAULT_ROLE",
     "ROLE_CONVERSATION_MAIN",

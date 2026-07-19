@@ -19,6 +19,7 @@ from ..utils.environment_loader import get_environment_full
 from ..utils.llm_resolver import (
     ROLE_REASONING_MAIN,
     get_llm_reasoning_effort,
+    has_llm_runtime_services,
     resolve_llm_client,
 )
 from ..utils.plan_validation import merge_plans, should_reject_plan_update, validate_plan_quality
@@ -34,6 +35,7 @@ from .node_utils import append_usage_to_state
 from agent.graph.config.token_limits import LIMITS
 from agent.providers.llm.core.exceptions import (
     LLMConfigurationError,
+    LLMProviderError,
     LLMRefusalError,
 )
 from agent.tools.capability_surface import render_capability_surface
@@ -117,6 +119,8 @@ async def think_more_node(
         )
         reasoning_effort = get_llm_reasoning_effort(llm_client)
     except LLMConfigurationError:
+        if has_llm_runtime_services(config):
+            raise
         llm_client = None
     
     if llm_client is None:
@@ -271,6 +275,8 @@ async def think_more_node(
             )
                 
         except LLMRefusalError:
+            raise
+        except LLMProviderError:
             raise
         except Exception as exc:
             logger.error(f"Think more LLM call failed: {exc}")

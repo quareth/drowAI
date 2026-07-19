@@ -86,18 +86,19 @@ def test_openai_profiles_include_runner_control_strategy_metadata() -> None:
     for model_id in model_ids:
         profile = require_model_profile(_openai_ref(model_id))
 
-        if model_id in {"gpt-5.5-pro", "gpt-oss-20b"}:
+        if model_id == "gpt-5.5-pro":
             assert not profile.supports(LLMCapability.STREAMING)
             assert not profile.supports(LLMCapability.STREAMING_USAGE_REPORTING)
         else:
             assert profile.supports(LLMCapability.STREAMING_USAGE_REPORTING)
         if model_id == "gpt-oss-20b":
-            assert profile.tool_choice_modes == frozenset()
+            assert profile.tool_choice_modes == frozenset(("auto", "required"))
+            assert profile.role_model_policy == "selected_model"
         else:
             assert profile.tool_choice_modes == frozenset(
                 ("auto", "none", "required", "specific")
             )
-        if model_id in {"gpt-5.4-pro", "gpt-oss-20b"}:
+        if model_id == "gpt-5.4-pro":
             assert not profile.supports(LLMCapability.STRUCTURED_OUTPUT_NATIVE)
             assert profile.structured_output_strategies == frozenset()
         else:

@@ -104,6 +104,17 @@ class ModelRoleRegistry:
     ) -> RoleCallSettings:
         """Resolve model + effort + source for a role-owned call."""
 
+        if _selected_model_owns_all_roles(
+            provider=conversation_provider,
+            model=conversation_model,
+        ):
+            return self._resolve_selected_model_settings(
+                role=role,
+                conversation_provider=conversation_provider,
+                conversation_model=conversation_model,
+                reasoning_effort=reasoning_effort,
+            )
+
         if role in CONVERSATION_INHERITED_ROLE_KEYS:
             return self._resolve_conversation_inherited_settings(
                 role=role,
@@ -151,6 +162,40 @@ class ModelRoleRegistry:
                 default_effort=self.internal_reasoning_default,
             ),
             source="internal_fixed",
+        )
+
+    def _resolve_selected_model_settings(
+        self,
+        *,
+        role: RoleKey,
+        conversation_provider: Optional[str],
+        conversation_model: Optional[str],
+        reasoning_effort: Optional[str],
+    ) -> RoleCallSettings:
+        """Resolve a model profile that owns every role to one selected target."""
+
+        provider = _normalize_provider_id(conversation_provider)
+        model = _normalize_model_name(conversation_model)
+        if provider is None or model is None:
+            raise ValueError(
+                f"Role '{role}' requires an explicit selected provider and model"
+            )
+        binding = ProviderModelBinding(provider=provider, model=model)
+        _validate_role_binding(
+            role=role,
+            binding=binding,
+            binding_kind="selected-model",
+        )
+        return RoleCallSettings(
+            provider=provider,
+            model=model,
+            reasoning_effort=self._resolve_reasoning_effort(
+                provider=provider,
+                model=model,
+                requested_effort=reasoning_effort,
+                default_effort=self.user_selected_reasoning_default,
+            ),
+            source="user_selected",
         )
 
     def _resolve_conversation_inherited_settings(
@@ -359,6 +404,31 @@ def _model_reasoning_default(
     if not profile.supports(LLMCapability.REASONING_EFFORT):
         return False, None
     return True, cast(Optional[ReasoningEffort], profile.default_reasoning_effort)
+
+
+def _selected_model_owns_all_roles(
+    *,
+    provider: Optional[str],
+    model: Optional[str],
+) -> bool:
+    """Return whether the selected model profile replaces internal role models."""
+
+    normalized_provider = _normalize_provider_id(provider)
+    normalized_model = _normalize_model_name(model)
+    if normalized_provider is None or normalized_model is None:
+        return False
+
+    from agent.providers.llm.core.exceptions import LLMProfileNotFoundError
+    from agent.providers.llm.core.identity import ProviderModelRef
+    from agent.providers.llm.profiles.registry import require_model_profile
+
+    try:
+        profile = require_model_profile(
+            ProviderModelRef(normalized_provider, normalized_model)
+        )
+    except LLMProfileNotFoundError:
+        return False
+    return profile.role_model_policy == "selected_model"
 
 
 def _parse_provider_model_ref_env(

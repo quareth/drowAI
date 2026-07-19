@@ -538,6 +538,7 @@ class TurnExecutionOrchestrator:
                 completion_source="initial_generation",
                 context_window_metadata=context_window_metadata,
                 model=model,
+                runtime_selection=runtime_selection,
                 emit_token_metrics=True,
                 base_metadata=completion_metadata,
             )
@@ -914,6 +915,7 @@ class TurnExecutionOrchestrator:
                     ),
                     context_window_metadata=context_window_metadata,
                     model=runtime_context.model,
+                    runtime_selection=runtime_context.selection_payload,
                     base_metadata=completion_metadata,
                 )
                 interrupt_completed_fn = (
@@ -1379,6 +1381,7 @@ class TurnExecutionOrchestrator:
                 completion_source="checkpoint_retry",
                 context_window_metadata=context_window_metadata,
                 model=runtime_context.model,
+                runtime_selection=runtime_context.selection_payload,
                 base_metadata=completion_metadata,
             )
             await retry_lifecycle.publish(

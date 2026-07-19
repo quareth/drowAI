@@ -1,14 +1,14 @@
-"""Conservative unregistered adapter for validated OpenAI-compatible endpoints.
+"""Policy-bound adapter for validated OpenAI-compatible Chat endpoints.
 
-The adapter reuses the native Chat Completions implementation but enables only
-plain text calls until a code-owned dialect policy explicitly admits tools,
-structured output, streaming usage differences, and other optional behavior.
+The adapter reuses native Chat Completions parsing while admitting only the
+features declared by a code-owned dialect. Endpoint and credential handling
+remain outside the dialect contract and guarded by the backend runtime.
 """
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from types import SimpleNamespace
 from typing import Any, AsyncIterator, Callable, Dict, List, Mapping
@@ -21,6 +21,7 @@ from ...core.base import (
     LLMCallOptions,
     LLMResponse,
     LLMStreamingResponse,
+    StructuredOutputSpec,
     ToolCallResult,
     ToolChoiceInput,
     ToolSpecInput,
@@ -32,6 +33,18 @@ from ...core.exceptions import (
 )
 from .chat import OpenAIChatClient
 from .client_options import openai_sdk_client_options
+from .compatible_dialects import (
+    AGENT_OPENAI_COMPATIBLE_DIALECT,
+    CONSERVATIVE_OPENAI_COMPATIBLE_DIALECT,
+    OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
+    OPENAI_COMPATIBLE_CHAT_ADAPTER_VERSION,
+    validate_openai_compatible_dialect,
+)
+from .structured_output import (
+    StructuredOutputSchemaError,
+    build_chat_response_format,
+    validate_openai_strict_schema,
+)
 
 
 class CompatibleChatAuthMode(str, Enum):
@@ -69,26 +82,15 @@ class CompatibleChatAuth:
         return cls(mode=CompatibleChatAuthMode.BEARER, credential=credential)
 
 
-_PLAIN_CALL_OPTIONS = frozenset({"_retries", "max_tokens", "temperature"})
-_STREAM_CALL_OPTIONS = frozenset({"max_tokens", "temperature"})
-OPENAI_COMPATIBLE_CHAT_ADAPTER_ID = "openai_compatible_chat"
-OPENAI_COMPATIBLE_CHAT_ADAPTER_VERSION = "1"
-_ADAPTER_CAPABILITY_CEILING = frozenset(
-    {
-        LLMCapability.CHAT,
-        LLMCapability.STREAMING,
-        LLMCapability.USAGE_REPORTING,
-    }
+_PLAIN_CALL_OPTIONS = frozenset(
+    {"_retries", "max_tokens", "reasoning_effort", "structured_output", "temperature"}
+)
+_STREAM_CALL_OPTIONS = frozenset({"max_tokens", "reasoning_effort", "temperature"})
+_TOOL_CALL_OPTIONS = frozenset(
+    {"_retries", "max_tokens", "parallel_tool_calls", "reasoning_effort", "temperature"}
 )
 _HTTP_SCHEME = "http"
 _HTTPS_SCHEME = "https"
-CONSERVATIVE_OPENAI_COMPATIBLE_DIALECT = LLMDialectPolicy(
-    policy_id="openai_compatible_chat.conservative_v1",
-    adapter_id=OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
-    api_surface="chat_completions",
-    capabilities=_ADAPTER_CAPABILITY_CEILING,
-    max_retry_attempts=2,
-)
 GuardedCompatibleChatExecutor = Callable[[Mapping[str, Any]], bytes]
 
 
@@ -127,7 +129,7 @@ class _GuardedCompatibleSDKClient:
 
 
 class OpenAICompatibleChatClient(OpenAIChatClient):
-    """Direct-only compatible client with a deliberately narrow call surface."""
+    """Chat client constrained by a registered compatible dialect policy."""
 
     def __init__(
         self,
@@ -153,11 +155,7 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
                 "dialect_policy must be LLMDialectPolicy",
                 provider="OpenAI-compatible",
             )
-        dialect_policy.validate_adapter_binding(
-            expected_adapter_id=OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
-            allowed_capabilities=_ADAPTER_CAPABILITY_CEILING,
-            max_retry_attempts=2,
-        )
+        validate_openai_compatible_dialect(dialect_policy)
 
         if guarded_executor is not None:
             sdk_client = _GuardedCompatibleSDKClient(guarded_executor)
@@ -266,18 +264,22 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
         messages: List[Dict[str, Any]],
         **kwargs: Any,
     ) -> LLMStreamingResponse:
-        """Reject streaming usage until dialect behavior is registered."""
+        """Stream text and provider-reported usage when the dialect admits it."""
         try:
-            self._dialect_policy.validate_call_options(
-                LLMCallOptions(include_stream_usage=True),
+            call_kwargs = self._validate_call(
+                kwargs,
+                allowed_legacy=_STREAM_CALL_OPTIONS,
                 required_capabilities=(
                     LLMCapability.CHAT,
                     LLMCapability.STREAMING,
+                    LLMCapability.STREAMING_USAGE_REPORTING,
                 ),
+                include_stream_usage=True,
+                allow_retries=False,
             )
-        except (LLMCapabilityNotSupportedError, LLMConfigurationError) as exc:
+        except LLMCapabilityNotSupportedError as exc:
             raise _dialect_policy_required("streaming usage") from exc
-        raise _dialect_policy_required("streaming usage")
+        return await super().stream_chat_messages_with_usage(messages, **call_kwargs)
 
     async def chat_with_tools(
         self,
@@ -287,15 +289,18 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
         tool_choice: ToolChoiceInput = "auto",
         **kwargs: Any,
     ) -> ToolCallResult:
-        """Reject tool calls until dialect behavior is registered."""
+        """Run a normalized function-tool call when the dialect admits it."""
         try:
-            self._dialect_policy.validate_call_options(
-                LLMCallOptions(),
-                required_capabilities=(LLMCapability.CHAT, LLMCapability.TOOLS),
-            )
-        except (LLMCapabilityNotSupportedError, LLMConfigurationError) as exc:
+            call_kwargs = self._validate_tool_call(kwargs, tool_choice=tool_choice)
+        except LLMCapabilityNotSupportedError as exc:
             raise _dialect_policy_required("tool calls") from exc
-        raise _dialect_policy_required("tool calls")
+        return await super().chat_with_tools(
+            system_prompt,
+            user_prompt,
+            tools,
+            tool_choice=tool_choice,
+            **call_kwargs,
+        )
 
     async def chat_with_tools_with_usage(
         self,
@@ -305,19 +310,41 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
         tool_choice: ToolChoiceInput = "auto",
         **kwargs: Any,
     ) -> ToolCallResult:
-        """Reject usage-tracked tools until dialect behavior is registered."""
+        """Run a usage-tracked normalized function-tool call."""
         try:
-            self._dialect_policy.validate_call_options(
-                LLMCallOptions(),
-                required_capabilities=(
-                    LLMCapability.CHAT,
-                    LLMCapability.TOOLS,
-                    LLMCapability.USAGE_REPORTING,
-                ),
+            call_kwargs = self._validate_tool_call(
+                kwargs,
+                tool_choice=tool_choice,
+                require_usage=True,
             )
-        except (LLMCapabilityNotSupportedError, LLMConfigurationError) as exc:
+        except LLMCapabilityNotSupportedError as exc:
             raise _dialect_policy_required("tool calls") from exc
-        raise _dialect_policy_required("tool calls")
+        return await super().chat_with_tools_with_usage(
+            system_prompt,
+            user_prompt,
+            tools,
+            tool_choice=tool_choice,
+            **call_kwargs,
+        )
+
+    def _validate_tool_call(
+        self,
+        kwargs: dict[str, Any],
+        *,
+        tool_choice: ToolChoiceInput,
+        require_usage: bool = False,
+    ) -> dict[str, Any]:
+        """Validate tool controls against the selected compatible dialect."""
+
+        required = [LLMCapability.CHAT, LLMCapability.TOOLS]
+        if require_usage:
+            required.append(LLMCapability.USAGE_REPORTING)
+        return self._validate_call(
+            kwargs,
+            allowed_legacy=_TOOL_CALL_OPTIONS,
+            required_capabilities=tuple(required),
+            tool_choice_mode=_tool_choice_mode(tool_choice),
+        )
 
     def _validate_call(
         self,
@@ -325,6 +352,8 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
         *,
         allowed_legacy: frozenset[str],
         required_capabilities: tuple[CapabilityInput, ...],
+        include_stream_usage: bool = False,
+        tool_choice_mode: str | None = None,
         allow_retries: bool = True,
     ) -> dict[str, Any]:
         """Validate typed or legacy controls and return native call kwargs."""
@@ -332,24 +361,56 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
         remaining = dict(kwargs)
         typed_options = remaining.pop("call_options", None)
         if typed_options is not None:
-            if remaining:
-                names = ", ".join(sorted(remaining))
-                raise LLMConfigurationError(
-                    f"call_options cannot be combined with legacy options: {names}",
-                    provider="OpenAI-compatible",
-                )
             if not isinstance(typed_options, LLMCallOptions):
                 raise LLMConfigurationError(
                     "call_options must be LLMCallOptions",
                     provider="OpenAI-compatible",
                 )
-            options = typed_options
+            _reject_unsupported_options(remaining, allowed=allowed_legacy)
+            conflicting_controls = sorted(set(remaining) - {"structured_output"})
+            if conflicting_controls:
+                raise LLMConfigurationError(
+                    "call_options cannot be combined with legacy options: "
+                    + ", ".join(conflicting_controls),
+                    provider="OpenAI-compatible",
+                )
+            structured_strategy = typed_options.structured_output_strategy
+            if remaining.get("structured_output") is not None:
+                if structured_strategy not in {None, "native_schema"}:
+                    raise LLMConfigurationError(
+                        "Compatible Chat structured output requires native_schema",
+                        provider="OpenAI-compatible",
+                    )
+                structured_strategy = "native_schema"
+            resolved_tool_mode = typed_options.tool_choice_mode
+            if tool_choice_mode is not None:
+                if resolved_tool_mode not in {None, tool_choice_mode}:
+                    raise LLMConfigurationError(
+                        "call_options tool choice does not match tool_choice",
+                        provider="OpenAI-compatible",
+                    )
+                resolved_tool_mode = tool_choice_mode
+            options = replace(
+                typed_options,
+                tool_choice_mode=resolved_tool_mode,
+                structured_output_strategy=structured_strategy,
+                include_stream_usage=(
+                    typed_options.include_stream_usage or include_stream_usage
+                ),
+            )
         else:
             _reject_unsupported_options(remaining, allowed=allowed_legacy)
             options = LLMCallOptions(
                 temperature=remaining.get("temperature"),
                 max_tokens=remaining.get("max_tokens"),
+                tool_choice_mode=tool_choice_mode,
+                structured_output_strategy=(
+                    "native_schema" if remaining.get("structured_output") is not None else None
+                ),
+                include_stream_usage=include_stream_usage,
+                reasoning_effort=remaining.get("reasoning_effort"),
                 retry_attempts=remaining.get("_retries"),
+                parallel_tool_calls=remaining.get("parallel_tool_calls"),
             )
 
         if not allow_retries and options.retry_attempts is not None:
@@ -361,7 +422,35 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
             options,
             required_capabilities=required_capabilities,
         )
-        return _native_call_kwargs(options)
+        native_kwargs = _native_call_kwargs(options)
+        structured_output = remaining.get("structured_output")
+        if structured_output is not None:
+            native_kwargs["structured_output"] = structured_output
+        if options.parallel_tool_calls is not None:
+            native_kwargs["parallel_tool_calls"] = options.parallel_tool_calls
+        return native_kwargs
+
+    def _attach_structured_response_format(
+        self,
+        request_kwargs: Dict[str, Any],
+        structured_spec: StructuredOutputSpec | None,
+    ) -> None:
+        """Attach native JSON schema after dialect and schema validation."""
+
+        if structured_spec is None:
+            return
+        self._dialect_policy.validate_call_options(
+            LLMCallOptions(structured_output_strategy="native_schema"),
+            required_capabilities=(LLMCapability.STRUCTURED_OUTPUT_NATIVE,),
+        )
+        try:
+            validate_openai_strict_schema(structured_spec)
+        except StructuredOutputSchemaError as exc:
+            raise LLMConfigurationError(
+                str(exc),
+                provider="OpenAI-compatible",
+            ) from exc
+        request_kwargs["response_format"] = build_chat_response_format(structured_spec)
 
 
 def _validate_base_url(base_url: str, *, guarded: bool) -> str:
@@ -445,8 +534,27 @@ def _native_call_kwargs(options: LLMCallOptions) -> dict[str, Any]:
     return kwargs
 
 
+def _tool_choice_mode(tool_choice: ToolChoiceInput) -> str | None:
+    """Return the provider-neutral mode represented by a tool-choice value."""
+
+    if tool_choice is None:
+        return None
+    if isinstance(tool_choice, str):
+        return tool_choice
+    mode = getattr(tool_choice, "mode", None)
+    if isinstance(mode, str):
+        return mode
+    if isinstance(tool_choice, Mapping):
+        if tool_choice.get("type") == "function" or "function" in tool_choice:
+            return "specific"
+    raise LLMConfigurationError(
+        "Compatible Chat tool_choice is invalid",
+        provider="OpenAI-compatible",
+    )
+
+
 def _dialect_policy_required(feature: str) -> LLMConfigurationError:
-    """Return the fail-closed error for optional compatible protocol features."""
+    """Return a stable fail-closed error for an unavailable dialect feature."""
 
     return LLMConfigurationError(
         f"Compatible Chat {feature} requires an explicit dialect policy",
@@ -505,6 +613,7 @@ async def _guarded_stream(events: Any) -> AsyncIterator[Any]:
 
 
 __all__ = [
+    "AGENT_OPENAI_COMPATIBLE_DIALECT",
     "CompatibleChatAuth",
     "CompatibleChatAuthMode",
     "CONSERVATIVE_OPENAI_COMPATIBLE_DIALECT",

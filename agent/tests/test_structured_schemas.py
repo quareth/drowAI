@@ -10,11 +10,15 @@ from jsonschema import ValidationError, validate
 from agent.providers.llm.contracts.structured_output import validate_openai_strict_schema
 from core.llm.structured_schemas import (
     DECISION_ROUTER_STRUCTURED_OUTPUT,
+    ENGAGEMENT_REPORT_SECTION_STRUCTURED_OUTPUT,
     GENERIC_CANDIDATE_EXTRACTOR_STRUCTURED_OUTPUT,
     INTENT_CLASSIFIER_STRUCTURED_OUTPUT,
+    MEMORY_EXTRACTION_STRUCTURED_OUTPUT,
+    MEMORY_GATE_STRUCTURED_OUTPUT,
     PLANNER_CONTRACT_STRUCTURED_OUTPUT,
     POST_TOOL_DECISION_STRUCTURED_OUTPUT,
     REFLECT_STRUCTURED_OUTPUT,
+    TASK_CLOSURE_MEMO_STRUCTURED_OUTPUT,
     THINK_MORE_STRUCTURED_OUTPUT,
     TOOL_CATEGORY_SELECTOR_STRUCTURED_OUTPUT,
     TOOL_SELECTOR_STRUCTURED_OUTPUT,
@@ -63,12 +67,19 @@ def test_structured_schemas_have_required_for_all_properties() -> None:
         PLANNER_CONTRACT_STRUCTURED_OUTPUT,
         DECISION_ROUTER_STRUCTURED_OUTPUT,
         THINK_MORE_STRUCTURED_OUTPUT,
+        POST_TOOL_DECISION_STRUCTURED_OUTPUT,
         REFLECT_STRUCTURED_OUTPUT,
         TOOL_OUTPUT_COMPRESSOR_STRUCTURED_OUTPUT,
+        GENERIC_CANDIDATE_EXTRACTOR_STRUCTURED_OUTPUT,
+        MEMORY_GATE_STRUCTURED_OUTPUT,
+        MEMORY_EXTRACTION_STRUCTURED_OUTPUT,
+        TASK_CLOSURE_MEMO_STRUCTURED_OUTPUT,
+        ENGAGEMENT_REPORT_SECTION_STRUCTURED_OUTPUT,
     ]
     errors: List[str] = []
     for spec in specs:
         errors.extend(_collect_required_coverage_errors(spec.schema, path=spec.name))
+        validate_openai_strict_schema(spec)
     assert not errors, "\n".join(errors)
 
 

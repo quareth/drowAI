@@ -34,6 +34,10 @@ Target version: `0.1.0`.
 
 ### Changed
 
+- GPT-OSS 20B now runs classification, planning, structured responses,
+  function/tool calls, compression, post-tool reasoning, and streamed
+  articulation through the user-selected serving route instead of switching
+  hidden agent roles to another provider's model.
 - Native and hosted model routes accept provider-scoped operator base URLs for
   gateways or local development without changing other connection endpoints.
 - Dependency security updates refresh the frontend and backend toolchains,
@@ -49,6 +53,11 @@ Target version: `0.1.0`.
 
 ### Fixed
 
+- Reviewed GPT-OSS routes now use one agent-capable compatible protocol contract
+  across NVIDIA, Hugging Face, Ollama, and vLLM; arbitrary custom compatible
+  endpoints remain conservative and fail closed.
+- LangGraph usage records now retain the selected connection, deployment, and
+  route identity even when final graph metadata omits the runtime selection.
 - Provider settings now render one setup card per supported GPT-OSS route
   instead of duplicating cards for provider inventory models.
 - Chat requests now use usage-tracked non-streaming responses when a selected

@@ -1,4 +1,4 @@
-"""Tests for the unregistered conservative OpenAI-compatible Chat adapter."""
+"""Tests for fail-closed and agent-capable OpenAI-compatible Chat dialects."""
 
 from __future__ import annotations
 
@@ -8,9 +8,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from agent.providers.llm.adapters.openai.compatible_chat import (
+    AGENT_OPENAI_COMPATIBLE_DIALECT,
     CompatibleChatAuth,
     OpenAICompatibleChatClient,
 )
+from agent.providers.llm.core.base import StructuredOutputSpec
+from agent.providers.llm.contracts.compat import LLMDialectPolicy
 from agent.providers.llm.core.exceptions import LLMConfigurationError
 from agent.providers.llm.factory.client_factory import LLMClientFactory
 
@@ -29,6 +32,7 @@ def _client(
     wire_model_id: str = "Vendor/Model.Name-20B",
     auth: CompatibleChatAuth | None = None,
     guarded_executor: MagicMock | None = None,
+    dialect_policy: LLMDialectPolicy | None = None,
 ) -> tuple[OpenAICompatibleChatClient, MagicMock, MagicMock]:
     """Create the compatible adapter with a mocked SDK constructor."""
 
@@ -40,11 +44,16 @@ def _client(
         "agent.providers.llm.adapters.openai.compatible_chat.openai.AsyncOpenAI",
         constructor,
     ):
+        client_kwargs = {
+            "base_url": endpoint,
+            "auth": auth or CompatibleChatAuth.bearer("test-key"),
+            "wire_model_id": wire_model_id,
+            "guarded_executor": guarded_executor,
+        }
+        if dialect_policy is not None:
+            client_kwargs["dialect_policy"] = dialect_policy
         client = OpenAICompatibleChatClient(
-            base_url=endpoint,
-            auth=auth or CompatibleChatAuth.bearer("test-key"),
-            wire_model_id=wire_model_id,
-            guarded_executor=guarded_executor,
+            **client_kwargs,
         )
     return client, sdk_client, constructor
 
@@ -140,6 +149,126 @@ async def test_compatible_adapter_rejects_tools_without_dialect_policy() -> None
         )
 
     sdk.chat.completions.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_agent_dialect_sends_and_parses_native_structured_output() -> None:
+    """Agent classification uses the reviewed JSON-schema request contract."""
+
+    client, sdk, _constructor = _client(
+        dialect_policy=AGENT_OPENAI_COMPATIBLE_DIALECT
+    )
+    sdk.chat.completions.create.return_value = _response('{"route":"simple_tool"}')
+    spec = StructuredOutputSpec(
+        name="intent_route",
+        schema={
+            "type": "object",
+            "properties": {"route": {"type": "string"}},
+            "required": ["route"],
+            "additionalProperties": False,
+        },
+    )
+
+    response = await client.chat_with_usage(
+        "system",
+        "user",
+        max_tokens=64,
+        reasoning_effort=None,
+        structured_output=spec,
+    )
+
+    assert response.structured_output == {"route": "simple_tool"}
+    assert sdk.chat.completions.create.await_args.kwargs["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "intent_route",
+            "strict": True,
+            "schema": spec.schema,
+        },
+    }
+
+
+@pytest.mark.asyncio
+async def test_agent_dialect_sends_and_normalizes_usage_tracked_tool_calls() -> None:
+    """Function-call parameter resolution stays provider-neutral at the boundary."""
+
+    client, sdk, _constructor = _client(
+        dialect_policy=AGENT_OPENAI_COMPATIBLE_DIALECT
+    )
+    tool_call = SimpleNamespace(
+        id="call-1",
+        function=SimpleNamespace(name="tool__net_nmap", arguments='{"target":"127.0.0.1"}'),
+    )
+    sdk.chat.completions.create.return_value = SimpleNamespace(
+        id="tool-response",
+        choices=[
+            SimpleNamespace(
+                message=SimpleNamespace(
+                    content=None,
+                    refusal=None,
+                    tool_calls=[tool_call],
+                ),
+                finish_reason="tool_calls",
+            )
+        ],
+        usage=SimpleNamespace(prompt_tokens=11, completion_tokens=4, total_tokens=15),
+    )
+
+    result = await client.chat_with_tools_with_usage(
+        "system",
+        "user",
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "tool__net_nmap",
+                    "description": "Run nmap",
+                    "parameters": {"type": "object"},
+                },
+            }
+        ],
+        tool_choice="required",
+        max_tokens=128,
+    )
+
+    assert result.tool_calls is not None
+    assert result.tool_calls[0].name == "tool__net_nmap"
+    assert result.tool_calls[0].arguments == '{"target":"127.0.0.1"}'
+    assert result.usage is not None
+    assert result.usage.total_tokens == 15
+    assert sdk.chat.completions.create.await_args.kwargs["tool_choice"] == "required"
+
+
+@pytest.mark.asyncio
+async def test_agent_dialect_decodes_guarded_sse_and_final_usage() -> None:
+    """Guarded compatible streaming preserves content and provider usage events."""
+
+    guarded_executor = MagicMock(
+        return_value=(
+            b'data: {"id":"stream-1","choices":[{"delta":{"content":"hello"}}]}\n\n'
+            b'data: {"id":"stream-1","choices":[],"usage":{"prompt_tokens":3,'
+            b'"completion_tokens":1,"total_tokens":4}}\n\n'
+            b'data: [DONE]\n\n'
+        )
+    )
+    client, _sdk, _constructor = _client(
+        guarded_executor=guarded_executor,
+        dialect_policy=AGENT_OPENAI_COMPATIBLE_DIALECT,
+    )
+
+    response = await client.stream_chat_messages_with_usage(
+        [{"role": "user", "content": "hello"}],
+        max_tokens=8,
+        reasoning_effort=None,
+    )
+    chunks = [chunk async for chunk in response.content_iterator]
+
+    assert chunks == ["hello"]
+    assert response.get_final_usage() is not None
+    assert response.get_final_usage().total_tokens == 4
+    request = guarded_executor.call_args.args[0]
+    assert request["stream"] is True
+    assert request["stream_options"] == {"include_usage": True}
 
 
 @pytest.mark.parametrize(

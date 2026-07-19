@@ -322,6 +322,38 @@ class LLMDeploymentService:
         ).scalars()
         return tuple(rows)
 
+    def select_enabled_route(
+        self,
+        *,
+        user_id: int,
+        deployment_id: UUID | str,
+        preferred_route_id: UUID | str | None = None,
+    ) -> LLMDeploymentRoute | None:
+        """Return the preferred or first enabled owner-scoped deployment route."""
+
+        deployment = self.get_deployment(
+            user_id=user_id,
+            deployment_id=deployment_id,
+        )
+        if preferred_route_id is not None:
+            route = self.get_route(user_id=user_id, route_id=preferred_route_id)
+            if route.deployment_id != deployment.id or not route.enabled:
+                raise LLMDeploymentNotFoundError(
+                    "Preferred deployment route is unavailable"
+                )
+            return route
+        return self._db.execute(
+            select(LLMDeploymentRoute)
+            .where(
+                LLMDeploymentRoute.deployment_id == deployment.id,
+                LLMDeploymentRoute.enabled.is_(True),
+            )
+            .order_by(
+                LLMDeploymentRoute.created_at.asc(),
+                LLMDeploymentRoute.id.asc(),
+            )
+        ).scalars().first()
+
 
 def _uuid(value: UUID | str) -> UUID:
     try:

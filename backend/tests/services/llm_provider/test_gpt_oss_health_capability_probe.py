@@ -175,7 +175,7 @@ def test_gpt_oss_probe_requires_inventory_model_and_usage_evidence(
         ProviderModelRef(OPENAI_PROVIDER_ID, "gpt-oss-20b")
     )
     assert profile_after is profile_before
-    assert not profile_after.supports(LLMCapability.TOOLS)
+    assert profile_after.supports(LLMCapability.TOOLS)
 
 
 def test_gpt_oss_probe_fails_closed_without_provider_reported_usage(

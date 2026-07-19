@@ -18,12 +18,13 @@ from types import MappingProxyType
 from typing import Any, Iterable, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
-from agent.providers.llm.adapters.openai.compatible_chat import (
-    CONSERVATIVE_OPENAI_COMPATIBLE_DIALECT,
+from agent.providers.llm.adapters.openai.compatible_dialects import (
     OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
     OPENAI_COMPATIBLE_CHAT_ADAPTER_VERSION,
+    resolve_openai_compatible_dialect,
 )
 from agent.providers.llm.core.capabilities import LLMCapability, freeze_capabilities
+from agent.providers.llm.core.exceptions import LLMConfigurationError
 from .types import (
     LLMEgressNetworkScope,
     LLMConnectionOperation,
@@ -250,14 +251,18 @@ def _connection_preset_from_payload(payload: Any) -> ProvingConnectionPreset:
     if adapter_version != OPENAI_COMPATIBLE_CHAT_ADAPTER_VERSION:
         raise OperationRegistryError("Connection preset adapter version is not supported")
     api_surface = _manifest_text(payload, "api_surface")
-    if api_surface != CONSERVATIVE_OPENAI_COMPATIBLE_DIALECT.api_surface:
-        raise OperationRegistryError("Connection preset API surface is not supported")
     dialect_policy_id = _manifest_text(payload, "dialect_policy_id")
-    if dialect_policy_id != CONSERVATIVE_OPENAI_COMPATIBLE_DIALECT.policy_id:
-        raise OperationRegistryError("Connection preset dialect policy is not supported")
+    try:
+        dialect_policy = resolve_openai_compatible_dialect(dialect_policy_id)
+    except LLMConfigurationError as exc:
+        raise OperationRegistryError(
+            "Connection preset dialect policy is not supported"
+        ) from exc
+    if api_surface != dialect_policy.api_surface:
+        raise OperationRegistryError("Connection preset API surface is not supported")
 
     capabilities = freeze_capabilities(_manifest_text_tuple(payload, "capability_ceiling"))
-    if not capabilities.issubset(CONSERVATIVE_OPENAI_COMPATIBLE_DIALECT.capabilities):
+    if not capabilities.issubset(dialect_policy.capabilities):
         raise OperationRegistryError("Connection preset capability ceiling is not supported")
     endpoint_policy_id = _manifest_text(payload, "endpoint_policy_id")
     if endpoint_policy_id not in _ALLOWED_PRESET_ENDPOINT_POLICIES:

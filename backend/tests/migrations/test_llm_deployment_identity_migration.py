@@ -48,7 +48,7 @@ def test_revision_is_append_only_after_resumable_reports() -> None:
     assert _REVISION_PATH.exists()
     assert revision is not None
     assert revision.down_revision == "0005_resumable_reports"
-    assert script.get_heads() == ["0008_llm_conversation_origin"]
+    assert script.get_heads() == ["0010_gpt_oss_agent_dialect"]
 
 
 def test_upgrade_adds_identity_tables_and_preserves_legacy_rows(

@@ -258,14 +258,16 @@ the shared `LLMRuntimeClientResolver`.
 
 ## Multi-Model Support
 
-The user's selected provider/model is the default conversation target, but it
-is not the only model a turn can use.
+The user's selected provider/model is the default conversation target. A model
+profile can also declare that every hidden agent role must inherit that same
+selection.
 
 `core/llm/role_policy.py` resolves a provider/model/reasoning-effort tuple for
-each role-owned call. User-selected roles can use the conversation model or an
-explicit reasoning model. Internal roles use provider-owned defaults declared in
-provider profiles, with environment variable overrides for specific internal
-roles.
+each role-owned call. GPT-OSS declares `selected_model`, so conversation,
+reasoning, classification, compression, tool selection, post-tool observation,
+and articulation all resolve to the selected deployment and its exact serving
+route. Native OpenAI and Anthropic profiles retain their provider-owned role
+defaults and environment overrides.
 
 Current role families:
 
@@ -283,10 +285,10 @@ Conversation-context compression also uses the task-selected provider/model,
 but resolves that target directly from the compaction request. It has no
 internal lightweight-model profile default or role-policy environment override.
 
-When a role resolves to a provider different from the conversation selection,
-`LLMRuntimeClientResolver` fetches an enabled credential ref for the target
-provider. This means multi-provider execution is supported, but every target
-provider still requires a valid credential for the runtime user.
+When a native-provider role resolves to a provider different from the
+conversation selection, `LLMRuntimeClientResolver` fetches an enabled
+credential ref for that target provider. The GPT-OSS selected-model policy does
+not perform that cross-provider switch.
 
 Capability checks stay profile-driven. Reasoning effort is passed only to
 models that declare `REASONING_EFFORT`; unsupported efforts fail before the
@@ -326,10 +328,28 @@ OpenAI-specific translation is isolated in adapter helpers:
 
 ## OpenAI-Compatible Implementation
 
-Curated GPT-OSS routes use the conservative `OpenAICompatibleChatClient`
-adapter and the same deployment-aware resolver and factory boundary as native
-providers. Connection presets supply the normal provider endpoint and exact
-wire model identifier; graph nodes do not construct endpoints or clients.
+Reviewed GPT-OSS routes use `OpenAICompatibleChatClient` with the code-owned
+`openai_compatible_chat.agent_v1` dialect and the same deployment-aware resolver
+and factory boundary as native providers. The dialect admits only the agent
+contracts DrowAI exercises: chat, usage-aware streaming, native JSON-schema
+output, function tools, and `auto` or `required` tool choice. It does not claim
+reasoning-effort or parallel-tool controls. Connection presets supply the normal
+provider endpoint and exact wire model identifier; graph nodes do not construct
+endpoints or clients.
+
+Arbitrary custom compatible endpoints retain the conservative dialect. They do
+not become agent-capable merely because they implement an endpoint named
+`/v1/chat/completions`; unsupported calls fail before outbound inference.
+
+Reporting and semantic-memory generation retain their independent user
+selections. When either selection points at a reviewed GPT-OSS deployment, the
+shared effective-profile and runtime-client path supplies the same structured
+output dialect instead of a reporting- or memory-specific adapter.
+
+Deployment selections snapshot the deterministic enabled route when one is
+available. Turn finalization forwards that authoritative selection into usage
+persistence, preserving connection, deployment, and route attribution for all
+role-owned calls in the turn.
 
 Endpoint resolution is connection-scoped and declarative. Native OpenAI and
 Anthropic routes use `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL`; hosted NVIDIA

@@ -33,7 +33,7 @@ def test_active_alembic_graph_is_linear_from_static_baseline() -> None:
     script = _script_directory()
 
     assert script.get_bases() == ["0001_initial_current_schema"]
-    assert script.get_heads() == ["0009_llm_legacy_retirement"]
+    assert script.get_heads() == ["0010_gpt_oss_agent_dialect"]
     assert [
         revision.revision for revision in reversed(list(script.walk_revisions()))
     ] == [
@@ -46,6 +46,7 @@ def test_active_alembic_graph_is_linear_from_static_baseline() -> None:
         "0007_llm_deployment_backfill",
         "0008_llm_conversation_origin",
         "0009_llm_legacy_retirement",
+        "0010_gpt_oss_agent_dialect",
     ]
 
 

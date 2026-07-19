@@ -17,9 +17,6 @@ from sqlalchemy.orm import Session
 
 from agent.context.context_window_policy import estimate_chat_history_tokens
 from agent.context.token_counter_registry import estimate_json_tokens
-from agent.providers.llm.adapters.openai.compatible_chat import (
-    OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
-)
 from agent.providers.llm.core.base import (
     ChatMessage,
     LLMClient,
@@ -190,12 +187,12 @@ class LLMRuntimeClientResolver:
         factory_kwargs["base_url"] = (
             resolved_target.connection.operation_target.client_base_url
         )
-        if resolved_target.adapter_id == OPENAI_COMPATIBLE_CHAT_ADAPTER_ID:
-            factory_kwargs["wire_model_id"] = resolved_target.exact_wire_model_id
-            factory_kwargs["guarded_executor"] = _guarded_inference_executor(
-                operation_target=resolved_target.connection.operation_target,
-                secret=secret,
-            )
+        factory_kwargs["wire_model_id"] = resolved_target.exact_wire_model_id
+        factory_kwargs["dialect_policy_id"] = resolved_target.dialect_policy_id
+        factory_kwargs["guarded_executor"] = _guarded_inference_executor(
+            operation_target=resolved_target.connection.operation_target,
+            secret=secret,
+        )
         client = LLMClientFactory.get_client(
             provider_model=call_ref,
             api_key=secret.value,
@@ -568,25 +565,11 @@ class LLMRuntimeClientResolver:
     ) -> LLMDeploymentRoute | None:
         if self._deployments is None:
             raise LLMConfigurationError("Deployment service is unavailable")
-        if preferred_route_id is not None:
-            route = self._deployments.get_route(
-                user_id=user_id,
-                route_id=preferred_route_id,
-            )
-            if route.deployment_id != deployment.id or not route.enabled:
-                raise LLMDeploymentNotFoundError(
-                    "Preferred deployment route is unavailable"
-                )
-            return route
-        routes = tuple(
-            route
-            for route in self._deployments.list_routes(
-                user_id=user_id,
-                deployment_id=deployment.id,
-            )
-            if route.enabled
+        return self._deployments.select_enabled_route(
+            user_id=user_id,
+            deployment_id=deployment.id,
+            preferred_route_id=preferred_route_id,
         )
-        return routes[0] if routes else None
 
     def _trusted_access_context(
         self,

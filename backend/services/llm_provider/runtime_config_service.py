@@ -229,15 +229,13 @@ class LLMRuntimeConfigService:
             user_id=user_id,
             deployment_id=deployment_id,
         )
-        if preferred_route_id is not None:
-            route = deployments.get_route(
-                user_id=user_id,
-                route_id=preferred_route_id,
-            )
-            if route.deployment_id != deployment.id or not route.enabled:
-                raise LLMDeploymentNotFoundError(
-                    "Preferred deployment route is unavailable"
-                )
+        route = deployments.select_enabled_route(
+            user_id=user_id,
+            deployment_id=deployment.id,
+            preferred_route_id=preferred_route_id,
+        )
+        if route is not None:
+            preferred_route_id = str(route.id)
         return LLMRuntimeSelectionV2(
             deployment_ref=DeploymentRef(
                 deployment_id=str(deployment.id),

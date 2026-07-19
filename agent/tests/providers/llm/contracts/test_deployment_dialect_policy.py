@@ -249,9 +249,13 @@ def test_compatible_adapter_rejects_wrong_or_overbroad_policy_binding() -> None:
     with pytest.raises(LLMConfigurationError, match="capabilities"):
         _compatible_client(
             _policy(
-                capabilities=frozenset(
-                    {LLMCapability.CHAT, LLMCapability.TOOLS}
-                )
+                    capabilities=frozenset(
+                        {
+                            LLMCapability.CHAT,
+                            LLMCapability.TOOLS,
+                            LLMCapability.PARALLEL_TOOLS,
+                        }
+                    )
             )
         )
     with pytest.raises(LLMConfigurationError, match="retry limit"):

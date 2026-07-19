@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from agent.providers.llm.adapters.openai.compatible_chat import (
     OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
 )
+from agent.providers.llm.core.capabilities import LLMCapability
 from backend.models import User
 from backend.services.llm_provider.connection_service import LLMConnectionService
 from backend.services.llm_provider.deployment_service import LLMDeploymentService
@@ -195,6 +196,22 @@ def test_scaled_presets_are_reviewed_data_on_existing_openai_compatible_protocol
         VLLM_OPENAI_COMPATIBLE_PRESET_ID,
         CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
     }
+    custom = registry.get_connection_preset(CUSTOM_OPENAI_COMPATIBLE_PRESET_ID)
+    assert custom.dialect_policy_id == "openai_compatible_chat.conservative_v1"
+    for preset_id in (
+        GPT_OSS_20B_PROVING_PRESET_ID,
+        HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+        NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+        OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
+        VLLM_OPENAI_COMPATIBLE_PRESET_ID,
+    ):
+        preset = registry.get_connection_preset(preset_id)
+        assert preset.dialect_policy_id == "openai_compatible_chat.agent_v1"
+        assert {
+            LLMCapability.TOOLS,
+            LLMCapability.STRUCTURED_OUTPUT_NATIVE,
+            LLMCapability.STREAMING_USAGE_REPORTING,
+        }.issubset(preset.capability_ceiling)
 
 
 def test_huggingface_preset_uses_fixed_router_endpoint_and_guarded_operation_matrix() -> None:

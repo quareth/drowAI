@@ -220,6 +220,9 @@ class LLMProviderSelectionService:
                 deployment_id=str(target.deployment.id),
                 expected_revision=int(target.deployment.revision),
             ),
+            preferred_route_id=(
+                str(target.route.id) if target.route is not None else None
+            ),
             reasoning_effort=reasoning_effort,
             legacy_provider=selection.provider,
             legacy_model=selection.model,
@@ -249,6 +252,9 @@ class LLMProviderSelectionService:
             deployment_ref=DeploymentRef(
                 deployment_id=str(target.deployment.id),
                 expected_revision=int(target.deployment.revision),
+            ),
+            preferred_route_id=(
+                str(target.route.id) if target.route is not None else None
             ),
             reasoning_effort=reasoning_effort,
             legacy_provider=target.provider,

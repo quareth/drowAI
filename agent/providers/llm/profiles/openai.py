@@ -131,10 +131,14 @@ _OPENAI_RESPONSES_NO_NATIVE_STRUCTURED_OUTPUT_CAPABILITIES = (
     _OPENAI_RESPONSES_MODEL_CAPABILITIES
     - frozenset({LLMCapability.STRUCTURED_OUTPUT_NATIVE})
 )
-_OPENAI_COMPATIBLE_CHAT_CONSERVATIVE_CAPABILITIES = freeze_capabilities(
+_OPENAI_COMPATIBLE_CHAT_AGENT_CAPABILITIES = freeze_capabilities(
     (
         LLMCapability.CHAT,
+        LLMCapability.STREAMING,
+        LLMCapability.TOOLS,
+        LLMCapability.STRUCTURED_OUTPUT_NATIVE,
         LLMCapability.USAGE_REPORTING,
+        LLMCapability.STREAMING_USAGE_REPORTING,
         LLMCapability.CONTEXT_WINDOW,
         LLMCapability.MAX_OUTPUT_TOKENS,
     )
@@ -336,17 +340,18 @@ def _openai_chat_profile(model_id: str) -> ModelProfile:
 
 
 def _openai_compatible_chat_profile(model_id: str, *, listable: bool) -> ModelProfile:
-    """Build a conservative profile for an OpenAI-compatible chat deployment."""
+    """Build the reviewed agent profile for GPT-OSS compatible deployments."""
     return ModelProfile(
         ref=ProviderModelRef(OPENAI_PROVIDER_ID, model_id),
         display_name=OPENAI_LISTABLE_MODEL_LABELS.get(model_id, model_id),
         api_surface=OPENAI_API_SURFACE_CHAT_COMPLETIONS,
-        capabilities=_OPENAI_COMPATIBLE_CHAT_CONSERVATIVE_CAPABILITIES,
+        capabilities=_OPENAI_COMPATIBLE_CHAT_AGENT_CAPABILITIES,
         context_window_tokens=DEFAULT_CONTEXT_WINDOW_TOKENS,
         max_output_tokens=DEFAULT_MAX_OUTPUT_TOKENS,
         listable=listable,
-        tool_choice_modes=frozenset(),
-        structured_output_strategies=frozenset(),
+        tool_choice_modes=frozenset({"auto", "required"}),
+        structured_output_strategies=_OPENAI_STRUCTURED_OUTPUT_STRATEGIES,
+        role_model_policy="selected_model",
     )
 
 

@@ -381,6 +381,10 @@ class LLMClientFactory:
                 "wire_model_id",
                 resolution.provider_request_model,
             )
+            dialect_policy_id = kwargs.pop("dialect_policy_id", None)
+            dialect_policy = kwargs.pop("dialect_policy", None)
+            if dialect_policy is None:
+                dialect_policy = _resolve_openai_compatible_dialect(dialect_policy_id)
             kwargs.pop("resolution_role", None)
             kwargs.pop("resolution_source", None)
             if not isinstance(base_url, str) or not base_url.strip():
@@ -392,8 +396,12 @@ class LLMClientFactory:
                 base_url=base_url,
                 auth=_openai_compatible_bearer_auth(api_key),
                 wire_model_id=wire_model_id,
+                dialect_policy=dialect_policy,
                 **kwargs,
             )
+        kwargs.pop("wire_model_id", None)
+        kwargs.pop("dialect_policy_id", None)
+        kwargs.pop("guarded_executor", None)
         return provider_class(
             api_key=api_key,
             model=resolution.provider_request_model,
@@ -603,6 +611,24 @@ def _openai_compatible_bearer_auth(api_key: str) -> Any:
     from ..adapters.openai.compatible_chat import CompatibleChatAuth
 
     return CompatibleChatAuth.bearer(api_key)
+
+
+def _resolve_openai_compatible_dialect(policy_id: Any) -> Any:
+    """Resolve code-owned compatible policy inside the adapter factory boundary."""
+
+    from ..adapters.openai.compatible_dialects import (
+        AGENT_OPENAI_COMPATIBLE_DIALECT,
+        resolve_openai_compatible_dialect,
+    )
+
+    if policy_id is None:
+        return AGENT_OPENAI_COMPATIBLE_DIALECT
+    if not isinstance(policy_id, str) or not policy_id.strip():
+        raise LLMConfigurationError(
+            "OpenAI-compatible adapter requires a dialect policy id",
+            provider=OPENAI_PROVIDER_ID,
+        )
+    return resolve_openai_compatible_dialect(policy_id)
 
 
 __all__ = ["LLMClientFactory"]

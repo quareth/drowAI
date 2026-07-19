@@ -16,11 +16,13 @@ from .node_utils import append_usage_to_state
 from ..utils.llm_resolver import (
     ROLE_REASONING_MAIN,
     get_llm_reasoning_effort,
+    has_llm_runtime_services,
     resolve_llm_client,
 )
 from ..config.token_limits import LIMITS
 from agent.providers.llm.core.exceptions import (
     LLMConfigurationError,
+    LLMProviderError,
     LLMRefusalError,
 )
 from agent.tools.capability_surface import render_capability_surface
@@ -76,6 +78,8 @@ async def synthesis_node(
         )
         reasoning_effort = get_llm_reasoning_effort(llm_client)
     except LLMConfigurationError:
+        if has_llm_runtime_services(config):
+            raise
         # Fallback without LLM
         logger.warning("No LLMClient for synthesis, using fallback")
         final_text = _build_fallback_message(interactive)
@@ -116,6 +120,8 @@ async def synthesis_node(
             )
             
         except LLMRefusalError:
+            raise
+        except LLMProviderError:
             raise
         except Exception as exc:
             logger.error(f"Synthesis LLM call failed: {exc}")

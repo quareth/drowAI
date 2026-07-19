@@ -13,6 +13,12 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from agent.providers.llm.adapters.openai.compatible_chat import (
+    OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
+)
+from agent.providers.llm.adapters.openai.compatible_dialects import (
+    resolve_openai_compatible_dialect,
+)
 from agent.providers.llm.core.capabilities import CapabilityInput, LLMCapability, freeze_capabilities
 from agent.providers.llm.core.identity import OPENAI_PROVIDER_ID, ProviderModelRef
 from agent.providers.llm.profiles.registry import ModelProfile, require_model_profile
@@ -24,9 +30,6 @@ from backend.models import (
 )
 
 from .operation_registry import GPT_OSS_20B_PROVING_PRESET_ID, ConnectionOperationRegistry
-from agent.providers.llm.adapters.openai.compatible_chat import (
-    OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
-)
 from .types import LLMDeploymentValidationError
 
 
@@ -205,6 +208,7 @@ def _compatible_profile(
         raise LLMDeploymentValidationError(
             "Deployment route does not match its registered adapter profile"
         )
+    dialect = resolve_openai_compatible_dialect(route.dialect_policy_id)
     return ModelProfile(
         ref=ProviderModelRef(OPENAI_PROVIDER_ID, "gpt-oss-20b"),
         display_name=deployment.display_name,
@@ -216,8 +220,12 @@ def _compatible_profile(
         canonical_model_id=deployment.canonical_model_id or deployment.wire_model_id,
         lifecycle=deployment.lifecycle_state,
         support_tier="deployment",
+        tool_choice_modes=dialect.tool_choice_modes,
+        structured_output_strategies=dialect.structured_output_strategies,
+        reasoning_efforts=dialect.reasoning_efforts,
         pricing_schedule_ref=None,
         pricing_provenance=None,
+        role_model_policy="selected_model",
     )
 
 

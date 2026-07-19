@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from typing import Any, Iterator
+from typing import Any, Iterator, get_args
 
 import pytest
 from sqlalchemy import create_engine
@@ -13,7 +13,8 @@ from sqlalchemy.orm import sessionmaker
 
 from agent.context.context_window_policy import estimate_chat_history_tokens
 from agent.context.token_counter_registry import estimate_text_tokens
-from agent.providers.llm.core.base import LLMResponse
+from agent.providers.llm.contracts.tool_contracts import FunctionToolSpec
+from agent.providers.llm.core.base import LLMResponse, StructuredOutputSpec
 from agent.providers.llm.core.exceptions import LLMConfigurationError
 from agent.providers.llm.core.identity import ProviderModelRef
 from agent.providers.llm.factory.client_factory import LLMClientFactory
@@ -64,6 +65,8 @@ from backend.services.usage_tracking.pricing_registry import (
     PRICING_UNAVAILABLE,
     get_pricing_quote,
 )
+from core.llm.role_contracts import RoleKey
+from core.llm.role_policy import ModelRoleRegistry
 
 
 @pytest.fixture
@@ -203,26 +206,73 @@ async def test_gpt_oss_runtime_uses_shared_authorities_without_fallback(
     def fake_execute(self, operation, provider, secret, json_body=None, operation_target=None):
         del self
         del operation_target
+        body = dict(json_body or {})
         guarded_calls.append(
             {
                 "operation": LLMConnectionOperation(operation),
                 "provider": provider,
                 "secret": secret.value,
-                "json_body": dict(json_body or {}),
+                "json_body": body,
             }
         )
+        if body.get("stream") is True:
+            return GuardedHTTPResponse(
+                status_code=200,
+                body=(
+                    b'data: {"id":"stream-1","choices":[{"delta":{"content":"streamed"}}]}\n\n'
+                    b'data: {"id":"stream-1","choices":[],"usage":{"prompt_tokens":5,'
+                    b'"completion_tokens":2,"total_tokens":7}}\n\n'
+                    b'data: [DONE]\n\n'
+                ),
+                audit_id="runtime-guarded-stream-audit",
+            )
+        if body.get("tools"):
+            response_payload = {
+                "choices": [
+                    {
+                        "message": {
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call-1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "tool__network_nmap",
+                                        "arguments": '{"target":"127.0.0.1"}',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 9,
+                    "completion_tokens": 4,
+                    "total_tokens": 13,
+                },
+            }
+        elif body.get("response_format"):
+            response_payload = {
+                "choices": [{"message": {"content": '{"route":"simple_tool"}'}}],
+                "usage": {
+                    "prompt_tokens": 8,
+                    "completion_tokens": 3,
+                    "total_tokens": 11,
+                },
+            }
+        else:
+            response_payload = {
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {
+                    "prompt_tokens": 7,
+                    "completion_tokens": 3,
+                    "total_tokens": 10,
+                },
+            }
         return GuardedHTTPResponse(
             status_code=200,
-            body=json.dumps(
-                {
-                    "choices": [{"message": {"content": "ok"}}],
-                    "usage": {
-                        "prompt_tokens": 7,
-                        "completion_tokens": 3,
-                        "total_tokens": 10,
-                    },
-                }
-            ).encode(),
+            body=json.dumps(response_payload).encode(),
             audit_id="runtime-guarded-audit",
         )
 
@@ -266,6 +316,27 @@ async def test_gpt_oss_runtime_uses_shared_authorities_without_fallback(
     )
     resolver = LLMRuntimeClientResolver(credentials, db=llm_identity_db)
 
+    for role in get_args(RoleKey):
+        role_settings = ModelRoleRegistry().resolve_call_settings(
+            role,
+            conversation_provider="openai",
+            conversation_model="gpt-oss-20b",
+        )
+        role_client = resolver.get_client(
+            selection,
+            target=role_settings,
+            access_context=LLMRuntimeAccessContext(
+                runtime_user_id=owner.id,
+                task_id=task.id,
+                tenant_id=74,
+            ),
+            purpose=f"gpt-oss-role:{role}",
+            resolution_role=role,
+            resolution_source=role_settings.source,
+        )
+        assert role_settings.model == "gpt-oss-20b"
+        assert role_client.model == "openai/gpt-oss-20b"
+
     client = resolver.get_client(
         selection,
         access_context=LLMRuntimeAccessContext(
@@ -302,19 +373,73 @@ async def test_gpt_oss_runtime_uses_shared_authorities_without_fallback(
     assert response.content == "ok"
     assert response.usage is not None
     assert response.usage.total_tokens == 10
-    assert guarded_calls == [
-        {
-            "operation": LLMConnectionOperation.INFERENCE,
-            "provider": GPT_OSS_20B_PROVING_PRESET_ID,
-            "secret": "sk-gpt-oss-runtime",
-            "json_body": {
-                "model": "openai/gpt-oss-20b",
-                "messages": [{"role": "user", "content": "hello"}],
-                "temperature": 0.1,
-                "max_tokens": 4,
-            },
-        }
-    ]
+
+    structured_spec = StructuredOutputSpec(
+        name="runtime_route",
+        schema={
+            "type": "object",
+            "properties": {"route": {"type": "string"}},
+            "required": ["route"],
+            "additionalProperties": False,
+        },
+    )
+    structured_response = await client.chat_messages_with_usage(
+        [{"role": "user", "content": "classify"}],
+        max_tokens=32,
+        structured_output=structured_spec,
+    )
+    assert structured_response.structured_output == {"route": "simple_tool"}
+
+    tool_response = await client.chat_with_tools_with_usage(
+        "system",
+        "build one tool call",
+        tools=[
+            FunctionToolSpec(
+                tool_id="information_gathering.network_discovery.nmap",
+                name="tool__network_nmap",
+                description="Run a bounded local network scan",
+                parameters_schema={
+                    "type": "object",
+                    "properties": {"target": {"type": "string"}},
+                    "required": ["target"],
+                    "additionalProperties": False,
+                },
+            )
+        ],
+        tool_choice="required",
+        max_tokens=64,
+    )
+    assert tool_response.tool_calls is not None
+    assert tool_response.tool_calls[0].name == "tool__network_nmap"
+    assert tool_response.usage is not None
+    assert tool_response.usage.total_tokens == 13
+
+    stream_response = await client.stream_chat_messages_with_usage(
+        [{"role": "user", "content": "stream"}],
+        max_tokens=16,
+    )
+    streamed_chunks = [chunk async for chunk in stream_response.content_iterator]
+    assert streamed_chunks == ["streamed"]
+    assert stream_response.get_final_usage() is not None
+    assert stream_response.get_final_usage().total_tokens == 7
+
+    assert len(guarded_calls) == 4
+    assert all(
+        call["operation"] is LLMConnectionOperation.INFERENCE
+        and call["provider"] == GPT_OSS_20B_PROVING_PRESET_ID
+        and call["secret"] == "sk-gpt-oss-runtime"
+        and call["json_body"]["model"] == "openai/gpt-oss-20b"
+        for call in guarded_calls
+    )
+    assert guarded_calls[0]["json_body"] == {
+        "model": "openai/gpt-oss-20b",
+        "messages": [{"role": "user", "content": "hello"}],
+        "temperature": 0.1,
+        "max_tokens": 4,
+    }
+    assert guarded_calls[1]["json_body"]["response_format"]["type"] == "json_schema"
+    assert guarded_calls[2]["json_body"]["tool_choice"] == "required"
+    assert guarded_calls[3]["json_body"]["stream_options"] == {"include_usage": True}
 
     text_estimate = estimate_text_tokens(
         "tokenizer provenance",

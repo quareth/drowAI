@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from agent.providers.llm.adapters.openai.compatible_chat import (
-    CONSERVATIVE_OPENAI_COMPATIBLE_DIALECT,
+    AGENT_OPENAI_COMPATIBLE_DIALECT,
     OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
     OPENAI_COMPATIBLE_CHAT_ADAPTER_VERSION,
 )
@@ -46,7 +46,7 @@ def test_gpt_oss_registry_exposes_exactly_one_fixed_proving_preset(
     assert preset.adapter_id == OPENAI_COMPATIBLE_CHAT_ADAPTER_ID
     assert preset.adapter_version == OPENAI_COMPATIBLE_CHAT_ADAPTER_VERSION
     assert preset.api_surface == "chat_completions"
-    assert preset.dialect_policy_id == CONSERVATIVE_OPENAI_COMPATIBLE_DIALECT.policy_id
+    assert preset.dialect_policy_id == AGENT_OPENAI_COMPATIBLE_DIALECT.policy_id
     assert preset.auth_mode == "bearer_api_key"
     assert preset.secret_fields == ("api_key",)
     assert preset.user_config_fields == ("display_label", "api_key")
@@ -205,7 +205,7 @@ def test_gpt_oss_deployment_and_route_preserve_exact_code_owned_alias(
     assert route.adapter_id == OPENAI_COMPATIBLE_CHAT_ADAPTER_ID
     assert route.adapter_version == OPENAI_COMPATIBLE_CHAT_ADAPTER_VERSION
     assert route.api_surface == "chat_completions"
-    assert route.dialect_policy_id == CONSERVATIVE_OPENAI_COMPATIBLE_DIALECT.policy_id
+    assert route.dialect_policy_id == AGENT_OPENAI_COMPATIBLE_DIALECT.policy_id
     assert route.billing_provider_id is None
     assert route.route_config == {"preset_id": GPT_OSS_20B_PROVING_PRESET_ID}
 

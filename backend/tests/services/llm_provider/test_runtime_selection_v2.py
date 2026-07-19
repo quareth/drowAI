@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy.orm import Session
 
-from backend.models import User
+from backend.models import LLMDeploymentRoute, User
 from backend.services.llm_provider.connection_service import LLMConnectionService
 from backend.services.llm_provider.deployment_service import LLMDeploymentService
 from backend.services.llm_provider.runtime_config_service import (
@@ -119,6 +119,17 @@ def test_runtime_config_builds_v2_from_owner_scoped_current_revision(
         display_name="GPT 5.2",
         discovery_source="catalog",
     )
+    route = LLMDeploymentRoute(
+        id=uuid4(),
+        deployment_id=deployment.id,
+        adapter_id="openai_responses",
+        adapter_version="1",
+        api_surface="responses",
+        dialect_policy_id="openai_responses.native_v1",
+        enabled=True,
+    )
+    llm_identity_db.add(route)
+    llm_identity_db.flush()
 
     selection = LLMRuntimeConfigService(
         llm_identity_db
@@ -130,6 +141,7 @@ def test_runtime_config_builds_v2_from_owner_scoped_current_revision(
     )
 
     assert selection.deployment_ref == DeploymentRef(str(deployment.id), 1)
+    assert selection.preferred_route_id == str(route.id)
     with pytest.raises(LLMDeploymentNotFoundError):
         LLMRuntimeConfigService(
             llm_identity_db
