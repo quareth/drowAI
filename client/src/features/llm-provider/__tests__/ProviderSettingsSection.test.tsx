@@ -165,11 +165,8 @@ describe("ProviderSettingsSection", () => {
     expect(screen.getAllByText("Anthropic").length).toBeGreaterThan(0);
     expect(screen.queryByText("Reporting model")).toBeNull();
     expect(screen.queryByText("Workload deployment")).toBeNull();
-    expect(
-      screen.getByRole("button", { name: "Advanced model preferences" }).getAttribute(
-        "aria-expanded",
-      ),
-    ).toBe("false");
+    expect(screen.queryByRole("button", { name: "Advanced model preferences" })).toBeNull();
+    expect(screen.queryByText(/capability evidence|lifecycle|runnability/i)).toBeNull();
     expect(screen.queryByRole("combobox", { name: /selected provider/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /save model selection/i })).toBeNull();
   });

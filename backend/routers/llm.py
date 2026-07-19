@@ -77,6 +77,7 @@ from ..services.llm_provider import (
 from ..services.llm_provider.guarded_transport import GuardedTransport, GuardedTransportError
 from ..services.llm_provider.operation_registry import (
     GPT_OSS_20B_PROVING_PRESET_ID,
+    PUBLIC_GPT_OSS_20B_PRESET_IDS,
     ConnectionOperationRegistry,
     OperationRegistryError,
 )
@@ -228,9 +229,7 @@ def _catalog_connection_provider_rows(
 
     rows: list[dict[str, object]] = []
     deployments = LLMDeploymentService(db)
-    for preset_id in registry.list_connection_preset_ids():
-        if preset_id == GPT_OSS_20B_PROVING_PRESET_ID:
-            continue
+    for preset_id in registry.list_public_gpt_oss_20b_preset_ids():
         try:
             preset = registry.get_connection_preset(preset_id)
         except OperationRegistryError:
@@ -240,6 +239,11 @@ def _catalog_connection_provider_rows(
             owned_deployments = deployments.list_deployments(
                 user_id=user_id,
                 connection_id=connection.id,
+            )
+            owned_deployments = tuple(
+                deployment
+                for deployment in owned_deployments
+                if _deployment_matches_product_preset(preset, deployment)
             )
             if not owned_deployments:
                 models.append(
@@ -272,6 +276,8 @@ def _catalog_connection_provider_rows(
                     deployment=None,
                 )
             )
+        if preset.id in PUBLIC_GPT_OSS_20B_PRESET_IDS:
+            models = [max(models, key=_product_catalog_model_score)]
         rows.append(
             {
                 "id": preset.id,
@@ -304,6 +310,29 @@ def _catalog_connection_provider_rows(
     return rows
 
 
+def _product_catalog_model_score(model: dict[str, object]) -> tuple[int, int, int]:
+    """Prefer the usable configured route when old connection records coexist."""
+
+    connection = model.get("connection")
+    connection_metadata = connection if isinstance(connection, dict) else {}
+    return (
+        int(bool(model.get("runnable"))),
+        int(model.get("deploymentRef") is not None),
+        int(connection_metadata.get("lifecycleState") == "enabled"),
+    )
+
+
+def _deployment_matches_product_preset(preset, deployment) -> bool:
+    """Return whether a persisted route belongs to the shipped GPT-OSS product."""
+
+    if preset.id not in PUBLIC_GPT_OSS_20B_PRESET_IDS:
+        return False
+    if preset.exact_wire_model_id:
+        return deployment.wire_model_id == preset.exact_wire_model_id
+    canonical_model_id = deployment.canonical_model_id or deployment.wire_model_id
+    return canonical_model_id == preset.canonical_model_id
+
+
 def _connection_catalog_model(
     db: Session,
     *,
@@ -331,9 +360,17 @@ def _connection_catalog_model(
         deployment=deployment,
         route=route,
     )
-    wire_model_id = getattr(deployment, "wire_model_id", None)
+    wire_model_id = (
+        getattr(deployment, "wire_model_id", None)
+        or preset.exact_wire_model_id
+        or None
+    )
     model_id = wire_model_id or preset.id
-    label = getattr(deployment, "display_name", None) or preset.display_name
+    label = (
+        f"GPT-OSS 20B via {_connection_provider_label(preset)}"
+        if preset.id in PUBLIC_GPT_OSS_20B_PRESET_IDS
+        else getattr(deployment, "display_name", None) or preset.display_name
+    )
     deployment_ref = _deployment_ref_from_row(deployment) if deployment is not None else None
     return {
         "id": model_id,
@@ -745,6 +782,31 @@ def _managed_connection_secret(
         auth_mode=LLMAuthMode.BEARER,
     )
     return resolved.secret.value if resolved.secret is not None else ""
+
+
+def _product_connection_deployment(
+    db: Session,
+    *,
+    user_id: int,
+    connection,
+    preset,
+):
+    """Return the one intentionally supported model for a product connection."""
+
+    if preset.id not in PUBLIC_GPT_OSS_20B_PRESET_IDS:
+        return None
+    deployments = LLMDeploymentService(db).list_deployments(
+        user_id=user_id,
+        connection_id=connection.id,
+    )
+    return next(
+        (
+            deployment
+            for deployment in deployments
+            if _deployment_matches_product_preset(preset, deployment)
+        ),
+        None,
+    )
 
 
 def _inventory_model_ids_from_response(body: bytes) -> tuple[str, ...]:
@@ -1440,25 +1502,52 @@ async def test_managed_connection(
             api_key=body.api_key,
             purpose="connection-preset-health-check",
         )
+        deployment = _product_connection_deployment(
+            db,
+            user_id=current_user.id,
+            connection=connection,
+            preset=preset,
+        )
+        operation = (
+            LLMConnectionOperation.CAPABILITY_PROBE
+            if deployment is not None
+            else LLMConnectionOperation.HEALTH
+        )
         authorized = LLMConnectionAuthorizer(db).authorize(
             access_context=LLMConnectionAccessContext(
                 authenticated_user_id=current_user.id,
             ),
             connection_id=connection.id,
             expected_revision=int(connection.revision),
-            operation=LLMConnectionOperation.HEALTH,
+            operation=operation,
         )
         GuardedTransport().execute(
-            LLMConnectionOperation.HEALTH,
+            operation,
             provider=preset.id,
             secret=ProviderSecret(provider=preset.id, value=api_key),
             operation_target=authorized.operation_target,
+            **(
+                {
+                    "json_body": {
+                        "model": deployment.wire_model_id,
+                        "messages": [{"role": "user", "content": "ping"}],
+                        "stream": False,
+                        "max_tokens": 1,
+                    }
+                }
+                if deployment is not None
+                else {}
+            ),
         )
         db.commit()
         return {
             "status": "passed",
             "code": "verified",
-            "message": "Connection endpoint verified",
+            "message": (
+                "GPT-OSS 20B is ready"
+                if deployment is not None
+                else "Connection endpoint verified"
+            ),
             "retryable": False,
             "observed_at": None,
             "expires_at": None,

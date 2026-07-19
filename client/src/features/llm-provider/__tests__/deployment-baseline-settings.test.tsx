@@ -1,5 +1,5 @@
 /**
- * Characterizes current provider settings catalog, credential, and reporting flows.
+ * Characterizes the limited provider settings surface.
  */
 import { readFileSync } from "node:fs";
 
@@ -15,27 +15,26 @@ const credentialCardSource = readFileSync(
 );
 
 describe("deployment baseline provider settings", () => {
-  it("uses llm-provider api helpers for catalog and reporting selection", () => {
+  it("loads provider settings from the public model catalog only", () => {
     expect(settingsSource).toContain("fetchLLMModelCatalog");
-    expect(settingsSource).toContain("fetchReportingLLMSelection");
-    expect(settingsSource).toContain("saveReportingLLMSelection");
+    expect(settingsSource).not.toContain("fetchReportingLLMSelection");
+    expect(settingsSource).not.toContain("saveReportingLLMSelection");
     expect(settingsSource).toContain('from "@/features/llm-provider/api"');
     expect(settingsSource).toContain("queryKey: catalogQueryKey");
-    expect(settingsSource).toContain("queryKey: reportingSelectionQueryKey");
   });
 
-  it("renders provider credential cards from backend catalog providers", () => {
-    expect(settingsSource).toContain("providers.map((provider)");
+  it("renders credential cards only for direct providers", () => {
+    expect(settingsSource).toContain("credentialProviders.map((provider)");
     expect(settingsSource).toContain("<ProviderCredentialCard");
     expect(settingsSource).toContain("provider={provider}");
     expect(settingsSource).toContain("key={provider.id}");
   });
 
-  it("saves reporting model selection with backend provider, model, and reasoning payload", () => {
-    expect(settingsSource).toContain("saveReportingSelection.mutate({");
-    expect(settingsSource).toContain("provider: selection.provider");
-    expect(settingsSource).toContain("model: selection.model");
-    expect(settingsSource).toContain("reasoning_effort: reasoningEffort ?? null");
+  it("keeps reporting and deployment selection controls out of settings", () => {
+    expect(settingsSource).not.toContain("Reporting model");
+    expect(settingsSource).not.toContain("Workload deployment");
+    expect(settingsSource).not.toContain("Advanced model preferences");
+    expect(settingsSource).not.toContain("Capability evidence");
   });
 
   it("keeps provider credential mutations behind llm-provider api helpers", () => {

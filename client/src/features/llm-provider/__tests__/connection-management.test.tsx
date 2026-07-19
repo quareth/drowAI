@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * Verifies scalable provider settings separate connection config from deployment selection.
+ * Verifies the intentionally limited GPT-OSS provider settings experience.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
@@ -106,23 +106,23 @@ const managedConnectionRef = {
 const managedCatalog: LLMModelCatalogResponse = {
   providers: [
     {
-      id: "custom_openai_compatible_chat",
-      label: "Custom OpenAI-compatible",
+      id: "ollama_openai_compatible_chat",
+      label: "Ollama",
       capabilities: [],
       available: true,
       selectable: true,
       credential: {
         user_id: 1,
-        provider: "custom_openai_compatible_chat",
+        provider: "ollama_openai_compatible_chat",
         enabled: false,
         has_api_key: true,
       },
-      defaultModel: "team/model",
+      defaultModel: "openai/gpt-oss-20b",
       models: [
         {
-          id: "team/model",
-          canonicalModelId: "custom_openai_compatible_chat",
-          label: "Team Model",
+          id: "gpt-oss:20b",
+          canonicalModelId: "openai/gpt-oss-20b",
+          label: "GPT-OSS 20B via Ollama",
           apiSurface: "chat_completions",
           capabilities: ["chat"],
           contextWindowTokens: 128000,
@@ -137,8 +137,8 @@ const managedCatalog: LLMModelCatalogResponse = {
           deploymentRef: null,
           runnable: false,
           connection: {
-            presetId: "custom_openai_compatible_chat",
-            displayName: "Custom OpenAI-compatible HTTPS endpoint",
+            presetId: "ollama_openai_compatible_chat",
+            displayName: "Ollama-compatible HTTPS endpoint",
             enabled: true,
             authMode: "bearer_api_key",
             userConfigFields: ["display_label", "base_url", "api_key"],
@@ -232,7 +232,7 @@ afterEach(() => {
 });
 
 describe("Connection management", () => {
-  it("deduplicates connection setup cards by preset without collapsing deployment inventory", async () => {
+  it("shows one supported NVIDIA card while ignoring legacy inventory rows", async () => {
     const nimConnectionRef = {
       connection_id: "44444444-4444-4444-8444-444444444444",
       expected_revision: 7,
@@ -323,7 +323,7 @@ describe("Connection management", () => {
             enabled: true,
             has_api_key: true,
           },
-          defaultModel: "meta/llama-3.1-8b-instruct",
+          defaultModel: "openai/gpt-oss-20b",
           models: [
             {
               ...catalog.providers[0].models[0],
@@ -350,10 +350,10 @@ describe("Connection management", () => {
             },
             {
               ...catalog.providers[0].models[0],
-              id: "meta/llama-3.1-70b-instruct",
-              canonicalModelId: "meta/llama-3.1-70b-instruct",
-              exactWireModelId: "meta/llama-3.1-70b-instruct",
-              label: "Llama 3.1 70B via NVIDIA NIM",
+              id: "openai/gpt-oss-20b",
+              canonicalModelId: "openai/gpt-oss-20b",
+              exactWireModelId: "openai/gpt-oss-20b",
+              label: "GPT-OSS 20B via NVIDIA",
               deploymentRef: nimDeploymentRef,
               runnable: true,
               connection: {
@@ -461,27 +461,27 @@ describe("Connection management", () => {
       />,
     );
 
-    expect(await screen.findByText("NVIDIA NIM Endpoint")).toBeTruthy();
-    expect(screen.getAllByText("NVIDIA NIM Endpoint")).toHaveLength(1);
-    expect(screen.getByRole("button", { name: /update nvidia nim endpoint/i })).toBeTruthy();
+    expect(await screen.findByText("NVIDIA")).toBeTruthy();
+    expect(screen.getAllByText("NVIDIA")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: /update nvidia/i })).toBeTruthy();
     expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Anthropic").length).toBeGreaterThan(0);
 
-    fireEvent.click(screen.getByRole("button", { name: "Advanced model preferences" }));
-    expect(screen.getByText("Llama 3.1 70B")).toBeTruthy();
-    expect(screen.getByText("Mixtral 8x7B")).toBeTruthy();
+    expect(screen.queryByText("Llama 3.1 8B via NVIDIA NIM")).toBeNull();
+    expect(screen.queryByText("Mixtral 8x7B via NVIDIA NIM")).toBeNull();
+    expect(screen.queryByText(/capability evidence|lifecycle|runnability/i)).toBeNull();
 
     fireEvent.change(screen.getByLabelText("API key"), {
       target: { value: "sk-nim" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /update nvidia nim endpoint/i }));
+    fireEvent.click(screen.getByRole("button", { name: /update nvidia/i }));
 
     await waitFor(() => {
       expect(mocked.createLLMManagedConnection).toHaveBeenCalledWith(
         "nvidia_nim_openai_compatible_chat",
         expect.objectContaining({
-          wire_model_id: "meta/llama-3.1-70b-instruct",
-          canonical_model_id: null,
+          wire_model_id: "openai/gpt-oss-20b",
+          canonical_model_id: "openai/gpt-oss-20b",
         }),
       );
       expect(mocked.testLLMManagedConnection).toHaveBeenCalledWith(
@@ -501,7 +501,7 @@ describe("Connection management", () => {
     });
   });
 
-  it("deduplicates advanced endpoint cards by preset while preserving distinct presets", async () => {
+  it("deduplicates local route cards while preserving Ollama and vLLM", async () => {
     const duplicateAdvancedCatalog: LLMModelCatalogResponse = {
       providers: [
         {
@@ -518,23 +518,23 @@ describe("Connection management", () => {
         },
         {
           ...managedCatalog.providers[0],
-          id: "team_openai_compatible_chat",
-          label: "Team OpenAI-compatible",
+          id: "vllm_openai_compatible_chat",
+          label: "vLLM",
           credential: {
             ...managedCatalog.providers[0].credential,
-            provider: "team_openai_compatible_chat",
+            provider: "vllm_openai_compatible_chat",
           },
-          defaultModel: "team/hosted-model",
+          defaultModel: "openai/gpt-oss-20b",
           models: [
             {
               ...managedCatalog.providers[0].models[0],
-              id: "team/hosted-model",
-              label: "Team Hosted Model",
-              exactWireModelId: "team/hosted-model",
+              id: "gpt-oss-20b",
+              label: "GPT-OSS 20B via vLLM",
+              exactWireModelId: "gpt-oss-20b",
               connection: {
                 ...managedCatalog.providers[0].models[0].connection!,
-                presetId: "team_openai_compatible_chat",
-                displayName: "Team OpenAI-compatible HTTPS endpoint",
+                presetId: "vllm_openai_compatible_chat",
+                displayName: "vLLM-compatible HTTPS endpoint",
               },
             },
           ],
@@ -552,11 +552,11 @@ describe("Connection management", () => {
     );
 
     fireEvent.click(await screen.findByRole("button", {
-      name: "Advanced/self-hosted endpoints",
+      name: "Local & self-hosted",
     }));
 
-    expect(screen.getAllByText("Custom OpenAI-compatible HTTPS endpoint")).toHaveLength(1);
-    expect(screen.getAllByText("Team OpenAI-compatible HTTPS endpoint")).toHaveLength(1);
+    expect(screen.getAllByText("Ollama")).toHaveLength(1);
+    expect(screen.getAllByText("vLLM")).toHaveLength(1);
   });
 
   it("separates hosted API-key setup from advanced endpoint setup", async () => {
@@ -727,15 +727,12 @@ describe("Connection management", () => {
 
     expect(await screen.findByRole("heading", { name: "AI providers" })).toBeTruthy();
     expect(screen.getAllByRole("heading", { level: 3 })[0].textContent).toBe("AI providers");
+    expect(screen.getByRole("heading", { name: "Open models" })).toBeTruthy();
     expect(screen.queryByText("Reporting model")).toBeNull();
     expect(screen.queryByText("Workload deployment")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Advanced model preferences" })).toBeNull();
     expect(
-      screen.getByRole("button", { name: "Advanced model preferences" }).getAttribute(
-        "aria-expanded",
-      ),
-    ).toBe("false");
-    expect(
-      screen.getByRole("button", { name: "Advanced/self-hosted endpoints" }).getAttribute(
+      screen.getByRole("button", { name: "Local & self-hosted" }).getAttribute(
         "aria-expanded",
       ),
     ).toBe("false");
@@ -743,7 +740,8 @@ describe("Connection management", () => {
     expect(screen.getByText("Anthropic")).toBeTruthy();
     expect(screen.getByText("Usage is billed by Anthropic for the selected model.")).toBeTruthy();
     expect(screen.getByText("Usage is billed by OpenAI for the selected model.")).toBeTruthy();
-    expect(screen.getAllByText("Hugging Face Router").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Hugging Face").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("NVIDIA").length).toBeGreaterThan(0);
     expect(screen.getByText("Credits and pay-as-you-go usage apply.")).toBeTruthy();
     expect(screen.getByText("Free development and prototyping access has usage limits.")).toBeTruthy();
     expect(screen.queryByText("Custom OpenAI-compatible HTTPS endpoint")).toBeNull();
@@ -754,6 +752,7 @@ describe("Connection management", () => {
     expect(screen.queryByRole("button", { name: /refresh inventory/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /^enable$/i })).toBeNull();
     expect(screen.queryByText(/Verification:/)).toBeNull();
+    expect(screen.queryByText(/capability evidence|lifecycle|runnability|deployment/i)).toBeNull();
     expect(screen.queryByText(/wire|canonical|adapter|provenance/i)).toBeNull();
     expect(screen.queryByText(/\$0|free production/i)).toBeNull();
   });
@@ -854,7 +853,7 @@ describe("Connection management", () => {
     mocked.createLLMManagedConnection.mockResolvedValue({
       lifecycleState: "draft",
       connectionRef: managedConnectionRef,
-      deploymentRef: null,
+      deploymentRef,
       verification: null,
       runnability: {
         status: "not_created",
@@ -920,7 +919,7 @@ describe("Connection management", () => {
     fireEvent.change(screen.getByLabelText("API key"), {
       target: { value: "sk-hf" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /connect hugging face router/i }));
+    fireEvent.click(screen.getByRole("button", { name: /connect hugging face/i }));
 
     await waitFor(() => {
       expect(mocked.createLLMManagedConnection).toHaveBeenCalledWith(
@@ -939,13 +938,7 @@ describe("Connection management", () => {
           connection_ref: managedConnectionRef,
         },
       );
-      expect(mocked.refreshLLMManagedConnectionInventory).toHaveBeenCalledWith(
-        "huggingface_openai_compatible_chat",
-        {
-          api_key: "sk-hf",
-          connection_ref: managedConnectionRef,
-        },
-      );
+      expect(mocked.refreshLLMManagedConnectionInventory).not.toHaveBeenCalled();
       expect(mocked.enableLLMManagedConnection).toHaveBeenCalledWith(
         "huggingface_openai_compatible_chat",
         {
@@ -956,14 +949,7 @@ describe("Connection management", () => {
     });
   });
 
-  it("keeps connection configuration separate from workload deployment selection", async () => {
-    mocked.saveLLMDeploymentSelection.mockResolvedValue({
-      provider: "metadata-provider",
-      model: "metadata/model",
-      deploymentRef,
-      selectionStatus: { status: "selectable", selectable: true, runnable: true },
-    });
-
+  it("does not expose internal deployment and capability controls", async () => {
     renderWithQueryClient(
       <ProviderSettingsSection
         queryEnabled
@@ -972,28 +958,15 @@ describe("Connection management", () => {
       />,
     );
 
-    expect(await screen.findByRole("button", { name: "Advanced model preferences" })).toBeTruthy();
+    await waitFor(() => {
+      expect(mocked.fetchLLMModelCatalog).toHaveBeenCalled();
+    });
+    expect(screen.queryByRole("button", { name: "Advanced model preferences" })).toBeNull();
     expect(screen.queryByText("Reporting model")).toBeNull();
     expect(screen.queryByText("Workload deployment")).toBeNull();
     expect(screen.queryByPlaceholderText("Search deployments")).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Advanced model preferences" }));
-
-    expect(screen.getByText("Reporting model")).toBeTruthy();
-    expect(screen.getByText("Workload deployment")).toBeTruthy();
-    expect(screen.queryByLabelText("API key")).toBeNull();
-    expect(screen.queryByLabelText(/endpoint|base url|headers/i)).toBeNull();
-    expect(screen.queryByText(/marketplace|fallback|tenant admin/i)).toBeNull();
-    expect(screen.getByText("Pricing: unavailable")).toBeTruthy();
-    expect(screen.queryByText("$0")).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: /select metadata model/i }));
-
-    await waitFor(() => {
-      expect(mocked.saveLLMDeploymentSelection).toHaveBeenCalledWith({
-        deployment_ref: deploymentRef,
-      });
-    });
+    expect(screen.queryByText(/capability evidence|lifecycle|runnability/i)).toBeNull();
+    expect(screen.queryByText(/context:|output:|pricing:/i)).toBeNull();
   });
 
   it("keeps advanced endpoint fields collapsed until explicitly opened", async () => {
@@ -1008,27 +981,27 @@ describe("Connection management", () => {
     );
 
     const disclosure = await screen.findByRole("button", {
-      name: "Advanced/self-hosted endpoints",
+      name: "Local & self-hosted",
     });
     expect(disclosure.getAttribute("aria-expanded")).toBe("false");
-    expect(screen.queryByText("Custom OpenAI-compatible HTTPS endpoint")).toBeNull();
+    expect(screen.queryByText("Ollama")).toBeNull();
     expect(screen.queryByLabelText("Base URL")).toBeNull();
     expect(screen.queryByLabelText("Model name")).toBeNull();
 
     fireEvent.click(disclosure);
 
     expect(disclosure.getAttribute("aria-expanded")).toBe("true");
-    expect(screen.getByText("Custom OpenAI-compatible HTTPS endpoint")).toBeTruthy();
+    expect(screen.getByText("Ollama")).toBeTruthy();
     expect(screen.getByLabelText("Base URL")).toBeTruthy();
     expect(screen.getByLabelText("API key")).toBeTruthy();
     expect(screen.getByLabelText("Model name")).toBeTruthy();
     expect(screen.queryByLabelText("Display name")).toBeNull();
     expect(screen.queryByRole("button", { name: /create draft/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /refresh inventory/i })).toBeNull();
-    expect(screen.getByRole("button", { name: /update custom openai-compatible https endpoint/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /update ollama/i })).toBeTruthy();
   });
 
-  it("does not submit preset placeholder canonical IDs for custom connections", async () => {
+  it("submits the GPT-OSS identity with a self-hosted serving model name", async () => {
     mocked.fetchLLMModelCatalog.mockResolvedValue(managedCatalog);
     mocked.createLLMManagedConnection.mockResolvedValue({
       lifecycleState: "draft",
@@ -1070,7 +1043,7 @@ describe("Connection management", () => {
     );
 
     fireEvent.click(await screen.findByRole("button", {
-      name: "Advanced/self-hosted endpoints",
+      name: "Local & self-hosted",
     }));
     fireEvent.change(await screen.findByLabelText("API key"), {
       target: { value: "sk-managed" },
@@ -1081,13 +1054,14 @@ describe("Connection management", () => {
     fireEvent.change(screen.getByLabelText("Model name"), {
       target: { value: "team/model" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /update custom openai-compatible https endpoint/i }));
+    fireEvent.click(screen.getByRole("button", { name: /update ollama/i }));
 
     await waitFor(() => {
       expect(mocked.createLLMManagedConnection).toHaveBeenCalledWith(
-        "custom_openai_compatible_chat",
+        "ollama_openai_compatible_chat",
         expect.objectContaining({
-          canonical_model_id: null,
+          canonical_model_id: "openai/gpt-oss-20b",
+          wire_model_id: "team/model",
         }),
       );
     });

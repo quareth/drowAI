@@ -321,7 +321,7 @@ describe("ProviderModelMenu", () => {
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Select model" }));
 
-    const openAIPublisher = await screen.findByText("OpenAI");
+    const openAIPublisher = await screen.findByText("Open models");
     expect(screen.queryByText("Hugging Face")).toBeNull();
     expect(screen.queryByText("NVIDIA NIM")).toBeNull();
 
@@ -340,7 +340,7 @@ describe("ProviderModelMenu", () => {
     fireEvent.pointerMove(modelItem, { pointerType: "mouse" });
     fireEvent.mouseMove(modelItem);
 
-    fireEvent.click(await screen.findByText("NVIDIA NIM"));
+    fireEvent.click(await screen.findByText("Run with NVIDIA"));
 
     await waitFor(() => {
       expect(onModelChange).toHaveBeenCalledWith({

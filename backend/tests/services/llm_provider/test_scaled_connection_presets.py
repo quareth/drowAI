@@ -40,6 +40,12 @@ def test_scaled_presets_are_reviewed_data_on_existing_openai_compatible_protocol
 
     assert registry.list_proving_preset_ids() == (GPT_OSS_20B_PROVING_PRESET_ID,)
     assert set(registry.list_connection_preset_ids()) >= expected_preset_ids
+    assert registry.list_public_gpt_oss_20b_preset_ids() == (
+        NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+        HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+        OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
+        VLLM_OPENAI_COMPATIBLE_PRESET_ID,
+    )
 
     presets = [
         registry.get_connection_preset(preset_id)
@@ -66,6 +72,15 @@ def test_scaled_presets_are_reviewed_data_on_existing_openai_compatible_protocol
         HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
         NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
     }
+
+    nvidia = registry.get_connection_preset(NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID)
+    assert nvidia.canonical_model_id == "openai/gpt-oss-20b"
+    assert nvidia.exact_wire_model_id == "openai/gpt-oss-20b"
+    huggingface = registry.get_connection_preset(
+        HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID
+    )
+    assert huggingface.canonical_model_id == "openai/gpt-oss-20b"
+    assert huggingface.exact_wire_model_id == "openai/gpt-oss-20b:fireworks-ai"
     assert {
         preset.id for preset in presets if preset.endpoint_config_field == "base_url"
     } == {

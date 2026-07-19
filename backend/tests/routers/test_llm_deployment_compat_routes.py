@@ -427,6 +427,80 @@ def test_managed_connection_create_registers_custom_model_through_inventory_serv
         app.dependency_overrides.clear()
 
 
+def test_nvidia_connection_wires_only_gpt_oss_and_becomes_runnable(
+    monkeypatch,
+) -> None:
+    """The NVIDIA Build key flow verifies and enables the one shipped model."""
+
+    user = _user("llm-nvidia-gpt-oss")
+    transport_calls: list[dict] = []
+
+    class RecordingGuardedTransport:
+        def execute(self, operation, **kwargs):
+            transport_calls.append({"operation": operation, **kwargs})
+            return GuardedHTTPResponse(
+                status_code=200,
+                body=b'{"choices":[{"message":{"content":"pong"}}]}',
+                audit_id="audit-nvidia-gpt-oss",
+            )
+
+    monkeypatch.setattr(llm_routes, "GuardedTransport", RecordingGuardedTransport)
+    client, app = _client(user)
+    try:
+        created = client.post(
+            (
+                "/api/llm/connection-presets/"
+                f"{NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID}/connection"
+            ),
+            json={"api_key": "nvapi-test"},
+        )
+        assert created.status_code == 200, created.text
+        created_payload = created.json()
+        assert created_payload["deployment_ref"] is not None
+
+        tested = client.post(
+            (
+                "/api/llm/connection-presets/"
+                f"{NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID}/connection/test"
+            ),
+            json={
+                "connection_ref": created_payload["connection_ref"],
+            },
+        )
+        assert tested.status_code == 200, tested.text
+        assert tested.json()["status"] == "passed"
+        assert transport_calls[-1]["operation"] == LLMConnectionOperation.CAPABILITY_PROBE
+        assert transport_calls[-1]["provider"] == NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID
+        assert transport_calls[-1]["json_body"]["model"] == "openai/gpt-oss-20b"
+
+        enabled = client.post(
+            (
+                "/api/llm/connection-presets/"
+                f"{NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID}/connection/enable"
+            ),
+            json={
+                "connection_ref": created_payload["connection_ref"],
+                "deployment_ref": created_payload["deployment_ref"],
+            },
+        )
+        assert enabled.status_code == 200, enabled.text
+
+        catalog = client.get("/api/llm/models")
+        assert catalog.status_code == 200, catalog.text
+        nvidia = next(
+            provider
+            for provider in catalog.json()["providers"]
+            if provider["id"] == NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID
+        )
+        assert [model["id"] for model in nvidia["models"]] == [
+            "openai/gpt-oss-20b"
+        ]
+        assert nvidia["models"][0]["canonicalModelId"] == "openai/gpt-oss-20b"
+        assert nvidia["models"][0]["runnable"] is True
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_managed_connection_create_normalizes_explicit_gpt_oss_canonical_alias() -> None:
     """Managed creation stores the one canonical GPT-OSS identity for aliases."""
 
@@ -461,8 +535,8 @@ def test_managed_connection_create_normalizes_explicit_gpt_oss_canonical_alias()
         app.dependency_overrides.clear()
 
 
-def test_models_catalog_keeps_explicit_gpt_oss_and_generic_custom_identity_separate() -> None:
-    """Catalog projection groups only explicitly canonical GPT-OSS deployments."""
+def test_models_catalog_exposes_supported_gpt_oss_but_hides_generic_custom_models() -> None:
+    """The product catalog stays narrow without deleting generic foundations."""
 
     user = _user("llm-gpt-oss-canonical-grouping")
     db = SessionLocal()
@@ -519,26 +593,18 @@ def test_models_catalog_keeps_explicit_gpt_oss_and_generic_custom_identity_separ
             for provider in providers
             if provider["id"] == HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID
         )
-        custom = next(
-            provider
+        assert all(
+            provider["id"] != CUSTOM_OPENAI_COMPATIBLE_PRESET_ID
             for provider in providers
-            if provider["id"] == CUSTOM_OPENAI_COMPATIBLE_PRESET_ID
         )
         hf_model = next(
             model
             for model in hf["models"]
             if model["deploymentRef"]["deployment_id"] == hf_deployment_id
         )
-        custom_model = next(
-            model
-            for model in custom["models"]
-            if model["deploymentRef"]["deployment_id"] == custom_deployment_id
-        )
-
         assert hf_model["canonicalModelId"] == "openai/gpt-oss-20b"
         assert hf_model["exactWireModelId"] == "openai/gpt-oss-20b:fireworks-ai"
-        assert custom_model["canonicalModelId"] == "team/chat-model"
-        assert custom_model["canonicalModelId"] != "openai/gpt-oss-20b"
+        assert custom_deployment_id
     finally:
         app.dependency_overrides.clear()
 
@@ -583,7 +649,11 @@ def test_managed_connection_refresh_uses_guarded_inventory_service(
             transport_calls.append({"operation": operation, **kwargs})
             return GuardedHTTPResponse(
                 status_code=200,
-                body=b'{"data":[{"id":"hf/refreshed-a"},{"id":"hf/refreshed-b"}]}',
+                body=(
+                    b'{"data":['
+                    b'{"id":"openai/gpt-oss-20b:fireworks-ai"},'
+                    b'{"id":"hf/unrelated-model"}]}'
+                ),
                 audit_id="audit-refresh",
             )
 
@@ -610,15 +680,15 @@ def test_managed_connection_refresh_uses_guarded_inventory_service(
             if item["id"] == HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID
         )
         model_ids = {model["id"] for model in hf["models"]}
-        assert {"hf/refreshed-a", "hf/refreshed-b"}.issubset(model_ids)
+        assert model_ids == {"openai/gpt-oss-20b:fireworks-ai"}
         assert "hf-secret" not in str(response.json())
         assert "hf-secret" not in str(catalog.json())
     finally:
         app.dependency_overrides.clear()
 
 
-def test_models_catalog_exposes_scaled_connection_deployments_and_schema_fields() -> None:
-    """Managed catalog and selection share credential/capability runnability."""
+def test_hidden_custom_connection_keeps_internal_selection_safety_boundary() -> None:
+    """Hidden generic routes retain their capability-gated internal foundation."""
 
     user = _user("llm-scaled-catalog")
     db = SessionLocal()
@@ -688,28 +758,11 @@ def test_models_catalog_exposes_scaled_connection_deployments_and_schema_fields(
         catalog = client.get("/api/llm/models")
 
         assert catalog.status_code == 200, catalog.text
-        custom = next(
-            item
+        assert all(
+            item["id"] != CUSTOM_OPENAI_COMPATIBLE_PRESET_ID
             for item in catalog.json()["providers"]
-            if item["id"] == CUSTOM_OPENAI_COMPATIBLE_PRESET_ID
         )
-        model = next(item for item in custom["models"] if item["id"] == "team/tool-model")
-        assert model["deploymentRef"] == {
-            "deployment_id": deployment_id,
-            "expected_revision": 1,
-        }
-        assert "deployment_ref" not in model
-        assert model["runnable"] is False
-        assert model["pricingStatus"] == "unavailable"
-        assert model["connection"]["presetId"] == CUSTOM_OPENAI_COMPATIBLE_PRESET_ID
-        assert model["connection"]["lifecycleState"] == "enabled"
-        assert model["connection"]["runnability"]["status"] == "capability_unknown"
-        assert {field["name"] for field in model["connection"]["configFields"]} >= {
-            "api_key",
-            "base_url",
-        }
-        assert "endpoint_url" not in str(model).lower()
-        assert "sk-team" not in str(model)
+        assert "sk-team" not in str(catalog.json())
 
         rejected = client.put(
             "/api/llm/selection",
@@ -750,17 +803,6 @@ def test_models_catalog_exposes_scaled_connection_deployments_and_schema_fields(
 
     client, app = _client(user)
     try:
-        catalog = client.get("/api/llm/models")
-        assert catalog.status_code == 200, catalog.text
-        custom = next(
-            item
-            for item in catalog.json()["providers"]
-            if item["id"] == CUSTOM_OPENAI_COMPATIBLE_PRESET_ID
-        )
-        model = next(item for item in custom["models"] if item["id"] == "team/tool-model")
-        assert model["runnable"] is True
-        assert model["connection"]["runnability"]["status"] == "runnable"
-
         accepted = client.put(
             "/api/llm/selection",
             json={

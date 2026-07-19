@@ -28,6 +28,7 @@ from .effective_profile_service import EffectiveProfileService
 from .guarded_transport import GuardedTransport, GuardedTransportError
 from .operation_registry import (
     GPT_OSS_20B_PROVING_PRESET_ID,
+    PUBLIC_GPT_OSS_20B_PRESET_IDS,
     ConnectionOperationRegistry,
     OperationRegistryError,
 )
@@ -342,6 +343,12 @@ class LLMInventoryService:
             operation=LLMConnectionOperation.INVENTORY,
         )
 
+        discovered_model_ids = _product_inventory_model_ids(
+            connection_preset_id=connection.connection_preset_id,
+            discovered_model_ids=discovered_model_ids,
+            registry=self._operation_registry,
+        )
+
         deployments: list[LLMModelDeployment] = []
         for wire_model_id in _unique_wire_model_ids(discovered_model_ids):
             deployment = _deployment_by_wire_model(
@@ -566,6 +573,27 @@ def _usage(payload: dict[str, Any] | None) -> dict[str, int] | None:
             return None
         values[key] = value
     return values
+
+
+def _product_inventory_model_ids(
+    *,
+    connection_preset_id: str,
+    discovered_model_ids: tuple[str, ...],
+    registry: ConnectionOperationRegistry,
+) -> tuple[str, ...]:
+    """Keep provider discovery bounded to intentionally shipped open models."""
+
+    if connection_preset_id not in PUBLIC_GPT_OSS_20B_PRESET_IDS:
+        return discovered_model_ids
+    preset = registry.get_connection_preset(connection_preset_id)
+    if not preset.exact_wire_model_id:
+        return discovered_model_ids
+    exact_model = preset.exact_wire_model_id
+    if exact_model not in discovered_model_ids:
+        raise LLMDeploymentValidationError(
+            "GPT-OSS 20B is not available from this provider connection"
+        )
+    return (exact_model,)
 
 
 def _unique_wire_model_ids(values: tuple[str, ...]) -> tuple[str, ...]:

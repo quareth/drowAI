@@ -39,12 +39,14 @@ def test_inventory_refresh_records_connection_availability_without_catalog_mutat
         user_id=owner.id,
         connection_id=connection.id,
         expected_connection_revision=1,
-        discovered_model_ids=("hf/Org-Model-A", "hf/Org-Model-B"),
+        discovered_model_ids=(
+            "openai/gpt-oss-20b:fireworks-ai",
+            "hf/Org-Model-A",
+        ),
     )
 
     assert tuple(deployment.wire_model_id for deployment in deployments) == (
-        "hf/Org-Model-A",
-        "hf/Org-Model-B",
+        "openai/gpt-oss-20b:fireworks-ai",
     )
     assert all(deployment.discovery_source == "inventory" for deployment in deployments)
     assert all(deployment.availability_state == "available" for deployment in deployments)
@@ -53,7 +55,12 @@ def test_inventory_refresh_records_connection_availability_without_catalog_mutat
     assert observations == []
     assert require_model_profile(ProviderModelRef(OPENAI_PROVIDER_ID, "gpt-5.2")) is before
     with pytest.raises(LLMProfileNotFoundError):
-        require_model_profile(ProviderModelRef(HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID, "hf/org-model-a"))
+        require_model_profile(
+            ProviderModelRef(
+                HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+                "openai/gpt-oss-20b:fireworks-ai",
+            )
+        )
 
 
 def test_inventory_refresh_is_owner_and_revision_authorized(

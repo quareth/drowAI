@@ -19,7 +19,10 @@ from backend.models import LLMDeploymentRoute, LLMInferenceConnection, LLMModelD
 
 from .deployment_service import LLMDeploymentService
 from .effective_profile_service import EffectiveProfileService
-from .operation_registry import ConnectionOperationRegistry
+from .operation_registry import (
+    PUBLIC_GPT_OSS_20B_PRESET_IDS,
+    ConnectionOperationRegistry,
+)
 from .types import (
     LLMAuthMode,
     LLMConnectionCredentialRef,
@@ -189,7 +192,10 @@ class LLMSelectionDeploymentResolver:
                 runnable=False,
                 reason="Deployment connection is not enabled",
             )
-        if is_connection_preset:
+        if (
+            is_connection_preset
+            and connection.connection_preset_id not in PUBLIC_GPT_OSS_20B_PRESET_IDS
+        ):
             decision = EffectiveProfileService(self._db).classify_runnability(
                 deployment=target.deployment,
                 route=target.route,

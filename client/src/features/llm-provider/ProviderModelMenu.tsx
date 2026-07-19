@@ -1,5 +1,5 @@
 /**
- * Publisher-first chat model picker backed by the public LLM catalog.
+ * Product-grouped chat model picker backed by the public LLM catalog.
  *
  * Owns model/deployment menu rendering and capability-aware reasoning effort
  * choices without duplicating provider-specific model policy in the frontend.
@@ -197,6 +197,9 @@ function canonicalPublisherKey(
   provider: LLMCatalogProvider,
   model: LLMCatalogModel,
 ): string {
+  if (model.canonicalModelId?.trim().toLowerCase() === "openai/gpt-oss-20b") {
+    return "open_models";
+  }
   return splitCanonicalModelId(model.canonicalModelId)?.publisher ?? provider.id;
 }
 
@@ -210,6 +213,7 @@ function canonicalPublisherLabel(
   }
   const knownPublisherLabels: Record<string, string> = {
     anthropic: "Anthropic",
+    open_models: "Open models",
     openai: "OpenAI",
   };
   return knownPublisherLabels[publisherKey.toLowerCase()] ?? titleCaseIdentifier(publisherKey);
@@ -261,7 +265,16 @@ function deploymentChoiceLabel(
   if (model.proving?.enabled) {
     return "GPT-OSS proving";
   }
-  return provider.label;
+  const productProviderLabels: Record<string, string> = {
+    huggingface_openai_compatible_chat: "Hugging Face",
+    nvidia_nim_openai_compatible_chat: "NVIDIA",
+    ollama_openai_compatible_chat: "Ollama",
+    vllm_openai_compatible_chat: "vLLM",
+  };
+  const providerLabel = productProviderLabels[provider.id] ?? provider.label;
+  return model.canonicalModelId?.trim().toLowerCase() === "openai/gpt-oss-20b"
+    ? `Run with ${providerLabel}`
+    : providerLabel;
 }
 
 function selectedModelDisplayLabel(
@@ -292,7 +305,10 @@ function renderModelGroup(
   selectedReasoningEffort: VisibleLLMReasoningEffort,
   onModelChange: ProviderModelMenuProps["onModelChange"],
 ) {
-  if (group.choices.length === 1) {
+  const deploymentBacked = group.choices.some((choice) =>
+    Boolean(choice.selection.deploymentRef),
+  );
+  if (group.choices.length === 1 && !deploymentBacked) {
     return renderChoice(
       { ...group.choices[0], label: group.label },
       selectedSelection,

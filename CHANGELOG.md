@@ -21,14 +21,12 @@ Target version: `0.1.0`.
   structured tool results, and task-scoped execution state.
 - Provider-neutral task execution through local Docker or managed runners,
   including per-task Kali runtimes and isolated workspaces.
-- GPT-OSS 20B appears in the curated LLM catalog with conservative capability
-  metadata, unavailable pricing, one code-owned proving connection preset, and
-  bounded health, capability verification, opt-in endpoint proof, deployment-aware
-  runtime routing, and a metadata-driven proving UI.
+- GPT-OSS 20B appears in the curated LLM catalog with reviewed routes for
+  NVIDIA, Hugging Face, Ollama, and vLLM, plus deployment-aware runtime routing.
 - Deployment-aware LLM management now uses reviewed catalog and connection
   preset manifests, supports scaled compatible connection/deployment inventory
   with custom model registration, service-authorized refresh, usage/pricing
-  attribution, and searchable deployment selection UI.
+  attribution, and explicit deployment selection contracts.
 - GPT-OSS 20B deployment choices now appear under one canonical model entry
   while preserving explicit provider-specific deployment selection.
 - Local development and deployment workflows, architecture documentation,
@@ -38,14 +36,16 @@ Target version: `0.1.0`.
 
 - Dependency security updates refresh the frontend and backend toolchains,
   replace python-jose with PyJWT, and require Node.js 20.19 or newer.
-- The chat model selector now groups deployment-aware LLMs by publisher first,
-  with GPT-OSS 20B shown once under OpenAI and hosted serving operators shown
-  only as explicit deployment choices.
+- The chat model selector now groups GPT-OSS 20B under Open models and shows
+  each ready serving route as an explicit Run with choice.
+- Provider settings now expose only direct credentials and the intentionally
+  supported GPT-OSS 20B routes; deployment, capability, lifecycle, and proving
+  internals are no longer shown in the normal settings experience.
 - The canonical local launcher is now `scripts/local_dev.py`; startup can
   interactively provision its PostgreSQL login role, database, and pgvector
   extension before running migrations.
 
 ### Fixed
 
-- Provider settings now render one setup card per LLM connection preset instead
-  of duplicating hosted endpoint cards for every model in the catalog.
+- Provider settings now render one setup card per supported GPT-OSS route
+  instead of duplicating cards for provider inventory models.

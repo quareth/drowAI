@@ -361,12 +361,16 @@ export function ConnectionSettingsPanel({
       });
       setVerification(verified);
 
-      const refreshed = await refreshLLMManagedConnectionInventory(connection.presetId, {
-        api_key: apiKey.trim() || null,
-        connection_ref: nextConnectionRef,
-      });
-      nextConnectionRef = refreshed.connectionRef ?? nextConnectionRef;
-      nextDeploymentRef = refreshed.deploymentRef ?? nextDeploymentRef;
+      let connectionStatus = created;
+      if (!nextDeploymentRef) {
+        const refreshed = await refreshLLMManagedConnectionInventory(connection.presetId, {
+          api_key: apiKey.trim() || null,
+          connection_ref: nextConnectionRef,
+        });
+        connectionStatus = refreshed;
+        nextConnectionRef = refreshed.connectionRef ?? nextConnectionRef;
+        nextDeploymentRef = refreshed.deploymentRef ?? nextDeploymentRef;
+      }
 
       if (verified.status === "passed" && nextConnectionRef && nextDeploymentRef) {
         return enableLLMManagedConnection(connection.presetId, {
@@ -374,14 +378,16 @@ export function ConnectionSettingsPanel({
           deployment_ref: nextDeploymentRef,
         });
       }
-      return { ...refreshed, verification: verified };
+      return { ...connectionStatus, verification: verified };
     },
     onSuccess: async (status) => {
       applyConnectionStatus(status);
       await invalidateCatalog();
       onSuccess(
         `${connection.displayName} connected`,
-        "The connection is ready for model selection when a deployment is available.",
+        runnable || status.runnability?.runnable
+          ? "GPT-OSS 20B is ready."
+          : "The connection was saved, but GPT-OSS 20B is not ready yet.",
       );
     },
     onError: (error) => onError(
@@ -396,7 +402,7 @@ export function ConnectionSettingsPanel({
     refreshMutation.isPending ||
     enableMutation.isPending ||
     connectMutation.isPending;
-  const statusLabel = runnable || connectionRef ? "Connected" : "Not connected";
+  const statusLabel = runnable ? "Ready" : connectionRef ? "Connected" : "Not connected";
 
   return (
     <Card className="border-slate-700 bg-slate-900">
@@ -539,6 +545,17 @@ function managedCanonicalModelId(
   connection: LLMConnectionMetadata | LLMProvingMetadata,
 ): string | null {
   const canonical = model.canonicalModelId?.trim();
+  if (
+    canonical === "openai/gpt-oss-20b"
+    && [
+      "huggingface_openai_compatible_chat",
+      "nvidia_nim_openai_compatible_chat",
+      "ollama_openai_compatible_chat",
+      "vllm_openai_compatible_chat",
+    ].includes(connection.presetId)
+  ) {
+    return canonical;
+  }
   if (!canonical || canonical === model.id || canonical === connection.presetId) {
     return null;
   }

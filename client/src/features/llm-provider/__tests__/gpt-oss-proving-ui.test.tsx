@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 /**
- * Verifies the metadata-driven GPT-OSS proving UI flow.
+ * Verifies internal GPT-OSS proving metadata is not exposed in Settings.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -138,36 +138,7 @@ afterEach(() => {
 });
 
 describe("GPT-OSS proving UI", () => {
-  it("runs the metadata-driven proving lifecycle and selects the deployment", async () => {
-    mocked.createLLMProvingConnection.mockResolvedValue({
-      lifecycleState: "draft",
-      connectionRef: catalog.providers[0].models[0].proving?.connectionRef,
-      deploymentRef,
-    });
-    mocked.testLLMProvingConnection.mockResolvedValue({
-      status: "passed",
-      code: "verified",
-      message: "GPT-OSS proving endpoint verified.",
-      retryable: false,
-      modelPresent: true,
-      usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
-    });
-    mocked.enableLLMProvingConnection.mockResolvedValue({
-      lifecycleState: "enabled",
-      connectionRef: catalog.providers[0].models[0].proving?.connectionRef,
-      deploymentRef,
-      runnability: {
-        status: "runnable",
-        selectable: true,
-        runnable: true,
-      },
-    });
-    mocked.saveLLMDeploymentSelection.mockResolvedValue({
-      provider: "registered-provider",
-      model: "gpt-oss-20b",
-      deploymentRef,
-    });
-
+  it("ignores proving controls even when legacy metadata and query flags exist", async () => {
     renderWithQueryClient(
       <ProviderSettingsSection
         queryEnabled
@@ -176,62 +147,17 @@ describe("GPT-OSS proving UI", () => {
       />,
     );
 
-    expect(
-      (await screen.findAllByText("GPT-OSS 20B OpenAI-compatible proving")).length,
-    ).toBeGreaterThan(0);
-    expect(screen.getByText("Verification: not_tested")).toBeTruthy();
+    await waitFor(() => {
+      expect(mocked.fetchLLMModelCatalog).toHaveBeenCalled();
+    });
+    expect(screen.queryByText("GPT-OSS 20B OpenAI-compatible proving")).toBeNull();
+    expect(screen.queryByText("Verification: not_tested")).toBeNull();
     expect(screen.queryByText("Context: 128000 tokens")).toBeNull();
     expect(screen.queryByText("Pricing: unavailable")).toBeNull();
-    expect(screen.queryByRole("button", { name: /select gpt-oss 20b/i })).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "Advanced model preferences" }));
-    expect(screen.getByText("Context: 128000 tokens")).toBeTruthy();
-    expect(screen.getByText("Pricing: unavailable")).toBeTruthy();
-    expect(screen.queryByText("$0")).toBeNull();
-    expect(screen.queryByLabelText(/endpoint/i)).toBeNull();
-    expect(screen.queryByText(/marketplace/i)).toBeNull();
-    expect(
-      (screen.getByRole("button", { name: /select gpt-oss 20b/i }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true);
-
-    fireEvent.change(screen.getByLabelText("Proving API Key"), {
-      target: { value: "sk-proving" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: /create draft/i }));
-    await waitFor(() => {
-      expect(mocked.createLLMProvingConnection).toHaveBeenCalledWith(
-        "proving-preset",
-        { api_key: "sk-proving" },
-      );
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: /test proving/i }));
-    await waitFor(() => {
-      expect(mocked.testLLMProvingConnection).toHaveBeenCalledWith(
-        "proving-preset",
-        {
-          api_key: "sk-proving",
-          connection_ref: catalog.providers[0].models[0].proving?.connectionRef,
-          deployment_ref: deploymentRef,
-        },
-      );
-    });
-    fireEvent.click(screen.getByRole("button", { name: /enable/i }));
-    await waitFor(() => {
-      expect(mocked.enableLLMProvingConnection).toHaveBeenCalledWith(
-        "proving-preset",
-        {
-          connection_ref: catalog.providers[0].models[0].proving?.connectionRef,
-          deployment_ref: deploymentRef,
-        },
-      );
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: /select gpt-oss 20b/i }));
-    await waitFor(() => {
-      expect(mocked.saveLLMDeploymentSelection).toHaveBeenCalledWith({
-        deployment_ref: deploymentRef,
-      });
-    });
+    expect(screen.queryByText(/capability evidence|lifecycle|runnability/i)).toBeNull();
+    expect(screen.queryByRole("button", { name: /advanced model preferences/i })).toBeNull();
+    expect(mocked.createLLMProvingConnection).not.toHaveBeenCalled();
+    expect(mocked.testLLMProvingConnection).not.toHaveBeenCalled();
+    expect(mocked.enableLLMProvingConnection).not.toHaveBeenCalled();
   });
 });

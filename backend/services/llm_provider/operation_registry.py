@@ -31,6 +31,12 @@ NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID = "nvidia_nim_openai_compatible_chat"
 OLLAMA_OPENAI_COMPATIBLE_PRESET_ID = "ollama_openai_compatible_chat"
 VLLM_OPENAI_COMPATIBLE_PRESET_ID = "vllm_openai_compatible_chat"
 CUSTOM_OPENAI_COMPATIBLE_PRESET_ID = "custom_openai_compatible_chat"
+PUBLIC_GPT_OSS_20B_PRESET_IDS = (
+    NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+    HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+    OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
+    VLLM_OPENAI_COMPATIBLE_PRESET_ID,
+)
 GPT_OSS_20B_PROVING_E2E_ENV = "DROWAI_GPT_OSS_20B_PROVING_E2E"
 GPT_OSS_20B_PROVING_BASE_URL_ENV = "DROWAI_GPT_OSS_20B_PROVING_BASE_URL"
 GPT_OSS_20B_PROVING_API_KEY_ENV = "DROWAI_GPT_OSS_20B_PROVING_API_KEY"
@@ -388,6 +394,15 @@ class ConnectionOperationRegistry:
         """Return the complete sorted reviewed connection preset vocabulary."""
 
         return tuple(sorted(_CONNECTION_PRESETS))
+
+    def list_public_gpt_oss_20b_preset_ids(self) -> tuple[str, ...]:
+        """Return intentionally product-supported GPT-OSS serving presets."""
+
+        return tuple(
+            preset_id
+            for preset_id in PUBLIC_GPT_OSS_20B_PRESET_IDS
+            if preset_id in _CONNECTION_PRESETS
+        )
 
     def get_connection_preset(self, preset_id: str) -> ProvingConnectionPreset:
         """Return one reviewed connection preset or reject unknown IDs."""
