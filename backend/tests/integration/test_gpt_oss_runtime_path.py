@@ -363,6 +363,18 @@ async def test_custom_compatible_runtime_uses_guarded_executor_without_sdk_fallb
     identity_users: tuple[User, User],
 ) -> None:
     _FakeAsyncOpenAI.instances.clear()
+    factory_calls: list[dict[str, Any]] = []
+    factory_get_client = LLMClientFactory.get_client
+
+    def recording_get_client(**kwargs: Any) -> Any:
+        factory_calls.append(dict(kwargs))
+        return factory_get_client(**kwargs)
+
+    monkeypatch.setattr(
+        "backend.services.llm_provider.runtime_client_resolver."
+        "LLMClientFactory.get_client",
+        recording_get_client,
+    )
     monkeypatch.setattr(
         "agent.providers.llm.adapters.openai.compatible_chat.openai.AsyncOpenAI",
         _FakeAsyncOpenAI,
@@ -457,6 +469,7 @@ async def test_custom_compatible_runtime_uses_guarded_executor_without_sdk_fallb
     assert response.content == "custom ok"
     assert _FakeAsyncOpenAI.instances == []
     assert credentials.calls[0]["auth_mode"] is LLMAuthMode.BEARER
+    assert factory_calls[0]["base_url"] == "https://llm.example.test/team/v1"
     assert guarded_calls == [
         {
             "operation": LLMConnectionOperation.INFERENCE,

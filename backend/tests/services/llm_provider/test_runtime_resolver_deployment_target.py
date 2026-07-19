@@ -22,6 +22,7 @@ from backend.services.llm_provider.deployment_service import LLMDeploymentServic
 from backend.services.llm_provider.migration_service import (
     deterministic_legacy_connection_id,
 )
+from backend.services.llm_provider.operation_registry import OPENAI_BASE_URL_ENV
 from backend.services.llm_provider.runtime_client_resolver import (
     BudgetEnforcingLLMClient,
     LLMRuntimeClientResolver,
@@ -88,6 +89,7 @@ def test_v2_resolver_normalizes_live_target_through_factory_and_budget(
 ) -> None:
     """V2 resolution authorizes identity, composes profile, and keeps budgeting."""
 
+    monkeypatch.setenv(OPENAI_BASE_URL_ENV, "http://127.0.0.1:4100/v1")
     owner, _ = identity_users
     llm_identity_db.add(Tenant(id=41, slug="runtime", name="Runtime"))
     llm_identity_db.flush()
@@ -152,6 +154,7 @@ def test_v2_resolver_normalizes_live_target_through_factory_and_budget(
     )
     assert calls[0]["api_key"] == "sk-deployment"
     assert calls[0]["model_profile"] is target.effective_profile
+    assert calls[0]["base_url"] == "http://127.0.0.1:4100/v1"
 
 
 def test_legacy_selection_normalizes_to_same_persisted_target(

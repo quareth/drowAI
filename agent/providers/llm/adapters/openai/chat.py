@@ -25,7 +25,6 @@ from ...core.base import (
     LLMStreamingResponse,
     StructuredOutputSpec,
     ToolChoiceInput,
-    ToolCall,
     ToolCallResult,
     ToolSpecInput,
 )
@@ -62,6 +61,7 @@ from .refusal import (
     raise_for_openai_chat_refusal,
     raise_for_openai_chat_stream_refusal,
 )
+from .client_options import openai_sdk_client_options
 
 # Import UsageData for token tracking
 try:
@@ -169,7 +169,12 @@ class OpenAIChatClient(LLMClient):
         self._initialize_client_state(
             api_key=api_key,
             model=model,
-            sdk_client=openai.AsyncOpenAI(api_key=api_key),
+            sdk_client=openai.AsyncOpenAI(
+                **openai_sdk_client_options(
+                    api_key=api_key,
+                    base_url=kwargs.get("base_url"),
+                )
+            ),
         )
 
         logger.debug(f"Initialized OpenAIChatClient with model={model}")

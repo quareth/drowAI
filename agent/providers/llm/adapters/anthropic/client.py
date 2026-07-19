@@ -102,7 +102,20 @@ class AnthropicMessagesClient(LLMClient):
         self._reasoning_effort = self._resolve_reasoning_effort(
             kwargs.get("reasoning_effort")
         )
-        self._client = anthropic.AsyncAnthropic(api_key=api_key.strip())
+        sdk_options = {"api_key": api_key.strip()}
+        base_url = kwargs.get("base_url")
+        if base_url is not None:
+            if (
+                not isinstance(base_url, str)
+                or not base_url
+                or base_url != base_url.strip()
+            ):
+                raise LLMConfigurationError(
+                    "Anthropic client base URL must be a non-empty string",
+                    provider=ANTHROPIC_PROVIDER_ID,
+                )
+            sdk_options["base_url"] = base_url
+        self._client = anthropic.AsyncAnthropic(**sdk_options)
         self._close_lock = asyncio.Lock()
         self._closed = False
 

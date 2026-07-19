@@ -1,5 +1,19 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "native_provider_endpoints": [
+    {
+      "provider_id": "openai",
+      "default_base_url": "https://api.openai.com",
+      "base_url_env": "OPENAI_BASE_URL",
+      "client_base_path": "/v1"
+    },
+    {
+      "provider_id": "anthropic",
+      "default_base_url": "https://api.anthropic.com",
+      "base_url_env": "ANTHROPIC_BASE_URL",
+      "client_base_path": ""
+    }
+  ],
   "presets": [
     {
       "id": "gpt_oss_20b_openai_compatible_proving",
@@ -20,6 +34,7 @@
       "user_config_fields": ["display_label", "api_key"],
       "fixed_base_url": null,
       "endpoint_config_field": null,
+      "client_base_path": "/v1",
       "billing_provider_id": null,
       "base_url_env": "DROWAI_GPT_OSS_20B_PROVING_BASE_URL",
       "e2e_enabled_env": "DROWAI_GPT_OSS_20B_PROVING_E2E",
@@ -45,7 +60,9 @@
       "user_config_fields": ["display_label", "api_key"],
       "fixed_base_url": "https://router.huggingface.co",
       "endpoint_config_field": null,
+      "client_base_path": "/v1",
       "billing_provider_id": "huggingface",
+      "base_url_env": "DROWAI_HUGGINGFACE_BASE_URL",
       "proving": false
     },
     {
@@ -67,7 +84,9 @@
       "user_config_fields": ["display_label", "api_key"],
       "fixed_base_url": "https://integrate.api.nvidia.com",
       "endpoint_config_field": null,
+      "client_base_path": "/v1",
       "billing_provider_id": "nvidia",
+      "base_url_env": "DROWAI_NVIDIA_NIM_BASE_URL",
       "proving": false
     },
     {
@@ -89,6 +108,7 @@
       "user_config_fields": ["display_label", "base_url", "api_key"],
       "fixed_base_url": null,
       "endpoint_config_field": "base_url",
+      "client_base_path": "/v1",
       "billing_provider_id": null,
       "proving": false
     },
@@ -111,6 +131,7 @@
       "user_config_fields": ["display_label", "base_url", "api_key"],
       "fixed_base_url": null,
       "endpoint_config_field": "base_url",
+      "client_base_path": "/v1",
       "billing_provider_id": null,
       "proving": false
     },
@@ -133,6 +154,7 @@
       "user_config_fields": ["display_label", "base_url", "api_key"],
       "fixed_base_url": null,
       "endpoint_config_field": "base_url",
+      "client_base_path": "/v1",
       "billing_provider_id": null,
       "proving": false
     }

@@ -454,6 +454,7 @@ class RegisteredLLMOperationTarget:
     provider: str
     method: str
     url: str
+    client_base_url: str
     expected_host: str
     allowed_ports: frozenset[int]
     allowed_path_prefixes: tuple[str, ...]

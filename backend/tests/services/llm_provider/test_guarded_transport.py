@@ -19,8 +19,8 @@ from backend.services.llm_provider.operation_registry import (
     GPT_OSS_20B_PROVING_BASE_URL_ENV,
     GPT_OSS_20B_PROVING_PRESET_ID,
     HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+    NVIDIA_NIM_BASE_URL_ENV,
     NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
-    OPENAI_COMPATIBLE_BASE_URL_ENV,
     OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
     VLLM_OPENAI_COMPATIBLE_PRESET_ID,
 )
@@ -445,7 +445,7 @@ def test_transport_allows_explicit_operator_loopback_override() -> None:
     session = _Session()
     registry = ConnectionOperationRegistry(
         env_getter={
-            OPENAI_COMPATIBLE_BASE_URL_ENV: "http://127.0.0.1:4000"
+            NVIDIA_NIM_BASE_URL_ENV: "http://127.0.0.1:4000"
         }.get
     )
     policy = FixedProviderEgressPolicy(

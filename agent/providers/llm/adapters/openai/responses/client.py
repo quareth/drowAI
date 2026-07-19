@@ -70,6 +70,7 @@ from ..refusal import (
     raise_for_openai_responses_refusal,
     raise_for_openai_responses_stream_refusal,
 )
+from ..client_options import openai_sdk_client_options
 from .retry import (
     DEFAULT_RETRY_COUNT as RETRY_DEFAULT_RETRY_COUNT,
     INITIAL_RETRY_DELAY as RETRY_INITIAL_RETRY_DELAY,
@@ -258,7 +259,12 @@ class OpenAIResponsesClient(LLMClient):
             else default_reasoning_effort(model)
         )
         self._reasoning_effort = self._validate_reasoning_effort(effort)
-        self._client = openai.AsyncOpenAI(api_key=api_key)
+        self._client = openai.AsyncOpenAI(
+            **openai_sdk_client_options(
+                api_key=api_key,
+                base_url=kwargs.get("base_url"),
+            )
+        )
         self._close_lock = asyncio.Lock()
         self._closed = False
 

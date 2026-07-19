@@ -195,7 +195,7 @@ def _compatible_client(
         MagicMock(return_value=sdk_client),
     ):
         client = OpenAICompatibleChatClient(
-            endpoint="https://inference.example/v1",
+            base_url="https://inference.example/v1",
             auth=CompatibleChatAuth.bearer("test-key"),
             wire_model_id="Vendor/Model.Name-20B",
             dialect_policy=policy,

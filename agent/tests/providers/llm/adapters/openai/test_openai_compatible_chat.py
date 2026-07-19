@@ -28,6 +28,7 @@ def _client(
     endpoint: str = "https://inference.example/v1",
     wire_model_id: str = "Vendor/Model.Name-20B",
     auth: CompatibleChatAuth | None = None,
+    guarded_executor: MagicMock | None = None,
 ) -> tuple[OpenAICompatibleChatClient, MagicMock, MagicMock]:
     """Create the compatible adapter with a mocked SDK constructor."""
 
@@ -40,9 +41,10 @@ def _client(
         constructor,
     ):
         client = OpenAICompatibleChatClient(
-            endpoint=endpoint,
+            base_url=endpoint,
             auth=auth or CompatibleChatAuth.bearer("test-key"),
             wire_model_id=wire_model_id,
+            guarded_executor=guarded_executor,
         )
     return client, sdk_client, constructor
 
@@ -153,7 +155,7 @@ async def test_compatible_adapter_rejects_tools_without_dialect_policy() -> None
 def test_compatible_adapter_rejects_unsafe_endpoint_forms(endpoint: str) -> None:
     """Endpoint syntax is validated before constructing an SDK transport."""
 
-    with pytest.raises(LLMConfigurationError, match="endpoint"):
+    with pytest.raises(LLMConfigurationError, match="base URL"):
         _client(endpoint=endpoint)
 
 
@@ -166,11 +168,14 @@ def test_compatible_adapter_rejects_unsafe_endpoint_forms(endpoint: str) -> None
     ),
 )
 def test_compatible_adapter_accepts_explicit_loopback_endpoint(endpoint: str) -> None:
-    """Direct compatible construction admits local development endpoints only."""
+    """Guarded compatible construction accepts its authorized local endpoint."""
 
-    _client_instance, _sdk, constructor = _client(endpoint=endpoint)
+    _client_instance, _sdk, constructor = _client(
+        endpoint=endpoint,
+        guarded_executor=MagicMock(),
+    )
 
-    assert constructor.call_args.kwargs["base_url"] == endpoint
+    constructor.assert_not_called()
 
 
 def test_compatible_adapter_supports_typed_no_auth() -> None:

@@ -112,6 +112,26 @@ def client_with_mock(mock_openai_client):
         return client, mock_openai_client
 
 
+def test_openai_responses_forwards_explicit_resolved_base_url() -> None:
+    """The native Responses adapter does not depend on ambient SDK configuration."""
+
+    with patch(
+        "agent.providers.llm.adapters.openai.responses.client.openai"
+    ) as mock_openai:
+        mock_openai.AsyncOpenAI.return_value = MagicMock()
+
+        OpenAIResponsesClient(
+            api_key="gateway-key",
+            model="gpt-5",
+            base_url="http://127.0.0.1:4100/v1",
+        )
+
+    mock_openai.AsyncOpenAI.assert_called_once_with(
+        api_key="gateway-key",
+        base_url="http://127.0.0.1:4100/v1",
+    )
+
+
 @pytest.mark.asyncio
 async def test_responses_refusal_block_is_not_retried(client_with_mock) -> None:
     client, mock = client_with_mock

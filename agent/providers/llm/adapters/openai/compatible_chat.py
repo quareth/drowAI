@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from enum import Enum
-from ipaddress import ip_address
 from types import SimpleNamespace
 from typing import Any, AsyncIterator, Callable, Dict, List, Mapping
 from urllib.parse import urlsplit
@@ -32,6 +31,7 @@ from ...core.exceptions import (
     LLMConfigurationError,
 )
 from .chat import OpenAIChatClient
+from .client_options import openai_sdk_client_options
 
 
 class CompatibleChatAuthMode(str, Enum):
@@ -82,7 +82,6 @@ _ADAPTER_CAPABILITY_CEILING = frozenset(
 )
 _HTTP_SCHEME = "http"
 _HTTPS_SCHEME = "https"
-_LOOPBACK_HOSTNAME = "localhost"
 CONSERVATIVE_OPENAI_COMPATIBLE_DIALECT = LLMDialectPolicy(
     policy_id="openai_compatible_chat.conservative_v1",
     adapter_id=OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
@@ -133,13 +132,16 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
     def __init__(
         self,
         *,
-        endpoint: str,
+        base_url: str,
         auth: CompatibleChatAuth,
         wire_model_id: str,
         dialect_policy: LLMDialectPolicy = CONSERVATIVE_OPENAI_COMPATIBLE_DIALECT,
         guarded_executor: GuardedCompatibleChatExecutor | None = None,
     ) -> None:
-        validated_endpoint = _validate_endpoint(endpoint)
+        validated_base_url = _validate_base_url(
+            base_url,
+            guarded=guarded_executor is not None,
+        )
         validated_wire_model = _validate_wire_model_id(wire_model_id)
         if not isinstance(auth, CompatibleChatAuth):
             raise LLMConfigurationError(
@@ -160,20 +162,20 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
         if guarded_executor is not None:
             sdk_client = _GuardedCompatibleSDKClient(guarded_executor)
         else:
-            sdk_kwargs: dict[str, Any] = {
-                "api_key": auth.credential,
-                "base_url": validated_endpoint,
-            }
-            if auth.mode is CompatibleChatAuthMode.NONE:
-                sdk_kwargs["_enforce_credentials"] = False
-            sdk_client = openai.AsyncOpenAI(**sdk_kwargs)
+            sdk_client = openai.AsyncOpenAI(
+                **openai_sdk_client_options(
+                    api_key=auth.credential,
+                    base_url=validated_base_url,
+                    enforce_credentials=auth.mode is not CompatibleChatAuthMode.NONE,
+                )
+            )
 
         self._initialize_client_state(
             api_key=auth.credential,
             model=validated_wire_model,
             sdk_client=sdk_client,
         )
-        self._endpoint = validated_endpoint
+        self._base_url = validated_base_url
         self._auth_mode = auth.mode
         self._dialect_policy = dialect_policy
 
@@ -362,28 +364,27 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
         return _native_call_kwargs(options)
 
 
-def _validate_endpoint(endpoint: str) -> str:
-    """Validate HTTPS or an explicitly local development endpoint."""
+def _validate_base_url(base_url: str, *, guarded: bool) -> str:
+    """Validate base URL syntax while guarded egress owns address policy."""
 
     if (
-        not isinstance(endpoint, str)
-        or not endpoint
-        or endpoint != endpoint.strip()
-        or any(character.isspace() for character in endpoint)
+        not isinstance(base_url, str)
+        or not base_url
+        or base_url != base_url.strip()
+        or any(character.isspace() for character in base_url)
     ):
         raise LLMConfigurationError(
-            "compatible endpoint must be a non-empty absolute URL",
+            "compatible base URL must be a non-empty absolute URL",
             provider="OpenAI-compatible",
         )
     try:
-        parsed = urlsplit(endpoint)
+        parsed = urlsplit(base_url)
         parsed.port
     except ValueError as exc:
         raise LLMConfigurationError(
-            "compatible endpoint is invalid",
+            "compatible base URL is invalid",
             provider="OpenAI-compatible",
         ) from exc
-    host = str(parsed.hostname or "").lower()
     if (
         parsed.scheme not in {_HTTP_SCHEME, _HTTPS_SCHEME}
         or not parsed.hostname
@@ -391,25 +392,14 @@ def _validate_endpoint(endpoint: str) -> str:
         or parsed.password is not None
         or parsed.query
         or parsed.fragment
-        or (parsed.scheme == _HTTP_SCHEME and not _is_loopback_host(host))
+        or (parsed.scheme == _HTTP_SCHEME and not guarded)
     ):
         raise LLMConfigurationError(
-            "compatible endpoint must be public HTTPS or loopback HTTP without "
-            "userinfo, query, or fragment",
+            "compatible base URL must use HTTPS unless guarded egress authorizes "
+            "HTTP, and cannot contain userinfo, query, or fragment",
             provider="OpenAI-compatible",
         )
-    return endpoint
-
-
-def _is_loopback_host(host: str) -> bool:
-    """Return whether a hostname is explicitly confined to this machine."""
-
-    if host == _LOOPBACK_HOSTNAME:
-        return True
-    try:
-        return ip_address(host).is_loopback
-    except ValueError:
-        return False
+    return base_url
 
 
 def _validate_wire_model_id(wire_model_id: str) -> str:

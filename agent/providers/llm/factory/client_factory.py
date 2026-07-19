@@ -376,19 +376,19 @@ class LLMClientFactory:
             profile.ref,
         )
         if provider_class is _openai_compatible_chat_client_class():
-            endpoint = kwargs.pop("endpoint", None)
+            base_url = kwargs.pop("base_url", None)
             wire_model_id = kwargs.pop(
                 "wire_model_id",
                 resolution.provider_request_model,
             )
             kwargs.pop("resolution_role", None)
-            if not isinstance(endpoint, str) or not endpoint.strip():
+            if not isinstance(base_url, str) or not base_url.strip():
                 raise LLMConfigurationError(
-                    "OpenAI-compatible adapter requires an endpoint",
+                    "OpenAI-compatible adapter requires a base URL",
                     provider=lookup_ref.provider,
-                )
+            )
             return provider_class(
-                endpoint=endpoint,
+                base_url=base_url,
                 auth=_openai_compatible_bearer_auth(api_key),
                 wire_model_id=wire_model_id,
                 **kwargs,

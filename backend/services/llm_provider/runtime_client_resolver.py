@@ -10,7 +10,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import asdict, is_dataclass
 from typing import Any, AsyncIterator
-from urllib.parse import urlsplit, urlunsplit
 from uuid import UUID, uuid5
 
 from sqlalchemy import select
@@ -188,10 +187,10 @@ class LLMRuntimeClientResolver:
             )
         ):
             factory_kwargs["model_profile"] = resolved_target.effective_profile
+        factory_kwargs["base_url"] = (
+            resolved_target.connection.operation_target.client_base_url
+        )
         if resolved_target.adapter_id == OPENAI_COMPATIBLE_CHAT_ADAPTER_ID:
-            factory_kwargs["endpoint"] = _compatible_chat_base_url(
-                resolved_target.connection.endpoint
-            )
             factory_kwargs["wire_model_id"] = resolved_target.exact_wire_model_id
             factory_kwargs["guarded_executor"] = _guarded_inference_executor(
                 operation_target=resolved_target.connection.operation_target,
@@ -1060,17 +1059,6 @@ def resolve_call_reasoning_effort(
     if isinstance(target, (RoleCallSettings, LLMCallTarget)):
         return target.reasoning_effort
     return runtime_selection.reasoning_effort
-
-
-def _compatible_chat_base_url(operation_url: str) -> str:
-    """Return the SDK base URL corresponding to a registered chat operation."""
-
-    parsed = urlsplit(operation_url)
-    path = parsed.path.rstrip("/")
-    suffix = "/chat/completions"
-    if path.endswith(suffix):
-        path = path[: -len(suffix)] or "/"
-    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
 def _guarded_inference_executor(*, operation_target, secret: ProviderSecret):

@@ -10,6 +10,12 @@ from backend.services.llm_provider.connection_authorization import (
     LLMConnectionAuthorizer,
 )
 from backend.services.llm_provider.connection_service import LLMConnectionService
+from backend.services.llm_provider.operation_registry import (
+    CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+    NVIDIA_NIM_BASE_URL_ENV,
+    NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+    ConnectionOperationRegistry,
+)
 from backend.services.llm_provider.types import (
     LLMConnectionAccessContext,
     LLMConnectionAuthorizationError,
@@ -149,6 +155,64 @@ def test_authorization_reloads_revision_state_policy_operation_and_revocation(
             operation="health",
         )
     assert revoked.value.code == "connection_unavailable"
+
+
+def test_authorization_keeps_endpoint_substitution_connection_scoped(
+    llm_identity_db: Session,
+    identity_users: tuple[User, User],
+) -> None:
+    """A managed override cannot replace another connection's configured endpoint."""
+
+    owner, _ = identity_users
+    connections = LLMConnectionService(llm_identity_db)
+    nvidia = connections.create_draft(
+        user_id=owner.id,
+        display_name="NVIDIA",
+        connection_preset_id=NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+        runtime_family_id="openai_compatible_chat",
+        serving_operator_id="nvidia_nim",
+    )
+    custom = connections.create_draft(
+        user_id=owner.id,
+        display_name="Team gateway",
+        connection_preset_id=CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+        runtime_family_id="openai_compatible_chat",
+        serving_operator_id="organization_managed",
+        non_secret_config={
+            "base_url": "https://team-gateway.example.test",
+            "auth_mode": "bearer",
+        },
+    )
+    registry = ConnectionOperationRegistry(
+        env_getter={
+            NVIDIA_NIM_BASE_URL_ENV: "http://127.0.0.1:4000/v1",
+        }.get
+    )
+    authorizer = LLMConnectionAuthorizer(
+        llm_identity_db,
+        operation_registry=registry,
+    )
+    context = LLMConnectionAccessContext(authenticated_user_id=owner.id)
+
+    authorized_nvidia = authorizer.authorize(
+        access_context=context,
+        connection_id=nvidia.id,
+        expected_revision=nvidia.revision,
+        operation="health",
+    )
+    authorized_custom = authorizer.authorize(
+        access_context=context,
+        connection_id=custom.id,
+        expected_revision=custom.revision,
+        operation="health",
+    )
+
+    assert authorized_nvidia.operation_target.client_base_url == (
+        "http://127.0.0.1:4000/v1"
+    )
+    assert authorized_custom.operation_target.client_base_url == (
+        "https://team-gateway.example.test/v1"
+    )
 
 
 def test_authorization_rejects_unregistered_provider_operation_matrix(

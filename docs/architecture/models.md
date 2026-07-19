@@ -331,13 +331,20 @@ adapter and the same deployment-aware resolver and factory boundary as native
 providers. Connection presets supply the normal provider endpoint and exact
 wire model identifier; graph nodes do not construct endpoints or clients.
 
-Operators may set `DROWAI_OPENAI_COMPATIBLE_BASE_URL` to redirect these routes
-through any compatible gateway without gateway-specific application code. The
-configured base URL may include `/v1`; operation paths are composed once. The
-guarded transport still disables ambient HTTP proxy inheritance, credentials
-remain connection-owned, and redirects remain disabled. Public destinations
-require HTTPS and globally routable DNS. Local development permits HTTP only
-for a hostname or literal address that resolves entirely to loopback.
+Endpoint resolution is connection-scoped and declarative. Native OpenAI and
+Anthropic routes use `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL`; hosted NVIDIA
+and Hugging Face routes use `DROWAI_NVIDIA_NIM_BASE_URL` and
+`DROWAI_HUGGINGFACE_BASE_URL`. An override changes only its named provider.
+User-configured custom, Ollama, and vLLM connections retain their saved base
+URL. The registry resolves one SDK client base URL and one guarded operation
+URL, and the runtime passes the client base URL explicitly through the shared
+factory contract. A configured base URL may already include the declared
+client path such as `/v1`; paths are composed exactly once.
+
+The guarded transport still disables ambient HTTP proxy inheritance,
+credentials remain connection-owned, and redirects remain disabled. Public
+destinations require HTTPS and globally routable DNS. Local development permits
+HTTP only for a hostname or literal address that resolves entirely to loopback.
 
 ## Anthropic Implementation
 

@@ -34,8 +34,8 @@ Target version: `0.1.0`.
 
 ### Changed
 
-- OpenAI-compatible model routes can use one operator-configured base URL for
-  gateways or local development while retaining secure provider defaults.
+- Native and hosted model routes accept provider-scoped operator base URLs for
+  gateways or local development without changing other connection endpoints.
 - Dependency security updates refresh the frontend and backend toolchains,
   replace python-jose with PyJWT, and require Node.js 20.19 or newer.
 - The chat model selector now groups GPT-OSS 20B under Open models and shows

@@ -12,12 +12,15 @@ from backend.models import User
 from backend.services.llm_provider.connection_service import LLMConnectionService
 from backend.services.llm_provider.deployment_service import LLMDeploymentService
 from backend.services.llm_provider.operation_registry import (
+    ANTHROPIC_BASE_URL_ENV,
     CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
     GPT_OSS_20B_PROVING_PRESET_ID,
+    HUGGINGFACE_BASE_URL_ENV,
     HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+    NVIDIA_NIM_BASE_URL_ENV,
     NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
-    OPENAI_COMPATIBLE_BASE_URL_ENV,
     OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
+    OPENAI_BASE_URL_ENV,
     VLLM_OPENAI_COMPATIBLE_PRESET_ID,
     ConnectionOperationRegistry,
     OperationRegistryError,
@@ -29,45 +32,58 @@ from backend.services.llm_provider.types import (
 )
 
 
-@pytest.mark.parametrize(
-    "preset_id",
-    (
-        HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
-        NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
-        OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
-        VLLM_OPENAI_COMPATIBLE_PRESET_ID,
-        CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
-    ),
-)
-def test_operator_base_url_overrides_compatible_preset_targets(
-    preset_id: str,
-) -> None:
-    """One runtime-family override redirects every compatible route consistently."""
+def test_managed_preset_operator_endpoints_are_connection_scoped() -> None:
+    """Each managed provider resolves only its own declarative override source."""
 
-    configured_environment = {
-        OPENAI_COMPATIBLE_BASE_URL_ENV: "http://127.0.0.1:4000"
-    }
-    registry = ConnectionOperationRegistry(env_getter=configured_environment.get)
-
-    target = registry.resolve(
-        LLMConnectionOperation.INFERENCE,
-        provider=preset_id,
-        base_url=(
-            "https://configured.example.test"
-            if preset_id
-            in {
-                OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
-                VLLM_OPENAI_COMPATIBLE_PRESET_ID,
-                CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
-            }
-            else None
-        ),
+    registry = ConnectionOperationRegistry(
+        env_getter={
+            NVIDIA_NIM_BASE_URL_ENV: "http://127.0.0.1:4000/v1",
+        }.get
     )
 
-    assert target.url == "http://127.0.0.1:4000/v1/chat/completions"
-    assert target.expected_host == "127.0.0.1"
-    assert target.allowed_ports == frozenset({4000})
-    assert target.network_scope is LLMEgressNetworkScope.LOOPBACK
+    nvidia = registry.resolve(
+        LLMConnectionOperation.INFERENCE,
+        provider=NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+    )
+    huggingface = registry.resolve(
+        LLMConnectionOperation.INFERENCE,
+        provider=HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+    )
+    custom = registry.resolve(
+        LLMConnectionOperation.INFERENCE,
+        provider=CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+        base_url="https://configured.example.test/team",
+    )
+
+    assert nvidia.client_base_url == "http://127.0.0.1:4000/v1"
+    assert nvidia.url == "http://127.0.0.1:4000/v1/chat/completions"
+    assert nvidia.network_scope is LLMEgressNetworkScope.LOOPBACK
+    assert huggingface.client_base_url == "https://router.huggingface.co/v1"
+    assert custom.client_base_url == "https://configured.example.test/team/v1"
+
+
+def test_native_provider_operator_endpoints_use_the_same_resolution_contract() -> None:
+    """Native providers resolve explicit SDK base URLs through registry data."""
+
+    registry = ConnectionOperationRegistry(
+        env_getter={
+            OPENAI_BASE_URL_ENV: "http://127.0.0.1:4100/v1",
+            ANTHROPIC_BASE_URL_ENV: "http://127.0.0.1:4200",
+        }.get
+    )
+
+    openai = registry.resolve(LLMConnectionOperation.INFERENCE, provider="openai")
+    anthropic = registry.resolve(
+        LLMConnectionOperation.INFERENCE,
+        provider="anthropic",
+    )
+
+    assert openai.client_base_url == "http://127.0.0.1:4100/v1"
+    assert openai.url == "http://127.0.0.1:4100/v1/chat/completions"
+    assert anthropic.client_base_url == "http://127.0.0.1:4200"
+    assert anthropic.url == "http://127.0.0.1:4200/v1/messages"
+    assert openai.network_scope is LLMEgressNetworkScope.LOOPBACK
+    assert anthropic.network_scope is LLMEgressNetworkScope.LOOPBACK
 
 
 @pytest.mark.parametrize(
@@ -85,7 +101,7 @@ def test_operator_base_url_rejects_unsafe_targets(override: str) -> None:
     """Operator overrides allow public HTTPS or an exact loopback destination only."""
 
     registry = ConnectionOperationRegistry(
-        env_getter={OPENAI_COMPATIBLE_BASE_URL_ENV: override}.get
+        env_getter={NVIDIA_NIM_BASE_URL_ENV: override}.get
     )
 
     with pytest.raises(OperationRegistryError):
@@ -100,7 +116,7 @@ def test_operator_public_gateway_accepts_versioned_base_url_once() -> None:
 
     registry = ConnectionOperationRegistry(
         env_getter={
-            OPENAI_COMPATIBLE_BASE_URL_ENV: (
+            HUGGINGFACE_BASE_URL_ENV: (
                 "https://gateway.example.test:8443/team/v1"
             )
         }.get
@@ -108,7 +124,7 @@ def test_operator_public_gateway_accepts_versioned_base_url_once() -> None:
 
     target = registry.resolve(
         LLMConnectionOperation.INFERENCE,
-        provider=NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+        provider=HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
     )
 
     assert target.url == (
