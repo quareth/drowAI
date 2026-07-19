@@ -279,6 +279,7 @@ def test_scaled_preset_deployments_reuse_existing_adapter_routes(
     )
 
     assert deployment.wire_model_id == "openai/gpt-oss-20b:fireworks-ai"
+    assert deployment.canonical_model_id == "openai/gpt-oss-20b"
     assert deployment.discovery_source == "preset"
     assert deployment.source_metadata == {
         "preset_id": HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
@@ -291,3 +292,33 @@ def test_scaled_preset_deployments_reuse_existing_adapter_routes(
         "preset_id": HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
         "discovery_strategy": "openai_models_endpoint",
     }
+
+
+def test_scaled_preset_deployments_normalize_gpt_oss_canonical_aliases(
+    llm_identity_db: Session,
+    identity_users: tuple[User, User],
+) -> None:
+    owner, _ = identity_users
+    connection = LLMConnectionService(llm_identity_db).create_draft(
+        user_id=owner.id,
+        display_name="Team Custom",
+        connection_preset_id=CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+        runtime_family_id="openai_compatible_chat",
+        serving_operator_id="organization_managed",
+        non_secret_config={
+            "base_url": "https://llm.example.test/team/base",
+            "auth_mode": "bearer",
+        },
+    )
+
+    deployment, _route = LLMDeploymentService(llm_identity_db).create_preset_deployment(
+        user_id=owner.id,
+        connection_id=connection.id,
+        expected_connection_revision=1,
+        wire_model_id="gpt-oss:20b",
+        display_name="GPT-OSS 20B via Ollama",
+        canonical_model_id="gpt-oss:20b",
+    )
+
+    assert deployment.wire_model_id == "gpt-oss:20b"
+    assert deployment.canonical_model_id == "openai/gpt-oss-20b"

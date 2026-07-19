@@ -29,6 +29,8 @@ Target version: `0.1.0`.
   preset manifests, supports scaled compatible connection/deployment inventory
   with custom model registration, service-authorized refresh, usage/pricing
   attribution, and searchable deployment selection UI.
+- GPT-OSS 20B deployment choices now appear under one canonical model entry
+  while preserving explicit provider-specific deployment selection.
 - Local development and deployment workflows, architecture documentation,
   contribution guidance, and private vulnerability reporting.
 

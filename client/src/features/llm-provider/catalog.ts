@@ -9,6 +9,7 @@ import type {
   LLMCatalogModel,
   LLMCatalogProvider,
   LLMDeploymentCandidate,
+  LLMDeploymentCandidateGroup,
   LLMDeploymentRef,
   LLMDeploymentStatusOverride,
   LLMSelection,
@@ -157,6 +158,7 @@ export function getDeploymentCandidates(
       return [{
         providerId: provider.id,
         providerLabel: provider.label,
+        deploymentLabel: deploymentCandidateLabel(connection?.displayName, provider.label),
         modelId: model.id,
         modelLabel: model.label,
         canonicalModelId: model.canonicalModelId,
@@ -174,6 +176,75 @@ export function getDeploymentCandidates(
       }];
     }),
   );
+}
+
+export function getDeploymentCandidateGroups(
+  catalog: LLMModelCatalogResponse | null | undefined,
+  statusOverrides: LLMDeploymentStatusOverride[] = [],
+): LLMDeploymentCandidateGroup[] {
+  const candidates = getDeploymentCandidates(catalog, statusOverrides);
+  const groups = new Map<string, LLMDeploymentCandidateGroup>();
+  for (const candidate of candidates) {
+    const key = deploymentCandidateGroupKey(candidate);
+    const existing = groups.get(key);
+    if (existing) {
+      existing.candidates.push(candidate);
+      continue;
+    }
+    groups.set(key, {
+      key,
+      modelLabel: getCanonicalModelDisplayLabel(
+        catalog,
+        candidate.canonicalModelId,
+        candidate.modelLabel,
+      ),
+      canonicalModelId: candidate.canonicalModelId,
+      candidates: [candidate],
+    });
+  }
+  return Array.from(groups.values());
+}
+
+function deploymentCandidateGroupKey(candidate: LLMDeploymentCandidate): string {
+  const canonical = candidate.canonicalModelId?.trim();
+  return canonical || `${candidate.providerId}:${candidate.modelId}`;
+}
+
+function deploymentCandidateLabel(
+  connectionDisplayName: string | null | undefined,
+  fallbackProviderLabel: string,
+): string {
+  const displayName = connectionDisplayName?.trim();
+  return displayName || fallbackProviderLabel;
+}
+
+function getCanonicalModelDisplayLabel(
+  catalog: LLMModelCatalogResponse | null | undefined,
+  canonicalModelId: string | null | undefined,
+  fallback: string,
+): string {
+  const canonical = canonicalModelId?.trim();
+  if (!catalog || !canonical) {
+    return fallback;
+  }
+
+  const matchingLabels = catalog.providers.flatMap((provider) =>
+    provider.models
+      .filter((model) => model.canonicalModelId === canonical)
+      .map((model) => model.label.trim())
+      .filter(Boolean),
+  );
+  if (matchingLabels.length === 0) {
+    return fallback;
+  }
+  return stripDeploymentQualifier(
+    matchingLabels.sort((left, right) => left.length - right.length)[0],
+  );
+}
+
+function stripDeploymentQualifier(label: string): string {
+  const canonicalLabel = label.replace(/\s+via\s+.+$/i, "").trim();
+  return canonicalLabel || label;
 }
 
 export function sameDeploymentRef(

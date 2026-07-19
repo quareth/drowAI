@@ -174,7 +174,9 @@ describe("GPT-OSS proving UI", () => {
       />,
     );
 
-    expect(await screen.findByText("GPT-OSS 20B OpenAI-compatible proving")).toBeTruthy();
+    expect(
+      (await screen.findAllByText("GPT-OSS 20B OpenAI-compatible proving")).length,
+    ).toBeGreaterThan(0);
     expect(screen.getAllByText("Lifecycle: draft").length).toBeGreaterThan(0);
     expect(screen.getByText("Verification: not_tested")).toBeTruthy();
     expect(screen.getAllByText("Runnability: capability_unknown").length).toBeGreaterThan(0);

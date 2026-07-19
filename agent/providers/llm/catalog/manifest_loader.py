@@ -269,10 +269,14 @@ def _catalog_model_from_payload(
     if support_tier not in _ALLOWED_SUPPORT_TIERS:
         raise CatalogManifestValidationError(f"Unsupported support tier '{support_tier}'")
     context_window_tokens, max_output_tokens = _limits(payload.get("limits"))
+    canonical_model_id = _canonical_model_id(
+        _require_text(payload, "canonical_model_id"),
+        provider=provider,
+    )
     return CatalogModel(
         provider=provider,
         model=model,
-        canonical_model_id=_require_text(payload, "canonical_model_id"),
+        canonical_model_id=canonical_model_id,
         display_name=_require_text(payload, "display_name"),
         api_surface=_require_text(payload, "api_surface").lower(),
         lifecycle=lifecycle,
@@ -315,6 +319,18 @@ def _optional_text(payload: Mapping[str, Any], key: str) -> str | None:
     if not isinstance(value, str) or not value.strip():
         raise CatalogManifestValidationError(f"Catalog field '{key}' must be text when set")
     return value.strip().lower()
+
+
+def _canonical_model_id(value: str, *, provider: str) -> str:
+    """Normalize manifest canonical IDs to provider/model slash form."""
+
+    stripped = value.strip()
+    colon_prefix = f"{provider}:"
+    if stripped.startswith(colon_prefix):
+        suffix = stripped[len(colon_prefix):].strip()
+        if suffix:
+            return f"{provider}/{suffix}"
+    return stripped
 
 
 def _require_bool(payload: Mapping[str, Any], key: str) -> bool:

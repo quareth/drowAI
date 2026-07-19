@@ -2,7 +2,15 @@
 
 from __future__ import annotations
 
+from agent.providers.llm.catalog.manifest_loader import load_catalog_manifest
 from backend.services.llm_provider.catalog_service import LLMProviderCatalogService
+
+
+def test_gpt_oss_manifest_uses_normalized_canonical_model_id() -> None:
+    manifest = load_catalog_manifest()
+    gpt_oss = manifest.require_model("openai", "gpt-oss-20b")
+
+    assert gpt_oss.canonical_model_id == "openai/gpt-oss-20b"
 
 
 def test_gpt_oss_catalog_projection_separates_canonical_and_wire_ids() -> None:

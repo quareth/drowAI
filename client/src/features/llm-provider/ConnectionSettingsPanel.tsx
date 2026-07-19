@@ -139,7 +139,7 @@ export function ConnectionSettingsPanel({
         base_url: fieldValues.base_url?.trim() || null,
         wire_model_id: fieldValues.wire_model_id?.trim() || model.exactWireModelId || model.id,
         model_label: model.label,
-        canonical_model_id: model.canonicalModelId ?? null,
+        canonical_model_id: managedCanonicalModelId(model, connection),
       };
       return createLLMManagedConnection(connection.presetId, request);
     },
@@ -373,6 +373,17 @@ export function ConnectionSettingsPanel({
       </CardContent>
     </Card>
   );
+}
+
+function managedCanonicalModelId(
+  model: LLMCatalogModel,
+  connection: LLMConnectionMetadata | LLMProvingMetadata,
+): string | null {
+  const canonical = model.canonicalModelId?.trim();
+  if (!canonical || canonical === model.id || canonical === connection.presetId) {
+    return null;
+  }
+  return canonical;
 }
 
 export default ConnectionSettingsPanel;

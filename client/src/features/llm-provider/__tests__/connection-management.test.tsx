@@ -121,6 +121,7 @@ const managedCatalog: LLMModelCatalogResponse = {
       models: [
         {
           id: "team/model",
+          canonicalModelId: "custom_openai_compatible_chat",
           label: "Team Model",
           apiSurface: "chat_completions",
           capabilities: ["chat"],
@@ -276,6 +277,44 @@ describe("Connection management", () => {
           api_key: "sk-managed",
           connection_ref: managedConnectionRef,
         },
+      );
+    });
+  });
+
+  it("does not submit preset placeholder canonical IDs for custom connections", async () => {
+    mocked.fetchLLMModelCatalog.mockResolvedValue(managedCatalog);
+    mocked.createLLMManagedConnection.mockResolvedValue({
+      lifecycleState: "draft",
+      connectionRef: managedConnectionRef,
+      deploymentRef: deploymentRef,
+      verification: null,
+      runnability: {
+        status: "capability_unknown",
+        selectable: true,
+        runnable: false,
+        reason: "Usage evidence is required.",
+      },
+    });
+
+    renderWithQueryClient(
+      <ProviderSettingsSection
+        queryEnabled
+        onSuccess={() => undefined}
+        onError={() => undefined}
+      />,
+    );
+
+    fireEvent.change(await screen.findByLabelText("API key"), {
+      target: { value: "sk-managed" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /create draft/i }));
+
+    await waitFor(() => {
+      expect(mocked.createLLMManagedConnection).toHaveBeenCalledWith(
+        "custom_openai_compatible_chat",
+        expect.objectContaining({
+          canonical_model_id: null,
+        }),
       );
     });
   });

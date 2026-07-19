@@ -173,6 +173,7 @@ export interface LLMDeploymentStatusOverride {
 export interface LLMDeploymentCandidate {
   providerId: ProviderId;
   providerLabel: string;
+  deploymentLabel: string;
   modelId: ModelId;
   modelLabel: string;
   canonicalModelId?: string;
@@ -187,6 +188,13 @@ export interface LLMDeploymentCandidate {
   runnable: boolean;
   status: string;
   reason?: string | null;
+}
+
+export interface LLMDeploymentCandidateGroup {
+  key: string;
+  modelLabel: string;
+  canonicalModelId?: string;
+  candidates: LLMDeploymentCandidate[];
 }
 
 export interface ReportingLLMSelectionApiResponse {

@@ -189,7 +189,7 @@ class LLMProviderCatalogService:
 
         return CatalogModelSummary(
             id=profile.ref.model,
-            canonical_model_id=str(profile.ref),
+            canonical_model_id=profile.canonical_model_id or str(profile.ref),
             exact_wire_model_id=None,
             label=profile.display_name,
             api_surface=profile.api_surface,

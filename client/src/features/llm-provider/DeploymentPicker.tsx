@@ -9,7 +9,7 @@ import { CheckCircle, Search } from "lucide-react";
 
 import {
   formatPricingStatus,
-  getDeploymentCandidates,
+  getDeploymentCandidateGroups,
   getSingleEligibleDeployment,
   isDeploymentCandidateSelectable,
   sameDeploymentRef,
@@ -39,41 +39,44 @@ export function DeploymentPicker({
   isPending = false,
 }: DeploymentPickerProps) {
   const [searchTerm, setSearchTerm] = useState("");
-  const candidates = useMemo(
-    () => getDeploymentCandidates(catalog, statusOverrides),
+  const candidateGroups = useMemo(
+    () => getDeploymentCandidateGroups(catalog, statusOverrides),
     [catalog, statusOverrides],
+  );
+  const candidates = useMemo(
+    () => candidateGroups.flatMap((group) => group.candidates),
+    [candidateGroups],
   );
   const defaultCandidate = useMemo(
     () => getSingleEligibleDeployment(candidates),
     [candidates],
   );
   const normalizedSearch = searchTerm.trim().toLowerCase();
-  const filteredCandidates = useMemo(() => {
+  const filteredGroups = useMemo(() => {
     if (!normalizedSearch) {
-      return candidates;
+      return candidateGroups;
     }
-    return candidates.filter((candidate) =>
-      [
-        candidate.providerLabel,
-        candidate.modelLabel,
-        candidate.modelId,
-        candidate.canonicalModelId,
-        candidate.exactWireModelId,
-        candidate.apiSurface,
-      ]
-        .filter(Boolean)
-        .some((value) => String(value).toLowerCase().includes(normalizedSearch)),
-    );
-  }, [candidates, normalizedSearch]);
-  const groupedCandidates = useMemo(() => {
-    const groups = new Map<string, typeof filteredCandidates>();
-    for (const candidate of filteredCandidates) {
-      const existing = groups.get(candidate.providerLabel) ?? [];
-      existing.push(candidate);
-      groups.set(candidate.providerLabel, existing);
-    }
-    return Array.from(groups.entries());
-  }, [filteredCandidates]);
+    return candidateGroups
+      .map((group) => ({
+        ...group,
+        candidates: group.candidates.filter((candidate) =>
+          [
+            group.modelLabel,
+            group.canonicalModelId,
+            candidate.deploymentLabel,
+            candidate.providerLabel,
+            candidate.modelLabel,
+            candidate.modelId,
+            candidate.canonicalModelId,
+            candidate.exactWireModelId,
+            candidate.apiSurface,
+          ]
+            .filter(Boolean)
+            .some((value) => String(value).toLowerCase().includes(normalizedSearch)),
+        ),
+      }))
+      .filter((group) => group.candidates.length > 0);
+  }, [candidateGroups, normalizedSearch]);
 
   return (
     <div className="space-y-4">
@@ -88,17 +91,17 @@ export function DeploymentPicker({
         <Search className="absolute left-3 top-2.5 h-4 w-4 text-slate-500" />
       </div>
 
-      {groupedCandidates.length === 0 ? (
+      {filteredGroups.length === 0 ? (
         <p className="text-sm text-slate-400">No backend-provided deployments match.</p>
       ) : (
         <div className="space-y-5">
-          {groupedCandidates.map(([providerLabel, providerCandidates]) => (
-            <section key={providerLabel} className="space-y-2">
+          {filteredGroups.map((group) => (
+            <section key={group.key} className="space-y-2">
               <h4 className="text-xs font-semibold uppercase text-slate-400">
-                {providerLabel}
+                {group.modelLabel}
               </h4>
               <div className="space-y-2">
-                {providerCandidates.map((candidate) => {
+                {group.candidates.map((candidate) => {
                   const selectable = isDeploymentCandidateSelectable(candidate);
                   const selected = sameDeploymentRef(
                     candidate.deploymentRef,
@@ -117,8 +120,13 @@ export function DeploymentPicker({
                         <div className="min-w-0 space-y-2">
                           <div className="flex flex-wrap items-center gap-2">
                             <p className="text-sm font-medium text-white">
-                              {candidate.modelLabel}
+                              {candidate.deploymentLabel}
                             </p>
+                            {candidate.deploymentLabel !== candidate.providerLabel ? (
+                              <Badge className="bg-slate-800 text-slate-200">
+                                {candidate.providerLabel}
+                              </Badge>
+                            ) : null}
                             {selected || defaulted ? (
                               <Badge className="bg-emerald-900/70 text-emerald-100">
                                 <CheckCircle className="mr-1 h-3 w-3" />
@@ -136,6 +144,7 @@ export function DeploymentPicker({
                             <p>Context: {candidate.contextWindowTokens} tokens</p>
                             <p>Output: {candidate.maxOutputTokens} tokens</p>
                             <p>API: {candidate.apiSurface}</p>
+                            <p>Wire: {candidate.exactWireModelId ?? candidate.modelId}</p>
                             <p>Pricing: {formatPricingStatus(candidate.pricingStatus)}</p>
                           </div>
                           {candidate.reason ? (
@@ -148,9 +157,14 @@ export function DeploymentPicker({
                           variant="outline"
                           disabled={!selectable || isPending}
                           onClick={() => onSelectDeployment(candidate.deploymentRef)}
+                          aria-label={deploymentSelectLabel(
+                            group.modelLabel,
+                            candidate.deploymentLabel,
+                            candidate.providerLabel,
+                          )}
                           className="border-slate-600 text-slate-200 hover:text-white"
                         >
-                          Select {candidate.modelLabel}
+                          Select {group.modelLabel} on {candidate.deploymentLabel}
                         </Button>
                       </div>
                     </div>
@@ -163,6 +177,17 @@ export function DeploymentPicker({
       )}
     </div>
   );
+}
+
+function deploymentSelectLabel(
+  modelLabel: string,
+  deploymentLabel: string,
+  providerLabel: string,
+): string {
+  if (deploymentLabel === providerLabel) {
+    return `Select ${modelLabel} on ${deploymentLabel}`;
+  }
+  return `Select ${modelLabel} on ${deploymentLabel} (${providerLabel})`;
 }
 
 export default DeploymentPicker;

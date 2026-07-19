@@ -355,6 +355,7 @@ def test_managed_connection_create_registers_custom_model_through_inventory_serv
                 "base_url": "https://llm.example.test/team",
                 "wire_model_id": "team/chat-model",
                 "model_label": "Team Chat Model",
+                "canonical_model_id": CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
             },
         )
 
@@ -369,11 +370,128 @@ def test_managed_connection_create_registers_custom_model_through_inventory_serv
         try:
             deployment = db.get(LLMModelDeployment, UUID(deployment_id))
             assert deployment.discovery_source == "custom"
+            assert deployment.canonical_model_id is None
             assert deployment.source_metadata["registration_source"] == (
                 "user_custom_model"
             )
         finally:
             db.close()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_managed_connection_create_normalizes_explicit_gpt_oss_canonical_alias() -> None:
+    """Managed creation stores the one canonical GPT-OSS identity for aliases."""
+
+    user = _user("llm-managed-gpt-oss-normalize")
+    client, app = _client(user)
+    try:
+        response = client.post(
+            (
+                "/api/llm/connection-presets/"
+                f"{CUSTOM_OPENAI_COMPATIBLE_PRESET_ID}/connection"
+            ),
+            json={
+                "api_key": "sk-team",
+                "display_label": "Team GPT-OSS endpoint",
+                "base_url": "https://llm.example.test/team",
+                "wire_model_id": "gpt-oss:20b",
+                "model_label": "Team GPT-OSS",
+                "canonical_model_id": "gpt-oss:20b",
+            },
+        )
+
+        assert response.status_code == 200, response.text
+        deployment_id = response.json()["deployment_ref"]["deployment_id"]
+
+        db = SessionLocal()
+        try:
+            deployment = db.get(LLMModelDeployment, UUID(deployment_id))
+            assert deployment.canonical_model_id == "openai/gpt-oss-20b"
+        finally:
+            db.close()
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_models_catalog_keeps_explicit_gpt_oss_and_generic_custom_identity_separate() -> None:
+    """Catalog projection groups only explicitly canonical GPT-OSS deployments."""
+
+    user = _user("llm-gpt-oss-canonical-grouping")
+    db = SessionLocal()
+    try:
+        connections = LLMConnectionService(db)
+        hf_connection = connections.create_draft(
+            user_id=user.id,
+            display_name="HF GPT-OSS",
+            connection_preset_id=HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+            runtime_family_id="openai_compatible_chat",
+            serving_operator_id="huggingface",
+            non_secret_config={"auth_mode": "bearer"},
+        )
+        custom_connection = connections.create_draft(
+            user_id=user.id,
+            display_name="Team endpoint",
+            connection_preset_id=CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+            runtime_family_id="openai_compatible_chat",
+            serving_operator_id="organization_managed",
+            non_secret_config={
+                "base_url": "https://llm.example.test/team",
+                "auth_mode": "bearer",
+            },
+        )
+        hf_deployment, _hf_route = LLMDeploymentService(db).create_preset_deployment(
+            user_id=user.id,
+            connection_id=hf_connection.id,
+            expected_connection_revision=int(hf_connection.revision),
+            wire_model_id="openai/gpt-oss-20b:fireworks-ai",
+            display_name="GPT-OSS 20B via HF",
+            canonical_model_id="openai/gpt-oss-20b",
+        )
+        custom_deployment, _custom_route = LLMDeploymentService(db).create_preset_deployment(
+            user_id=user.id,
+            connection_id=custom_connection.id,
+            expected_connection_revision=int(custom_connection.revision),
+            wire_model_id="team/chat-model",
+            display_name="Team Chat Model",
+        )
+        hf_deployment_id = str(hf_deployment.id)
+        custom_deployment_id = str(custom_deployment.id)
+        db.commit()
+    finally:
+        db.close()
+
+    client, app = _client(user)
+    try:
+        response = client.get("/api/llm/models")
+
+        assert response.status_code == 200, response.text
+        providers = response.json()["providers"]
+        hf = next(
+            provider
+            for provider in providers
+            if provider["id"] == HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID
+        )
+        custom = next(
+            provider
+            for provider in providers
+            if provider["id"] == CUSTOM_OPENAI_COMPATIBLE_PRESET_ID
+        )
+        hf_model = next(
+            model
+            for model in hf["models"]
+            if model["deploymentRef"]["deployment_id"] == hf_deployment_id
+        )
+        custom_model = next(
+            model
+            for model in custom["models"]
+            if model["deploymentRef"]["deployment_id"] == custom_deployment_id
+        )
+
+        assert hf_model["canonicalModelId"] == "openai/gpt-oss-20b"
+        assert hf_model["exactWireModelId"] == "openai/gpt-oss-20b:fireworks-ai"
+        assert custom_model["canonicalModelId"] == "team/chat-model"
+        assert custom_model["canonicalModelId"] != "openai/gpt-oss-20b"
     finally:
         app.dependency_overrides.clear()
 

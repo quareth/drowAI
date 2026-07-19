@@ -20,7 +20,12 @@ from backend.models import (
 
 from .connection_service import LLMConnectionService
 from .operation_registry import (
+    CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
     GPT_OSS_20B_PROVING_PRESET_ID,
+    HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+    NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+    OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
+    VLLM_OPENAI_COMPATIBLE_PRESET_ID,
     ConnectionOperationRegistry,
     OperationRegistryError,
 )
@@ -28,6 +33,24 @@ from .types import (
     LLMConnectionNotFoundError,
     LLMDeploymentNotFoundError,
     LLMDeploymentValidationError,
+)
+
+_GPT_OSS_20B_CANONICAL_MODEL_ID = "openai/gpt-oss-20b"
+_GPT_OSS_20B_CANONICAL_ALIASES = frozenset(
+    {
+        _GPT_OSS_20B_CANONICAL_MODEL_ID,
+        "gpt-oss-20b",
+        "gpt-oss:20b",
+    }
+)
+_PLACEHOLDER_CANONICAL_IDS = frozenset(
+    {
+        CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+        HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+        NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+        OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
+        VLLM_OPENAI_COMPATIBLE_PRESET_ID,
+    }
 )
 
 
@@ -67,7 +90,7 @@ class LLMDeploymentService:
             id=uuid4(),
             connection_id=_uuid(connection_id),
             wire_model_id=_exact_wire_model_id(wire_model_id),
-            canonical_model_id=_optional_text(canonical_model_id, 255),
+            canonical_model_id=_canonical_model_id(canonical_model_id),
             display_name=_required_text(display_name, 255),
             discovery_source=_required_text(discovery_source, 50),
             source_metadata=_optional_metadata(source_metadata),
@@ -326,6 +349,18 @@ def _optional_text(value: str | None, max_length: int) -> str | None:
     if value is None:
         return None
     return _required_text(value, max_length)
+
+
+def _canonical_model_id(value: str | None) -> str | None:
+    canonical = _optional_text(value, 255)
+    if canonical is None:
+        return None
+    normalized = canonical.lower()
+    if normalized in _PLACEHOLDER_CANONICAL_IDS:
+        return None
+    if normalized in _GPT_OSS_20B_CANONICAL_ALIASES:
+        return _GPT_OSS_20B_CANONICAL_MODEL_ID
+    return canonical
 
 
 def _optional_metadata(value: dict[str, Any] | None) -> dict[str, Any] | None:
