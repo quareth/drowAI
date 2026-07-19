@@ -17,3 +17,7 @@ updated_at: ""
 # Program Workflow State Example
 
 Set `doc_root` and `last_completed_index`. Router discovers numbered files; no per-file list in state.
+
+Valid active stages are `creating_guide`, `reviewing_guide`, `implementing`,
+`reviewing_implementation`, `reviewing_quality`, and `advance_queue`. The
+quality stage completes automatically before the router advances the queue.

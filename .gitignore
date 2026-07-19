@@ -84,6 +84,9 @@ pip-delete-this-directory.txt
 /error.log
 /*.db
 
+# Local developer design workspace
+/docs/devdocs/
+
 # Unit test / coverage reports
 htmlcov/
 e2e/output/
