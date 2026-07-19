@@ -28,6 +28,8 @@ import DeploymentPicker from "@/features/llm-provider/DeploymentPicker";
 import ProviderCredentialCard from "@/features/llm-provider/ProviderCredentialCard";
 import ProviderModelMenu from "@/features/llm-provider/ProviderModelMenu";
 import type {
+  LLMCatalogModel,
+  LLMCatalogProvider,
   LLMDeploymentRef,
   LLMDeploymentStatusOverride,
   LLMConnectionMetadata,
@@ -50,6 +52,12 @@ export interface ProviderSettingsSectionProps {
 const catalogQueryKey = ["/api/llm/models"] as const;
 const selectionQueryKey = ["/api/llm/selection"] as const;
 const reportingSelectionQueryKey = ["/api/llm/reporting-selection"] as const;
+
+interface ConnectionSettingsEntry {
+  model: LLMCatalogModel;
+  connection: LLMConnectionMetadata | LLMProvingMetadata;
+  usesProvingRoutes: boolean;
+}
 
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) {
@@ -123,23 +131,12 @@ export function ProviderSettingsSection({
 
   const providers = catalog?.providers ?? [];
   const showProvingSetup = isProvingSetupEnabled();
-  const connectionModels = providers.flatMap((provider) =>
-    provider.models
-      .filter((model) => Boolean(
-        model.connection?.enabled || (showProvingSetup && model.proving?.enabled),
-      ))
-      .map((model) => ({
-        provider,
-        model,
-        connection: model.connection ?? model.proving,
-        usesProvingRoutes: Boolean(model.proving?.enabled && !model.connection),
-      })),
-  );
+  const connectionModels = getConnectionSettingsEntries(providers, showProvingSetup);
   const hostedConnectionModels = connectionModels.filter(({ connection }) =>
-    connection ? isHostedConnection(connection) : false,
+    isHostedConnection(connection),
   );
   const advancedConnectionModels = connectionModels.filter(({ connection }) =>
-    connection ? !isHostedConnection(connection) : false,
+    !isHostedConnection(connection),
   );
   const credentialProviders = providers.filter((provider) =>
     isDirectHostedCredentialProvider(provider.id) ||
@@ -246,20 +243,18 @@ export function ProviderSettingsSection({
                     ))}
                   </div>
                 ) : null}
-                {hostedConnectionModels.map(({ provider, model, connection, usesProvingRoutes }) => (
-                  connection ? (
-                    <ConnectionSettingsPanel
-                      key={`${provider.id}:${model.id}:${connection.presetId}`}
-                      model={model}
-                      connection={connection}
-                      usesProvingRoutes={usesProvingRoutes}
-                      setupNote={connectionSetupNote(connection.presetId)}
-                      showOperationalDetails={usesProvingRoutes}
-                      onDeploymentStatusChange={handleDeploymentStatusChange}
-                      onSuccess={handleProviderSuccess}
-                      onError={onError}
-                    />
-                  ) : null
+                {hostedConnectionModels.map(({ model, connection, usesProvingRoutes }) => (
+                  <ConnectionSettingsPanel
+                    key={connectionSettingsKey(connection, usesProvingRoutes)}
+                    model={model}
+                    connection={connection}
+                    usesProvingRoutes={usesProvingRoutes}
+                    setupNote={connectionSetupNote(connection.presetId)}
+                    showOperationalDetails={usesProvingRoutes}
+                    onDeploymentStatusChange={handleDeploymentStatusChange}
+                    onSuccess={handleProviderSuccess}
+                    onError={onError}
+                  />
                 ))}
               </div>
             </section>
@@ -336,20 +331,18 @@ export function ProviderSettingsSection({
               </Button>
               {advancedOpen ? (
                 <div className="space-y-4">
-                  {advancedConnectionModels.map(({ provider, model, connection, usesProvingRoutes }) => (
-                    connection ? (
-                      <ConnectionSettingsPanel
-                        key={`${provider.id}:${model.id}:${connection.presetId}`}
-                        model={model}
-                        connection={connection}
-                        usesProvingRoutes={usesProvingRoutes}
-                        setupNote="Endpoint URL is required for this self-hosted or custom deployment."
-                        showOperationalDetails={false}
-                        onDeploymentStatusChange={handleDeploymentStatusChange}
-                        onSuccess={handleProviderSuccess}
-                        onError={onError}
-                      />
-                    ) : null
+                  {advancedConnectionModels.map(({ model, connection, usesProvingRoutes }) => (
+                    <ConnectionSettingsPanel
+                      key={connectionSettingsKey(connection, usesProvingRoutes)}
+                      model={model}
+                      connection={connection}
+                      usesProvingRoutes={usesProvingRoutes}
+                      setupNote="Endpoint URL is required for this self-hosted or custom deployment."
+                      showOperationalDetails={false}
+                      onDeploymentStatusChange={handleDeploymentStatusChange}
+                      onSuccess={handleProviderSuccess}
+                      onError={onError}
+                    />
                   ))}
                 </div>
               ) : null}
@@ -370,6 +363,82 @@ function coerceVisibleReasoningEffort(
 }
 
 export default ProviderSettingsSection;
+
+function getConnectionSettingsEntries(
+  providers: LLMCatalogProvider[],
+  showProvingSetup: boolean,
+): ConnectionSettingsEntry[] {
+  const entriesByConnection = new Map<string, ConnectionSettingsEntry>();
+  for (const provider of providers) {
+    for (const model of provider.models) {
+      const entry = getConnectionSettingsEntry(model, showProvingSetup);
+      if (!entry) {
+        continue;
+      }
+      const key = connectionSettingsKey(entry.connection, entry.usesProvingRoutes);
+      const current = entriesByConnection.get(key);
+      if (!current || connectionSettingsScore(entry) > connectionSettingsScore(current)) {
+        entriesByConnection.set(key, entry);
+      }
+    }
+  }
+  return Array.from(entriesByConnection.values());
+}
+
+function getConnectionSettingsEntry(
+  model: LLMCatalogModel,
+  showProvingSetup: boolean,
+): ConnectionSettingsEntry | null {
+  if (model.connection?.enabled) {
+    return {
+      model,
+      connection: model.connection,
+      usesProvingRoutes: false,
+    };
+  }
+  if (showProvingSetup && model.proving?.enabled) {
+    return {
+      model,
+      connection: model.proving,
+      usesProvingRoutes: true,
+    };
+  }
+  return null;
+}
+
+function connectionSettingsKey(
+  connection: LLMConnectionMetadata | LLMProvingMetadata,
+  usesProvingRoutes: boolean,
+): string {
+  return `${usesProvingRoutes ? "proving" : "managed"}:${connection.presetId}`;
+}
+
+function connectionSettingsScore(entry: ConnectionSettingsEntry): number {
+  const { connection, model } = entry;
+  let score = 0;
+  if (connection.connectionRef) {
+    score += 100;
+  }
+  if (connection.deploymentRef || model.deploymentRef) {
+    score += 50;
+  }
+  if (connection.runnability) {
+    score += 20;
+  }
+  if (connection.runnability?.runnable) {
+    score += 20;
+  }
+  if (connection.verification) {
+    score += 10;
+  }
+  if (connection.lifecycleState && !["not_created", "unknown"].includes(connection.lifecycleState)) {
+    score += 5;
+  }
+  if (model.runnable) {
+    score += 1;
+  }
+  return score;
+}
 
 function isHostedConnection(
   connection: LLMConnectionMetadata | LLMProvingMetadata,

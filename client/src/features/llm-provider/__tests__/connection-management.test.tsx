@@ -232,6 +232,333 @@ afterEach(() => {
 });
 
 describe("Connection management", () => {
+  it("deduplicates connection setup cards by preset without collapsing deployment inventory", async () => {
+    const nimConnectionRef = {
+      connection_id: "44444444-4444-4444-8444-444444444444",
+      expected_revision: 7,
+    };
+    const nimDeploymentRef = {
+      deployment_id: "55555555-5555-4555-8555-555555555555",
+      expected_revision: 8,
+    };
+    const secondNimDeploymentRef = {
+      deployment_id: "66666666-6666-4666-8666-666666666666",
+      expected_revision: 9,
+    };
+    const sharedNimConnection = {
+      presetId: "nvidia_nim_openai_compatible_chat",
+      displayName: "NVIDIA NIM Endpoint",
+      enabled: true,
+      authMode: "bearer_api_key",
+      userConfigFields: ["api_key"],
+      configFields: [
+        {
+          name: "api_key",
+          label: "API key",
+          fieldType: "password" as const,
+          required: true,
+          secret: true,
+        },
+      ],
+    };
+    const duplicateCatalog: LLMModelCatalogResponse = {
+      providers: [
+        {
+          id: "openai",
+          label: "OpenAI",
+          capabilities: [],
+          available: true,
+          selectable: true,
+          credential: {
+            user_id: 1,
+            provider: "openai",
+            enabled: true,
+            has_api_key: true,
+          },
+          defaultModel: "gpt-4.1",
+          models: [
+            {
+              ...catalog.providers[0].models[0],
+              id: "gpt-4.1",
+              label: "GPT-4.1",
+              deploymentRef: null,
+              connection: null,
+              proving: null,
+            },
+          ],
+        },
+        {
+          id: "anthropic",
+          label: "Anthropic",
+          capabilities: [],
+          available: true,
+          selectable: true,
+          credential: {
+            user_id: 1,
+            provider: "anthropic",
+            enabled: true,
+            has_api_key: true,
+          },
+          defaultModel: "claude-sonnet-4-6",
+          models: [
+            {
+              ...catalog.providers[0].models[0],
+              id: "claude-sonnet-4-6",
+              label: "Claude Sonnet 4.6",
+              deploymentRef: null,
+              connection: null,
+              proving: null,
+            },
+          ],
+        },
+        {
+          id: "nvidia_nim_openai_compatible_chat",
+          label: "NVIDIA NIM",
+          capabilities: [],
+          available: true,
+          selectable: true,
+          credential: {
+            user_id: 1,
+            provider: "nvidia_nim_openai_compatible_chat",
+            enabled: true,
+            has_api_key: true,
+          },
+          defaultModel: "meta/llama-3.1-8b-instruct",
+          models: [
+            {
+              ...catalog.providers[0].models[0],
+              id: "meta/llama-3.1-8b-instruct",
+              canonicalModelId: "meta/llama-3.1-8b-instruct",
+              exactWireModelId: "meta/llama-3.1-8b-instruct",
+              label: "Llama 3.1 8B via NVIDIA NIM",
+              deploymentRef: null,
+              runnable: false,
+              connection: {
+                ...sharedNimConnection,
+                lifecycleState: "not_created",
+                connectionRef: null,
+                deploymentRef: null,
+                verification: null,
+                runnability: {
+                  status: "not_created",
+                  selectable: true,
+                  runnable: false,
+                  reason: "Connection configuration is required.",
+                },
+              },
+              proving: null,
+            },
+            {
+              ...catalog.providers[0].models[0],
+              id: "meta/llama-3.1-70b-instruct",
+              canonicalModelId: "meta/llama-3.1-70b-instruct",
+              exactWireModelId: "meta/llama-3.1-70b-instruct",
+              label: "Llama 3.1 70B via NVIDIA NIM",
+              deploymentRef: nimDeploymentRef,
+              runnable: true,
+              connection: {
+                ...sharedNimConnection,
+                lifecycleState: "enabled",
+                connectionRef: nimConnectionRef,
+                deploymentRef: nimDeploymentRef,
+                verification: {
+                  status: "passed",
+                  code: "verified",
+                  message: "Verified",
+                  retryable: false,
+                },
+                runnability: {
+                  status: "runnable",
+                  selectable: true,
+                  runnable: true,
+                  reason: null,
+                },
+              },
+              proving: null,
+            },
+            {
+              ...catalog.providers[0].models[0],
+              id: "mistralai/mixtral-8x7b-instruct",
+              canonicalModelId: "mistralai/mixtral-8x7b-instruct",
+              exactWireModelId: "mistralai/mixtral-8x7b-instruct",
+              label: "Mixtral 8x7B via NVIDIA NIM",
+              deploymentRef: secondNimDeploymentRef,
+              runnable: true,
+              connection: {
+                ...sharedNimConnection,
+                lifecycleState: "enabled",
+                connectionRef: nimConnectionRef,
+                deploymentRef: secondNimDeploymentRef,
+                verification: {
+                  status: "passed",
+                  code: "verified",
+                  message: "Verified",
+                  retryable: false,
+                },
+                runnability: {
+                  status: "runnable",
+                  selectable: true,
+                  runnable: true,
+                  reason: null,
+                },
+              },
+              proving: null,
+            },
+          ],
+        },
+        managedCatalog.providers[0],
+      ],
+    };
+    mocked.fetchLLMModelCatalog.mockResolvedValue(duplicateCatalog);
+    mocked.createLLMManagedConnection.mockResolvedValue({
+      lifecycleState: "draft",
+      connectionRef: null,
+      deploymentRef: null,
+      verification: null,
+      runnability: {
+        status: "not_created",
+        selectable: true,
+        runnable: false,
+        reason: "Connection configuration is required.",
+      },
+    });
+    mocked.testLLMManagedConnection.mockResolvedValue({
+      status: "passed",
+      code: "verified",
+      message: "Connection verified.",
+      retryable: false,
+    });
+    mocked.refreshLLMManagedConnectionInventory.mockResolvedValue({
+      lifecycleState: "enabled",
+      connectionRef: nimConnectionRef,
+      deploymentRef: nimDeploymentRef,
+      verification: null,
+      runnability: {
+        status: "runnable",
+        selectable: true,
+        runnable: true,
+        reason: null,
+      },
+    });
+    mocked.enableLLMManagedConnection.mockResolvedValue({
+      lifecycleState: "enabled",
+      connectionRef: nimConnectionRef,
+      deploymentRef: nimDeploymentRef,
+      verification: null,
+      runnability: {
+        status: "runnable",
+        selectable: true,
+        runnable: true,
+        reason: null,
+      },
+    });
+
+    renderWithQueryClient(
+      <ProviderSettingsSection
+        queryEnabled
+        onSuccess={() => undefined}
+        onError={() => undefined}
+      />,
+    );
+
+    expect(await screen.findByText("NVIDIA NIM Endpoint")).toBeTruthy();
+    expect(screen.getAllByText("NVIDIA NIM Endpoint")).toHaveLength(1);
+    expect(screen.getByRole("button", { name: /update nvidia nim endpoint/i })).toBeTruthy();
+    expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Anthropic").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole("button", { name: "Advanced model preferences" }));
+    expect(screen.getByText("Llama 3.1 70B")).toBeTruthy();
+    expect(screen.getByText("Mixtral 8x7B")).toBeTruthy();
+
+    fireEvent.change(screen.getByLabelText("API key"), {
+      target: { value: "sk-nim" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: /update nvidia nim endpoint/i }));
+
+    await waitFor(() => {
+      expect(mocked.createLLMManagedConnection).toHaveBeenCalledWith(
+        "nvidia_nim_openai_compatible_chat",
+        expect.objectContaining({
+          wire_model_id: "meta/llama-3.1-70b-instruct",
+          canonical_model_id: null,
+        }),
+      );
+      expect(mocked.testLLMManagedConnection).toHaveBeenCalledWith(
+        "nvidia_nim_openai_compatible_chat",
+        {
+          api_key: "sk-nim",
+          connection_ref: nimConnectionRef,
+        },
+      );
+      expect(mocked.enableLLMManagedConnection).toHaveBeenCalledWith(
+        "nvidia_nim_openai_compatible_chat",
+        {
+          connection_ref: nimConnectionRef,
+          deployment_ref: nimDeploymentRef,
+        },
+      );
+    });
+  });
+
+  it("deduplicates advanced endpoint cards by preset while preserving distinct presets", async () => {
+    const duplicateAdvancedCatalog: LLMModelCatalogResponse = {
+      providers: [
+        {
+          ...managedCatalog.providers[0],
+          models: [
+            managedCatalog.providers[0].models[0],
+            {
+              ...managedCatalog.providers[0].models[0],
+              id: "team/second-model",
+              label: "Team Second Model",
+              exactWireModelId: "team/second-model",
+            },
+          ],
+        },
+        {
+          ...managedCatalog.providers[0],
+          id: "team_openai_compatible_chat",
+          label: "Team OpenAI-compatible",
+          credential: {
+            ...managedCatalog.providers[0].credential,
+            provider: "team_openai_compatible_chat",
+          },
+          defaultModel: "team/hosted-model",
+          models: [
+            {
+              ...managedCatalog.providers[0].models[0],
+              id: "team/hosted-model",
+              label: "Team Hosted Model",
+              exactWireModelId: "team/hosted-model",
+              connection: {
+                ...managedCatalog.providers[0].models[0].connection!,
+                presetId: "team_openai_compatible_chat",
+                displayName: "Team OpenAI-compatible HTTPS endpoint",
+              },
+            },
+          ],
+        },
+      ],
+    };
+    mocked.fetchLLMModelCatalog.mockResolvedValue(duplicateAdvancedCatalog);
+
+    renderWithQueryClient(
+      <ProviderSettingsSection
+        queryEnabled
+        onSuccess={() => undefined}
+        onError={() => undefined}
+      />,
+    );
+
+    fireEvent.click(await screen.findByRole("button", {
+      name: "Advanced/self-hosted endpoints",
+    }));
+
+    expect(screen.getAllByText("Custom OpenAI-compatible HTTPS endpoint")).toHaveLength(1);
+    expect(screen.getAllByText("Team OpenAI-compatible HTTPS endpoint")).toHaveLength(1);
+  });
+
   it("separates hosted API-key setup from advanced endpoint setup", async () => {
     const hostedAndAdvancedCatalog: LLMModelCatalogResponse = {
       providers: [

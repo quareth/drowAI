@@ -44,3 +44,8 @@ Target version: `0.1.0`.
 - The canonical local launcher is now `scripts/local_dev.py`; startup can
   interactively provision its PostgreSQL login role, database, and pgvector
   extension before running migrations.
+
+### Fixed
+
+- Provider settings now render one setup card per LLM connection preset instead
+  of duplicating hosted endpoint cards for every model in the catalog.
