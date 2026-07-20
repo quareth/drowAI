@@ -4,12 +4,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from core.llm.role_contracts import (
-    ROLE_POST_TOOL_ARTICULATOR,
-    ROLE_TOOL_CATEGORY_SELECTOR,
-    ROLE_TOOL_OUTPUT_COMPRESSOR,
-)
-
 from ..contracts.structured_output_strategy import freeze_structured_output_strategies
 from ..contracts.tool_contracts import freeze_tool_choice_modes
 from ..core.capabilities import LLMCapability, freeze_capabilities
@@ -93,12 +87,6 @@ OPENAI_LISTABLE_MODEL_LABELS: dict[str, str] = {
     "gpt-5.6-terra": "GPT-5.6 Terra",
     "gpt-5.6-luna": "GPT-5.6 Luna",
     OPENAI_GPT_OSS_20B_MODEL_ID: "GPT-OSS 20B",
-}
-
-OPENAI_INTERNAL_ROLE_MODELS: dict[str, str] = {
-    ROLE_TOOL_OUTPUT_COMPRESSOR: "gpt-5-nano",
-    ROLE_TOOL_CATEGORY_SELECTOR: "gpt-5-mini",
-    ROLE_POST_TOOL_ARTICULATOR: "gpt-5-mini",
 }
 
 _OPENAI_MODEL_CAPABILITIES = freeze_capabilities(
@@ -232,7 +220,6 @@ def build_openai_provider_profile() -> ProviderProfile:
         id=OPENAI_PROVIDER_ID,
         display_name="OpenAI",
         capabilities=freeze_capabilities((LLMCapability.REMOTE_CONVERSATION_LIFECYCLE,)),
-        internal_role_models=OPENAI_INTERNAL_ROLE_MODELS,
     )
 
 
@@ -351,7 +338,6 @@ def _openai_compatible_chat_profile(model_id: str, *, listable: bool) -> ModelPr
         listable=listable,
         tool_choice_modes=frozenset({"auto", "required"}),
         structured_output_strategies=_OPENAI_STRUCTURED_OUTPUT_STRATEGIES,
-        role_model_policy="selected_model",
     )
 
 
@@ -392,7 +378,6 @@ __all__ = [
     "OPENAI_EXACT_MODEL_IDS",
     "OPENAI_GPT_OSS_20B_MODEL_ID",
     "OPENAI_LEGACY_CHAT_MODEL_IDS",
-    "OPENAI_INTERNAL_ROLE_MODELS",
     "OPENAI_LISTABLE_MODEL_IDS",
     "OPENAI_NON_LISTABLE_RESPONSES_MODEL_IDS",
     "OPENAI_RESPONSES_MAX_OUTPUT_TOKENS",

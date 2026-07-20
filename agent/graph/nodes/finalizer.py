@@ -5,6 +5,11 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, List, Mapping, Optional
 
+from core.llm.runtime_selection import (
+    has_versioned_runtime_selection_marker,
+    project_checkpoint_runtime_selection,
+)
+
 from ..infrastructure.state_models import GraphRuntimeContext
 from ..state import InteractiveState
 
@@ -112,6 +117,8 @@ def _runtime_selection_snapshot(
 
     existing = metadata.get("llm_runtime_selection")
     if isinstance(existing, Mapping):
+        if has_versioned_runtime_selection_marker(existing):
+            return project_checkpoint_runtime_selection(existing)
         credential_ref = existing.get("credential_ref")
         if isinstance(credential_ref, Mapping):
             return {

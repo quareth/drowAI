@@ -352,7 +352,7 @@ def test_default_compressor_requires_runtime_resolver() -> None:
                         "model": "gpt-5-mini",
                         "provider": "openai",
                         "reasoning_effort": "minimal",
-                        "source": "internal_fixed",
+                        "source": "user_selected",
                     },
                 )(),
             )

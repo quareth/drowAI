@@ -11,8 +11,13 @@ import logging
 from typing import Any, Mapping
 
 from sqlalchemy.orm import Session
+
 from backend.config.feature_flags import is_semantic_memory_runtime_enabled
 from backend.services.metrics.utils import safe_inc
+from core.llm.runtime_selection import (
+    has_versioned_runtime_selection_marker,
+    project_checkpoint_runtime_selection,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,25 +38,11 @@ def _coerce_runtime_selection(
 
     if not isinstance(value, Mapping):
         return None
-    if value.get("schema_version") == 2 or "deployment_ref" in value:
-        deployment_ref = value.get("deployment_ref")
-        if not isinstance(deployment_ref, Mapping):
+    if has_versioned_runtime_selection_marker(value):
+        try:
+            return project_checkpoint_runtime_selection(value)
+        except (KeyError, TypeError, ValueError):
             return None
-        deployment_id = str(deployment_ref.get("deployment_id") or "").strip()
-        expected_revision = deployment_ref.get("expected_revision")
-        if not deployment_id or not isinstance(expected_revision, int):
-            return None
-        return {
-            "schema_version": 2,
-            "deployment_ref": {
-                "deployment_id": deployment_id,
-                "expected_revision": expected_revision,
-            },
-            "preferred_route_id": value.get("preferred_route_id"),
-            "reasoning_effort": value.get("reasoning_effort"),
-            "legacy_provider": value.get("legacy_provider"),
-            "legacy_model": value.get("legacy_model"),
-        }
     credential_ref = value.get("credential_ref")
     if not isinstance(credential_ref, Mapping):
         return None

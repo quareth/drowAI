@@ -261,6 +261,54 @@ function upsertNormalizedStep(draft: TaskStreamState, step: Step | StreamPacket,
   return { changed, itemsChanged };
 }
 
+function clearStreamingItems(draft: TaskStreamState, sequence?: number): MutationResult {
+  let changed = false;
+  let itemsChanged = false;
+  const cleared: string[] = [];
+  draft.items = draft.items.map(item => {
+    if (!item.isStreaming) return item;
+    if (typeof sequence === "number") {
+      const metaSeq = (item.metadata as Record<string, unknown> | undefined)?.turn_sequence;
+      const itemSequence =
+        typeof metaSeq === "number"
+          ? metaSeq
+          : typeof item.sequence === "number"
+            ? item.sequence
+            : undefined;
+      if (itemSequence !== sequence) {
+        return item;
+      }
+    }
+    const metadata = {
+      ...(item.metadata ?? {}),
+      streaming: false,
+      is_streaming: false,
+      in_progress: false,
+    } as Record<string, unknown>;
+    const updated: Step = {
+      ...item,
+      metadata,
+      isStreaming: false,
+    };
+    if (item.__internalKey) {
+      cleared.push(item.__internalKey);
+    }
+    changed = true;
+    itemsChanged = true;
+    return updated;
+  });
+  for (const key of cleared) {
+    draft.streamingKeys.delete(key);
+  }
+  return { changed, itemsChanged };
+}
+
+function isAssistantFinal(message: Step | StreamPacket): boolean {
+  const normalized = normalizeStep(message);
+  const metadata = (normalized.metadata ?? {}) as Record<string, unknown>;
+  return normalized.type === "assistant_final" || metadata.subtype === "assistant_final";
+}
+
 export function setTaskHistory(
   taskId: number,
   steps: Step[],
@@ -290,7 +338,20 @@ export function setTaskHistory(
 
 export function applyStreamMessage(taskId: number, message: Step | StreamPacket, sequenceHint?: number): void {
   if (!taskId) return;
-  mutateTaskState(taskId, draft => upsertNormalizedStep(draft, message, sequenceHint));
+  const terminal = isAssistantFinal(message);
+  mutateTaskState(taskId, draft => {
+    const completion = terminal
+      ? clearStreamingItems(draft)
+      : { changed: false, itemsChanged: false };
+    const upsert = upsertNormalizedStep(draft, message, sequenceHint);
+    return {
+      changed: completion.changed || upsert.changed,
+      itemsChanged: completion.itemsChanged || upsert.itemsChanged,
+    };
+  });
+  if (terminal) {
+    setChatState(taskId, "input");
+  }
 }
 
 export function appendStreamingChunk(taskId: number, chunk: OpenAIChunk, fallbackSequence?: number): void {
@@ -337,47 +398,7 @@ export function advanceStreamSequence(taskId: number, sequence?: number): void {
 
 export function markStreamingComplete(taskId: number, sequence?: number): void {
   if (!taskId) return;
-  mutateTaskState(taskId, draft => {
-    let changed = false;
-    let itemsChanged = false;
-    const cleared: string[] = [];
-    draft.items = draft.items.map(item => {
-      if (!item.isStreaming) return item;
-      if (typeof sequence === "number") {
-        const metaSeq = (item.metadata as Record<string, unknown> | undefined)?.turn_sequence;
-        const itemSequence =
-          typeof metaSeq === "number"
-            ? metaSeq
-            : typeof item.sequence === "number"
-              ? item.sequence
-              : undefined;
-        if (itemSequence !== sequence) {
-          return item;
-        }
-      }
-      const metadata = {
-        ...(item.metadata ?? {}),
-        streaming: false,
-        is_streaming: false,
-        in_progress: false,
-      } as Record<string, unknown>;
-      const updated: Step = {
-        ...item,
-        metadata,
-        isStreaming: false,
-      };
-      if (item.__internalKey) {
-        cleared.push(item.__internalKey);
-      }
-      changed = true;
-      itemsChanged = true;
-      return updated;
-    });
-    for (const key of cleared) {
-      draft.streamingKeys.delete(key);
-    }
-    return { changed, itemsChanged };
-  });
+  mutateTaskState(taskId, draft => clearStreamingItems(draft, sequence));
   setChatState(taskId, "input");
 }
 

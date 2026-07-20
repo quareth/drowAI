@@ -45,14 +45,10 @@ class MockGraphRuntimeContext:
         api_key: Optional[str] = None,
         provider: Optional[str] = None,
         model: Optional[str] = None,
-        reasoning_provider: Optional[str] = None,
-        reasoning_model: Optional[str] = None,
     ) -> None:
         self.api_key = api_key
         self.provider = provider
         self.model = model
-        self.reasoning_provider = reasoning_provider
-        self.reasoning_model = reasoning_model
         self.task_id = 1
 
 
@@ -266,19 +262,19 @@ class TestResolveLLMClient:
         assert call["target"].model == "claude-sonnet-4-6"
         assert call["target"].reasoning_effort == "high"
 
-    def test_resolves_articulation_role_from_internal_fixed_policy(self) -> None:
+    def test_articulation_role_inherits_selected_model_with_low_effort(self) -> None:
         mock_client = MagicMock(spec=LLMClient)
         resolver = FakeRuntimeClientResolver(mock_client)
 
         resolve_llm_client(
-            {"provider": "openai", "model": "frontend-model"},
+            {"provider": "openai", "model": "gpt-5.2"},
             config=_runtime_config(resolver),
             role=ROLE_POST_TOOL_ARTICULATOR,
         )
 
         call = resolver.calls[0]
-        assert call["target"].model == "gpt-5-mini"
-        assert call["target"].reasoning_effort == "minimal"
+        assert call["target"].model == "gpt-5.2"
+        assert call["target"].reasoning_effort == "low"
         assert call["purpose"] == "graph:post_tool_articulator"
 
     def test_raw_api_key_metadata_is_rejected_without_runtime_services(self) -> None:

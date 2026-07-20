@@ -95,7 +95,6 @@ def test_build_checkpoint_execution_config_carries_provider_runtime_for_invocati
         "actor_id": "langgraph",
         "runner_id": "runner-a",
         "execution_site_id": "site-a",
-        "llm_runtime_selection": selection,
         "reasoning_effort": "medium",
     }
     assert "credential_ref" not in repr(configurable)

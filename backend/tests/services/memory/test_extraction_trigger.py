@@ -26,7 +26,6 @@ def _deployment_runtime_selection() -> dict[str, Any]:
             "deployment_id": "cc8a325e-e6c7-4fa4-9218-40999b38e836",
             "expected_revision": 4,
         },
-        "preferred_route_id": None,
         "reasoning_effort": "medium",
         "legacy_provider": "openai",
         "legacy_model": "gpt-5.2",

@@ -15,6 +15,9 @@ from agent.graph.infrastructure.state_models import checkpoint_safe_llm_runtime_
 from backend.config import E2E_DETERMINISTIC_MODE
 from backend.database import SessionLocal
 from backend.services.chat.message_service import ChatMessageService
+from backend.services.langgraph_chat.checkpoint.runtime_selection_resolver import (
+    resolve_checkpoint_runtime_selection,
+)
 from backend.services.langgraph_chat.contracts import LangGraphChatResult
 from backend.services.langgraph_chat.exceptions import HITLError
 from backend.services.langgraph_chat.hitl_constants import (
@@ -692,76 +695,11 @@ class CheckpointContinuationService:
             values = snapshot.get("values") or snapshot
         return self._extract_checkpoint_runtime_hint(values)
 
-    @classmethod
-    def _extract_checkpoint_runtime_hint(cls, values: Any) -> Optional[Dict[str, Any]]:
-        """Extract the provider/model continuation hint from checkpoint values."""
-
-        if not isinstance(values, Mapping):
-            return None
-
-        candidates: list[Mapping[str, Any]] = []
-        cls._append_runtime_hint_candidates(candidates, values)
-        facts = values.get("facts")
-        if isinstance(facts, Mapping):
-            cls._append_runtime_hint_candidates(candidates, facts)
-            metadata = facts.get("metadata")
-        else:
-            metadata = getattr(facts, "metadata", None)
-        if isinstance(metadata, Mapping):
-            cls._append_runtime_hint_candidates(candidates, metadata)
-
-        for candidate in candidates:
-            hint = cls._sanitize_runtime_hint(candidate)
-            if hint:
-                return hint
-        return None
-
     @staticmethod
-    def _append_runtime_hint_candidates(
-        candidates: list[Mapping[str, Any]],
-        source: Mapping[str, Any],
-    ) -> None:
-        """Collect possible runtime hint mappings from a checkpoint payload."""
+    def _extract_checkpoint_runtime_hint(values: Any) -> Optional[Dict[str, Any]]:
+        """Resolve the authoritative non-secret runtime identity from state."""
 
-        candidates.append(source)
-        for key in ("llm_runtime_selection", "graph_runtime_context"):
-            value = source.get(key)
-            if isinstance(value, Mapping):
-                candidates.append(value)
-
-    @staticmethod
-    def _sanitize_runtime_hint(source: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
-        """Return only non-secret runtime hint fields used for fresh resolution."""
-
-        if isinstance(source.get("deployment_ref"), Mapping):
-            hint: Dict[str, Any] = {"schema_version": 2}
-            deployment_ref = source["deployment_ref"]
-            safe_ref: Dict[str, Any] = {}
-            deployment_id = deployment_ref.get("deployment_id")
-            expected_revision = deployment_ref.get("expected_revision")
-            if isinstance(deployment_id, str) and deployment_id.strip():
-                safe_ref["deployment_id"] = deployment_id.strip()
-            if isinstance(expected_revision, int):
-                safe_ref["expected_revision"] = expected_revision
-            if safe_ref:
-                hint["deployment_ref"] = safe_ref
-            for key in (
-                "preferred_route_id",
-                "reasoning_effort",
-                "legacy_provider",
-                "legacy_model",
-            ):
-                value = source.get(key)
-                if isinstance(value, str) and value.strip():
-                    hint[key] = value.strip()
-            return hint if "deployment_ref" in hint else None
-
-        hint: Dict[str, Any] = {}
-        for key in ("provider", "model", "reasoning_effort"):
-            value = source.get(key)
-            if isinstance(value, str) and value.strip():
-                hint[key] = value.strip()
-        return hint or None
+        return resolve_checkpoint_runtime_selection(values)
 
     async def _compile_graph_for_name(
         self,

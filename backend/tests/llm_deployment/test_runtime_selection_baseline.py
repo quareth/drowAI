@@ -181,7 +181,6 @@ def test_checkpoint_runtime_hint_and_execution_config_remain_non_secret() -> Non
     assert config["configurable"]["runtime_projection"] == {
         "task_id": 7,
         "graph_thread_id": "a" * 32,
-        "llm_runtime_selection": selection,
         "reasoning_effort": "medium",
         "user_id": 11,
     }

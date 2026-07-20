@@ -141,7 +141,6 @@ def build_metadata(
         workspace_path=metadata_source.get("workspace_path"),
         provider=metadata.get("provider"),
         model=chat_inputs.model,
-        llm_runtime_selection=safe_runtime_selection,
         reasoning_effort=chat_inputs.reasoning_effort,
         turn_id=turn_id,
         turn_sequence=turn_sequence,
@@ -343,8 +342,6 @@ def build_thread_config(
         "execution_site_id": runtime_config.metadata.get("execution_site_id"),
         "workspace_path": runtime_config.metadata.get("workspace_path"),
     }
-    if safe_runtime_selection:
-        runtime_projection["llm_runtime_selection"] = safe_runtime_selection
     configurable.setdefault("runtime_projection", runtime_projection)
     if safe_runtime_selection:
         configurable.setdefault(

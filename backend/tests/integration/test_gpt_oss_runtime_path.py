@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 from typing import Any, Iterator, get_args
 
@@ -46,7 +45,6 @@ from backend.services.llm_provider.runtime_client_resolver import (
     LLMRuntimeClientResolver,
 )
 from backend.services.llm_provider.types import (
-    GuardedHTTPResponse,
     LLMAuthMode,
     LLMConnectionCredentialRef,
     LLMConnectionOperation,
@@ -203,29 +201,33 @@ async def test_gpt_oss_runtime_uses_shared_authorities_without_fallback(
     )
     guarded_calls: list[dict[str, Any]] = []
 
-    def fake_execute(self, operation, provider, secret, json_body=None, operation_target=None):
-        del self
-        del operation_target
-        body = dict(json_body or {})
+    def record_guarded_call(self, json_body: Any) -> dict[str, Any]:
+        body = dict(json_body)
         guarded_calls.append(
             {
-                "operation": LLMConnectionOperation(operation),
-                "provider": provider,
-                "secret": secret.value,
+                "operation": self._operation_target.operation,
+                "provider": self._operation_target.provider,
+                "secret": self._secret.value,
                 "json_body": body,
             }
         )
-        if body.get("stream") is True:
-            return GuardedHTTPResponse(
-                status_code=200,
-                body=(
-                    b'data: {"id":"stream-1","choices":[{"delta":{"content":"streamed"}}]}\n\n'
-                    b'data: {"id":"stream-1","choices":[],"usage":{"prompt_tokens":5,'
-                    b'"completion_tokens":2,"total_tokens":7}}\n\n'
-                    b'data: [DONE]\n\n'
-                ),
-                audit_id="runtime-guarded-stream-audit",
-            )
+        return body
+
+    async def fake_stream_json_events(self, json_body: Any) -> Any:
+        record_guarded_call(self, json_body)
+        yield {"id": "stream-1", "choices": [{"delta": {"content": "streamed"}}]}
+        yield {
+            "id": "stream-1",
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 2,
+                "total_tokens": 7,
+            },
+        }
+
+    async def fake_request_json(self, json_body: Any) -> Any:
+        body = record_guarded_call(self, json_body)
         if body.get("tools"):
             response_payload = {
                 "choices": [
@@ -270,15 +272,17 @@ async def test_gpt_oss_runtime_uses_shared_authorities_without_fallback(
                     "total_tokens": 10,
                 },
             }
-        return GuardedHTTPResponse(
-            status_code=200,
-            body=json.dumps(response_payload).encode(),
-            audit_id="runtime-guarded-audit",
-        )
+        return response_payload
 
     monkeypatch.setattr(
-        "backend.services.llm_provider.runtime_client_builder.GuardedTransport.execute",
-        fake_execute,
+        "backend.services.llm_provider.guarded_transport."
+        "GuardedAsyncInferenceTransport.request_json",
+        fake_request_json,
+    )
+    monkeypatch.setattr(
+        "backend.services.llm_provider.guarded_transport."
+        "GuardedAsyncInferenceTransport.stream_json_events",
+        fake_stream_json_events,
     )
     owner, _ = identity_users
     llm_identity_db.add(Tenant(id=74, slug="gpt-oss-runtime", name="GPT-OSS Runtime"))
@@ -483,7 +487,7 @@ async def test_gpt_oss_runtime_uses_shared_authorities_without_fallback(
 
 
 @pytest.mark.asyncio
-async def test_custom_compatible_runtime_uses_guarded_executor_without_sdk_fallback(
+async def test_custom_compatible_runtime_uses_async_guarded_transport_without_sdk_fallback(
     monkeypatch: pytest.MonkeyPatch,
     llm_identity_db: Session,
     identity_users: tuple[User, User],
@@ -507,35 +511,29 @@ async def test_custom_compatible_runtime_uses_guarded_executor_without_sdk_fallb
     )
     guarded_calls: list[dict[str, Any]] = []
 
-    def fake_execute(self, operation, provider, secret, json_body=None, operation_target=None):
-        del self
+    async def fake_request_json(self, json_body):
         guarded_calls.append(
             {
-                "operation": LLMConnectionOperation(operation),
-                "provider": provider,
-                "secret": secret.value,
-                "url": operation_target.url if operation_target is not None else None,
+                "operation": self._operation_target.operation,
+                "provider": self._operation_target.provider,
+                "secret": self._secret.value,
+                "url": self._operation_target.url,
                 "json_body": dict(json_body or {}),
             }
         )
-        return GuardedHTTPResponse(
-            status_code=200,
-            body=json.dumps(
-                {
-                    "choices": [{"message": {"content": "custom ok"}}],
-                    "usage": {
-                        "prompt_tokens": 5,
-                        "completion_tokens": 2,
-                        "total_tokens": 7,
-                    },
-                }
-            ).encode(),
-            audit_id="custom-runtime-guarded-audit",
-        )
+        return {
+            "choices": [{"message": {"content": "custom ok"}}],
+            "usage": {
+                "prompt_tokens": 5,
+                "completion_tokens": 2,
+                "total_tokens": 7,
+            },
+        }
 
     monkeypatch.setattr(
-        "backend.services.llm_provider.runtime_client_builder.GuardedTransport.execute",
-        fake_execute,
+        "backend.services.llm_provider.guarded_transport."
+        "GuardedAsyncInferenceTransport.request_json",
+        fake_request_json,
     )
     owner, _ = identity_users
     connections = LLMConnectionService(llm_identity_db)

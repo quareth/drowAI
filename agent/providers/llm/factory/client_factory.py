@@ -401,7 +401,7 @@ class LLMClientFactory:
             )
         kwargs.pop("wire_model_id", None)
         kwargs.pop("dialect_policy_id", None)
-        kwargs.pop("guarded_executor", None)
+        kwargs.pop("inference_transport", None)
         return provider_class(
             api_key=api_key,
             model=resolution.provider_request_model,

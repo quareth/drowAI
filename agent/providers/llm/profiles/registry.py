@@ -9,9 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType
-from typing import Iterable, Mapping
-
-from core.llm.role_requirements import get_role_requirements
+from typing import Iterable
 
 from ..catalog.manifest_loader import build_model_profiles_from_manifest, load_catalog_manifest
 from ..contracts.structured_output_strategy import freeze_structured_output_strategies
@@ -23,7 +21,6 @@ from ..core.identity import (
     OPENAI_PROVIDER_ID,
     ProviderModelRef,
     get_openai_legacy_compatibility_family,
-    normalize_model_id,
     normalize_provider_id,
 )
 
@@ -38,16 +35,10 @@ class ProviderProfile:
     id: str
     display_name: str
     capabilities: frozenset[LLMCapability] = field(default_factory=frozenset)
-    internal_role_models: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "id", normalize_provider_id(self.id))
         object.__setattr__(self, "capabilities", freeze_capabilities(self.capabilities))
-        object.__setattr__(
-            self,
-            "internal_role_models",
-            MappingProxyType(_normalize_internal_role_models(self.internal_role_models)),
-        )
 
     def supports(self, capability: CapabilityInput) -> bool:
         """Return True when the provider exposes a provider-wide capability."""
@@ -86,7 +77,6 @@ class ModelProfile:
     aliases: tuple[str, ...] = field(default_factory=tuple)
     pricing_schedule_ref: str | None = None
     pricing_provenance: str | None = None
-    role_model_policy: str = "provider_defaults"
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "ref", self.ref.normalized())
@@ -118,10 +108,6 @@ class ModelProfile:
         object.__setattr__(self, "canonical_model_id", str(canonical_model_id).strip())
         object.__setattr__(self, "lifecycle", str(self.lifecycle).strip().lower())
         object.__setattr__(self, "support_tier", str(self.support_tier).strip().lower())
-        role_model_policy = str(self.role_model_policy).strip().lower()
-        if role_model_policy not in {"provider_defaults", "selected_model"}:
-            raise ValueError("role_model_policy must be provider_defaults or selected_model")
-        object.__setattr__(self, "role_model_policy", role_model_policy)
         object.__setattr__(
             self,
             "aliases",
@@ -252,28 +238,6 @@ class ModelProfileRegistry:
         profile.require_capability(capability)
         return profile
 
-    def resolve_provider_internal_role_model(
-        self,
-        provider_id: str,
-        role: str,
-    ) -> ProviderModelRef:
-        """Return and validate the provider-owned model for an internal role."""
-        provider_profile = self.require_provider_profile(provider_id)
-        role_key = str(role).strip()
-        try:
-            model = provider_profile.internal_role_models[role_key]
-        except KeyError as exc:
-            raise LLMProfileNotFoundError(
-                f"No internal model configured for provider '{provider_profile.id}' "
-                f"and role '{role_key}'",
-                provider=provider_profile.id,
-            ) from exc
-
-        ref = ProviderModelRef(provider_profile.id, model)
-        model_profile = self.require_model_profile(ref)
-        _validate_internal_role_model(role_key, model_profile)
-        return model_profile.ref
-
     def resolve_context_window_tokens(self, ref: ProviderModelRef) -> int:
         """Return the model profile's declared context-window ceiling."""
         return self.require_model_profile(ref).context_window_tokens
@@ -311,35 +275,9 @@ class ModelProfileRegistry:
         return None
 
 
-def _normalize_internal_role_models(
-    internal_role_models: Mapping[str, str],
-) -> dict[str, str]:
-    """Return normalized role -> model mapping for a provider profile."""
-    normalized: dict[str, str] = {}
-    for role, model in dict(internal_role_models).items():
-        role_key = str(role).strip()
-        if not role_key:
-            raise ValueError("internal role key cannot be empty")
-        normalized[role_key] = normalize_model_id(str(model))
-    return normalized
-
-
-def _validate_internal_role_model(role: str, profile: ModelProfile) -> None:
-    """Validate that a model profile can satisfy one internal role."""
-    requirements = get_role_requirements(role)
-    for capability in requirements.required_capabilities:
-        profile.require_capability(capability)
-    if requirements.structured_output_required and not profile.structured_output_strategies:
-        raise ValueError(
-            f"Internal role '{role}' target '{profile.ref}' must support a "
-            "structured output strategy"
-        )
-
-
 from .anthropic import (  # noqa: E402
     ANTHROPIC_API_SURFACE_MESSAGES,
     ANTHROPIC_DEFAULT_MODEL_ID,
-    ANTHROPIC_INTERNAL_ROLE_MODELS,
     build_anthropic_provider_profile,
 )
 from .openai import (  # noqa: E402
@@ -347,7 +285,6 @@ from .openai import (  # noqa: E402
     OPENAI_API_SURFACE_RESPONSES,
     OPENAI_DEFAULT_MODEL_ID,
     OPENAI_GPT_OSS_20B_MODEL_ID,
-    OPENAI_INTERNAL_ROLE_MODELS,
     OPENAI_RESPONSES_MAX_OUTPUT_TOKENS,
     build_openai_compatibility_rules,
     build_openai_provider_profile,
@@ -450,11 +387,6 @@ def require_model_capability(ref: ProviderModelRef, capability: CapabilityInput)
     return MODEL_PROFILE_REGISTRY.require_model_capability(ref, capability)
 
 
-def resolve_provider_internal_role_model(provider_id: str, role: str) -> ProviderModelRef:
-    """Return the provider-owned model reference for an internal role."""
-    return MODEL_PROFILE_REGISTRY.resolve_provider_internal_role_model(provider_id, role)
-
-
 def resolve_context_window_tokens(ref: ProviderModelRef) -> int:
     """Return the selected model's declared context-window ceiling."""
     return MODEL_PROFILE_REGISTRY.resolve_context_window_tokens(ref)
@@ -486,7 +418,6 @@ __all__ = [
     "ANTHROPIC_API_SURFACE_MESSAGES",
     "ANTHROPIC_DEFAULT_MODEL_ID",
     "ANTHROPIC_EXACT_MODEL_IDS",
-    "ANTHROPIC_INTERNAL_ROLE_MODELS",
     "ANTHROPIC_LISTABLE_MODEL_IDS",
     "ANTHROPIC_NON_LISTABLE_MODEL_IDS",
     "OPENAI_API_SURFACE_CHAT_COMPLETIONS",
@@ -494,7 +425,6 @@ __all__ = [
     "OPENAI_DEFAULT_MODEL_ID",
     "OPENAI_EXACT_MODEL_IDS",
     "OPENAI_GPT_OSS_20B_MODEL_ID",
-    "OPENAI_INTERNAL_ROLE_MODELS",
     "OPENAI_LEGACY_CHAT_MODEL_IDS",
     "OPENAI_LISTABLE_MODEL_IDS",
     "OPENAI_NON_LISTABLE_RESPONSES_MODEL_IDS",
@@ -510,7 +440,6 @@ __all__ = [
     "require_model_profile",
     "require_provider_capability",
     "require_provider_profile",
-    "resolve_provider_internal_role_model",
     "resolve_context_window_tokens",
     "resolve_max_output_tokens",
     "supports_model",

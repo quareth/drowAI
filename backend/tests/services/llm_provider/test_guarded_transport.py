@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
+import httpx
 import pytest
 import requests
 
 import backend.services.llm_provider.guarded_transport as guarded_transport_module
 from backend.services.llm_provider.egress_policy import FixedProviderEgressPolicy
 from backend.services.llm_provider.guarded_transport import (
+    GuardedAsyncInferenceTransport,
     GuardedTransport,
     GuardedTransportError,
 )
@@ -103,6 +106,212 @@ def _transport(
         ),
         bounds=bounds or GuardedEgressBounds(),
     )
+
+
+def _async_transport(
+    handler: Any,
+    *,
+    bounds: GuardedEgressBounds | None = None,
+) -> GuardedAsyncInferenceTransport:
+    """Build async inference transport with deterministic DNS and HTTP I/O."""
+
+    policy = FixedProviderEgressPolicy(
+        dns_resolver=lambda _host, _port: ("93.184.216.34",),
+    )
+    target = ConnectionOperationRegistry().resolve(
+        LLMConnectionOperation.INFERENCE,
+        provider="openai",
+    )
+
+    def client_factory(**kwargs: Any) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            transport=httpx.MockTransport(handler),
+            **kwargs,
+        )
+
+    return GuardedAsyncInferenceTransport(
+        operation_target=target,
+        secret=ProviderSecret(provider="openai", value="sk-secret"),
+        egress_policy=policy,
+        client_factory=client_factory,
+        timeouts=GuardedEgressTimeouts(
+            connect_seconds=1.0,
+            read_seconds=1.0,
+            total_seconds=2.0,
+        ),
+        bounds=bounds,
+    )
+
+
+class _DelayedSSEStream(httpx.AsyncByteStream):
+    """Yield one SSE event, then wait before yielding the terminal events."""
+
+    def __init__(self, gate: asyncio.Event) -> None:
+        self._gate = gate
+        self.closed = False
+
+    async def __aiter__(self) -> Any:
+        yield b'data: {"id":"one","choices":[{"delta":{"content":"first"}}]}\n\n'
+        await self._gate.wait()
+        yield b'data: {"id":"two","choices":[{"delta":{"content":"second"}}]}\n\n'
+        yield b"data: [DONE]\n\n"
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_async_inference_request_does_not_block_event_loop() -> None:
+    """A slow provider wait leaves graph and stream publisher tasks runnable."""
+
+    gate = asyncio.Event()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.headers["authorization"] == "Bearer sk-secret"
+        await gate.wait()
+        return httpx.Response(200, json={"choices": []})
+
+    transport = _async_transport(handler)
+    pending = asyncio.create_task(transport.request_json({"model": "gpt-5.2"}))
+    await asyncio.sleep(0)
+
+    assert pending.done() is False
+    gate.set()
+    assert await pending == {"choices": []}
+
+
+@pytest.mark.asyncio
+async def test_async_inference_stream_yields_first_sse_event_before_eof() -> None:
+    """SSE parsing forwards a provider event without buffering later bytes."""
+
+    gate = asyncio.Event()
+    provider_stream = _DelayedSSEStream(gate)
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            stream=provider_stream,
+        )
+
+    events = _async_transport(handler).stream_json_events(
+        {"model": "gpt-5.2", "stream": True}
+    )
+
+    first = await asyncio.wait_for(anext(events), timeout=0.1)
+    assert first["choices"][0]["delta"]["content"] == "first"
+    assert provider_stream.closed is False
+
+    gate.set()
+    second = await asyncio.wait_for(anext(events), timeout=0.1)
+    assert second["choices"][0]["delta"]["content"] == "second"
+    with pytest.raises(StopAsyncIteration):
+        await anext(events)
+    assert provider_stream.closed is True
+
+
+@pytest.mark.asyncio
+async def test_async_inference_streams_over_real_delayed_http_connection() -> None:
+    """A real loopback HTTP stream exposes its first chunk before completion."""
+
+    gate = asyncio.Event()
+
+    async def handle_client(
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+    ) -> None:
+        try:
+            await reader.readuntil(b"\r\n\r\n")
+            writer.write(
+                b"HTTP/1.1 200 OK\r\n"
+                b"Content-Type: text/event-stream\r\n"
+                b"Transfer-Encoding: chunked\r\n"
+                b"Connection: close\r\n\r\n"
+            )
+            first = b'data: {"id":"one","choices":[{"delta":{"content":"first"}}]}\n\n'
+            writer.write(f"{len(first):x}\r\n".encode() + first + b"\r\n")
+            await writer.drain()
+            await gate.wait()
+            final = b"data: [DONE]\n\n"
+            writer.write(f"{len(final):x}\r\n".encode() + final + b"\r\n0\r\n\r\n")
+            await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    server = await asyncio.start_server(handle_client, "127.0.0.1", 0)
+    port = int(server.sockets[0].getsockname()[1])
+    registry = ConnectionOperationRegistry(
+        env_getter={NVIDIA_NIM_BASE_URL_ENV: f"http://127.0.0.1:{port}"}.get
+    )
+    target = registry.resolve(
+        LLMConnectionOperation.INFERENCE,
+        provider=NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+    )
+    transport = GuardedAsyncInferenceTransport(
+        operation_target=target,
+        secret=ProviderSecret(
+            provider=NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+            value="sk-local-test",
+        ),
+    )
+    events = transport.stream_json_events({"model": "test", "stream": True})
+
+    try:
+        first_event = await asyncio.wait_for(anext(events), timeout=1.0)
+        assert first_event["choices"][0]["delta"]["content"] == "first"
+        gate.set()
+        with pytest.raises(StopAsyncIteration):
+            await asyncio.wait_for(anext(events), timeout=1.0)
+    finally:
+        gate.set()
+        await events.aclose()
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_async_inference_cancellation_closes_provider_stream() -> None:
+    """Cancelling an in-flight graph call releases the upstream response."""
+
+    gate = asyncio.Event()
+    provider_stream = _DelayedSSEStream(gate)
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=provider_stream)
+
+    events = _async_transport(handler).stream_json_events(
+        {"model": "gpt-5.2", "stream": True}
+    )
+    await anext(events)
+    pending = asyncio.create_task(anext(events))
+    await asyncio.sleep(0)
+
+    pending.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    assert provider_stream.closed is True
+
+
+@pytest.mark.asyncio
+async def test_async_inference_rejects_oversized_body_before_network() -> None:
+    """The async path preserves the guarded request-size boundary."""
+
+    calls = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={})
+
+    transport = _async_transport(
+        handler,
+        bounds=GuardedEgressBounds(max_request_bytes=16),
+    )
+
+    with pytest.raises(GuardedTransportError):
+        await transport.request_json({"prompt": "x" * 64})
+    assert calls == 0
 
 
 def test_transport_enforces_fixed_target_redirect_proxy_tls_and_timeouts() -> None:

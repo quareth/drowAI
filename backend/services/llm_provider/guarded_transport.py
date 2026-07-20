@@ -7,11 +7,14 @@ provider authentication, and returns bounded bodies with sanitized failures.
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator
 import json
 from time import monotonic
 from typing import Any, Callable, Mapping, Protocol
 from uuid import uuid4
 
+import httpx
 import requests
 
 from .egress_policy import EgressPolicyError, FixedProviderEgressPolicy
@@ -40,6 +43,12 @@ class _SessionLike(Protocol):
 
 
 SessionFactory = Callable[[], _SessionLike]
+AsyncClientFactory = Callable[..., httpx.AsyncClient]
+_DEFAULT_INFERENCE_TIMEOUTS = GuardedEgressTimeouts(
+    connect_seconds=5.0,
+    read_seconds=120.0,
+    total_seconds=300.0,
+)
 
 
 class GuardedTransportError(RuntimeError):
@@ -178,6 +187,166 @@ class GuardedTransport:
                     "Guarded transport cleanup failed",
                     audit_id=audit_id,
                 ) from None
+
+
+class GuardedAsyncInferenceTransport:
+    """Run one authorized inference target without blocking or buffering SSE."""
+
+    def __init__(
+        self,
+        *,
+        operation_target: RegisteredLLMOperationTarget,
+        secret: ProviderSecret,
+        egress_policy: FixedProviderEgressPolicy | None = None,
+        client_factory: AsyncClientFactory | None = None,
+        timeouts: GuardedEgressTimeouts | None = None,
+        bounds: GuardedEgressBounds | None = None,
+    ) -> None:
+        self._operation_target = operation_target
+        self._secret = secret
+        self._egress_policy = egress_policy or FixedProviderEgressPolicy()
+        self._client_factory = client_factory or httpx.AsyncClient
+        self._timeouts = timeouts or _DEFAULT_INFERENCE_TIMEOUTS
+        self._bounds = bounds or GuardedEgressBounds()
+
+    async def request_json(self, json_body: Mapping[str, Any]) -> Any:
+        """Return one bounded decoded response while yielding to the event loop."""
+
+        audit_id = uuid4().hex
+        started_at = monotonic()
+        try:
+            url, headers = self._prepare_request(json_body, audit_id=audit_id)
+            async with self._client() as client:
+                async with asyncio.timeout(self._timeouts.total_seconds):
+                    async with client.stream(
+                        self._operation_target.method,
+                        url,
+                        headers=headers,
+                        json=json_body,
+                    ) as response:
+                        _validate_response_status(response.status_code, audit_id=audit_id)
+                        _validate_headers(response.headers, self._bounds, audit_id=audit_id)
+                        body = await _read_bounded_async_body(
+                            response,
+                            bounds=self._bounds,
+                            started_at=started_at,
+                            total_seconds=self._timeouts.total_seconds,
+                            audit_id=audit_id,
+                        )
+            return json.loads(body.decode("utf-8"))
+        except GuardedTransportError:
+            raise
+        except TimeoutError:
+            raise GuardedTransportError(
+                "Guarded operation timed out",
+                audit_id=audit_id,
+            ) from None
+        except (EgressPolicyError, httpx.HTTPError, UnicodeError, ValueError):
+            raise GuardedTransportError(
+                "Guarded outbound operation failed",
+                audit_id=audit_id,
+            ) from None
+        except Exception:
+            raise GuardedTransportError(
+                "Guarded outbound operation failed",
+                audit_id=audit_id,
+            ) from None
+
+    async def stream_json_events(
+        self,
+        json_body: Mapping[str, Any],
+    ) -> AsyncIterator[Any]:
+        """Yield each bounded SSE JSON event immediately after it arrives."""
+
+        audit_id = uuid4().hex
+        started_at = monotonic()
+        try:
+            url, headers = self._prepare_request(json_body, audit_id=audit_id)
+            async with self._client() as client:
+                async with client.stream(
+                    self._operation_target.method,
+                    url,
+                    headers=headers,
+                    json=json_body,
+                ) as response:
+                    _validate_response_status(response.status_code, audit_id=audit_id)
+                    _validate_headers(response.headers, self._bounds, audit_id=audit_id)
+                    async for event in _iter_bounded_sse_json(
+                        response,
+                        bounds=self._bounds,
+                        started_at=started_at,
+                        total_seconds=self._timeouts.total_seconds,
+                        audit_id=audit_id,
+                    ):
+                        yield event
+        except GuardedTransportError:
+            raise
+        except TimeoutError:
+            raise GuardedTransportError(
+                "Guarded operation timed out",
+                audit_id=audit_id,
+            ) from None
+        except (EgressPolicyError, httpx.HTTPError, UnicodeError, ValueError):
+            raise GuardedTransportError(
+                "Guarded outbound operation failed",
+                audit_id=audit_id,
+            ) from None
+        except Exception:
+            raise GuardedTransportError(
+                "Guarded outbound operation failed",
+                audit_id=audit_id,
+            ) from None
+
+    def _prepare_request(
+        self,
+        json_body: Mapping[str, Any],
+        *,
+        audit_id: str,
+    ) -> tuple[str, dict[str, str]]:
+        """Validate the bound target, credential, body, and current DNS answers."""
+
+        target = self._operation_target
+        _validate_operation_target(
+            target,
+            operation=LLMConnectionOperation.INFERENCE,
+            provider=target.provider,
+            resource_id=None,
+            audit_id=audit_id,
+        )
+        _validate_secret(
+            self._secret,
+            expected_provider=target.provider,
+            audit_id=audit_id,
+        )
+        _validate_request_body(json_body, bounds=self._bounds)
+        validated_target = self._egress_policy.validate_endpoint(
+            target.url,
+            expected_host=target.expected_host,
+            allowed_ports=target.allowed_ports,
+            allowed_path_prefixes=target.allowed_path_prefixes,
+            network_scope=target.network_scope,
+        )
+        self._egress_policy.revalidate(validated_target)
+        return (
+            validated_target.url,
+            _provider_headers(target.provider, self._secret.value, json_body),
+        )
+
+    def _client(self) -> httpx.AsyncClient:
+        """Build one proxy-free, redirect-free TLS-validating async client."""
+
+        timeout = httpx.Timeout(
+            connect=self._timeouts.connect_seconds,
+            read=self._timeouts.read_seconds,
+            write=self._timeouts.read_seconds,
+            pool=self._timeouts.connect_seconds,
+        )
+        return self._client_factory(
+            follow_redirects=False,
+            trust_env=False,
+            verify=True,
+            timeout=timeout,
+        )
 
 
 def _validate_secret(
@@ -364,6 +533,143 @@ def _read_bounded_body(
     return b"".join(chunks)
 
 
+async def _read_bounded_async_body(
+    response: httpx.Response,
+    *,
+    bounds: GuardedEgressBounds,
+    started_at: float,
+    total_seconds: float,
+    audit_id: str,
+) -> bytes:
+    """Read a decompressed async response within byte and duration bounds."""
+
+    chunks: list[bytes] = []
+    async for chunk in _iter_bounded_async_bytes(
+        response,
+        bounds=bounds,
+        started_at=started_at,
+        total_seconds=total_seconds,
+        audit_id=audit_id,
+    ):
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+async def _iter_bounded_async_bytes(
+    response: httpx.Response,
+    *,
+    bounds: GuardedEgressBounds,
+    started_at: float,
+    total_seconds: float,
+    audit_id: str,
+) -> AsyncIterator[bytes]:
+    """Yield response chunks while enforcing total decompressed byte limits."""
+
+    size = 0
+    iterator = response.aiter_bytes()
+    while True:
+        remaining = total_seconds - (monotonic() - started_at)
+        if remaining <= 0:
+            raise GuardedTransportError(
+                "Guarded operation timed out",
+                audit_id=audit_id,
+            )
+        try:
+            async with asyncio.timeout(remaining):
+                chunk = await anext(iterator)
+        except StopAsyncIteration:
+            return
+        if not chunk:
+            continue
+        size += len(chunk)
+        if size > bounds.max_response_bytes:
+            raise GuardedTransportError(
+                "Guarded response exceeds bounds",
+                audit_id=audit_id,
+            )
+        yield bytes(chunk)
+
+
+async def _iter_bounded_sse_json(
+    response: httpx.Response,
+    *,
+    bounds: GuardedEgressBounds,
+    started_at: float,
+    total_seconds: float,
+    audit_id: str,
+) -> AsyncIterator[Any]:
+    """Incrementally parse bounded SSE data fields into decoded JSON events."""
+
+    buffer = b""
+    data_lines: list[bytes] = []
+    saw_sse_field = False
+    raw_body = bytearray()
+
+    def _decode_event() -> Any | None:
+        nonlocal data_lines
+        if not data_lines:
+            return None
+        payload = b"\n".join(data_lines).decode("utf-8").strip()
+        data_lines = []
+        if payload == "[DONE]":
+            return _SSE_DONE
+        return json.loads(payload)
+
+    async for chunk in _iter_bounded_async_bytes(
+        response,
+        bounds=bounds,
+        started_at=started_at,
+        total_seconds=total_seconds,
+        audit_id=audit_id,
+    ):
+        if not saw_sse_field:
+            raw_body.extend(chunk)
+        buffer += chunk
+        while b"\n" in buffer:
+            line, buffer = buffer.split(b"\n", 1)
+            line = line.removesuffix(b"\r")
+            if not line:
+                event = _decode_event()
+                if event is _SSE_DONE:
+                    return
+                if event is not None:
+                    yield event
+                continue
+            if line.startswith(b":"):
+                saw_sse_field = True
+                raw_body.clear()
+                continue
+            field, separator, value = line.partition(b":")
+            if field != b"data":
+                continue
+            saw_sse_field = True
+            raw_body.clear()
+            if separator and value.startswith(b" "):
+                value = value[1:]
+            data_lines.append(value)
+
+    if buffer:
+        line = buffer.removesuffix(b"\r")
+        field, separator, value = line.partition(b":")
+        if field == b"data":
+            saw_sse_field = True
+            raw_body.clear()
+            if separator and value.startswith(b" "):
+                value = value[1:]
+            data_lines.append(value)
+    event = _decode_event()
+    if event is _SSE_DONE:
+        return
+    if event is not None:
+        yield event
+        return
+    if not saw_sse_field:
+        yield json.loads(bytes(raw_body).decode("utf-8"))
+
+
+_SSE_DONE = object()
+
+
 def _require_total_duration(
     started_at: float,
     total_seconds: float,
@@ -380,6 +686,8 @@ def _require_total_duration(
 
 
 __all__ = [
+    "AsyncClientFactory",
+    "GuardedAsyncInferenceTransport",
     "GuardedTransport",
     "GuardedTransportError",
     "SessionFactory",

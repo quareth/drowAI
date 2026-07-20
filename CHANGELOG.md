@@ -34,6 +34,9 @@ Target version: `0.1.0`.
 
 ### Changed
 
+- Agent-turn roles now consistently use the user-selected deployment across
+  OpenAI, Anthropic, and compatible models; lightweight internal calls use a
+  shared low-effort policy instead of silently switching models.
 - GPT-OSS 20B now runs classification, planning, structured responses,
   function/tool calls, compression, post-tool reasoning, and streamed
   articulation through the user-selected serving route instead of switching
@@ -53,6 +56,12 @@ Target version: `0.1.0`.
 
 ### Fixed
 
+- Runtime-selected OpenAI-compatible models now keep graph reasoning and HITL
+  resume events live while providers are working, stream response chunks
+  incrementally, and reliably clear completed response indicators.
+- LangGraph resume and retry now preserve the checkpointed deployment across
+  approval pauses, reject conflicting or malformed runtime identity, and avoid
+  switching to a user's newer default model.
 - Provider settings now use one consistent card, connection status, and API-key
   control layout across native, hosted open-model, and self-hosted routes.
 - OpenAI-compatible models that return requested function calls as JSON message

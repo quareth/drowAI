@@ -9,7 +9,6 @@ facade, or serialize/cache provider secrets.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from typing import Any
 
 from agent.providers.llm.core.base import LLMClient
@@ -24,13 +23,13 @@ from agent.providers.llm.factory.client_factory import LLMClientFactory
 from agent.providers.llm.profiles.registry import ModelProfile, require_model_profile
 from core.llm.role_policy import RoleCallSettings
 
-from .guarded_transport import GuardedTransport
+from .guarded_transport import GuardedAsyncInferenceTransport
 from .types import (
     LLMCallTarget,
-    LLMConnectionOperation,
     LLMRuntimeSelection,
     LLMRuntimeSelectionV2,
     ProviderSecret,
+    RegisteredLLMOperationTarget,
     ResolvedLLMTarget,
 )
 
@@ -130,7 +129,7 @@ class LLMRuntimeClientBuilder:
         )
         factory_kwargs["wire_model_id"] = resolved_target.exact_wire_model_id
         factory_kwargs["dialect_policy_id"] = resolved_target.dialect_policy_id
-        factory_kwargs["guarded_executor"] = guarded_inference_executor(
+        factory_kwargs["inference_transport"] = guarded_inference_transport(
             operation_target=resolved_target.connection.operation_target,
             secret=secret,
         )
@@ -162,26 +161,21 @@ def resolve_budget_role(
     return "unspecified"
 
 
-def guarded_inference_executor(*, operation_target, secret: ProviderSecret):
-    """Return the guarded compatible Chat Completions executor for one client."""
+def guarded_inference_transport(
+    *,
+    operation_target: RegisteredLLMOperationTarget,
+    secret: ProviderSecret,
+) -> GuardedAsyncInferenceTransport:
+    """Bind one authorized target and short-lived secret to async inference."""
 
-    transport = GuardedTransport()
-
-    def _execute(json_body: Mapping[str, Any]) -> bytes:
-        response = transport.execute(
-            LLMConnectionOperation.INFERENCE,
-            provider=operation_target.provider,
-            secret=secret,
-            json_body=json_body,
-            operation_target=operation_target,
-        )
-        return response.body
-
-    return _execute
+    return GuardedAsyncInferenceTransport(
+        operation_target=operation_target,
+        secret=secret,
+    )
 
 
 __all__ = [
     "LLMRuntimeClientBuilder",
-    "guarded_inference_executor",
+    "guarded_inference_transport",
     "resolve_budget_role",
 ]

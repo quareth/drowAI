@@ -7,16 +7,16 @@ remain outside the dialect contract and guarded by the backend runtime.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from types import SimpleNamespace
-from typing import Any, AsyncIterator, Callable, Dict, List, Mapping
+from typing import Any, AsyncIterator, Dict, List, Mapping
 from urllib.parse import urlsplit
 
 import openai
 
 from ...contracts.compat import LLMDialectPolicy
+from ...contracts.inference_transport import AsyncLLMInferenceTransport
 from ...core.base import (
     LLMCallOptions,
     LLMResponse,
@@ -91,37 +91,33 @@ _TOOL_CALL_OPTIONS = frozenset(
 )
 _HTTP_SCHEME = "http"
 _HTTPS_SCHEME = "https"
-GuardedCompatibleChatExecutor = Callable[[Mapping[str, Any]], bytes]
-
-
 class _GuardedCompatibleChatCompletions:
     """SDK-shaped Chat Completions facade backed by guarded transport."""
 
-    def __init__(self, executor: GuardedCompatibleChatExecutor) -> None:
-        self._executor = executor
+    def __init__(self, transport: AsyncLLMInferenceTransport) -> None:
+        self._transport = transport
 
     async def create(self, **kwargs: Any) -> Any:
         """Execute one Chat Completions request through the guarded boundary."""
 
-        body = self._executor(dict(kwargs))
-        payload = _decode_guarded_payload(body)
         if kwargs.get("stream") is True:
-            return _guarded_stream(payload)
+            return _guarded_stream(self._transport.stream_json_events(dict(kwargs)))
+        payload = await self._transport.request_json(dict(kwargs))
         return _object_payload(payload)
 
 
 class _GuardedCompatibleChat:
     """Expose the SDK-compatible ``chat.completions`` namespace."""
 
-    def __init__(self, executor: GuardedCompatibleChatExecutor) -> None:
-        self.completions = _GuardedCompatibleChatCompletions(executor)
+    def __init__(self, transport: AsyncLLMInferenceTransport) -> None:
+        self.completions = _GuardedCompatibleChatCompletions(transport)
 
 
 class _GuardedCompatibleSDKClient:
     """Minimal async client contract consumed by ``OpenAIChatClient``."""
 
-    def __init__(self, executor: GuardedCompatibleChatExecutor) -> None:
-        self.chat = _GuardedCompatibleChat(executor)
+    def __init__(self, transport: AsyncLLMInferenceTransport) -> None:
+        self.chat = _GuardedCompatibleChat(transport)
 
     async def close(self) -> None:
         """Match the OpenAI SDK close contract without owning resources."""
@@ -138,11 +134,11 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
         auth: CompatibleChatAuth,
         wire_model_id: str,
         dialect_policy: LLMDialectPolicy = CONSERVATIVE_OPENAI_COMPATIBLE_DIALECT,
-        guarded_executor: GuardedCompatibleChatExecutor | None = None,
+        inference_transport: AsyncLLMInferenceTransport | None = None,
     ) -> None:
         validated_base_url = _validate_base_url(
             base_url,
-            guarded=guarded_executor is not None,
+            guarded=inference_transport is not None,
         )
         validated_wire_model = _validate_wire_model_id(wire_model_id)
         if not isinstance(auth, CompatibleChatAuth):
@@ -157,8 +153,8 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
             )
         validate_openai_compatible_dialect(dialect_policy)
 
-        if guarded_executor is not None:
-            sdk_client = _GuardedCompatibleSDKClient(guarded_executor)
+        if inference_transport is not None:
+            sdk_client = _GuardedCompatibleSDKClient(inference_transport)
         else:
             sdk_client = openai.AsyncOpenAI(
                 **openai_sdk_client_options(
@@ -562,29 +558,6 @@ def _dialect_policy_required(feature: str) -> LLMConfigurationError:
     )
 
 
-def _decode_guarded_payload(body: bytes) -> Any:
-    """Decode guarded response bytes into Chat Completions payload objects."""
-
-    if not isinstance(body, bytes):
-        raise LLMConfigurationError(
-            "guarded compatible response body must be bytes",
-            provider="OpenAI-compatible",
-        )
-    text = body.decode("utf-8")
-    lines = [line.strip() for line in text.splitlines() if line.strip()]
-    if any(line.startswith("data:") for line in lines):
-        events: list[Any] = []
-        for line in lines:
-            if not line.startswith("data:"):
-                continue
-            data = line.removeprefix("data:").strip()
-            if data == "[DONE]":
-                continue
-            events.append(json.loads(data))
-        return events
-    return json.loads(text)
-
-
 def _object_payload(value: Any) -> Any:
     """Convert decoded provider JSON into SDK-like attribute objects."""
 
@@ -597,18 +570,10 @@ def _object_payload(value: Any) -> Any:
     return value
 
 
-async def _guarded_stream(events: Any) -> AsyncIterator[Any]:
+async def _guarded_stream(events: AsyncIterator[Any]) -> AsyncIterator[Any]:
     """Yield bounded guarded stream events in the SDK async-iterator shape."""
 
-    if isinstance(events, dict):
-        yield _object_payload(events)
-        return
-    if not isinstance(events, list):
-        raise LLMConfigurationError(
-            "guarded compatible stream response is invalid",
-            provider="OpenAI-compatible",
-        )
-    for event in events:
+    async for event in events:
         yield _object_payload(event)
 
 
@@ -617,7 +582,6 @@ __all__ = [
     "CompatibleChatAuth",
     "CompatibleChatAuthMode",
     "CONSERVATIVE_OPENAI_COMPATIBLE_DIALECT",
-    "GuardedCompatibleChatExecutor",
     "OPENAI_COMPATIBLE_CHAT_ADAPTER_ID",
     "OPENAI_COMPATIBLE_CHAT_ADAPTER_VERSION",
     "OpenAICompatibleChatClient",

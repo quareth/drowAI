@@ -117,16 +117,7 @@ def test_role_policy_explicitly_inherits_exact_conversation_target(
 def test_role_policy_fails_closed_without_compatible_inherited_target() -> None:
     """Missing profiles cannot trigger an internal or global model fallback."""
 
-    fallback_calls: list[tuple[str, str]] = []
-
-    def _unexpected_fallback(provider: str, role: str) -> Any:
-        fallback_calls.append((provider, role))
-        raise AssertionError("context compressor must not use internal fallback")
-
-    registry = ModelRoleRegistry(
-        conversation_main_default="gpt-5.2",
-        internal_model_resolver=_unexpected_fallback,  # type: ignore[arg-type]
-    )
+    registry = ModelRoleRegistry(conversation_main_default="gpt-5.2")
 
     with pytest.raises(ValueError, match="context_compressor"):
         registry.resolve_call_settings(
@@ -134,8 +125,6 @@ def test_role_policy_fails_closed_without_compatible_inherited_target() -> None:
             conversation_provider="custom",
             conversation_model="unregistered-model",
         )
-
-    assert fallback_calls == []
 
 
 def test_compression_service_obtains_settings_from_role_policy() -> None:

@@ -533,9 +533,9 @@ def test_runtime_client_resolver_uses_explicit_role_target(monkeypatch: pytest.M
         assert client is not None
         assert calls == [
             {
-                "provider_model": ProviderModelRef(OPENAI_PROVIDER_ID, "gpt-5-nano"),
+                "provider_model": ProviderModelRef(OPENAI_PROVIDER_ID, "gpt-5.2"),
                 "api_key": "sk-resolver",
-                "reasoning_effort": "minimal",
+                "reasoning_effort": "low",
             }
         ]
     finally:

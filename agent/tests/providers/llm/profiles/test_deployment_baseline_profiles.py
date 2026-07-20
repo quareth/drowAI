@@ -14,7 +14,6 @@ from agent.providers.llm.profiles.registry import (
     ANTHROPIC_API_SURFACE_MESSAGES,
     ANTHROPIC_DEFAULT_MODEL_ID,
     ANTHROPIC_EXACT_MODEL_IDS,
-    ANTHROPIC_INTERNAL_ROLE_MODELS,
     ANTHROPIC_LISTABLE_MODEL_IDS,
     ANTHROPIC_NON_LISTABLE_MODEL_IDS,
     OPENAI_API_SURFACE_CHAT_COMPLETIONS,
@@ -22,7 +21,6 @@ from agent.providers.llm.profiles.registry import (
     OPENAI_DEFAULT_MODEL_ID,
     OPENAI_EXACT_MODEL_IDS,
     OPENAI_GPT_OSS_20B_MODEL_ID,
-    OPENAI_INTERNAL_ROLE_MODELS,
     OPENAI_LEGACY_CHAT_MODEL_IDS,
     OPENAI_LISTABLE_MODEL_IDS,
     get_default_model_ref,
@@ -30,7 +28,6 @@ from agent.providers.llm.profiles.registry import (
     list_catalog_model_profiles,
     list_model_profiles,
     require_model_profile,
-    resolve_provider_internal_role_model,
 )
 
 
@@ -106,24 +103,6 @@ def test_anthropic_profiles_preserve_default_listability_and_messages_surface() 
         assert profile.listable is False
         assert profile.compatibility_family is None
         assert model_id not in _catalog_ids(ANTHROPIC_PROVIDER_ID)
-
-
-@pytest.mark.parametrize(
-    ("provider", "role_models"),
-    (
-        (OPENAI_PROVIDER_ID, OPENAI_INTERNAL_ROLE_MODELS),
-        (ANTHROPIC_PROVIDER_ID, ANTHROPIC_INTERNAL_ROLE_MODELS),
-    ),
-)
-def test_provider_internal_role_models_resolve_through_profile_registry(
-    provider: str,
-    role_models: dict[str, str],
-) -> None:
-    for role, model_id in role_models.items():
-        assert resolve_provider_internal_role_model(provider, role) == _ref(
-            provider,
-            model_id,
-        )
 
 
 @pytest.mark.parametrize(

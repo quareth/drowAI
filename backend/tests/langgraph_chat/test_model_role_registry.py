@@ -16,8 +16,6 @@ from backend.services.langgraph_chat.model_role_registry import (
     ROLE_REASONING_MAIN,
     ROLE_TOOL_CATEGORY_SELECTOR,
     ROLE_TOOL_OUTPUT_COMPRESSOR,
-    TOOL_CATEGORY_SELECTOR_MODEL_REF_ENV,
-    TOOL_OUTPUT_COMPRESSOR_MODEL_REF_ENV,
     ModelRoleRegistry,
     validate_reasoning_effort_for_model,
 )
@@ -82,65 +80,75 @@ def test_frontend_roles_resolve_deterministically() -> None:
         registry.resolve(
             ROLE_REASONING_MAIN,
             conversation_model="gpt-5.2",
-            reasoning_model="gpt-5-mini",
-        )
-        == "gpt-5-mini"
-    )
-    assert (
-        registry.resolve(
-            ROLE_REASONING_MAIN,
-            conversation_model="gpt-5.2",
-            reasoning_model=None,
         )
         == "gpt-5.2"
     )
     assert registry.resolve(ROLE_CONVERSATION_MAIN) == "gpt-default"
 
 
-def test_internal_roles_use_env_overrides(monkeypatch) -> None:
-    monkeypatch.setenv(
-        TOOL_OUTPUT_COMPRESSOR_MODEL_REF_ENV,
-        "anthropic/claude-haiku-4-5-20251001",
-    )
-    monkeypatch.setenv(
-        TOOL_CATEGORY_SELECTOR_MODEL_REF_ENV,
-        "anthropic/claude-haiku-4-5-20251001",
-    )
-
+def test_internal_roles_inherit_selected_openai_model_with_low_reasoning() -> None:
     registry = ModelRoleRegistry()
 
-    output = registry.resolve_call_settings(ROLE_TOOL_OUTPUT_COMPRESSOR)
-    category = registry.resolve_call_settings(ROLE_TOOL_CATEGORY_SELECTOR)
+    output = registry.resolve_call_settings(
+        ROLE_TOOL_OUTPUT_COMPRESSOR,
+        conversation_provider="openai",
+        conversation_model="gpt-5.2",
+    )
+    category = registry.resolve_call_settings(
+        ROLE_TOOL_CATEGORY_SELECTOR,
+        conversation_provider="openai",
+        conversation_model="gpt-5.2",
+    )
 
-    assert output.provider == "anthropic"
-    assert output.model == "claude-haiku-4-5-20251001"
-    assert category.provider == "anthropic"
-    assert category.model == "claude-haiku-4-5-20251001"
+    for settings in (output, category):
+        assert settings.provider == "openai"
+        assert settings.model == "gpt-5.2"
+        assert settings.reasoning_effort == "low"
+        assert settings.source == "user_selected"
 
 
-def test_internal_roles_follow_selected_provider_not_selected_model() -> None:
+def test_internal_role_uses_low_when_selected_model_omits_minimal() -> None:
+    settings = ModelRoleRegistry().resolve_call_settings(
+        ROLE_POST_TOOL_ARTICULATOR,
+        conversation_provider="openai",
+        conversation_model="gpt-5.6-sol",
+    )
+
+    assert settings.model == "gpt-5.6-sol"
+    assert settings.reasoning_effort == "low"
+
+
+def test_internal_role_prefers_supported_lower_effort_before_escalating() -> None:
+    settings = ModelRoleRegistry(
+        internal_reasoning_default="minimal"
+    ).resolve_call_settings(
+        ROLE_POST_TOOL_ARTICULATOR,
+        conversation_provider="openai",
+        conversation_model="gpt-5.6-sol",
+    )
+
+    assert settings.reasoning_effort == "none"
+
+
+def test_internal_roles_inherit_selected_anthropic_model_with_low_reasoning() -> None:
     registry = ModelRoleRegistry()
 
     output = registry.resolve_call_settings(
         ROLE_TOOL_OUTPUT_COMPRESSOR,
         conversation_model="claude-sonnet-4-6",
         conversation_provider="anthropic",
-        reasoning_model="claude-opus-4-7",
-        reasoning_provider="anthropic",
     )
     category = registry.resolve_call_settings(
         ROLE_TOOL_CATEGORY_SELECTOR,
         conversation_model="claude-sonnet-4-6",
         conversation_provider="anthropic",
-        reasoning_model="claude-opus-4-7",
-        reasoning_provider="anthropic",
     )
 
     for settings in (output, category):
         assert settings.provider == "anthropic"
-        assert settings.model == "claude-haiku-4-5-20251001"
-        assert settings.reasoning_effort is None
-        assert settings.source == "internal_fixed"
+        assert settings.model == "claude-sonnet-4-6"
+        assert settings.reasoning_effort == "low"
+        assert settings.source == "user_selected"
 
 
 @pytest.mark.parametrize(
@@ -163,8 +171,6 @@ def test_gpt_oss_uses_selected_model_for_every_role(role: str) -> None:
         role,
         conversation_provider="openai",
         conversation_model="gpt-oss-20b",
-        reasoning_provider="openai",
-        reasoning_model="gpt-5.2-pro",
         reasoning_effort=None,
     )
 
@@ -189,23 +195,15 @@ def test_context_compressor_inherits_conversation_target_through_role_policy() -
     assert settings.source == "user_selected"
 
 
-def test_internal_roles_fail_when_selected_provider_has_no_binding() -> None:
-    def _missing_internal_model(provider: str, role: str):
-        raise ValueError(
-            f"No internal model configured for provider '{provider}' and role '{role}'"
-        )
+def test_internal_role_omits_effort_when_selected_model_is_not_reasoning_capable() -> None:
+    settings = ModelRoleRegistry().resolve_call_settings(
+        ROLE_POST_TOOL_ARTICULATOR,
+        conversation_provider="anthropic",
+        conversation_model="claude-haiku-4-5-20251001",
+    )
 
-    registry = ModelRoleRegistry(internal_model_resolver=_missing_internal_model)
-
-    with pytest.raises(
-        ValueError,
-        match="No internal model configured for provider 'anthropic'",
-    ):
-        registry.resolve_call_settings(
-            ROLE_TOOL_CATEGORY_SELECTOR,
-            conversation_provider="anthropic",
-            conversation_model="claude-sonnet-4-6",
-        )
+    assert settings.model == "claude-haiku-4-5-20251001"
+    assert settings.reasoning_effort is None
 
 
 def test_intent_classifier_follows_user_selected_model() -> None:
@@ -232,25 +230,23 @@ def test_resolve_call_settings_returns_model_effort_and_source() -> None:
         ROLE_REASONING_MAIN,
         conversation_model="gpt-5.2",
         conversation_provider="openai",
-        reasoning_model="gpt-5.2-pro",
-        reasoning_provider="openai",
         reasoning_effort="high",
     )
     assert user_settings.provider == "openai"
-    assert user_settings.model == "gpt-5.2-pro"
+    assert user_settings.model == "gpt-5.2"
     assert user_settings.reasoning_effort == "high"
     assert user_settings.source == "user_selected"
 
     internal_settings = registry.resolve_call_settings(
         ROLE_TOOL_OUTPUT_COMPRESSOR,
-        conversation_model="frontend-main",
-        reasoning_model="frontend-reasoning",
+        conversation_model="gpt-5.2",
+        conversation_provider="openai",
         reasoning_effort="xhigh",
     )
-    assert internal_settings.model == "gpt-5-nano"
+    assert internal_settings.model == "gpt-5.2"
     assert internal_settings.provider == "openai"
-    assert internal_settings.reasoning_effort == "minimal"
-    assert internal_settings.source == "internal_fixed"
+    assert internal_settings.reasoning_effort == "low"
+    assert internal_settings.source == "user_selected"
 
 
 def test_post_tool_observation_uses_user_selected_role_path() -> None:
@@ -258,13 +254,12 @@ def test_post_tool_observation_uses_user_selected_role_path() -> None:
 
     role_settings = registry.resolve_call_settings(
         ROLE_POST_TOOL_OBSERVATION,
-        conversation_model="gpt-main",
+        conversation_model="claude-sonnet-4-6",
         conversation_provider="anthropic",
-        reasoning_model="gpt-5.2",
     )
-    assert role_settings.provider == "openai"
-    assert role_settings.model == "gpt-5.2"
-    assert role_settings.reasoning_effort == "medium"
+    assert role_settings.provider == "anthropic"
+    assert role_settings.model == "claude-sonnet-4-6"
+    assert role_settings.reasoning_effort == "high"
     assert role_settings.source == "user_selected"
 
 
@@ -312,20 +307,18 @@ def test_openai_chat_completion_role_omits_implicit_reasoning_effort() -> None:
     assert role_settings.source == "user_selected"
 
 
-def test_post_tool_articulator_uses_internal_fixed_role_path() -> None:
+def test_post_tool_articulator_inherits_selected_model_with_low_effort() -> None:
     registry = ModelRoleRegistry(conversation_main_default="gpt-default")
 
     role_settings = registry.resolve_call_settings(
         ROLE_POST_TOOL_ARTICULATOR,
         conversation_model="claude-sonnet-4-6",
         conversation_provider="anthropic",
-        reasoning_model="claude-opus-4-7",
-        reasoning_provider="anthropic",
     )
     assert role_settings.provider == "anthropic"
-    assert role_settings.model == "claude-haiku-4-5-20251001"
-    assert role_settings.reasoning_effort is None
-    assert role_settings.source == "internal_fixed"
+    assert role_settings.model == "claude-sonnet-4-6"
+    assert role_settings.reasoning_effort == "low"
+    assert role_settings.source == "user_selected"
 
 
 def test_validate_reasoning_effort_rejects_unknown_values() -> None:
@@ -409,8 +402,8 @@ def test_validate_reasoning_effort_rejects_openai_chat_profile_without_support()
         )
 
 
-def test_phase_5_1_role_effort_scenario_matrix() -> None:
-    """Covers user-selected and fixed-internal role classes in one matrix."""
+def test_role_effort_scenario_matrix() -> None:
+    """All roles share one selected model while lightweight roles use low effort."""
 
     registry = ModelRoleRegistry(conversation_main_default="gpt-5.2")
 
@@ -429,8 +422,6 @@ def test_phase_5_1_role_effort_scenario_matrix() -> None:
         ROLE_REASONING_MAIN,
         conversation_model="gpt-5.2",
         conversation_provider="openai",
-        reasoning_model="gpt-5.2",
-        reasoning_provider="openai",
         reasoning_effort="high",
     )
     assert reasoning.provider == "openai"
@@ -440,10 +431,8 @@ def test_phase_5_1_role_effort_scenario_matrix() -> None:
 
     post_tool = registry.resolve_call_settings(
         ROLE_POST_TOOL_OBSERVATION,
-        conversation_model="gpt-5.2",
+        conversation_model="gpt-5.2-pro",
         conversation_provider="openai",
-        reasoning_model="gpt-5.2-pro",
-        reasoning_provider="openai",
         reasoning_effort="xhigh",
     )
     assert post_tool.provider == "openai"
@@ -462,20 +451,18 @@ def test_phase_5_1_role_effort_scenario_matrix() -> None:
     assert intent.reasoning_effort == "xhigh"
     assert intent.source == "user_selected"
 
-    for internal_role, expected_model in (
-        (ROLE_TOOL_OUTPUT_COMPRESSOR, "claude-haiku-4-5-20251001"),
-        (ROLE_TOOL_CATEGORY_SELECTOR, "claude-haiku-4-5-20251001"),
-        (ROLE_POST_TOOL_ARTICULATOR, "claude-haiku-4-5-20251001"),
+    for internal_role in (
+        ROLE_TOOL_OUTPUT_COMPRESSOR,
+        ROLE_TOOL_CATEGORY_SELECTOR,
+        ROLE_POST_TOOL_ARTICULATOR,
     ):
         internal = registry.resolve_call_settings(
             internal_role,
-            conversation_model="gpt-5.2-pro",
+            conversation_model="claude-sonnet-4-6",
             conversation_provider="anthropic",
-            reasoning_model="gpt-5.2-pro",
-            reasoning_provider="anthropic",
             reasoning_effort="xhigh",
         )
         assert internal.provider == "anthropic"
-        assert internal.model == expected_model
-        assert internal.reasoning_effort is None
-        assert internal.source == "internal_fixed"
+        assert internal.model == "claude-sonnet-4-6"
+        assert internal.reasoning_effort == "low"
+        assert internal.source == "user_selected"

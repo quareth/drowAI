@@ -166,7 +166,7 @@ def test_compatible_factory_uses_the_same_explicit_base_url_contract() -> None:
             api_key="key",
             base_url="http://127.0.0.1:4000/v1",
             wire_model_id="openai/gpt-oss-20b",
-            guarded_executor=MagicMock(),
+            inference_transport=MagicMock(),
         )
 
     assert isinstance(client, OpenAICompatibleChatClient)

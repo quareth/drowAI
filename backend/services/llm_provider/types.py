@@ -2,7 +2,9 @@
 
 This module owns small value objects shared by backend LLM provider services.
 The contracts are intentionally non-secret and contain no database session,
-provider SDK client, or encryption behavior.
+provider SDK client, or encryption behavior. Cross-runtime deployment identity
+is defined in ``core.llm.runtime_selection`` and re-exported here for backend
+service compatibility.
 """
 
 from __future__ import annotations
@@ -11,9 +13,9 @@ from dataclasses import asdict, dataclass, field
 from enum import Enum
 from math import isfinite
 from typing import Any
-from uuid import UUID
 
 from agent.providers.llm.profiles.registry import ModelProfile
+from core.llm.runtime_selection import DeploymentRef, LLMRuntimeSelectionV2
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,117 +132,6 @@ class LLMRuntimeSelection:
                 if value.get("reasoning_effort") is not None
                 else None
             ),
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class DeploymentRef:
-    """Checkpoint-safe deployment identity with optimistic revision."""
-
-    deployment_id: str
-    expected_revision: int
-
-    def __post_init__(self) -> None:
-        object.__setattr__(
-            self,
-            "deployment_id",
-            _canonical_uuid(self.deployment_id, "deployment_id"),
-        )
-        _positive_revision(self.expected_revision)
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return the complete safe serialized deployment reference."""
-
-        return {
-            "deployment_id": self.deployment_id,
-            "expected_revision": self.expected_revision,
-        }
-
-    @classmethod
-    def from_mapping(cls, value: Any) -> "DeploymentRef":
-        """Parse a deployment reference without accepting extra facts."""
-
-        if isinstance(value, cls):
-            return value
-        if not isinstance(value, dict):
-            raise TypeError("DeploymentRef requires a mapping")
-        extra = set(value) - {"deployment_id", "expected_revision"}
-        if extra:
-            raise ValueError("DeploymentRef contains unsupported fields")
-        return cls(
-            deployment_id=str(value["deployment_id"]),
-            expected_revision=value["expected_revision"],
-        )
-
-
-@dataclass(frozen=True, slots=True)
-class LLMRuntimeSelectionV2:
-    """Checkpoint-safe deployment selection without live infrastructure facts."""
-
-    deployment_ref: DeploymentRef
-    preferred_route_id: str | None = None
-    reasoning_effort: str | None = None
-    legacy_provider: str | None = None
-    legacy_model: str | None = None
-    schema_version: int = 2
-
-    def __post_init__(self) -> None:
-        if self.schema_version != 2:
-            raise ValueError("LLM runtime selection schema_version must be 2")
-        if not isinstance(self.deployment_ref, DeploymentRef):
-            raise TypeError("deployment_ref must be DeploymentRef")
-        if self.preferred_route_id is not None:
-            object.__setattr__(
-                self,
-                "preferred_route_id",
-                _canonical_uuid(self.preferred_route_id, "preferred_route_id"),
-            )
-        for field_name in (
-            "reasoning_effort",
-            "legacy_provider",
-            "legacy_model",
-        ):
-            value = getattr(self, field_name)
-            if value is not None and (not isinstance(value, str) or not value.strip()):
-                raise ValueError(f"{field_name} must be non-empty when supplied")
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize only checkpoint-safe identity and diagnostic fields."""
-
-        return {
-            "schema_version": self.schema_version,
-            "deployment_ref": self.deployment_ref.to_dict(),
-            "preferred_route_id": self.preferred_route_id,
-            "reasoning_effort": self.reasoning_effort,
-            "legacy_provider": self.legacy_provider,
-            "legacy_model": self.legacy_model,
-        }
-
-    @classmethod
-    def from_mapping(cls, value: Any) -> "LLMRuntimeSelectionV2":
-        """Parse V2 identity while rejecting resolved or unknown fields."""
-
-        if isinstance(value, cls):
-            return value
-        if not isinstance(value, dict):
-            raise TypeError("LLMRuntimeSelectionV2 requires a mapping")
-        allowed = {
-            "schema_version",
-            "deployment_ref",
-            "preferred_route_id",
-            "reasoning_effort",
-            "legacy_provider",
-            "legacy_model",
-        }
-        if set(value) - allowed:
-            raise ValueError("LLMRuntimeSelectionV2 contains unsupported fields")
-        return cls(
-            schema_version=value.get("schema_version"),
-            deployment_ref=DeploymentRef.from_mapping(value["deployment_ref"]),
-            preferred_route_id=value.get("preferred_route_id"),
-            reasoning_effort=value.get("reasoning_effort"),
-            legacy_provider=value.get("legacy_provider"),
-            legacy_model=value.get("legacy_model"),
         )
 
 
@@ -397,19 +288,6 @@ class ResolvedLLMTarget:
     canonical_model_id: str | None
     exact_wire_model_id: str
     effective_profile: ModelProfile | None = field(repr=False)
-
-
-def _canonical_uuid(value: Any, field_name: str) -> str:
-    try:
-        return str(UUID(str(value)))
-    except (TypeError, ValueError, AttributeError) as exc:
-        raise ValueError(f"{field_name} must be a UUID") from exc
-
-
-def _positive_revision(value: Any) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError("expected_revision must be a positive integer")
-    return value
 
 
 def _positive_id(value: Any, field_name: str) -> int:

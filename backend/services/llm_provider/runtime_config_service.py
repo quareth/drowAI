@@ -10,6 +10,8 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from agent.providers.llm.core.exceptions import LLMProfileNotFoundError
+from agent.providers.llm.core.identity import ProviderModelRef
 from backend.config import E2E_DETERMINISTIC_MODE
 from backend.config.feature_flags import is_semantic_memory_runtime_enabled
 from backend.models import LLMInferenceConnection, LLMModelDeployment
@@ -18,7 +20,9 @@ from core.llm.role_policy import ModelRoleRegistry, RoleKey
 from .catalog_service import LLMProviderCatalogService
 from .credential_service import LLMCredentialService
 from .deployment_service import LLMDeploymentService
+from .effective_profile_service import EffectiveProfileService
 from .migration_service import LLMProviderMigrationService
+from .operation_registry import OperationRegistryError
 from .runtime_client_resolver import LLMRuntimeClientResolver
 from .runtime_services import LLMRuntimeServices
 from .selection_service import LLMProviderSelectionService
@@ -27,6 +31,7 @@ from .types import (
     LLMCallTarget,
     LLMCredentialRef,
     LLMDeploymentNotFoundError,
+    LLMDeploymentValidationError,
     LLMRuntimeSelection,
     LLMRuntimeSelectionV2,
     ProviderConfigurationError,
@@ -252,8 +257,6 @@ class LLMRuntimeConfigService:
         selection: LLMRuntimeSelection,
         role: RoleKey,
         *,
-        reasoning_model: str | None = None,
-        reasoning_provider: str | None = None,
         reasoning_effort: str | None = None,
     ) -> LLMCallTarget:
         """Resolve provider/model target for a role-owned LLM call."""
@@ -262,8 +265,6 @@ class LLMRuntimeConfigService:
             role,
             conversation_model=selection.model,
             conversation_provider=selection.provider,
-            reasoning_model=reasoning_model,
-            reasoning_provider=reasoning_provider,
             reasoning_effort=reasoning_effort or selection.reasoning_effort,
         )
         return LLMCallTarget(
@@ -371,23 +372,70 @@ class LLMRuntimeConfigService:
         model: str,
     ) -> LLMModelDeployment | None:
         self._migration.backfill_deployment_identity_for_user(user_id)
-        provider_id = provider.strip().lower()
-        model_id = model.strip()
-        if not provider_id or not model_id:
+        try:
+            legacy_ref = ProviderModelRef(provider, model).normalized()
+        except (TypeError, ValueError):
             return None
-        return self._db.execute(
-            select(LLMModelDeployment)
+        rows = self._db.execute(
+            select(LLMModelDeployment, LLMInferenceConnection)
             .join(
                 LLMInferenceConnection,
                 LLMInferenceConnection.id == LLMModelDeployment.connection_id,
             )
             .where(
                 LLMInferenceConnection.user_id == user_id,
-                LLMInferenceConnection.legacy_default_provider == provider_id,
-                LLMModelDeployment.wire_model_id == model_id,
             )
-            .order_by(LLMModelDeployment.created_at.asc())
-        ).scalars().first()
+            .order_by(
+                LLMModelDeployment.created_at.asc(),
+                LLMModelDeployment.id.asc(),
+            )
+        ).all()
+        deployments = LLMDeploymentService(self._db)
+        profiles = EffectiveProfileService()
+        matches: list[LLMModelDeployment] = []
+        for deployment, connection in rows:
+            routes = deployments.list_routes(
+                user_id=user_id,
+                deployment_id=deployment.id,
+            )
+            for route in routes or (None,):
+                try:
+                    profile = profiles.resolve(
+                        connection=connection,
+                        deployment=deployment,
+                        route=route,
+                    )
+                except (
+                    LLMDeploymentValidationError,
+                    LLMProfileNotFoundError,
+                    OperationRegistryError,
+                ):
+                    continue
+                aliases = {
+                    profile.ref.normalized(),
+                    ProviderModelRef(
+                        profile.ref.provider,
+                        deployment.wire_model_id,
+                    ).normalized(),
+                }
+                if deployment.canonical_model_id:
+                    aliases.add(
+                        ProviderModelRef(
+                            profile.ref.provider,
+                            deployment.canonical_model_id,
+                        ).normalized()
+                    )
+                if legacy_ref in aliases:
+                    matches.append(deployment)
+                    break
+
+        unique_matches = {str(deployment.id): deployment for deployment in matches}
+        if len(unique_matches) > 1:
+            raise ProviderConfigurationError(
+                "Legacy checkpoint runtime selection is ambiguous and cannot run; "
+                "reselect an available LLM deployment, then retry resume."
+            )
+        return next(iter(unique_matches.values()), None)
 
 
 __all__ = ["LLMRuntimeConfigService"]

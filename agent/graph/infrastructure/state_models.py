@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import logging
 from enum import Enum
-from typing import Any, Dict, List, Mapping, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
+
+from core.llm.runtime_selection import project_checkpoint_runtime_selection
 
 from ..state import FactsState, InteractiveState, TraceState
 
@@ -184,7 +186,6 @@ class GraphRuntimeContext(BaseModel):
     provider: Optional[str] = None
     model: Optional[str] = None
     credential_ref: Optional[Dict[str, Any]] = None
-    llm_runtime_selection: Optional[Dict[str, Any]] = None
     reasoning_effort: Optional[str] = None
     feature_flags: Dict[str, bool] = Field(default_factory=dict)
     turn_id: Optional[str] = None
@@ -259,49 +260,12 @@ def checkpoint_safe_llm_runtime_selection(
     *,
     include_legacy_diagnostics: bool = True,
 ) -> Optional[Dict[str, Any]]:
-    """Return a checkpoint-safe V2 runtime selection payload."""
+    """Return the canonical checkpoint-safe V2 runtime selection payload."""
 
-    if not isinstance(value, Mapping):
-        return None
-    if value.get("schema_version") != 2 and "deployment_ref" not in value:
-        return None
-    deployment_ref = value.get("deployment_ref")
-    if not isinstance(deployment_ref, Mapping):
-        return None
-    deployment_id = deployment_ref.get("deployment_id")
-    expected_revision = deployment_ref.get("expected_revision")
-    if not isinstance(deployment_id, str) or not deployment_id.strip():
-        return None
-    if isinstance(expected_revision, bool):
-        return None
-    try:
-        revision = int(expected_revision)
-    except (TypeError, ValueError):
-        return None
-    if revision <= 0:
-        return None
-
-    payload: Dict[str, Any] = {
-        "schema_version": 2,
-        "deployment_ref": {
-            "deployment_id": deployment_id.strip(),
-            "expected_revision": revision,
-        },
-    }
-    preferred_route_id = value.get("preferred_route_id")
-    if isinstance(preferred_route_id, str) and preferred_route_id.strip():
-        payload["preferred_route_id"] = preferred_route_id.strip()
-    reasoning_effort = value.get("reasoning_effort")
-    if isinstance(reasoning_effort, str) and reasoning_effort.strip():
-        payload["reasoning_effort"] = reasoning_effort.strip()
-    if include_legacy_diagnostics:
-        legacy_provider = value.get("legacy_provider")
-        legacy_model = value.get("legacy_model")
-        if isinstance(legacy_provider, str) and legacy_provider.strip():
-            payload["legacy_provider"] = legacy_provider.strip()
-        if isinstance(legacy_model, str) and legacy_model.strip():
-            payload["legacy_model"] = legacy_model.strip()
-    return payload
+    return project_checkpoint_runtime_selection(
+        value,
+        include_legacy_diagnostics=include_legacy_diagnostics,
+    )
 
 
 def initialize_extended_state(

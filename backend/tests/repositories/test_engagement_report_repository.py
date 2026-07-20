@@ -502,6 +502,73 @@ def test_ready_current_report_source_lookup_requires_current_report_and_hash() -
     engine.dispose()
 
 
+def test_ready_report_source_lookup_distinguishes_deployment_identity() -> None:
+    """V2 report reuse never collapses two deployments into an empty model key."""
+
+    engine, factory = _make_session_factory()
+    with factory() as session:
+        tenant, user, engagement, _ = _seed_scope(
+            session,
+            tenant_label="report-deployment-identity",
+        )
+        memo_id = uuid.uuid4()
+        stored_selection = {
+            "schema_version": 2,
+            "deployment_ref": {
+                "deployment_id": "11111111-1111-4111-8111-111111111111",
+                "expected_revision": 2,
+            },
+            "reasoning_effort": "medium",
+        }
+        report = _add_report(
+            session,
+            tenant_id=tenant.id,
+            user_id=user.id,
+            engagement_id=engagement.id,
+            report_type="pentest",
+            version=1,
+            status="ready",
+            is_current=True,
+            source_task_memo_ids=[str(memo_id)],
+            generation_metadata={
+                GENERATION_METADATA_SOURCE_WATERMARK_HASH_KEY: "source-hash",
+                "llm_runtime_selection": stored_selection,
+            },
+        )
+        repo = EngagementReportRepository(session)
+
+        matched = repo.find_ready_current_report_by_source(
+            tenant_id=tenant.id,
+            user_id=user.id,
+            engagement_id=engagement.id,
+            report_type="pentest",
+            selected_task_memo_ids=[str(memo_id)],
+            source_watermark_hash="source-hash",
+            llm_runtime_selection=stored_selection,
+        )
+        mismatched = repo.find_ready_current_report_by_source(
+            tenant_id=tenant.id,
+            user_id=user.id,
+            engagement_id=engagement.id,
+            report_type="pentest",
+            selected_task_memo_ids=[str(memo_id)],
+            source_watermark_hash="source-hash",
+            llm_runtime_selection={
+                **stored_selection,
+                "deployment_ref": {
+                    "deployment_id": "22222222-2222-4222-8222-222222222222",
+                    "expected_revision": 2,
+                },
+            },
+        )
+
+        assert matched is not None
+        assert matched.id == report.id
+        assert mismatched is None
+
+    engine.dispose()
+
+
 def test_report_repository_methods_do_not_commit_transactions() -> None:
     engine, factory = _make_session_factory()
     with factory() as session:

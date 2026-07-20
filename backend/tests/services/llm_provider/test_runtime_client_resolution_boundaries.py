@@ -37,6 +37,7 @@ from backend.services.llm_provider.operation_registry import (
 )
 from backend.services.llm_provider import legacy_target_resolver as legacy_module
 from backend.services.llm_provider import live_target_resolver as live_module
+from core.llm import ModelRoleRegistry, ROLE_POST_TOOL_ARTICULATOR
 from backend.services.llm_provider import runtime_client_resolver as resolver_module
 from backend.services.llm_provider.runtime_client_resolver import (
     LLMRuntimeClientResolver,
@@ -735,6 +736,49 @@ def test_v2_success_preserves_call_order_and_resolved_target_fields(
     assert target.canonical_model_id == "gpt-5.2"
     assert target.exact_wire_model_id == "Org/Model-Case:Exact"
     assert target.effective_profile is profiles.profile
+
+
+def test_v2_internal_role_uses_selected_deployment_with_low_reasoning(
+    llm_identity_db: Session,
+    identity_users: tuple[User, User],
+) -> None:
+    """A lightweight graph role cannot escape the turn's selected deployment."""
+
+    owner, _ = identity_users
+    events: list[str] = []
+    connection = _add_connection(llm_identity_db, owner=owner)
+    deployment = _add_deployment(llm_identity_db, connection=connection)
+    route = _add_route(llm_identity_db, deployment=deployment)
+    role_settings = ModelRoleRegistry().resolve_call_settings(
+        ROLE_POST_TOOL_ARTICULATOR,
+        conversation_provider="openai",
+        conversation_model="gpt-5.2",
+        reasoning_effort="high",
+    )
+    resolver = LLMRuntimeClientResolver(
+        _RecordingCredentialService(),
+        db=llm_identity_db,
+        deployment_service=_RecordingDeploymentService(
+            events=events,
+            deployment=deployment,
+            route=route,
+        ),
+        connection_authorizer=_RecordingAuthorizer(events=events),
+        effective_profile_service=_RecordingProfileService(events=events),
+    )
+
+    target = resolver.resolve_target(
+        _v2_selection(deployment, route=route),
+        access_context=LLMRuntimeAccessContext(runtime_user_id=owner.id),
+        purpose="graph:post_tool_articulator",
+        target=role_settings,
+    )
+
+    assert role_settings.provider == "openai"
+    assert role_settings.model == "gpt-5.2"
+    assert role_settings.reasoning_effort == "low"
+    assert target.deployment_id == str(deployment.id)
+    assert target.exact_wire_model_id == "gpt-5.2"
 
 
 def test_v2_failures_preserve_exceptions_and_safe_metrics(

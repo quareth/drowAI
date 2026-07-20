@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import AsyncIterator, Mapping
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -18,6 +21,40 @@ from agent.providers.llm.core.exceptions import LLMConfigurationError
 from agent.providers.llm.factory.client_factory import LLMClientFactory
 
 
+class _InferenceTransport:
+    """Controllable async inference transport for adapter contract tests."""
+
+    def __init__(
+        self,
+        *,
+        json_response: Any = None,
+        stream_events: list[Any] | None = None,
+        request_gate: asyncio.Event | None = None,
+        stream_gate: asyncio.Event | None = None,
+    ) -> None:
+        self.json_response = json_response
+        self.stream_events = stream_events or []
+        self.request_gate = request_gate
+        self.stream_gate = stream_gate
+        self.requests: list[dict[str, Any]] = []
+
+    async def request_json(self, json_body: Mapping[str, Any]) -> Any:
+        self.requests.append(dict(json_body))
+        if self.request_gate is not None:
+            await self.request_gate.wait()
+        return self.json_response
+
+    async def stream_json_events(
+        self,
+        json_body: Mapping[str, Any],
+    ) -> AsyncIterator[Any]:
+        self.requests.append(dict(json_body))
+        for index, event in enumerate(self.stream_events):
+            yield event
+            if index == 0 and self.stream_gate is not None:
+                await self.stream_gate.wait()
+
+
 def _response(content: str = "ok", usage: object | None = None) -> object:
     """Build a minimal successful Chat Completions response."""
 
@@ -31,7 +68,7 @@ def _client(
     endpoint: str = "https://inference.example/v1",
     wire_model_id: str = "Vendor/Model.Name-20B",
     auth: CompatibleChatAuth | None = None,
-    guarded_executor: MagicMock | None = None,
+    inference_transport: _InferenceTransport | None = None,
     dialect_policy: LLMDialectPolicy | None = None,
 ) -> tuple[OpenAICompatibleChatClient, MagicMock, MagicMock]:
     """Create the compatible adapter with a mocked SDK constructor."""
@@ -48,7 +85,7 @@ def _client(
             "base_url": endpoint,
             "auth": auth or CompatibleChatAuth.bearer("test-key"),
             "wire_model_id": wire_model_id,
-            "guarded_executor": guarded_executor,
+            "inference_transport": inference_transport,
         }
         if dialect_policy is not None:
             client_kwargs["dialect_policy"] = dialect_policy
@@ -286,18 +323,31 @@ async def test_agent_dialect_normalizes_valid_content_encoded_tool_call() -> Non
 async def test_guarded_compatible_transport_normalizes_content_encoded_tool_call() -> None:
     """The guarded runtime path normalizes the exact wire response seen from proxies."""
 
-    guarded_executor = MagicMock(
-        return_value=(
-            b'{"id":"tool-response","choices":[{"message":{'
-            b'"role":"assistant","content":"{\\"name\\":'
-            b'\\"functions.tool__net_nmap\\",\\"arguments\\":{'
-            b'\\"target\\":\\"127.0.0.1\\"}}","tool_calls":null},'
-            b'"finish_reason":"stop"}],"usage":{"prompt_tokens":11,'
-            b'"completion_tokens":4,"total_tokens":15}}'
-        )
+    inference_transport = _InferenceTransport(
+        json_response={
+            "id": "tool-response",
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": (
+                            '{"name":"functions.tool__net_nmap",'
+                            '"arguments":{"target":"127.0.0.1"}}'
+                        ),
+                        "tool_calls": None,
+                    },
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 11,
+                "completion_tokens": 4,
+                "total_tokens": 15,
+            },
+        }
     )
     client, _sdk, constructor = _client(
-        guarded_executor=guarded_executor,
+        inference_transport=inference_transport,
         dialect_policy=AGENT_OPENAI_COMPATIBLE_DIALECT,
     )
 
@@ -330,23 +380,29 @@ async def test_guarded_compatible_transport_normalizes_content_encoded_tool_call
     assert result.tool_calls[0].arguments == '{"target":"127.0.0.1"}'
     assert result.usage is not None
     assert result.usage.total_tokens == 15
-    assert guarded_executor.call_args.args[0]["tool_choice"] == "required"
+    assert inference_transport.requests[0]["tool_choice"] == "required"
 
 
 @pytest.mark.asyncio
 async def test_agent_dialect_decodes_guarded_sse_and_final_usage() -> None:
     """Guarded compatible streaming preserves content and provider usage events."""
 
-    guarded_executor = MagicMock(
-        return_value=(
-            b'data: {"id":"stream-1","choices":[{"delta":{"content":"hello"}}]}\n\n'
-            b'data: {"id":"stream-1","choices":[],"usage":{"prompt_tokens":3,'
-            b'"completion_tokens":1,"total_tokens":4}}\n\n'
-            b'data: [DONE]\n\n'
-        )
+    inference_transport = _InferenceTransport(
+        stream_events=[
+            {"id": "stream-1", "choices": [{"delta": {"content": "hello"}}]},
+            {
+                "id": "stream-1",
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 3,
+                    "completion_tokens": 1,
+                    "total_tokens": 4,
+                },
+            },
+        ]
     )
     client, _sdk, _constructor = _client(
-        guarded_executor=guarded_executor,
+        inference_transport=inference_transport,
         dialect_policy=AGENT_OPENAI_COMPATIBLE_DIALECT,
     )
 
@@ -360,9 +416,58 @@ async def test_agent_dialect_decodes_guarded_sse_and_final_usage() -> None:
     assert chunks == ["hello"]
     assert response.get_final_usage() is not None
     assert response.get_final_usage().total_tokens == 4
-    request = guarded_executor.call_args.args[0]
+    request = inference_transport.requests[0]
     assert request["stream"] is True
     assert request["stream_options"] == {"include_usage": True}
+
+
+@pytest.mark.asyncio
+async def test_guarded_request_yields_control_while_provider_is_slow() -> None:
+    """A slow guarded request cannot starve graph event publication."""
+
+    request_gate = asyncio.Event()
+    inference_transport = _InferenceTransport(
+        json_response={
+            "id": "response-1",
+            "choices": [
+                {
+                    "message": {"content": "ok", "refusal": None, "tool_calls": None},
+                    "finish_reason": "stop",
+                }
+            ],
+        },
+        request_gate=request_gate,
+    )
+    client, _sdk, _constructor = _client(inference_transport=inference_transport)
+
+    pending = asyncio.create_task(
+        client.chat_messages([{"role": "user", "content": "hello"}])
+    )
+    await asyncio.sleep(0)
+
+    assert pending.done() is False
+    request_gate.set()
+    assert await pending == "ok"
+
+
+@pytest.mark.asyncio
+async def test_guarded_stream_exposes_first_event_before_stream_completion() -> None:
+    """The adapter forwards the first SSE event without waiting for EOF."""
+
+    stream_gate = asyncio.Event()
+    inference_transport = _InferenceTransport(
+        stream_events=[
+            {"id": "stream-1", "choices": [{"delta": {"content": "first"}}]},
+            {"id": "stream-1", "choices": [{"delta": {"content": "second"}}]},
+        ],
+        stream_gate=stream_gate,
+    )
+    client, _sdk, _constructor = _client(inference_transport=inference_transport)
+    stream = client.stream_chat_messages([{"role": "user", "content": "hello"}])
+
+    assert await asyncio.wait_for(anext(stream), timeout=0.1) == "first"
+    stream_gate.set()
+    assert await asyncio.wait_for(anext(stream), timeout=0.1) == "second"
 
 
 @pytest.mark.parametrize(
@@ -395,7 +500,7 @@ def test_compatible_adapter_accepts_explicit_loopback_endpoint(endpoint: str) ->
 
     _client_instance, _sdk, constructor = _client(
         endpoint=endpoint,
-        guarded_executor=MagicMock(),
+        inference_transport=_InferenceTransport(),
     )
 
     constructor.assert_not_called()

@@ -239,7 +239,9 @@ def test_builder_factory_arguments_and_budget_wrapper_are_field_for_field(
     assert kwargs["base_url"] == target.connection.operation_target.client_base_url
     assert kwargs["wire_model_id"] == "Org/Model-Case:Exact"
     assert kwargs["dialect_policy_id"] == "openai_responses.native_v1"
-    assert callable(kwargs["guarded_executor"])
+    assert kwargs["inference_transport"].__class__.__name__ == (
+        "GuardedAsyncInferenceTransport"
+    )
 
 
 def test_builder_legacy_profile_rules_and_profileless_wrapper_condition(
@@ -343,26 +345,29 @@ def test_builder_v2_profile_and_secret_failures_precede_factory(
     assert factory_called is False
 
 
-def test_builder_guarded_executor_uses_registered_operation_and_sanitized_failure(
+@pytest.mark.asyncio
+async def test_builder_guarded_transport_binds_authorized_target_and_sanitized_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Guarded callback forwards only the approved operation target and secret object."""
+    """Async transport binds only the approved operation target and secret object."""
 
     builder = LLMRuntimeClientBuilder()
     secret = ProviderSecret(provider="openai", value="sk-guarded-secret")
     target = _resolved_target(secret=secret)
-    execute_calls: list[dict[str, Any]] = []
+    construction_calls: list[dict[str, Any]] = []
 
     class _GuardedTransport:
-        def execute(self, operation: Any, **kwargs: Any) -> SimpleNamespace:
-            execute_calls.append({"operation": operation, **kwargs})
-            return SimpleNamespace(body=b'{"ok":true}')
+        def __init__(self, **kwargs: Any) -> None:
+            construction_calls.append(dict(kwargs))
 
-    monkeypatch.setattr(builder_module, "GuardedTransport", _GuardedTransport)
-    captured_executor: list[Any] = []
+        async def request_json(self, _json_body: Any) -> Any:
+            return {"ok": True}
+
+    monkeypatch.setattr(builder_module, "GuardedAsyncInferenceTransport", _GuardedTransport)
+    captured_transports: list[Any] = []
 
     def fake_get_client(*, provider_model: ProviderModelRef, api_key: str, **kwargs: Any) -> _MinimalClient:
-        captured_executor.append(kwargs["guarded_executor"])
+        captured_transports.append(kwargs["inference_transport"])
         return _MinimalClient()
 
     monkeypatch.setattr(builder_module.LLMClientFactory, "get_client", fake_get_client)
@@ -379,23 +384,27 @@ def test_builder_guarded_executor_uses_registered_operation_and_sanitized_failur
     )
     body = {"model": "gpt-5.2", "messages": [{"role": "user", "content": "hi"}]}
 
-    assert captured_executor[0](body) == b'{"ok":true}'
-    assert execute_calls == [
+    assert await captured_transports[0].request_json(body) == {"ok": True}
+    assert construction_calls == [
         {
-            "operation": LLMConnectionOperation.INFERENCE,
-            "provider": "openai",
             "secret": secret,
-            "json_body": body,
             "operation_target": target.connection.operation_target,
         }
     ]
 
     class _FailingGuardedTransport:
-        def execute(self, *_args: Any, **_kwargs: Any) -> None:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def request_json(self, _json_body: Any) -> Any:
             raise LLMConfigurationError("guarded transport rejected request")
 
-    monkeypatch.setattr(builder_module, "GuardedTransport", _FailingGuardedTransport)
-    captured_executor.clear()
+    monkeypatch.setattr(
+        builder_module,
+        "GuardedAsyncInferenceTransport",
+        _FailingGuardedTransport,
+    )
+    captured_transports.clear()
     builder.build(
         selection=LLMRuntimeSelectionV2(deployment_ref=DeploymentRef(str(uuid4()), 1)),
         resolved_target=target,
@@ -408,5 +417,5 @@ def test_builder_guarded_executor_uses_registered_operation_and_sanitized_failur
     )
 
     with pytest.raises(LLMConfigurationError, match="guarded transport rejected request") as exc_info:
-        captured_executor[0](body)
+        await captured_transports[0].request_json(body)
     assert secret.value not in str(exc_info.value)

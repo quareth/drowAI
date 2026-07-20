@@ -15,7 +15,6 @@ from agent.providers.llm.profiles.registry import (
     OPENAI_API_SURFACE_RESPONSES,
     DEFAULT_CONTEXT_WINDOW_TOKENS,
     DEFAULT_MAX_OUTPUT_TOKENS,
-    OPENAI_INTERNAL_ROLE_MODELS,
     OPENAI_EXACT_MODEL_IDS,
     OPENAI_LEGACY_CHAT_MODEL_IDS,
     OPENAI_LISTABLE_MODEL_IDS,
@@ -28,19 +27,11 @@ from agent.providers.llm.profiles.registry import (
     require_model_profile,
     require_provider_capability,
     require_provider_profile,
-    resolve_provider_internal_role_model,
     resolve_context_window_tokens,
     resolve_max_output_tokens,
     supports_model,
     supports_provider,
 )
-from core.llm.role_contracts import (
-    ROLE_POST_TOOL_ARTICULATOR,
-    ROLE_TOOL_CATEGORY_SELECTOR,
-    ROLE_TOOL_OUTPUT_COMPRESSOR,
-)
-
-
 def _openai_ref(model: str) -> ProviderModelRef:
     return ProviderModelRef(OPENAI_PROVIDER_ID, model)
 
@@ -56,7 +47,6 @@ def test_openai_provider_profile_declares_provider_wide_capability_only() -> Non
     assert profile.display_name == "OpenAI"
     assert supports_provider(OPENAI_PROVIDER_ID, LLMCapability.REMOTE_CONVERSATION_LIFECYCLE)
     assert not supports_provider(OPENAI_PROVIDER_ID, LLMCapability.REASONING_EFFORT)
-    assert dict(profile.internal_role_models) == OPENAI_INTERNAL_ROLE_MODELS
 
 
 def test_provider_capability_checks_fail_loudly() -> None:
@@ -93,7 +83,6 @@ def test_openai_profiles_include_runner_control_strategy_metadata() -> None:
             assert profile.supports(LLMCapability.STREAMING_USAGE_REPORTING)
         if model_id == "gpt-oss-20b":
             assert profile.tool_choice_modes == frozenset(("auto", "required"))
-            assert profile.role_model_policy == "selected_model"
         else:
             assert profile.tool_choice_modes == frozenset(
                 ("auto", "none", "required", "specific")
@@ -154,11 +143,6 @@ def test_anthropic_profiles_are_registered_with_runner_control_policy_metadata()
     assert provider.id == ANTHROPIC_PROVIDER_ID
     assert provider.display_name == "Anthropic"
     assert provider.capabilities == frozenset()
-    assert set(provider.internal_role_models) == {
-        ROLE_TOOL_OUTPUT_COMPRESSOR,
-        ROLE_TOOL_CATEGORY_SELECTOR,
-        ROLE_POST_TOOL_ARTICULATOR,
-    }
 
     for model_id in ANTHROPIC_LISTABLE_MODEL_IDS:
         profile = require_model_profile(ProviderModelRef(ANTHROPIC_PROVIDER_ID, model_id))
@@ -210,27 +194,6 @@ def test_every_exact_anthropic_model_has_published_limits() -> None:
         )
         assert profile.context_window_tokens > 0
         assert profile.max_output_tokens > 0
-
-
-@pytest.mark.parametrize(
-    ("provider", "role", "expected_model"),
-    [
-        (OPENAI_PROVIDER_ID, ROLE_TOOL_OUTPUT_COMPRESSOR, "gpt-5-nano"),
-        (OPENAI_PROVIDER_ID, ROLE_TOOL_CATEGORY_SELECTOR, "gpt-5-mini"),
-        (OPENAI_PROVIDER_ID, ROLE_POST_TOOL_ARTICULATOR, "gpt-5-mini"),
-        (ANTHROPIC_PROVIDER_ID, ROLE_TOOL_OUTPUT_COMPRESSOR, "claude-haiku-4-5-20251001"),
-        (ANTHROPIC_PROVIDER_ID, ROLE_TOOL_CATEGORY_SELECTOR, "claude-haiku-4-5-20251001"),
-        (ANTHROPIC_PROVIDER_ID, ROLE_POST_TOOL_ARTICULATOR, "claude-haiku-4-5-20251001"),
-    ],
-)
-def test_provider_profiles_resolve_internal_role_models(
-    provider: str,
-    role: str,
-    expected_model: str,
-) -> None:
-    ref = resolve_provider_internal_role_model(provider, role)
-
-    assert ref == ProviderModelRef(provider, expected_model)
 
 
 def test_anthropic_catalog_profiles_are_curated_exact_models() -> None:

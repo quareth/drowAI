@@ -14,12 +14,18 @@ from backend.services.langgraph_chat.checkpoint.continuation_service import (
 )
 from backend.services.llm_provider import (
     LLMCredentialService,
+    LLMConnectionService,
+    LLMDeploymentService,
     LLMDeploymentNotFoundError,
     LLMProviderMigrationService,
     LLMProviderSelectionService,
     LLMRuntimeAccessContext,
     LLMRuntimeClientResolver,
     LLMRuntimeConfigService,
+)
+from backend.services.llm_provider.operation_registry import (
+    HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+    NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
 )
 from backend.services.llm_provider.types import (
     LLMRuntimeSelectionV2,
@@ -60,6 +66,33 @@ def _create_legacy_deployment(db, *, user_id: int, model: str) -> str:
     db.refresh(selection)
     assert selection.deployment_id is not None
     return str(selection.deployment_id)
+
+
+def _create_compatible_deployment(
+    db,
+    *,
+    user_id: int,
+    preset_id: str,
+    operator_id: str,
+    wire_model_id: str,
+) -> str:
+    connection = LLMConnectionService(db).create_draft(
+        user_id=user_id,
+        display_name=f"Compatible endpoint {preset_id}",
+        connection_preset_id=preset_id,
+        runtime_family_id="openai_compatible_chat",
+        serving_operator_id=operator_id,
+    )
+    deployment, _route = LLMDeploymentService(db).create_preset_deployment(
+        user_id=user_id,
+        connection_id=connection.id,
+        expected_connection_revision=connection.revision,
+        wire_model_id=wire_model_id,
+        canonical_model_id="openai/gpt-oss-20b",
+        display_name="Compatible GPT-OSS deployment",
+    )
+    db.commit()
+    return str(deployment.id)
 
 
 def test_legacy_checkpoint_hint_normalizes_to_checkpoint_safe_deployment_ref() -> None:
@@ -148,6 +181,182 @@ def test_v2_checkpoint_hint_extraction_keeps_only_safe_identity_fields() -> None
     assert "endpoint" not in repr(hint)
 
 
+def test_v2_checkpoint_identity_wins_over_outer_legacy_diagnostics() -> None:
+    """A modern nested deployment ref is authoritative over old outer fields."""
+
+    deployment_id = str(uuid4())
+    values = {
+        "provider": OPENAI_PROVIDER_ID,
+        "model": "legacy-display-model",
+        "facts": {
+            "metadata": {
+                "llm_runtime_selection": {
+                    "schema_version": 2,
+                    "deployment_ref": {
+                        "deployment_id": deployment_id,
+                        "expected_revision": 4,
+                    },
+                    "reasoning_effort": "medium",
+                    "legacy_provider": OPENAI_PROVIDER_ID,
+                    "legacy_model": "canonical-display-model",
+                }
+            }
+        },
+    }
+
+    hint = CheckpointContinuationService._extract_checkpoint_runtime_hint(values)
+
+    assert hint == {
+        "schema_version": 2,
+        "deployment_ref": {
+            "deployment_id": deployment_id,
+            "expected_revision": 4,
+        },
+        "reasoning_effort": "medium",
+        "legacy_provider": OPENAI_PROVIDER_ID,
+        "legacy_model": "canonical-display-model",
+    }
+
+
+def test_mixed_checkpoint_resumes_its_deployment_not_outer_legacy_model() -> None:
+    """The production failure shape reaches continuation with its deployment ref."""
+
+    db = SessionLocal()
+    try:
+        user = _create_user(db, "mixed-checkpoint-resume")
+        deployment_id = _create_legacy_deployment(
+            db,
+            user_id=user.id,
+            model="gpt-5.2",
+        )
+        deployment = db.get(LLMModelDeployment, UUID(deployment_id))
+        assert deployment is not None
+        values = {
+            "provider": OPENAI_PROVIDER_ID,
+            "model": "unmapped-outer-model",
+            "facts": {
+                "metadata": {
+                    "llm_runtime_selection": {
+                        "schema_version": 2,
+                        "deployment_ref": {
+                            "deployment_id": deployment_id,
+                            "expected_revision": int(deployment.revision),
+                        },
+                        "legacy_provider": OPENAI_PROVIDER_ID,
+                        "legacy_model": "gpt-5.2",
+                    }
+                }
+            },
+        }
+
+        hint = CheckpointContinuationService._extract_checkpoint_runtime_hint(values)
+        selection = LLMRuntimeConfigService(db).build_continuation_selection(
+            user_id=user.id,
+            checkpoint_hint=hint,
+        )
+
+        assert selection.deployment_ref.deployment_id == deployment_id
+        assert selection.legacy_model == "gpt-5.2"
+    finally:
+        db.close()
+
+
+def test_identical_v2_checkpoint_mirrors_are_accepted() -> None:
+    """Historical duplicate mirrors are accepted when routing identity agrees."""
+
+    deployment_id = str(uuid4())
+    selection = {
+        "schema_version": 2,
+        "deployment_ref": {
+            "deployment_id": deployment_id,
+            "expected_revision": 2,
+        },
+    }
+    values = {
+        "llm_runtime_selection": selection,
+        "facts": {"metadata": {"llm_runtime_selection": dict(selection)}},
+    }
+
+    assert (
+        CheckpointContinuationService._extract_checkpoint_runtime_hint(values)
+        == selection
+    )
+
+
+def test_conflicting_v2_checkpoint_mirrors_fail_closed() -> None:
+    """Conflicting durable deployment identities never depend on scan order."""
+
+    values = {
+        "llm_runtime_selection": {
+            "schema_version": 2,
+            "deployment_ref": {
+                "deployment_id": str(uuid4()),
+                "expected_revision": 2,
+            },
+        },
+        "facts": {
+            "metadata": {
+                "llm_runtime_selection": {
+                    "schema_version": 2,
+                    "deployment_ref": {
+                        "deployment_id": str(uuid4()),
+                        "expected_revision": 2,
+                    },
+                }
+            }
+        },
+    }
+
+    with pytest.raises(ProviderConfigurationError, match="conflicting"):
+        CheckpointContinuationService._extract_checkpoint_runtime_hint(values)
+
+
+def test_malformed_v2_checkpoint_does_not_downgrade_to_legacy() -> None:
+    """A claimed modern identity fails closed even when legacy labels are valid."""
+
+    values = {
+        "provider": OPENAI_PROVIDER_ID,
+        "model": "gpt-5.2",
+        "facts": {
+            "metadata": {
+                "llm_runtime_selection": {
+                    "schema_version": 2,
+                    "deployment_ref": {
+                        "deployment_id": "not-a-uuid",
+                        "expected_revision": 1,
+                    },
+                }
+            }
+        },
+    }
+
+    with pytest.raises(ProviderConfigurationError, match="invalid"):
+        CheckpointContinuationService._extract_checkpoint_runtime_hint(values)
+
+
+def test_unsupported_checkpoint_schema_does_not_downgrade_to_legacy() -> None:
+    """Unknown versioned identity is an explicit unrunnable checkpoint."""
+
+    values = {
+        "provider": OPENAI_PROVIDER_ID,
+        "model": "gpt-5.2",
+        "facts": {
+            "metadata": {
+                "llm_runtime_selection": {
+                    "schema_version": 3,
+                    "deployment_ref": {
+                        "deployment_id": str(uuid4()),
+                        "expected_revision": 1,
+                    },
+                }
+            }
+        },
+    }
+
+    with pytest.raises(ProviderConfigurationError, match="invalid"):
+        CheckpointContinuationService._extract_checkpoint_runtime_hint(values)
+
+
 def test_v2_checkpoint_continuation_preserves_checkpoint_revision_until_resolver() -> None:
     """Resume keeps checkpointed deployment revision so stale revisions fail closed."""
 
@@ -204,6 +413,66 @@ def test_unmapped_legacy_checkpoint_hint_fails_without_current_selection_fallbac
                 checkpoint_hint={
                     "provider": OPENAI_PROVIDER_ID,
                     "model": "legacy-unmapped-wire-model",
+                },
+            )
+    finally:
+        db.close()
+
+
+def test_legacy_compatibility_identity_maps_across_wire_model_alias() -> None:
+    """Legacy conversion compares effective identity, not one exact wire string."""
+
+    db = SessionLocal()
+    try:
+        user = _create_user(db, "legacy-compatible-alias")
+        deployment_id = _create_compatible_deployment(
+            db,
+            user_id=user.id,
+            preset_id=NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+            operator_id="nvidia_nim",
+            wire_model_id="openai/gpt-oss-20b",
+        )
+
+        selection = LLMRuntimeConfigService(db).build_continuation_selection(
+            user_id=user.id,
+            checkpoint_hint={
+                "provider": OPENAI_PROVIDER_ID,
+                "model": "gpt-oss-20b",
+            },
+        )
+
+        assert selection.deployment_ref.deployment_id == deployment_id
+    finally:
+        db.close()
+
+
+def test_legacy_compatibility_identity_fails_when_multiple_deployments_match() -> None:
+    """Legacy labels never choose arbitrarily between serving deployments."""
+
+    db = SessionLocal()
+    try:
+        user = _create_user(db, "legacy-compatible-ambiguous")
+        _create_compatible_deployment(
+            db,
+            user_id=user.id,
+            preset_id=NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+            operator_id="nvidia_nim",
+            wire_model_id="openai/gpt-oss-20b",
+        )
+        _create_compatible_deployment(
+            db,
+            user_id=user.id,
+            preset_id=HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+            operator_id="huggingface",
+            wire_model_id="openai/gpt-oss-20b:compatible-route",
+        )
+
+        with pytest.raises(ProviderConfigurationError, match="ambiguous"):
+            LLMRuntimeConfigService(db).build_continuation_selection(
+                user_id=user.id,
+                checkpoint_hint={
+                    "provider": OPENAI_PROVIDER_ID,
+                    "model": "gpt-oss-20b",
                 },
             )
     finally:

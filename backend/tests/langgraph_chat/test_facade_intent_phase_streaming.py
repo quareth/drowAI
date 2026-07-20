@@ -220,9 +220,7 @@ async def test_facade_prepares_context_after_build_and_before_classifier(
                 {"context_window": dict(metadata)} if isinstance(metadata, dict) else {}
             )
 
-    intent_classifier = IntentClassifier(
-        model_role_registry=ModelRoleRegistry(env_getter=lambda _name: None)
-    )
+    intent_classifier = IntentClassifier(model_role_registry=ModelRoleRegistry())
     original_prepare_request = intent_classifier.prepare_request
     prepare_calls = []
 
@@ -346,9 +344,7 @@ async def test_facade_rejects_unsupported_accounting_before_classifier_send() ->
         "provider": "unknown-provider",
         "model": "unknown-model",
     }
-    classifier = IntentClassifier(
-        model_role_registry=ModelRoleRegistry(env_getter=lambda _name: None)
-    )
+    classifier = IntentClassifier(model_role_registry=ModelRoleRegistry())
     classifier.enrich_runtime_config = AsyncMock()
     compression = AsyncMock()
     compression.prepare_preturn_history = AsyncMock()
@@ -379,9 +375,7 @@ async def test_facade_context_uncompactable_stops_before_classifier_and_live_swa
     live_bundle = runtime_config.metadata[METADATA_CONTEXT_BUNDLE_KEY]
     shared_window = live_bundle["transcript_window"]
     classifier_window = live_bundle[CLASSIFIER_TRANSCRIPT_WINDOW_KEY]
-    classifier = IntentClassifier(
-        model_role_registry=ModelRoleRegistry(env_getter=lambda _name: None)
-    )
+    classifier = IntentClassifier(model_role_registry=ModelRoleRegistry())
     classifier.enrich_runtime_config = AsyncMock()
     compression = SimpleNamespace(
         prepare_preturn_history=AsyncMock(

@@ -121,7 +121,6 @@ def build_checkpoint_execution_config(
         runtime_projection: Dict[str, Any] = {
             "task_id": task_id,
             "graph_thread_id": graph_thread_id,
-            "llm_runtime_selection": selection_payload,
             "reasoning_effort": selection_payload.get("reasoning_effort"),
         }
         if tenant_id is not None:

@@ -42,7 +42,6 @@ def test_gpt_oss_20b_profile_declares_reviewed_agent_contract() -> None:
     assert profile.reasoning_efforts == frozenset()
     assert profile.tool_choice_modes == frozenset({"auto", "required"})
     assert profile.structured_output_strategies == frozenset({"native_schema"})
-    assert profile.role_model_policy == "selected_model"
 
 
 def test_gpt_oss_20b_is_public_catalog_metadata() -> None:

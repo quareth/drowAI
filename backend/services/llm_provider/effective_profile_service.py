@@ -225,7 +225,6 @@ def _compatible_profile(
         reasoning_efforts=dialect.reasoning_efforts,
         pricing_schedule_ref=None,
         pricing_provenance=None,
-        role_model_policy="selected_model",
     )
 
 

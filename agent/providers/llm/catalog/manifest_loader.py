@@ -50,7 +50,6 @@ class CatalogModel:
     default_reasoning_effort: str | None = None
     tool_choice_modes: frozenset[str] = frozenset()
     structured_output_strategies: frozenset[str] = frozenset()
-    role_model_policy: str = "provider_defaults"
 
 
 @dataclass(frozen=True, slots=True)
@@ -149,7 +148,6 @@ def build_model_profiles_from_manifest(
             aliases=model.aliases,
             pricing_schedule_ref=model.pricing_schedule_ref,
             pricing_provenance=model.pricing_provenance,
-            role_model_policy=model.role_model_policy,
         )
         for model in manifest.models
     )
@@ -301,9 +299,6 @@ def _catalog_model_from_payload(
         ),
         structured_output_strategies=freeze_structured_output_strategies(
             _optional_sequence(payload, "structured_output_strategies")
-        ),
-        role_model_policy=(
-            _optional_text(payload, "role_model_policy") or "provider_defaults"
         ),
     )
 

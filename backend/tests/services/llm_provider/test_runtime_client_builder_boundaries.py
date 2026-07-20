@@ -283,7 +283,9 @@ def test_v2_factory_arguments_and_wrapper_are_field_for_field(
     assert kwargs["base_url"] == target.connection.operation_target.client_base_url
     assert kwargs["wire_model_id"] == "Org/Model-Case:Exact"
     assert kwargs["dialect_policy_id"] == "openai_responses.native_v1"
-    assert callable(kwargs["guarded_executor"])
+    assert kwargs["inference_transport"].__class__.__name__ == (
+        "GuardedAsyncInferenceTransport"
+    )
 
 
 def test_legacy_matching_profile_omits_model_profile_and_profileless_target_is_unwrapped(
@@ -395,28 +397,31 @@ def test_missing_secret_fails_before_factory(
     assert factory_called is False
 
 
-def test_guarded_executor_uses_registered_operation_and_sanitized_failure(
+@pytest.mark.asyncio
+async def test_guarded_transport_binds_registered_target_and_sanitized_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Guarded callback forwards only the approved operation target and secret object."""
+    """Async transport binds only the approved operation target and secret object."""
 
     resolver = LLMRuntimeClientResolver(_CredentialService())
     secret = ProviderSecret(provider="openai", value="sk-guarded-secret")
     target = _resolved_target(secret=secret)
-    execute_calls: list[dict[str, Any]] = []
+    construction_calls: list[dict[str, Any]] = []
 
     class _GuardedTransport:
-        def execute(self, operation: Any, **kwargs: Any) -> SimpleNamespace:
-            execute_calls.append({"operation": operation, **kwargs})
-            return SimpleNamespace(body=b'{"ok":true}')
+        def __init__(self, **kwargs: Any) -> None:
+            construction_calls.append(dict(kwargs))
+
+        async def request_json(self, _json_body: Any) -> Any:
+            return {"ok": True}
 
     monkeypatch.setattr(resolver, "resolve_target", lambda *_args, **_kwargs: target)
-    monkeypatch.setattr(builder_module, "GuardedTransport", _GuardedTransport)
+    monkeypatch.setattr(builder_module, "GuardedAsyncInferenceTransport", _GuardedTransport)
 
-    captured_executor: list[Any] = []
+    captured_transports: list[Any] = []
 
     def fake_get_client(*, provider_model: ProviderModelRef, api_key: str, **kwargs: Any) -> _MinimalClient:
-        captured_executor.append(kwargs["guarded_executor"])
+        captured_transports.append(kwargs["inference_transport"])
         return _MinimalClient()
 
     monkeypatch.setattr(builder_module.LLMClientFactory, "get_client", fake_get_client)
@@ -428,24 +433,28 @@ def test_guarded_executor_uses_registered_operation_and_sanitized_failure(
     )
     body = {"model": "gpt-5.2", "messages": [{"role": "user", "content": "hi"}]}
 
-    assert captured_executor[0](body) == b'{"ok":true}'
-    assert execute_calls == [
+    assert await captured_transports[0].request_json(body) == {"ok": True}
+    assert construction_calls == [
         {
-            "operation": LLMConnectionOperation.INFERENCE,
-            "provider": "openai",
             "secret": secret,
-            "json_body": body,
             "operation_target": target.connection.operation_target,
         }
     ]
 
     class _FailingGuardedTransport:
-        def execute(self, *_args: Any, **_kwargs: Any) -> None:
+        def __init__(self, **_kwargs: Any) -> None:
+            pass
+
+        async def request_json(self, _json_body: Any) -> Any:
             raise LLMConfigurationError("guarded transport rejected request")
 
-    monkeypatch.setattr(builder_module, "GuardedTransport", _FailingGuardedTransport)
+    monkeypatch.setattr(
+        builder_module,
+        "GuardedAsyncInferenceTransport",
+        _FailingGuardedTransport,
+    )
     monkeypatch.setattr(builder_module.LLMClientFactory, "get_client", fake_get_client)
-    captured_executor.clear()
+    captured_transports.clear()
     resolver.get_client(
         LLMRuntimeSelectionV2(deployment_ref=DeploymentRef(str(uuid4()), 1)),
         access_context=LLMRuntimeAccessContext(runtime_user_id=7),
@@ -453,5 +462,5 @@ def test_guarded_executor_uses_registered_operation_and_sanitized_failure(
     )
 
     with pytest.raises(LLMConfigurationError, match="guarded transport rejected request") as exc_info:
-        captured_executor[0](body)
+        await captured_transports[0].request_json(body)
     assert secret.value not in str(exc_info.value)

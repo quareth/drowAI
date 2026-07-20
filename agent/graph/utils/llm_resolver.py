@@ -25,7 +25,6 @@ from agent.providers.llm.core.identity import OPENAI_PROVIDER_ID, ProviderModelR
 from agent.providers.llm.profiles.registry import require_model_profile
 from agent.graph.utils.provider_model_resolution import (
     resolve_graph_provider_model_ref,
-    resolve_graph_reasoning_provider_model_ref,
 )
 from core.llm import (
     ModelRoleRegistry,
@@ -203,15 +202,12 @@ def _resolve_call_settings(
     )
     if conversation_ref is None:
         conversation_ref = ProviderModelRef(OPENAI_PROVIDER_ID, default_model)
-    reasoning_ref = resolve_graph_reasoning_provider_model_ref(metadata, context)
     reasoning_effort = _resolve_reasoning_effort(metadata, context)
 
     return _ROLE_REGISTRY.resolve_call_settings(
         resolved_role,
         conversation_provider=conversation_ref.provider,
         conversation_model=conversation_ref.model,
-        reasoning_provider=reasoning_ref.provider if reasoning_ref is not None else None,
-        reasoning_model=reasoning_ref.model if reasoning_ref is not None else None,
         reasoning_effort=reasoning_effort,
     )
 

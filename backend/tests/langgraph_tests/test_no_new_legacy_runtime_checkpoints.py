@@ -108,8 +108,8 @@ def test_new_initial_state_and_thread_config_write_only_v2_runtime_identity() ->
         "legacy_model": "gpt-5.2",
     }
     assert configurable["llm_runtime_selection"] == selection
-    assert projection["llm_runtime_selection"] == selection
-    assert runtime_context["llm_runtime_selection"] == selection
+    assert "llm_runtime_selection" not in projection
+    assert "llm_runtime_selection" not in runtime_context
 
     serialized = repr(initial_state) + repr(graph_config)
     for forbidden in (
@@ -153,7 +153,7 @@ def test_checkpoint_execution_config_sanitizes_v2_runtime_selection() -> None:
         "reasoning_effort": "medium",
     }
     assert configurable["llm_runtime_selection"] == expected_selection
-    assert configurable["runtime_projection"]["llm_runtime_selection"] == expected_selection
+    assert "llm_runtime_selection" not in configurable["runtime_projection"]
     assert "legacy_provider" not in repr(configurable)
     assert "legacy_model" not in repr(configurable)
     serialized = repr(config)

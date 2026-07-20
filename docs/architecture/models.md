@@ -1,7 +1,7 @@
 # Model Architecture
 
 Code-verified overview of how LLM providers, model profiles, credentials,
-runtime selection, multi-model role routing, and provider adapters are wired
+runtime selection, role execution policy, and provider adapters are wired
 through the system.
 
 ## Purpose
@@ -118,9 +118,9 @@ Agent provider and graph wiring:
 - `agent/providers/llm/profiles/registry.py`
   - Immutable provider/model profile registry.
 - `agent/providers/llm/profiles/openai.py`
-  - OpenAI model profiles, API surfaces, limits, and internal role defaults.
+  - OpenAI model profiles, API surfaces, capabilities, and limits.
 - `agent/providers/llm/profiles/anthropic.py`
-  - Anthropic model profiles, limits, and internal role defaults.
+  - Anthropic model profiles, capabilities, and limits.
 - `agent/providers/llm/factory/client_factory.py`
   - Provider/model-aware adapter factory.
 - `agent/providers/llm/adapters/openai/*`
@@ -160,7 +160,6 @@ Profiles declare:
 - reasoning-effort values
 - tool-choice modes
 - structured-output strategies
-- provider-owned internal role defaults
 
 `LLMProviderCatalogService` reads listable profiles and adapter availability
 from `LLMClientFactory`. A model is selectable only when its profile is valid,
@@ -248,6 +247,26 @@ keeps V2 deployment references plus compatibility provider/model snapshots
 only. Legacy provider/model checkpoints are no longer written for new
 non-deterministic turns.
 
+`core/llm/runtime_selection.py` is the shared contract and safe-projection
+authority for deployment runtime identity. New graph state has one durable
+selection at `facts.metadata.llm_runtime_selection`; the current invocation has
+one executable copy at `configurable.llm_runtime_selection`. Runtime projections
+and `graph_runtime_context` do not mirror the selection. The surrounding
+`provider` and `model` fields remain display and compatibility metadata, not
+resume routing authority.
+
+Checkpoint continuation reads only explicit current and historical selection
+locations. If any location claims a versioned deployment selection, V2 is
+authoritative: identical historical mirrors are accepted, conflicting mirrors
+fail closed, and malformed or unsupported V2 payloads cannot downgrade to
+legacy provider/model resolution. Legacy checkpoints are considered only when
+no versioned marker exists; their provider/model identity must map to exactly
+one owned deployment using its effective compatibility profile and canonical or
+wire-model aliases. Zero matches are unmapped and multiple matches are
+ambiguous. In every case, the resulting deployment reference still passes
+through live owner, revision, route, connection, credential, capability, and
+guarded-egress validation before a provider call.
+
 Reporting generation follows a separate saved-selection lifecycle from the
 default conversation selection. Authenticated `GET` and `PUT`
 `/api/llm/reporting-selection` routes read and persist it through
@@ -258,16 +277,14 @@ the shared `LLMRuntimeClientResolver`.
 
 ## Multi-Model Support
 
-The user's selected provider/model is the default conversation target. A model
-profile can also declare that every hidden agent role must inherit that same
-selection.
+The user's selected deployment is the model target for every call in the
+agent turn. Hidden graph roles do not select another model or provider.
 
 `core/llm/role_policy.py` resolves a provider/model/reasoning-effort tuple for
-each role-owned call. GPT-OSS declares `selected_model`, so conversation,
-reasoning, classification, compression, tool selection, post-tool observation,
-and articulation all resolve to the selected deployment and its exact serving
-route. Native OpenAI and Anthropic profiles retain their provider-owned role
-defaults and environment overrides.
+each role-owned call. Conversation, reasoning, classification, compression,
+tool selection, post-tool observation, and articulation all resolve to the
+selected deployment and its exact serving route for OpenAI, Anthropic, and
+reviewed compatible models.
 
 Current role families:
 
@@ -276,23 +293,20 @@ Current role families:
   - `reasoning_main`
   - `post_tool_observation`
   - `intent_classifier`
-- Internal fixed roles:
+- Lightweight internal roles:
   - `tool_output_compressor`
   - `tool_category_selector`
   - `post_tool_articulator`
 
 Conversation-context compression also uses the task-selected provider/model,
-but resolves that target directly from the compaction request. It has no
-internal lightweight-model profile default or role-policy environment override.
-
-When a native-provider role resolves to a provider different from the
-conversation selection, `LLMRuntimeClientResolver` fetches an enabled
-credential ref for that target provider. The GPT-OSS selected-model policy does
-not perform that cross-provider switch.
+but resolves that target directly from the compaction request.
 
 Capability checks stay profile-driven. Reasoning effort is passed only to
-models that declare `REASONING_EFFORT`; unsupported efforts fail before the
-provider call.
+models that declare `REASONING_EFFORT`. User-facing reasoning roles preserve
+the submitted effort. Lightweight internal roles request `low`; the shared
+policy chooses the closest supported effort without escalating into a hidden
+high-effort call when a lower level exists. Non-reasoning models omit the
+setting.
 
 ## OpenAI Implementation
 
@@ -361,10 +375,17 @@ URL, and the runtime passes the client base URL explicitly through the shared
 factory contract. A configured base URL may already include the declared
 client path such as `/v1`; paths are composed exactly once.
 
-The guarded transport still disables ambient HTTP proxy inheritance,
-credentials remain connection-owned, and redirects remain disabled. Public
-destinations require HTTPS and globally routable DNS. Local development permits
-HTTP only for a hostname or literal address that resolves entirely to loopback.
+The runtime client builder injects a provider-neutral asynchronous inference
+transport into compatible adapters. The backend implementation binds one
+authorized operation target and short-lived credential, returns bounded JSON
+for non-streaming calls, and decodes SSE incrementally so graph events and the
+first provider chunk remain observable before response completion. Other
+code-owned connection operations retain the bounded synchronous transport.
+
+Both guarded transports disable ambient HTTP proxy inheritance, keep
+credentials connection-owned, and reject redirects. Public destinations
+require HTTPS and globally routable DNS. Local development permits HTTP only
+for a hostname or literal address that resolves entirely to loopback.
 
 ## Anthropic Implementation
 
@@ -377,8 +398,9 @@ Anthropic model profiles declare provider-published context and max-output
 limits, streaming, tool use, usage reporting, and prompt-parse structured
 output. Claude Sonnet 5 and Claude Fable 5 are public catalog models;
 Claude Mythos 5 has an exact non-listable Anthropic Messages profile and is
-excluded from normal user selection. Active 4.x profiles remain available, and
-Haiku 4.5 remains the provider-owned model for all internal lightweight roles.
+excluded from normal user selection. Active 4.x profiles remain available.
+Every agent-turn role uses the selected Anthropic deployment; lightweight
+roles use the shared low-effort policy.
 
 Effort-capable Anthropic profiles expose only the levels accepted by each
 model. The adapter sends the resolved value through `output_config.effort` and
@@ -429,22 +451,20 @@ Recommended steps:
 3. Declare exact capabilities, API surface, context window, max output,
    reasoning-effort support, tool-choice modes, structured-output strategies,
    and listable/selectable intent.
-4. Add provider-owned internal role model defaults when internal graph roles can
-   use that provider.
-5. Register the provider profiles in `agent/providers/llm/profiles/registry.py`.
-6. Implement a provider adapter that satisfies `LLMClient`.
-7. Keep provider SDK payload shaping inside provider-local adapter helpers.
-8. Normalize every documented non-streaming and streaming refusal signal into
+4. Register the provider profiles in `agent/providers/llm/profiles/registry.py`.
+5. Implement a provider adapter that satisfies `LLMClient`.
+6. Keep provider SDK payload shaping inside provider-local adapter helpers.
+7. Normalize every documented non-streaming and streaming refusal signal into
    `LLMRefusalOutcome`, and re-raise `LLMRefusalError` unchanged through parse,
    recovery, tool, and retry layers. Application and UI code must not inspect
    provider-native refusal payloads.
-9. Register the adapter resolver in `LLMClientFactory.register_provider`.
-10. Extend catalog validation only when the new provider needs provider-specific
+8. Register the adapter resolver in `LLMClientFactory.register_provider`.
+9. Extend catalog validation only when the new provider needs provider-specific
    selectability rules.
-11. Add tests for catalog listing, selection validation, credential resolution,
+10. Add tests for catalog listing, selection validation, credential resolution,
     factory construction, role targeting, tool calls, structured output,
     streaming usage, refusals, and budget enforcement.
-12. Update UI/schema code only if the public catalog or selection response shape
+11. Update UI/schema code only if the public catalog or selection response shape
     changes.
 
 For a new model under an existing provider, prefer adding a profile first. If
