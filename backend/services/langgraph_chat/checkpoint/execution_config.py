@@ -115,31 +115,31 @@ def build_checkpoint_execution_config(
     """
     thread_id = format_graph_thread_id(graph_thread_id, task_id=task_id)
     configurable: Dict[str, Any] = {"thread_id": thread_id, "graph_name": graph_name}
+    runtime_projection: Dict[str, Any] = {
+        "task_id": task_id,
+        "graph_thread_id": graph_thread_id,
+    }
     selection_payload = checkpoint_safe_llm_runtime_selection(llm_runtime_selection)
     if selection_payload:
         configurable["llm_runtime_selection"] = selection_payload
-        runtime_projection: Dict[str, Any] = {
-            "task_id": task_id,
-            "graph_thread_id": graph_thread_id,
-            "reasoning_effort": selection_payload.get("reasoning_effort"),
-        }
-        if tenant_id is not None:
-            runtime_projection["tenant_id"] = tenant_id
-        if user_id is not None:
-            runtime_projection["user_id"] = user_id
-        if isinstance(runtime_placement_mode, str) and runtime_placement_mode.strip():
-            runtime_projection["runtime_placement_mode"] = runtime_placement_mode.strip()
-        if isinstance(workspace_id, str) and workspace_id.strip():
-            runtime_projection["workspace_id"] = workspace_id.strip()
-        if isinstance(actor_type, str) and actor_type.strip():
-            runtime_projection["actor_type"] = actor_type.strip()
-        if isinstance(actor_id, str) and actor_id.strip():
-            runtime_projection["actor_id"] = actor_id.strip()
-        if isinstance(runner_id, str) and runner_id.strip():
-            runtime_projection["runner_id"] = runner_id.strip()
-        if isinstance(execution_site_id, str) and execution_site_id.strip():
-            runtime_projection["execution_site_id"] = execution_site_id.strip()
-        configurable["runtime_projection"] = runtime_projection
+        runtime_projection["reasoning_effort"] = selection_payload.get("reasoning_effort")
+    if tenant_id is not None:
+        runtime_projection["tenant_id"] = tenant_id
+    if user_id is not None:
+        runtime_projection["user_id"] = user_id
+    if isinstance(runtime_placement_mode, str) and runtime_placement_mode.strip():
+        runtime_projection["runtime_placement_mode"] = runtime_placement_mode.strip()
+    if isinstance(workspace_id, str) and workspace_id.strip():
+        runtime_projection["workspace_id"] = workspace_id.strip()
+    if isinstance(actor_type, str) and actor_type.strip():
+        runtime_projection["actor_type"] = actor_type.strip()
+    if isinstance(actor_id, str) and actor_id.strip():
+        runtime_projection["actor_id"] = actor_id.strip()
+    if isinstance(runner_id, str) and runner_id.strip():
+        runtime_projection["runner_id"] = runner_id.strip()
+    if isinstance(execution_site_id, str) and execution_site_id.strip():
+        runtime_projection["execution_site_id"] = execution_site_id.strip()
+    configurable["runtime_projection"] = runtime_projection
     config: Dict[str, Any] = {"configurable": configurable}
     if runtime_services is not None:
         config = attach_runtime_services(config, runtime_services)

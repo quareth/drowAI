@@ -49,7 +49,7 @@ def _v2_selection(
 
 
 def test_build_checkpoint_execution_config_includes_required_fields() -> None:
-    """Checkpoint config always includes thread and graph identity."""
+    """Checkpoint config always includes thread, graph, and task identity."""
     config = build_checkpoint_execution_config(
         task_id=7,
         graph_thread_id=GRAPH_THREAD_ID,
@@ -57,6 +57,11 @@ def test_build_checkpoint_execution_config_includes_required_fields() -> None:
     )
     assert config["configurable"]["thread_id"] == f"graph-{GRAPH_THREAD_ID}"
     assert config["configurable"]["graph_name"] == "simple_tool"
+    assert config["configurable"]["runtime_projection"] == {
+        "task_id": 7,
+        "graph_thread_id": GRAPH_THREAD_ID,
+    }
+    assert "llm_runtime_selection" not in config["configurable"]
     assert "runtime_path" in config["configurable"]
 
 
