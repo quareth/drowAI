@@ -15,6 +15,7 @@ from agent.context.context_window_policy import estimate_chat_history_tokens
 from agent.context.token_counter_registry import estimate_text_tokens
 from agent.providers.llm.contracts.tool_contracts import FunctionToolSpec
 from agent.providers.llm.core.base import LLMResponse, StructuredOutputSpec
+from agent.providers.llm.core.budget_enforcing_client import BudgetEnforcingLLMClient
 from agent.providers.llm.core.exceptions import LLMConfigurationError
 from agent.providers.llm.core.identity import ProviderModelRef
 from agent.providers.llm.factory.client_factory import LLMClientFactory
@@ -42,7 +43,6 @@ from backend.services.llm_provider.operation_registry import (
     GPT_OSS_20B_PROVING_PRESET_ID,
 )
 from backend.services.llm_provider.runtime_client_resolver import (
-    BudgetEnforcingLLMClient,
     LLMRuntimeClientResolver,
 )
 from backend.services.llm_provider.types import (

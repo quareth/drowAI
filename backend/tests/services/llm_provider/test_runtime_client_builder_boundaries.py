@@ -18,11 +18,11 @@ from agent.providers.llm.core.exceptions import (
     LLMCapabilityNotSupportedError,
     LLMConfigurationError,
 )
+from agent.providers.llm.core.budget_enforcing_client import BudgetEnforcingLLMClient
 from agent.providers.llm.core.identity import ProviderModelRef
 from agent.providers.llm.profiles.registry import require_model_profile
 from backend.services.llm_provider import runtime_client_resolver as resolver_module
 from backend.services.llm_provider.runtime_client_resolver import (
-    BudgetEnforcingLLMClient,
     LLMRuntimeClientResolver,
 )
 from backend.services.llm_provider.types import (

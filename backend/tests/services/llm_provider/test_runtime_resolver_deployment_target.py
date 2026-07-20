@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from agent.providers.llm.core.identity import ProviderModelRef
+from agent.providers.llm.core.budget_enforcing_client import BudgetEnforcingLLMClient
 from backend.models import (
     LLMDeploymentRoute,
     LLMInferenceConnection,
@@ -24,7 +25,6 @@ from backend.services.llm_provider.migration_service import (
 )
 from backend.services.llm_provider.operation_registry import OPENAI_BASE_URL_ENV
 from backend.services.llm_provider.runtime_client_resolver import (
-    BudgetEnforcingLLMClient,
     LLMRuntimeClientResolver,
 )
 from backend.services.llm_provider.types import (

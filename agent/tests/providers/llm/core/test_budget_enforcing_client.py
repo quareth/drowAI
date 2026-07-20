@@ -1,9 +1,8 @@
-"""Characterize provider-neutral budget wrapper behavior before relocation.
+"""Characterize provider-neutral budget wrapper behavior.
 
 Scope: lock `BudgetEnforcingLLMClient` forwarding, budget decisions, capability
-exposure, tool-payload accounting, and current lifecycle behavior. Until Phase
-2 creates the canonical agent module, the characterized implementation still
-lives at the backend resolver boundary.
+exposure, tool-payload accounting, and current lifecycle behavior at its
+canonical agent LLM core boundary.
 """
 
 from __future__ import annotations
@@ -13,17 +12,17 @@ from typing import Any, AsyncIterator
 
 import pytest
 
+from agent.providers.llm.core import budget_enforcing_client as budget_module
 from agent.providers.llm.core.base import (
     ChatMessage,
     LLMClient,
     LLMResponse,
     ToolCallResult,
 )
+from agent.providers.llm.core.budget_enforcing_client import BudgetEnforcingLLMClient
 from agent.providers.llm.core.exceptions import LLMConfigurationError
 from agent.providers.llm.core.identity import ProviderModelRef
 from agent.providers.llm.profiles.registry import require_model_profile
-from backend.services.llm_provider import runtime_client_resolver as resolver_module
-from backend.services.llm_provider.runtime_client_resolver import BudgetEnforcingLLMClient
 
 
 class _RecordingClient(LLMClient):
@@ -138,7 +137,7 @@ def _stub_token_estimators(
 ) -> list[Any]:
     payloads: list[Any] = []
     monkeypatch.setattr(
-        resolver_module,
+        budget_module,
         "estimate_chat_history_tokens",
         lambda **_kwargs: SimpleNamespace(tokens=history_tokens),
     )
@@ -147,7 +146,7 @@ def _stub_token_estimators(
         payloads.append(payload)
         return SimpleNamespace(tokens=json_tokens)
 
-    monkeypatch.setattr(resolver_module, "estimate_json_tokens", fake_estimate_json_tokens)
+    monkeypatch.setattr(budget_module, "estimate_json_tokens", fake_estimate_json_tokens)
     return payloads
 
 
@@ -299,7 +298,7 @@ async def test_estimator_failure_prevents_provider_call(
     def fail_estimate(**_kwargs: Any) -> SimpleNamespace:
         raise ValueError("token estimator failed")
 
-    monkeypatch.setattr(resolver_module, "estimate_chat_history_tokens", fail_estimate)
+    monkeypatch.setattr(budget_module, "estimate_chat_history_tokens", fail_estimate)
     wrapped = _RecordingClient()
     client = _wrapper(
         wrapped,

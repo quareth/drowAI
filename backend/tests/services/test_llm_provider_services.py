@@ -10,6 +10,7 @@ import pytest
 
 from agent.providers.llm.contracts.tool_contracts import FunctionToolSpec
 from agent.providers.llm.factory import LLMClientFactory
+from agent.providers.llm.core import budget_enforcing_client as budget_module
 from agent.providers.llm.core.base import LLMResponse
 from agent.providers.llm.core.exceptions import (
     LLMCapabilityNotSupportedError,
@@ -1152,7 +1153,7 @@ async def test_runtime_client_resolver_rejects_context_overflow_before_call(
 
     monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
     monkeypatch.setattr(
-        resolver_module,
+        budget_module,
         "estimate_chat_history_tokens",
         lambda **_kwargs: SimpleNamespace(tokens=199_500),
     )
@@ -1213,7 +1214,7 @@ async def test_runtime_client_resolver_rejects_context_estimation_failure_before
         raise ValueError("estimator failure")
 
     monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
-    monkeypatch.setattr(resolver_module, "estimate_chat_history_tokens", fail_estimate)
+    monkeypatch.setattr(budget_module, "estimate_chat_history_tokens", fail_estimate)
 
     selection = LLMRuntimeSelection(
         provider=ANTHROPIC_PROVIDER_ID,
@@ -1269,7 +1270,7 @@ async def test_runtime_client_resolver_counts_tool_payloads_for_context_fit(
 
     monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
     monkeypatch.setattr(
-        resolver_module,
+        budget_module,
         "estimate_chat_history_tokens",
         lambda **_kwargs: SimpleNamespace(tokens=198_500),
     )
@@ -1280,7 +1281,7 @@ async def test_runtime_client_resolver_counts_tool_payloads_for_context_fit(
         return SimpleNamespace(tokens=700)
 
     monkeypatch.setattr(
-        resolver_module,
+        budget_module,
         "estimate_json_tokens",
         fake_estimate_json_tokens,
     )
