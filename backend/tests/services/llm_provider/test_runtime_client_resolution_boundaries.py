@@ -35,6 +35,7 @@ from backend.services.llm_provider.operation_registry import (
     FIXED_PROVIDER_ENDPOINT_POLICY_ID,
     ConnectionOperationRegistry,
 )
+from backend.services.llm_provider import live_target_resolver as live_module
 from backend.services.llm_provider import runtime_client_resolver as resolver_module
 from backend.services.llm_provider.runtime_client_resolver import (
     LLMRuntimeClientResolver,
@@ -252,11 +253,12 @@ class _RecordingProfileService:
 
 def _capture_metrics(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, str], int]]:
     calls: list[tuple[str, dict[str, str], int]] = []
-    monkeypatch.setattr(
-        resolver_module,
-        "safe_inc_labeled",
-        lambda name, labels, value=1: calls.append((name, dict(labels), value)),
-    )
+    for module in (resolver_module, live_module):
+        monkeypatch.setattr(
+            module,
+            "safe_inc_labeled",
+            lambda name, labels, value=1: calls.append((name, dict(labels), value)),
+        )
     return calls
 
 
@@ -543,7 +545,7 @@ def test_facade_mapping_discriminator_preserves_current_resolution_paths(
         parse_calls.append("legacy")
         return original_legacy_from_mapping(value)
 
-    def fake_resolve_v2(self, selection, *, access_context, purpose, target=None):
+    def fake_resolve_v2(selection, *, access_context, purpose, target=None):
         branch_calls.append(("v2", selection, purpose, target))
         raise RuntimeError("v2 resolver path")
 
@@ -561,7 +563,7 @@ def test_facade_mapping_discriminator_preserves_current_resolution_paths(
         "from_mapping",
         classmethod(spy_legacy_from_mapping),
     )
-    monkeypatch.setattr(LLMRuntimeClientResolver, "_resolve_v2_target", fake_resolve_v2)
+    monkeypatch.setattr(resolver._live_resolver, "resolve_target", fake_resolve_v2)
     monkeypatch.setattr(
         LLMRuntimeClientResolver,
         "_resolve_legacy_target",
@@ -1033,7 +1035,7 @@ def test_legacy_mapped_resolution_preserves_delegation_inputs_and_metrics(
         )
         return sentinel
 
-    monkeypatch.setattr(resolver, "_resolve_v2_target", fake_v2)
+    monkeypatch.setattr(resolver._live_resolver, "resolve_target", fake_v2)
 
     result = resolver.resolve_target(
         LLMRuntimeSelection(

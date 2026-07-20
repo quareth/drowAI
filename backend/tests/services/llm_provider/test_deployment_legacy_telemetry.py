@@ -26,6 +26,7 @@ from backend.services.llm_provider import (
     LLMRuntimeSelection,
     LLMRuntimeSelectionV2,
 )
+from backend.services.llm_provider import live_target_resolver as live_module
 from backend.services.llm_provider import runtime_client_resolver as resolver_module
 from backend.services.llm_provider import selection_service as selection_module
 from backend.services.llm_provider.runtime_client_resolver import (
@@ -35,14 +36,18 @@ from backend.services.llm_provider.types import DeploymentRef
 from backend.services.metrics import utils as metric_utils
 
 
-def _capture_metric_calls(monkeypatch: pytest.MonkeyPatch, module: object) -> list:
+def _capture_metric_calls(
+    monkeypatch: pytest.MonkeyPatch,
+    *modules: object,
+) -> list:
     calls: list[tuple[str, dict[str, str], int]] = []
-    monkeypatch.setattr(
-        module,
-        "safe_inc_labeled",
-        lambda name, labels, value=1: calls.append((name, dict(labels), value)),
-        raising=False,
-    )
+    for module in modules:
+        monkeypatch.setattr(
+            module,
+            "safe_inc_labeled",
+            lambda name, labels, value=1: calls.append((name, dict(labels), value)),
+            raising=False,
+        )
     return calls
 
 
@@ -169,7 +174,7 @@ def test_runtime_resolver_emits_legacy_mapping_and_revision_status_metrics(
 ) -> None:
     """Runtime telemetry distinguishes mapped legacy, stale, and denied states."""
 
-    calls = _capture_metric_calls(monkeypatch, resolver_module)
+    calls = _capture_metric_calls(monkeypatch, resolver_module, live_module)
     owner, _ = identity_users
     credential_service, deployment, connection = _create_mapped_legacy_deployment(
         llm_identity_db,
@@ -254,7 +259,7 @@ def test_runtime_resolver_emits_connection_revision_conflict_metric(
 ) -> None:
     """Authorization revision conflicts become explicit safe telemetry."""
 
-    calls = _capture_metric_calls(monkeypatch, resolver_module)
+    calls = _capture_metric_calls(monkeypatch, live_module)
     owner, _ = identity_users
     credential_service, deployment, connection = _create_mapped_legacy_deployment(
         llm_identity_db,
