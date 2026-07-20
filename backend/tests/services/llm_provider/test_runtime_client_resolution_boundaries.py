@@ -35,6 +35,7 @@ from backend.services.llm_provider.operation_registry import (
     FIXED_PROVIDER_ENDPOINT_POLICY_ID,
     ConnectionOperationRegistry,
 )
+from backend.services.llm_provider import legacy_target_resolver as legacy_module
 from backend.services.llm_provider import live_target_resolver as live_module
 from backend.services.llm_provider import runtime_client_resolver as resolver_module
 from backend.services.llm_provider.runtime_client_resolver import (
@@ -253,7 +254,7 @@ class _RecordingProfileService:
 
 def _capture_metrics(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict[str, str], int]]:
     calls: list[tuple[str, dict[str, str], int]] = []
-    for module in (resolver_module, live_module):
+    for module in (legacy_module, live_module):
         monkeypatch.setattr(
             module,
             "safe_inc_labeled",
@@ -532,7 +533,9 @@ def test_facade_mapping_discriminator_preserves_current_resolution_paths(
     legacy_payload = _legacy_selection(owner).to_dict()
 
     parse_calls: list[str] = []
-    branch_calls: list[tuple[str, object, str, ProviderModelRef | None]] = []
+    branch_calls: list[
+        tuple[str, object, ProviderModelRef | None, str, ProviderModelRef | None]
+    ] = []
     get_client_handoffs: list[str] = []
     original_v2_from_mapping = LLMRuntimeSelectionV2.from_mapping
     original_legacy_from_mapping = LLMRuntimeSelection.from_mapping
@@ -546,11 +549,18 @@ def test_facade_mapping_discriminator_preserves_current_resolution_paths(
         return original_legacy_from_mapping(value)
 
     def fake_resolve_v2(selection, *, access_context, purpose, target=None):
-        branch_calls.append(("v2", selection, purpose, target))
+        branch_calls.append(("v2", selection, None, purpose, target))
         raise RuntimeError("v2 resolver path")
 
-    def fake_resolve_legacy(self, selection, *, access_context, purpose, target=None):
-        branch_calls.append(("legacy", selection, purpose, target))
+    def fake_resolve_legacy(
+        selection,
+        *,
+        call_ref,
+        access_context,
+        purpose,
+        target=None,
+    ):
+        branch_calls.append(("legacy", selection, call_ref, purpose, target))
         raise RuntimeError("legacy resolver path")
 
     monkeypatch.setattr(
@@ -564,11 +574,7 @@ def test_facade_mapping_discriminator_preserves_current_resolution_paths(
         classmethod(spy_legacy_from_mapping),
     )
     monkeypatch.setattr(resolver._live_resolver, "resolve_target", fake_resolve_v2)
-    monkeypatch.setattr(
-        LLMRuntimeClientResolver,
-        "_resolve_legacy_target",
-        fake_resolve_legacy,
-    )
+    monkeypatch.setattr(resolver._legacy_resolver, "resolve", fake_resolve_legacy)
 
     with pytest.raises(RuntimeError, match="v2 resolver path"):
         resolver.resolve_target(v2_payload, access_context=access, purpose="schema-v2")
@@ -589,17 +595,19 @@ def test_facade_mapping_discriminator_preserves_current_resolution_paths(
             target=target,
         )
 
-    assert parse_calls == ["v2", "v2", "legacy"]
+    assert parse_calls == ["v2", "v2", "legacy", "legacy"]
     assert len(branch_calls) == 2
     assert branch_calls[0] == (
         "v2",
         LLMRuntimeSelectionV2.from_mapping(v2_payload),
+        None,
         "schema-v2",
         None,
     )
     assert branch_calls[1] == (
         "legacy",
         LLMRuntimeSelection.from_mapping(legacy_payload),
+        target,
         "legacy",
         target,
     )

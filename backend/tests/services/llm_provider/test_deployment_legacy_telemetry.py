@@ -26,8 +26,8 @@ from backend.services.llm_provider import (
     LLMRuntimeSelection,
     LLMRuntimeSelectionV2,
 )
+from backend.services.llm_provider import legacy_target_resolver as legacy_module
 from backend.services.llm_provider import live_target_resolver as live_module
-from backend.services.llm_provider import runtime_client_resolver as resolver_module
 from backend.services.llm_provider import selection_service as selection_module
 from backend.services.llm_provider.runtime_client_resolver import (
     LLMRuntimeClientResolver,
@@ -174,7 +174,7 @@ def test_runtime_resolver_emits_legacy_mapping_and_revision_status_metrics(
 ) -> None:
     """Runtime telemetry distinguishes mapped legacy, stale, and denied states."""
 
-    calls = _capture_metric_calls(monkeypatch, resolver_module, live_module)
+    calls = _capture_metric_calls(monkeypatch, legacy_module, live_module)
     owner, _ = identity_users
     credential_service, deployment, connection = _create_mapped_legacy_deployment(
         llm_identity_db,
