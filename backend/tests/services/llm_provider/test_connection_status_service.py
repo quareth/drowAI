@@ -150,30 +150,20 @@ def _record_proving_evidence(
     db.flush()
 
 
-def _assert_connection_runnability_matches_legacy(
+def _connection_runnability(
     service: LLMConnectionStatusService,
-    db: Session,
     *,
     user_id: int,
     connection: LLMInferenceConnection | None,
     deployment: LLMModelDeployment | None,
     route: LLMDeploymentRoute | None,
 ) -> RunnabilityOutcome:
-    expected = llm_routes._connection_runnability(
-        db,
+    return service.connection_runnability(
         user_id=user_id,
         connection=connection,
         deployment=deployment,
         route=route,
     )
-    actual = service.connection_runnability(
-        user_id=user_id,
-        connection=connection,
-        deployment=deployment,
-        route=route,
-    )
-    assert asdict(actual) == expected
-    return actual
 
 
 def _assert_proving_runnability_matches_legacy(
@@ -288,9 +278,8 @@ def test_managed_runnability_matches_missing_invalid_and_runnable_cases(
     owner, _ = identity_users
     service = LLMConnectionStatusService(llm_identity_db)
 
-    assert _assert_connection_runnability_matches_legacy(
+    assert _connection_runnability(
         service,
-        llm_identity_db,
         user_id=owner.id,
         connection=None,
         deployment=None,
@@ -301,25 +290,22 @@ def test_managed_runnability_matches_missing_invalid_and_runnable_cases(
         llm_identity_db,
         user_id=owner.id,
     )
-    assert _assert_connection_runnability_matches_legacy(
+    assert _connection_runnability(
         service,
-        llm_identity_db,
         user_id=owner.id,
         connection=managed,
         deployment=None,
         route=None,
     ).status == "deployment_missing"
-    assert _assert_connection_runnability_matches_legacy(
+    assert _connection_runnability(
         service,
-        llm_identity_db,
         user_id=owner.id,
         connection=managed,
         deployment=deployment,
         route=None,
     ).status == "capability_unknown"
-    assert _assert_connection_runnability_matches_legacy(
+    assert _connection_runnability(
         service,
-        llm_identity_db,
         user_id=owner.id,
         connection=managed,
         deployment=deployment,
@@ -351,9 +337,8 @@ def test_managed_runnability_matches_missing_invalid_and_runnable_cases(
     )
     llm_identity_db.add(invalid_route)
     llm_identity_db.flush()
-    invalid = _assert_connection_runnability_matches_legacy(
+    invalid = _connection_runnability(
         service,
-        llm_identity_db,
         user_id=owner.id,
         connection=invalid_connection,
         deployment=invalid_deployment,
@@ -381,9 +366,8 @@ def test_managed_runnability_matches_missing_invalid_and_runnable_cases(
         expected_revision=3,
         target_state=LLMConnectionState.ENABLED,
     )
-    runnable = _assert_connection_runnability_matches_legacy(
+    runnable = _connection_runnability(
         service,
-        llm_identity_db,
         user_id=owner.id,
         connection=managed,
         deployment=deployment,
@@ -505,13 +489,29 @@ def test_managed_and_proving_statuses_match_legacy_without_transactions(
         connection=managed,
         deployment=managed_deployment,
     )
-    managed_expected = llm_routes._managed_connection_status_response(
-        llm_identity_db,
+    managed_route = service.first_route_for_deployment(
+        user_id=owner.id,
+        deployment_id=managed_deployment.id,
+    )
+    assert managed_actual.lifecycle_state == managed.state
+    assert asdict(managed_actual.connection_ref) == llm_routes._connection_ref(
+        managed
+    )
+    assert managed_actual.deployment_ref is not None
+    assert asdict(managed_actual.deployment_ref) == (
+        llm_routes._deployment_ref_from_row(managed_deployment)
+    )
+    assert managed_actual.verification is not None
+    assert asdict(managed_actual.verification) == (
+        llm_routes._not_tested_verification()
+    )
+    assert managed_actual.runnability is not None
+    assert managed_actual.runnability == service.connection_runnability(
         user_id=owner.id,
         connection=managed,
         deployment=managed_deployment,
+        route=managed_route,
     )
-    assert asdict(managed_actual) == managed_expected
 
     proving_actual = service.proving_status(
         user_id=owner.id,

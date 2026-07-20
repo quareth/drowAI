@@ -10,7 +10,6 @@ from agent.providers.llm.core.identity import OPENAI_PROVIDER_ID, ProviderModelR
 from agent.providers.llm.core.exceptions import LLMProfileNotFoundError
 from agent.providers.llm.profiles.registry import require_model_profile
 from backend.models import LLMCapabilityObservation, User
-from backend.routers import llm as llm_routes
 from backend.services.llm_provider.connection_service import LLMConnectionService
 from backend.services.llm_provider.inventory_service import LLMInventoryService
 from backend.services.llm_provider.operation_registry import (
@@ -23,15 +22,12 @@ from backend.services.llm_provider.types import (
 )
 
 
-def _assert_parser_failure_matches_router(
+def _assert_parser_failure(
     service: LLMInventoryService,
     body: bytes | None,
 ) -> ProviderConfigurationError:
-    with pytest.raises(ProviderConfigurationError) as legacy_error:
-        llm_routes._inventory_model_ids_from_response(body)  # type: ignore[arg-type]
     with pytest.raises(ProviderConfigurationError) as service_error:
         service.parse_inventory_model_ids(body)  # type: ignore[arg-type]
-    assert str(service_error.value) == str(legacy_error.value)
     return service_error.value
 
 
@@ -48,10 +44,9 @@ def test_inventory_response_parser_preserves_trimmed_order_and_duplicates(
     )
     service = LLMInventoryService(llm_identity_db)
 
-    expected = llm_routes._inventory_model_ids_from_response(body)
     actual = service.parse_inventory_model_ids(body)
 
-    assert actual == expected == ("model-b", "model-a", "model-b")
+    assert actual == ("model-b", "model-a", "model-b")
 
 
 @pytest.mark.parametrize(
@@ -81,7 +76,7 @@ def test_inventory_response_parser_rejects_invalid_json_and_shape(
 ) -> None:
     """JSON, UTF-8, and required top-level shape failures stay identical."""
 
-    error = _assert_parser_failure_matches_router(
+    error = _assert_parser_failure(
         LLMInventoryService(llm_identity_db),
         body,
     )
@@ -103,7 +98,7 @@ def test_inventory_response_parser_rejects_no_usable_models(
 ) -> None:
     """Empty and fully invalid inventories preserve the stable detail."""
 
-    error = _assert_parser_failure_matches_router(
+    error = _assert_parser_failure(
         LLMInventoryService(llm_identity_db),
         body,
     )
@@ -117,7 +112,7 @@ def test_inventory_response_parser_error_does_not_disclose_body_secret(
     """Malformed provider content remains absent from the public error text."""
 
     secret = "inventory-parser-secret"
-    error = _assert_parser_failure_matches_router(
+    error = _assert_parser_failure(
         LLMInventoryService(llm_identity_db),
         f'{{"data": ["{secret}"'.encode(),
     )

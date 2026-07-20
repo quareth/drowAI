@@ -32,6 +32,9 @@ from .failure_policy import (
 )
 from .health_service import LLMProviderHealthService
 from .inventory_service import LLMInventoryService
+from .managed_connection_lifecycle_service import (
+    LLMManagedConnectionLifecycleService,
+)
 from .migration_service import LLMProviderMigrationService
 from .runtime_client_resolver import LLMRuntimeClientResolver, resolve_call_target
 from .runtime_config_service import LLMRuntimeConfigService
@@ -114,6 +117,7 @@ __all__ = [
     "LLMDeploymentValidationError",
     "LLMDeploymentService",
     "LLMInventoryService",
+    "LLMManagedConnectionLifecycleService",
     "LLM_INVENTORY_REFRESH_SERVICE_ACTOR",
     "LLMProviderCatalogService",
     "LLMProviderEnvironmentService",

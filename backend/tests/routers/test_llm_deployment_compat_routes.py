@@ -19,6 +19,9 @@ from backend.models import (
 )
 from backend.routers import llm as llm_routes
 from backend.services.llm_provider import (
+    managed_connection_lifecycle_service as managed_lifecycle_module,
+)
+from backend.services.llm_provider import (
     LLMCredentialService,
     LLMConnectionAuthorizer,
     LLMConnectionService,
@@ -337,11 +340,18 @@ def test_managed_connection_test_authorizes_and_uses_guarded_transport(
     transport_calls: list[dict] = []
 
     class RecordingGuardedTransport:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
         def execute(self, operation, **kwargs):
             transport_calls.append({"operation": operation, **kwargs})
 
     monkeypatch.setattr(LLMConnectionAuthorizer, "authorize", recording_authorize)
-    monkeypatch.setattr(llm_routes, "GuardedTransport", RecordingGuardedTransport)
+    monkeypatch.setattr(
+        managed_lifecycle_module,
+        "GuardedTransport",
+        RecordingGuardedTransport,
+    )
 
     client, app = _client(user)
     try:
@@ -436,6 +446,9 @@ def test_nvidia_connection_wires_only_gpt_oss_and_becomes_runnable(
     transport_calls: list[dict] = []
 
     class RecordingGuardedTransport:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
         def execute(self, operation, **kwargs):
             transport_calls.append({"operation": operation, **kwargs})
             return GuardedHTTPResponse(
@@ -444,7 +457,11 @@ def test_nvidia_connection_wires_only_gpt_oss_and_becomes_runnable(
                 audit_id="audit-nvidia-gpt-oss",
             )
 
-    monkeypatch.setattr(llm_routes, "GuardedTransport", RecordingGuardedTransport)
+    monkeypatch.setattr(
+        managed_lifecycle_module,
+        "GuardedTransport",
+        RecordingGuardedTransport,
+    )
     client, app = _client(user)
     try:
         created = client.post(
@@ -645,6 +662,9 @@ def test_managed_connection_refresh_uses_guarded_inventory_service(
     transport_calls: list[dict] = []
 
     class RecordingGuardedTransport:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
         def execute(self, operation, **kwargs):
             transport_calls.append({"operation": operation, **kwargs})
             return GuardedHTTPResponse(
@@ -657,7 +677,11 @@ def test_managed_connection_refresh_uses_guarded_inventory_service(
                 audit_id="audit-refresh",
             )
 
-    monkeypatch.setattr(llm_routes, "GuardedTransport", RecordingGuardedTransport)
+    monkeypatch.setattr(
+        managed_lifecycle_module,
+        "GuardedTransport",
+        RecordingGuardedTransport,
+    )
     client, app = _client(user)
     try:
         response = client.post(

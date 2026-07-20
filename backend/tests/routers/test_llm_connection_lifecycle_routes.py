@@ -29,11 +29,22 @@ from backend.models import (
 )
 from backend.routers import llm as llm_routes
 from backend.services.llm_provider import (
+    managed_connection_lifecycle_service as managed_lifecycle_module,
+)
+from backend.services.llm_provider import (
     LLMCredentialService,
     LLMConnectionAuthorizer,
     LLMConnectionService,
     LLMDeploymentService,
+    LLMManagedConnectionLifecycleService,
     LLMProviderServiceError,
+)
+from backend.services.llm_provider.application_contracts import (
+    ConnectionRefOutcome,
+    ConnectionStatusOutcome,
+    DeploymentRefOutcome,
+    RunnabilityOutcome,
+    VerificationOutcome,
 )
 from backend.services.llm_provider.guarded_transport import GuardedTransportError
 from backend.services.llm_provider.operation_registry import (
@@ -336,10 +347,17 @@ class _ManagedTransport:
 
 def _patch_managed_transport(monkeypatch, events: list[tuple[str, Any]], *, body: bytes = b"{}") -> None:
     class RecordingGuardedTransport:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
         def execute(self, operation, **kwargs):
             return _ManagedTransport(events, body=body).execute(operation, **kwargs)
 
-    monkeypatch.setattr(llm_routes, "GuardedTransport", RecordingGuardedTransport)
+    monkeypatch.setattr(
+        managed_lifecycle_module,
+        "GuardedTransport",
+        RecordingGuardedTransport,
+    )
 
 
 def _patch_proving_transport(monkeypatch, events: list[tuple[str, Any]]) -> None:
@@ -369,6 +387,173 @@ def _patch_proving_transport(monkeypatch, events: list[tuple[str, Any]]) -> None
             )
 
     monkeypatch.setattr(health_service, "GuardedTransport", RecordingGuardedTransport)
+
+
+def test_managed_routes_delegate_once_with_exact_request_adaptation(monkeypatch) -> None:
+    """The four managed HTTP adapters pass only explicit primitive workflow inputs."""
+
+    user = _user("llm-managed-adapters")
+    connection_id = str(uuid4())
+    deployment_id = str(uuid4())
+    calls: list[tuple[str, dict[str, object]]] = []
+    status_outcome = ConnectionStatusOutcome(
+        lifecycle_state="draft",
+        connection_ref=ConnectionRefOutcome(
+            connection_id=connection_id,
+            expected_revision=2,
+        ),
+        deployment_ref=DeploymentRefOutcome(
+            deployment_id=deployment_id,
+            expected_revision=1,
+        ),
+        verification=VerificationOutcome(
+            status="failed",
+            code="not_tested",
+            message="Verification has not run.",
+            retryable=False,
+        ),
+        runnability=RunnabilityOutcome(
+            status="capability_unknown",
+            selectable=True,
+            runnable=False,
+            reason="Capability evidence is required.",
+        ),
+    )
+    verification_outcome = VerificationOutcome(
+        status="passed",
+        code="verified",
+        message="Connection endpoint verified",
+        retryable=False,
+    )
+
+    def record(name: str, outcome):
+        def invoke(_self, **kwargs):
+            calls.append((name, kwargs))
+            return outcome
+
+        return invoke
+
+    monkeypatch.setattr(
+        LLMManagedConnectionLifecycleService,
+        "create_connection",
+        record("create", status_outcome),
+    )
+    monkeypatch.setattr(
+        LLMManagedConnectionLifecycleService,
+        "test_connection",
+        record("test", verification_outcome),
+    )
+    monkeypatch.setattr(
+        LLMManagedConnectionLifecycleService,
+        "refresh_inventory",
+        record("refresh", status_outcome),
+    )
+    monkeypatch.setattr(
+        LLMManagedConnectionLifecycleService,
+        "enable_connection",
+        record("enable", status_outcome),
+    )
+
+    client, app = _client(user)
+    try:
+        created = client.post(
+            f"/api/llm/connection-presets/{CUSTOM_OPENAI_COMPATIBLE_PRESET_ID}/connection",
+            json={
+                "api_key": _MANAGED_SECRET,
+                "display_label": "Team endpoint",
+                "base_url": "https://llm.example.test/team",
+                "wire_model_id": "team/chat-model",
+                "model_label": "Team Chat",
+                "canonical_model_id": CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+            },
+        )
+        tested = client.post(
+            f"/api/llm/connection-presets/{HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID}/connection/test",
+            json={
+                "api_key": _MANAGED_SECRET,
+                "connection_ref": {
+                    "connection_id": connection_id,
+                    "expected_revision": 2,
+                },
+            },
+        )
+        refreshed = client.post(
+            f"/api/llm/connection-presets/{HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID}/connection/refresh",
+            json={
+                "connection_ref": {
+                    "connection_id": connection_id,
+                    "expected_revision": 2,
+                },
+            },
+        )
+        enabled = client.post(
+            f"/api/llm/connection-presets/{HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID}/connection/enable",
+            json={
+                "connection_ref": {
+                    "connection_id": connection_id,
+                    "expected_revision": 2,
+                },
+                "deployment_ref": {
+                    "deployment_id": deployment_id,
+                    "expected_revision": 1,
+                },
+            },
+        )
+    finally:
+        app.dependency_overrides.clear()
+
+    assert [response.status_code for response in (created, tested, refreshed, enabled)] == [
+        200,
+        200,
+        200,
+        200,
+    ]
+    assert calls == [
+        (
+            "create",
+            {
+                "user_id": user.id,
+                "preset_id": CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+                "api_key": _MANAGED_SECRET,
+                "display_label": "Team endpoint",
+                "base_url": "https://llm.example.test/team",
+                "wire_model_id": "team/chat-model",
+                "model_label": "Team Chat",
+                "canonical_model_id": CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+            },
+        ),
+        (
+            "test",
+            {
+                "user_id": user.id,
+                "preset_id": HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+                "connection_id": connection_id,
+                "expected_connection_revision": 2,
+                "api_key": _MANAGED_SECRET,
+            },
+        ),
+        (
+            "refresh",
+            {
+                "user_id": user.id,
+                "preset_id": HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+                "connection_id": connection_id,
+                "expected_connection_revision": 2,
+                "api_key": None,
+            },
+        ),
+        (
+            "enable",
+            {
+                "user_id": user.id,
+                "preset_id": HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+                "connection_id": connection_id,
+                "expected_connection_revision": 2,
+                "deployment_id": deployment_id,
+                "expected_deployment_revision": 1,
+            },
+        ),
+    ]
 
 
 def test_managed_create_success_and_missing_secret_failure(monkeypatch, caplog) -> None:
@@ -1303,6 +1488,9 @@ def test_managed_refresh_transport_error_rolls_back_without_secret(monkeypatch, 
     captured_exceptions: list[BaseException] = []
 
     class FailingGuardedTransport:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
         def execute(self, operation, **kwargs):
             events.append(("transport", operation, kwargs))
             exc = GuardedTransportError(
@@ -1312,7 +1500,11 @@ def test_managed_refresh_transport_error_rolls_back_without_secret(monkeypatch, 
             captured_exceptions.append(exc)
             raise exc
 
-    monkeypatch.setattr(llm_routes, "GuardedTransport", FailingGuardedTransport)
+    monkeypatch.setattr(
+        managed_lifecycle_module,
+        "GuardedTransport",
+        FailingGuardedTransport,
+    )
     user = _user("llm-managed-refresh-transport-fail")
     connection_ref, _deployment_ref_value, _route_id = _managed_connection(
         user_id=user.id,
