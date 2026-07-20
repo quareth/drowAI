@@ -2,7 +2,7 @@
  * Reusable credential editor for one LLM provider.
  *
  * Handles non-secret credential status and one-action connect/disconnect
- * operations through provider-neutral LLM APIs without echoing stored keys.
+ * operations through provider-neutral LLM APIs without echoing credential secrets.
  */
 import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
@@ -106,6 +106,11 @@ export function ProviderCredentialCard({
       setupNote={setupNote}
       statusLabel={hasStoredCredential ? "Connected" : "Not connected"}
       statusPositive={hasStoredCredential}
+      headerDetails={provider.credential.masked_api_key ? (
+        <p className="text-xs text-slate-400">
+          Stored key: <span className="font-mono">{provider.credential.masked_api_key}</span>
+        </p>
+      ) : null}
     >
       <ProviderApiKeyField
         id={`llm-provider-key-${provider.id}`}

@@ -233,6 +233,7 @@ describe("ProviderCredentialCard", () => {
 
     const providerCard = screen.getByRole("group", { name: "OpenAI provider settings" });
     expect(within(providerCard).getByLabelText("OpenAI status: Connected")).toBeTruthy();
+    expect(within(providerCard).getByText("Stored key:").textContent).toContain("sk-...1234");
     expect(within(providerCard).getByRole("button", { name: "Show API key" })).toBeTruthy();
 
     fireEvent.change(screen.getByLabelText("API Key"), {
