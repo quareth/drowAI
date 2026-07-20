@@ -14,6 +14,7 @@ from .catalog_service import (
 from .conversation_lifecycle_service import LLMConversationLifecycleService
 from .connection_authorization import LLMConnectionAuthorizer
 from .connection_service import LLMConnectionService
+from .connection_status_service import LLMConnectionStatusService
 from .credential_service import (
     LLMCredentialService,
     decrypt_api_key,
@@ -100,6 +101,7 @@ __all__ = [
     "LLMConnectionOperation",
     "LLMConnectionRevisionConflictError",
     "LLMConnectionService",
+    "LLMConnectionStatusService",
     "LLMConnectionState",
     "LLMConnectionStateTransitionError",
     "LLMConnectionValidationError",

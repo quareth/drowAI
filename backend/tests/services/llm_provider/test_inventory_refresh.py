@@ -10,6 +10,7 @@ from agent.providers.llm.core.identity import OPENAI_PROVIDER_ID, ProviderModelR
 from agent.providers.llm.core.exceptions import LLMProfileNotFoundError
 from agent.providers.llm.profiles.registry import require_model_profile
 from backend.models import LLMCapabilityObservation, User
+from backend.routers import llm as llm_routes
 from backend.services.llm_provider.connection_service import LLMConnectionService
 from backend.services.llm_provider.inventory_service import LLMInventoryService
 from backend.services.llm_provider.operation_registry import (
@@ -18,7 +19,111 @@ from backend.services.llm_provider.operation_registry import (
 from backend.services.llm_provider.types import (
     LLMConnectionAuthorizationError,
     LLMConnectionNotFoundError,
+    ProviderConfigurationError,
 )
+
+
+def _assert_parser_failure_matches_router(
+    service: LLMInventoryService,
+    body: bytes | None,
+) -> ProviderConfigurationError:
+    with pytest.raises(ProviderConfigurationError) as legacy_error:
+        llm_routes._inventory_model_ids_from_response(body)  # type: ignore[arg-type]
+    with pytest.raises(ProviderConfigurationError) as service_error:
+        service.parse_inventory_model_ids(body)  # type: ignore[arg-type]
+    assert str(service_error.value) == str(legacy_error.value)
+    return service_error.value
+
+
+def test_inventory_response_parser_preserves_trimmed_order_and_duplicates(
+    llm_identity_db: Session,
+) -> None:
+    """Usable IDs retain provider order and duplicates before filtering."""
+
+    body = (
+        b'{"data": ['
+        b'{"id": "  model-b  "}, null, {"id": 7}, "ignored", '
+        b'{"id": "model-a"}, {"other": "field"}, {"id": "model-b"}'
+        b"]}"
+    )
+    service = LLMInventoryService(llm_identity_db)
+
+    expected = llm_routes._inventory_model_ids_from_response(body)
+    actual = service.parse_inventory_model_ids(body)
+
+    assert actual == expected == ("model-b", "model-a", "model-b")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b"",
+        b'{"data": [}',
+        b"[]",
+        b'{"models": []}',
+        b'{"data": {}}',
+        b'\xff{"data": []}',
+        None,
+    ],
+    ids=(
+        "empty-body",
+        "malformed-json",
+        "wrong-top-level-type",
+        "missing-data",
+        "wrong-data-type",
+        "invalid-utf8",
+        "unsupported-input-type",
+    ),
+)
+def test_inventory_response_parser_rejects_invalid_json_and_shape(
+    llm_identity_db: Session,
+    body: bytes | None,
+) -> None:
+    """JSON, UTF-8, and required top-level shape failures stay identical."""
+
+    error = _assert_parser_failure_matches_router(
+        LLMInventoryService(llm_identity_db),
+        body,
+    )
+
+    assert str(error) == "Provider inventory response is invalid"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        b'{"data": []}',
+        b'{"data": [null, {}, {"id": 3}, {"id": ""}, {"id": "   "}]}',
+    ],
+    ids=("empty-data", "mixed-without-usable-ids"),
+)
+def test_inventory_response_parser_rejects_no_usable_models(
+    llm_identity_db: Session,
+    body: bytes,
+) -> None:
+    """Empty and fully invalid inventories preserve the stable detail."""
+
+    error = _assert_parser_failure_matches_router(
+        LLMInventoryService(llm_identity_db),
+        body,
+    )
+
+    assert str(error) == "Provider inventory response did not include models"
+
+
+def test_inventory_response_parser_error_does_not_disclose_body_secret(
+    llm_identity_db: Session,
+) -> None:
+    """Malformed provider content remains absent from the public error text."""
+
+    secret = "inventory-parser-secret"
+    error = _assert_parser_failure_matches_router(
+        LLMInventoryService(llm_identity_db),
+        f'{{"data": ["{secret}"'.encode(),
+    )
+
+    assert secret not in str(error)
+    assert secret not in repr(error)
 
 
 def test_inventory_refresh_records_connection_availability_without_catalog_mutation(

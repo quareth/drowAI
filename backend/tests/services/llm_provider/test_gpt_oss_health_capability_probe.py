@@ -13,11 +13,17 @@ from sqlalchemy.orm import Session
 from agent.providers.llm.core.capabilities import LLMCapability
 from agent.providers.llm.core.identity import OPENAI_PROVIDER_ID, ProviderModelRef
 from agent.providers.llm.profiles.registry import require_model_profile
-from backend.models import LLMCapabilityObservation, User
+from backend.models import (
+    LLMCapabilityObservation,
+    LLMDeploymentRoute,
+    LLMModelDeployment,
+    User,
+)
 from backend.services.llm_provider.connection_service import LLMConnectionService
 from backend.services.llm_provider.deployment_service import LLMDeploymentService
 from backend.services.llm_provider.effective_profile_service import EffectiveProfileService
 from backend.services.llm_provider.health_service import LLMProviderHealthService
+from backend.services.llm_provider.inventory_service import LLMProviderInventoryService
 from backend.services.llm_provider.operation_registry import (
     GPT_OSS_20B_PROVING_BASE_URL_ENV,
     GPT_OSS_20B_PROVING_PRESET_ID,
@@ -61,6 +67,29 @@ def _gpt_oss_connection_and_route(
         expected_connection_revision=1,
     )
     return connection, deployment, route
+
+
+def _capability_observation(
+    *,
+    deployment: LLMModelDeployment,
+    route: LLMDeploymentRoute,
+    capability: str,
+    constraints: Any,
+) -> LLMCapabilityObservation:
+    observed_at = datetime.now(timezone.utc)
+    return LLMCapabilityObservation(
+        id=uuid4(),
+        deployment_id=deployment.id,
+        route_id=route.id,
+        capability=capability,
+        support_state="supported",
+        constraints=constraints,
+        source="gpt_oss_proving_probe",
+        observed_at=observed_at,
+        expires_at=observed_at + timedelta(hours=1),
+        revision=1,
+        fingerprint=f"rebind-{capability}",
+    )
 
 
 def test_gpt_oss_probe_requires_inventory_model_and_usage_evidence(
@@ -305,3 +334,188 @@ def test_gpt_oss_probe_fails_closed_when_inventory_lacks_exact_model(
     assert result.model_present is False
     assert result.retryable is False
     assert len(transport.calls) == 1
+
+
+def test_proving_observation_revision_rebinding_updates_only_exact_matches(
+    monkeypatch: pytest.MonkeyPatch,
+    llm_identity_db: Session,
+    identity_users: tuple[User, User],
+) -> None:
+    """Revision rebinding preserves selection, ignored rows, and transaction ownership."""
+
+    owner, _ = identity_users
+    connection, deployment, route = _gpt_oss_connection_and_route(
+        llm_identity_db,
+        user_id=owner.id,
+    )
+    other_deployment = LLMDeploymentService(llm_identity_db).create_deployment(
+        user_id=owner.id,
+        connection_id=connection.id,
+        expected_connection_revision=1,
+        wire_model_id="other-model",
+        display_name="Other model",
+        discovery_source="test",
+    )
+    other_route = LLMDeploymentRoute(
+        id=uuid4(),
+        deployment_id=deployment.id,
+        adapter_id="other-adapter",
+        adapter_version="1",
+        api_surface="other-surface",
+        dialect_policy_id="other-dialect",
+        enabled=True,
+    )
+    llm_identity_db.add(other_route)
+
+    matching_constraints = {
+        "connection_id": str(connection.id),
+        "connection_revision": 1,
+        "credential_fingerprint": "fingerprint-a",
+        "nested": {"preserved": True},
+    }
+    matching_string_revision = {
+        "connection_id": str(connection.id),
+        "connection_revision": "1",
+        "credential_fingerprint": "fingerprint-b",
+        "extra": "preserved",
+    }
+    seeded = {
+        "matching-int": _capability_observation(
+            deployment=deployment,
+            route=route,
+            capability="matching-int",
+            constraints=matching_constraints,
+        ),
+        "matching-string": _capability_observation(
+            deployment=deployment,
+            route=route,
+            capability="matching-string",
+            constraints=matching_string_revision,
+        ),
+        "wrong-deployment": _capability_observation(
+            deployment=other_deployment,
+            route=route,
+            capability="wrong-deployment",
+            constraints={
+                "connection_id": str(connection.id),
+                "connection_revision": 1,
+            },
+        ),
+        "wrong-route": _capability_observation(
+            deployment=deployment,
+            route=other_route,
+            capability="wrong-route",
+            constraints={
+                "connection_id": str(connection.id),
+                "connection_revision": 1,
+            },
+        ),
+        "non-dict": _capability_observation(
+            deployment=deployment,
+            route=route,
+            capability="non-dict",
+            constraints=["not", "a", "mapping"],
+        ),
+        "wrong-connection": _capability_observation(
+            deployment=deployment,
+            route=route,
+            capability="wrong-connection",
+            constraints={
+                "connection_id": str(uuid4()),
+                "connection_revision": 1,
+            },
+        ),
+        "missing-revision": _capability_observation(
+            deployment=deployment,
+            route=route,
+            capability="missing-revision",
+            constraints={"connection_id": str(connection.id)},
+        ),
+        "non-integer-revision": _capability_observation(
+            deployment=deployment,
+            route=route,
+            capability="non-integer-revision",
+            constraints={
+                "connection_id": str(connection.id),
+                "connection_revision": "not-an-integer",
+            },
+        ),
+        "wrong-prior-revision": _capability_observation(
+            deployment=deployment,
+            route=route,
+            capability="wrong-prior-revision",
+            constraints={
+                "connection_id": str(connection.id),
+                "connection_revision": 2,
+            },
+        ),
+    }
+    llm_identity_db.add_all(seeded.values())
+    llm_identity_db.flush()
+    ignored_constraints = {
+        name: row.constraints
+        for name, row in seeded.items()
+        if not name.startswith("matching-")
+    }
+
+    connections = LLMConnectionService(llm_identity_db)
+    connections.transition_state(
+        user_id=owner.id,
+        connection_id=connection.id,
+        expected_revision=1,
+        target_state=LLMConnectionState.DISABLED,
+    )
+    connections.transition_state(
+        user_id=owner.id,
+        connection_id=connection.id,
+        expected_revision=2,
+        target_state=LLMConnectionState.ENABLED,
+    )
+    assert connection.revision == 3
+
+    transaction_events: list[str] = []
+    original_flush = llm_identity_db.flush
+
+    def recording_flush(*args: Any, **kwargs: Any) -> None:
+        transaction_events.append("flush")
+        original_flush(*args, **kwargs)
+
+    monkeypatch.setattr(llm_identity_db, "flush", recording_flush)
+    monkeypatch.setattr(
+        llm_identity_db,
+        "commit",
+        lambda: transaction_events.append("commit"),
+    )
+    monkeypatch.setattr(
+        llm_identity_db,
+        "rollback",
+        lambda: transaction_events.append("rollback"),
+    )
+
+    LLMProviderInventoryService(
+        llm_identity_db
+    ).rebind_proving_observation_revision(
+        deployment=deployment,
+        route=route,
+        connection=connection,
+        previous_connection_revision=1,
+    )
+
+    assert transaction_events == ["flush"]
+    llm_identity_db.expire_all()
+    refreshed = {
+        row.capability: row
+        for row in llm_identity_db.execute(
+            select(LLMCapabilityObservation)
+        ).scalars()
+    }
+    assert refreshed["matching-int"].constraints == {
+        **matching_constraints,
+        "connection_revision": 3,
+    }
+    assert refreshed["matching-string"].constraints == {
+        **matching_string_revision,
+        "connection_revision": 3,
+    }
+    for capability, constraints in ignored_constraints.items():
+        assert refreshed[capability].constraints == constraints

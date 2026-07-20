@@ -38,6 +38,7 @@ from .types import (
     LLMConnectionAuthorizationError,
     LLMConnectionOperation,
     LLMDeploymentValidationError,
+    ProviderConfigurationError,
     ProviderSecret,
 )
 
@@ -75,6 +76,40 @@ class LLMProviderInventoryService:
         self._connection_authorizer = connection_authorizer or LLMConnectionAuthorizer(db)
         self._operation_registry = operation_registry or ConnectionOperationRegistry()
         self._deployments = LLMDeploymentService(db)
+
+    def rebind_proving_observation_revision(
+        self,
+        *,
+        deployment: LLMModelDeployment,
+        route: LLMDeploymentRoute,
+        connection: LLMInferenceConnection,
+        previous_connection_revision: int,
+    ) -> None:
+        """Rebind matching proving observations to the connection's new revision."""
+
+        rows = self._db.execute(
+            select(LLMCapabilityObservation).where(
+                LLMCapabilityObservation.deployment_id == deployment.id,
+                LLMCapabilityObservation.route_id == route.id,
+            )
+        ).scalars()
+        for row in rows:
+            constraints = row.constraints
+            if not isinstance(constraints, dict):
+                continue
+            if str(constraints.get("connection_id")) != str(connection.id):
+                continue
+            try:
+                observed_revision = int(constraints.get("connection_revision"))
+            except (TypeError, ValueError):
+                continue
+            if observed_revision != int(previous_connection_revision):
+                continue
+            row.constraints = {
+                **constraints,
+                "connection_revision": int(connection.revision),
+            }
+        self._db.flush()
 
     def verify_gpt_oss_20b_proving_connection(
         self,
@@ -321,6 +356,31 @@ class LLMInventoryService:
         self._deployments = LLMDeploymentService(db)
         self._connection_authorizer = connection_authorizer or LLMConnectionAuthorizer(db)
         self._operation_registry = operation_registry or ConnectionOperationRegistry()
+
+    @staticmethod
+    def parse_inventory_model_ids(body: bytes) -> tuple[str, ...]:
+        """Parse model IDs from a bounded OpenAI-compatible inventory body."""
+
+        try:
+            payload = json.loads(body)
+        except (TypeError, ValueError, UnicodeDecodeError) as exc:
+            raise ProviderConfigurationError(
+                "Provider inventory response is invalid"
+            ) from exc
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+            raise ProviderConfigurationError("Provider inventory response is invalid")
+        model_ids: list[str] = []
+        for item in payload["data"]:
+            if not isinstance(item, dict):
+                continue
+            model_id = item.get("id")
+            if isinstance(model_id, str) and model_id.strip():
+                model_ids.append(model_id.strip())
+        if not model_ids:
+            raise ProviderConfigurationError(
+                "Provider inventory response did not include models"
+            )
+        return tuple(model_ids)
 
     def refresh_inventory(
         self,
