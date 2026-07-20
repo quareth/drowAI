@@ -7,15 +7,14 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import ConnectionSettingsPanel from "../ConnectionSettingsPanel";
 import ProviderSettingsSection from "../ProviderSettingsSection";
 import type { LLMDeploymentRef, LLMModelCatalogResponse } from "../types";
 
 const mocked = vi.hoisted(() => ({
   createLLMManagedConnection: vi.fn(),
-  createLLMProvingConnection: vi.fn(),
   deleteLLMProviderCredential: vi.fn(),
   enableLLMManagedConnection: vi.fn(),
-  enableLLMProvingConnection: vi.fn(),
   fetchLLMModelCatalog: vi.fn(),
   fetchLLMSelection: vi.fn(),
   fetchReportingLLMSelection: vi.fn(),
@@ -25,7 +24,6 @@ const mocked = vi.hoisted(() => ({
   saveReportingLLMSelection: vi.fn(),
   testLLMManagedConnection: vi.fn(),
   testLLMProviderCredential: vi.fn(),
-  testLLMProvingConnection: vi.fn(),
 }));
 
 vi.mock("../api", () => mocked);
@@ -201,11 +199,14 @@ function renderWithQueryClient(component: ReactNode) {
       mutations: { retry: false },
     },
   });
-  return render(
-    <QueryClientProvider client={queryClient}>
-      {component}
-    </QueryClientProvider>,
-  );
+  return {
+    queryClient,
+    ...render(
+      <QueryClientProvider client={queryClient}>
+        {component}
+      </QueryClientProvider>,
+    ),
+  };
 }
 
 beforeEach(() => {
@@ -899,10 +900,11 @@ describe("Connection management", () => {
       },
     });
 
+    const onSuccess = vi.fn();
     renderWithQueryClient(
       <ProviderSettingsSection
         queryEnabled
-        onSuccess={() => undefined}
+        onSuccess={onSuccess}
         onError={() => undefined}
       />,
     );
@@ -936,12 +938,14 @@ describe("Connection management", () => {
     await waitFor(() => {
       expect(mocked.createLLMManagedConnection).toHaveBeenCalledWith(
         "huggingface_openai_compatible_chat",
-        expect.objectContaining({
+        {
           api_key: "sk-hf",
+          display_label: null,
           base_url: null,
           wire_model_id: "openai/gpt-oss-20b:fireworks-ai",
+          model_label: "GPT-OSS 20B via Hugging Face",
           canonical_model_id: "openai/gpt-oss-20b",
-        }),
+        },
       );
       expect(mocked.testLLMManagedConnection).toHaveBeenCalledWith(
         "huggingface_openai_compatible_chat",
@@ -958,7 +962,17 @@ describe("Connection management", () => {
           deployment_ref: deploymentRef,
         },
       );
+      expect(onSuccess).toHaveBeenCalledWith(
+        "Hugging Face connected",
+        "GPT-OSS 20B is ready.",
+      );
     });
+    expect(
+      mocked.createLLMManagedConnection.mock.invocationCallOrder[0],
+    ).toBeLessThan(mocked.testLLMManagedConnection.mock.invocationCallOrder[0]);
+    expect(
+      mocked.testLLMManagedConnection.mock.invocationCallOrder[0],
+    ).toBeLessThan(mocked.enableLLMManagedConnection.mock.invocationCallOrder[0]);
   });
 
   it("does not expose internal deployment and capability controls", async () => {
@@ -1009,8 +1023,467 @@ describe("Connection management", () => {
     expect(screen.getByLabelText("Model name")).toBeTruthy();
     expect(screen.queryByLabelText("Display name")).toBeNull();
     expect(screen.queryByRole("button", { name: /create draft/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /test connection/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /refresh inventory/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^enable$/i })).toBeNull();
     expect(screen.getByRole("button", { name: /update ollama/i })).toBeTruthy();
+  });
+
+  it("does not start the managed workflow while required visible fields are missing", async () => {
+    renderWithQueryClient(
+      <ConnectionSettingsPanel
+        model={managedCatalog.providers[0].models[0]}
+        connection={managedCatalog.providers[0].models[0].connection!}
+        onSuccess={() => undefined}
+        onError={() => undefined}
+      />,
+    );
+
+    const action = screen.getByRole("button", {
+      name: /update ollama-compatible https endpoint/i,
+    }) as HTMLButtonElement;
+    expect(action.disabled).toBe(true);
+    fireEvent.click(action);
+    expect(mocked.createLLMManagedConnection).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: "https://llm.example.test/team" },
+    });
+    fireEvent.change(screen.getByLabelText("API Key"), {
+      target: { value: "sk-required-placeholder" },
+    });
+
+    expect(action.disabled).toBe(true);
+    fireEvent.click(action);
+    expect(mocked.createLLMManagedConnection).not.toHaveBeenCalled();
+  });
+
+  it("fulfills without later workflow calls when creation yields no connection reference", async () => {
+    const model = managedCatalog.providers[0].models[0];
+    const connection = {
+      ...model.connection!,
+      lifecycleState: "not_created",
+      connectionRef: null,
+      deploymentRef: null,
+      verification: null,
+      runnability: {
+        status: "not_created",
+        selectable: true,
+        runnable: false,
+        reason: "Connection configuration is required.",
+      },
+    };
+    const onSuccess = vi.fn();
+    const onError = vi.fn();
+    mocked.createLLMManagedConnection.mockResolvedValue({
+      lifecycleState: "draft",
+      connectionRef: null,
+      deploymentRef: null,
+      verification: null,
+      runnability: {
+        status: "capability_unknown",
+        selectable: true,
+        runnable: false,
+        reason: "Usage evidence is required.",
+      },
+    });
+    const { queryClient } = renderWithQueryClient(
+      <ConnectionSettingsPanel
+        model={model}
+        connection={connection}
+        onSuccess={onSuccess}
+        onError={onError}
+      />,
+    );
+    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: " https://llm.example.test/team " },
+    });
+    fireEvent.change(screen.getByLabelText("API Key"), {
+      target: { value: " sk-created-placeholder " },
+    });
+    fireEvent.change(screen.getByLabelText("Model name"), {
+      target: { value: " team/model " },
+    });
+    fireEvent.click(screen.getByRole("button", {
+      name: /connect ollama-compatible https endpoint/i,
+    }));
+
+    await waitFor(() => {
+      expect(mocked.createLLMManagedConnection).toHaveBeenCalledWith(
+        "ollama_openai_compatible_chat",
+        {
+          api_key: "sk-created-placeholder",
+          display_label: null,
+          base_url: "https://llm.example.test/team",
+          wire_model_id: "team/model",
+          model_label: "GPT-OSS 20B via Ollama",
+          canonical_model_id: "openai/gpt-oss-20b",
+        },
+      );
+      expect(onSuccess).toHaveBeenCalledWith(
+        "Ollama-compatible HTTPS endpoint connected",
+        "The connection was saved, but GPT-OSS 20B is not ready yet.",
+      );
+    });
+    expect(mocked.testLLMManagedConnection).not.toHaveBeenCalled();
+    expect(mocked.refreshLLMManagedConnectionInventory).not.toHaveBeenCalled();
+    expect(mocked.enableLLMManagedConnection).not.toHaveBeenCalled();
+    expect(invalidateQueries).toHaveBeenCalledTimes(1);
+    expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["/api/llm/models"] });
+    expect(onError).not.toHaveBeenCalled();
+  });
+
+  it("suppresses enablement when refresh still returns no deployment", async () => {
+    const model = managedCatalog.providers[0].models[0];
+    const onSuccess = vi.fn();
+    mocked.createLLMManagedConnection.mockResolvedValue({
+      lifecycleState: "draft",
+      connectionRef: null,
+      deploymentRef: null,
+      verification: null,
+      runnability: {
+        status: "capability_unknown",
+        selectable: true,
+        runnable: false,
+        reason: "Usage evidence is required.",
+      },
+    });
+    mocked.testLLMManagedConnection.mockResolvedValue({
+      status: "passed",
+      code: "verified",
+      message: "Connection verified.",
+      retryable: false,
+    });
+    mocked.refreshLLMManagedConnectionInventory.mockResolvedValue({
+      lifecycleState: "draft",
+      connectionRef: null,
+      deploymentRef: null,
+      verification: null,
+      runnability: {
+        status: "deployment_missing",
+        selectable: true,
+        runnable: false,
+        reason: "Deployment model registration is required.",
+      },
+    });
+
+    renderWithQueryClient(
+      <ConnectionSettingsPanel
+        model={model}
+        connection={model.connection!}
+        onSuccess={onSuccess}
+        onError={() => undefined}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: "https://llm.example.test/team" },
+    });
+    fireEvent.change(screen.getByLabelText("API Key"), {
+      target: { value: "sk-refresh-placeholder" },
+    });
+    fireEvent.change(screen.getByLabelText("Model name"), {
+      target: { value: "team/model" },
+    });
+    fireEvent.click(screen.getByRole("button", {
+      name: /update ollama-compatible https endpoint/i,
+    }));
+
+    await waitFor(() => {
+      expect(mocked.testLLMManagedConnection).toHaveBeenCalledWith(
+        "ollama_openai_compatible_chat",
+        {
+          api_key: "sk-refresh-placeholder",
+          connection_ref: managedConnectionRef,
+        },
+      );
+      expect(mocked.refreshLLMManagedConnectionInventory).toHaveBeenCalledWith(
+        "ollama_openai_compatible_chat",
+        {
+          api_key: "sk-refresh-placeholder",
+          connection_ref: managedConnectionRef,
+        },
+      );
+      expect(onSuccess).toHaveBeenCalledWith(
+        "Ollama-compatible HTTPS endpoint connected",
+        "The connection was saved, but GPT-OSS 20B is not ready yet.",
+      );
+    });
+    expect(mocked.enableLLMManagedConnection).not.toHaveBeenCalled();
+    expect(
+      mocked.createLLMManagedConnection.mock.invocationCallOrder[0],
+    ).toBeLessThan(mocked.testLLMManagedConnection.mock.invocationCallOrder[0]);
+    expect(
+      mocked.testLLMManagedConnection.mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      mocked.refreshLLMManagedConnectionInventory.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("does not refresh or enable when verification fails with an effective deployment", async () => {
+    const model = managedCatalog.providers[0].models[0];
+    const onSuccess = vi.fn();
+    mocked.createLLMManagedConnection.mockResolvedValue({
+      lifecycleState: "draft",
+      connectionRef: managedConnectionRef,
+      deploymentRef,
+      verification: null,
+      runnability: {
+        status: "capability_unknown",
+        selectable: true,
+        runnable: false,
+        reason: "Usage evidence is required.",
+      },
+    });
+    mocked.testLLMManagedConnection.mockResolvedValue({
+      status: "failed",
+      code: "auth_failed",
+      message: "Connection rejected the test key.",
+      retryable: false,
+    });
+
+    renderWithQueryClient(
+      <ConnectionSettingsPanel
+        model={model}
+        connection={model.connection!}
+        onSuccess={onSuccess}
+        onError={() => undefined}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: "https://llm.example.test/team" },
+    });
+    fireEvent.change(screen.getByLabelText("API Key"), {
+      target: { value: "sk-failed-placeholder" },
+    });
+    fireEvent.change(screen.getByLabelText("Model name"), {
+      target: { value: "team/model" },
+    });
+    fireEvent.click(screen.getByRole("button", {
+      name: /update ollama-compatible https endpoint/i,
+    }));
+
+    await waitFor(() => {
+      expect(mocked.testLLMManagedConnection).toHaveBeenCalledWith(
+        "ollama_openai_compatible_chat",
+        {
+          api_key: "sk-failed-placeholder",
+          connection_ref: managedConnectionRef,
+        },
+      );
+      expect(onSuccess).toHaveBeenCalledWith(
+        "Ollama-compatible HTTPS endpoint connected",
+        "The connection was saved, but GPT-OSS 20B is not ready yet.",
+      );
+    });
+    expect(mocked.refreshLLMManagedConnectionInventory).not.toHaveBeenCalled();
+    expect(mocked.enableLLMManagedConnection).not.toHaveBeenCalled();
+    expect(
+      mocked.createLLMManagedConnection.mock.invocationCallOrder[0],
+    ).toBeLessThan(mocked.testLLMManagedConnection.mock.invocationCallOrder[0]);
+  });
+
+  it("enables a refreshed deployment after passed verification fills the missing deployment", async () => {
+    const model = managedCatalog.providers[0].models[0];
+    const onSuccess = vi.fn();
+    mocked.createLLMManagedConnection.mockResolvedValue({
+      lifecycleState: "draft",
+      connectionRef: managedConnectionRef,
+      deploymentRef: null,
+      verification: null,
+      runnability: {
+        status: "capability_unknown",
+        selectable: true,
+        runnable: false,
+        reason: "Usage evidence is required.",
+      },
+    });
+    mocked.testLLMManagedConnection.mockResolvedValue({
+      status: "passed",
+      code: "verified",
+      message: "Connection verified.",
+      retryable: false,
+    });
+    mocked.refreshLLMManagedConnectionInventory.mockResolvedValue({
+      lifecycleState: "draft",
+      connectionRef: managedConnectionRef,
+      deploymentRef,
+      verification: null,
+      runnability: {
+        status: "capability_unknown",
+        selectable: true,
+        runnable: false,
+        reason: "Usage evidence is required.",
+      },
+    });
+    mocked.enableLLMManagedConnection.mockResolvedValue({
+      lifecycleState: "enabled",
+      connectionRef: managedConnectionRef,
+      deploymentRef,
+      verification: null,
+      runnability: {
+        status: "runnable",
+        selectable: true,
+        runnable: true,
+        reason: null,
+      },
+    });
+
+    renderWithQueryClient(
+      <ConnectionSettingsPanel
+        model={model}
+        connection={model.connection!}
+        onSuccess={onSuccess}
+        onError={() => undefined}
+      />,
+    );
+
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: "https://llm.example.test/team" },
+    });
+    fireEvent.change(screen.getByLabelText("API Key"), {
+      target: { value: "sk-refreshed-placeholder" },
+    });
+    fireEvent.change(screen.getByLabelText("Model name"), {
+      target: { value: "team/model" },
+    });
+    fireEvent.click(screen.getByRole("button", {
+      name: /update ollama-compatible https endpoint/i,
+    }));
+
+    await waitFor(() => {
+      expect(mocked.enableLLMManagedConnection).toHaveBeenCalledWith(
+        "ollama_openai_compatible_chat",
+        {
+          connection_ref: managedConnectionRef,
+          deployment_ref: deploymentRef,
+        },
+      );
+      expect(onSuccess).toHaveBeenCalledWith(
+        "Ollama-compatible HTTPS endpoint connected",
+        "GPT-OSS 20B is ready.",
+      );
+    });
+    expect(
+      mocked.createLLMManagedConnection.mock.invocationCallOrder[0],
+    ).toBeLessThan(mocked.testLLMManagedConnection.mock.invocationCallOrder[0]);
+    expect(
+      mocked.testLLMManagedConnection.mock.invocationCallOrder[0],
+    ).toBeLessThan(
+      mocked.refreshLLMManagedConnectionInventory.mock.invocationCallOrder[0],
+    );
+    expect(
+      mocked.refreshLLMManagedConnectionInventory.mock.invocationCallOrder[0],
+    ).toBeLessThan(mocked.enableLLMManagedConnection.mock.invocationCallOrder[0]);
+  });
+
+  it.each([
+    "create",
+    "test",
+    "refresh",
+    "enable",
+  ] as const)("short-circuits rejected %s helper without success or invalidation", async (stage) => {
+    const model = managedCatalog.providers[0].models[0];
+    const onSuccess = vi.fn();
+    const onError = vi.fn();
+    mocked.createLLMManagedConnection.mockResolvedValue({
+      lifecycleState: "draft",
+      connectionRef: managedConnectionRef,
+      deploymentRef: stage === "refresh" ? null : deploymentRef,
+      verification: null,
+      runnability: {
+        status: "capability_unknown",
+        selectable: true,
+        runnable: false,
+        reason: "Usage evidence is required.",
+      },
+    });
+    mocked.testLLMManagedConnection.mockResolvedValue({
+      status: "passed",
+      code: "verified",
+      message: "Connection verified.",
+      retryable: false,
+    });
+    mocked.refreshLLMManagedConnectionInventory.mockResolvedValue({
+      lifecycleState: "draft",
+      connectionRef: managedConnectionRef,
+      deploymentRef,
+      verification: null,
+      runnability: {
+        status: "capability_unknown",
+        selectable: true,
+        runnable: false,
+        reason: "Usage evidence is required.",
+      },
+    });
+    mocked.enableLLMManagedConnection.mockResolvedValue({
+      lifecycleState: "enabled",
+      connectionRef: managedConnectionRef,
+      deploymentRef,
+      verification: null,
+      runnability: {
+        status: "runnable",
+        selectable: true,
+        runnable: true,
+        reason: null,
+      },
+    });
+    mocked[`${stage}LLMManagedConnection` as keyof typeof mocked]?.mockRejectedValue?.(
+      `${stage} failed`,
+    );
+    if (stage === "refresh") {
+      mocked.refreshLLMManagedConnectionInventory.mockRejectedValue("refresh failed");
+    }
+
+    const { queryClient } = renderWithQueryClient(
+      <ConnectionSettingsPanel
+        model={model}
+        connection={model.connection!}
+        onSuccess={onSuccess}
+        onError={onError}
+      />,
+    );
+    const invalidateQueries = vi.spyOn(queryClient, "invalidateQueries");
+
+    fireEvent.change(screen.getByLabelText("Base URL"), {
+      target: { value: "https://llm.example.test/team" },
+    });
+    fireEvent.change(screen.getByLabelText("API Key"), {
+      target: { value: "sk-error-placeholder" },
+    });
+    fireEvent.change(screen.getByLabelText("Model name"), {
+      target: { value: "team/model" },
+    });
+    fireEvent.click(screen.getByRole("button", {
+      name: /update ollama-compatible https endpoint/i,
+    }));
+
+    await waitFor(() => {
+      expect(onError).toHaveBeenCalledTimes(1);
+    });
+    expect(onError.mock.calls[0][0]).toBe(
+      "Ollama-compatible HTTPS endpoint connection failed",
+    );
+    expect(onError.mock.calls[0][1]).toBeInstanceOf(Error);
+    expect(onError.mock.calls[0][1].message).toBe(`${stage} failed`);
+    expect(onSuccess).not.toHaveBeenCalled();
+    expect(invalidateQueries).not.toHaveBeenCalled();
+
+    if (stage === "create") {
+      expect(mocked.testLLMManagedConnection).not.toHaveBeenCalled();
+      expect(mocked.refreshLLMManagedConnectionInventory).not.toHaveBeenCalled();
+      expect(mocked.enableLLMManagedConnection).not.toHaveBeenCalled();
+    }
+    if (stage === "test") {
+      expect(mocked.refreshLLMManagedConnectionInventory).not.toHaveBeenCalled();
+      expect(mocked.enableLLMManagedConnection).not.toHaveBeenCalled();
+    }
+    if (stage === "refresh") {
+      expect(mocked.enableLLMManagedConnection).not.toHaveBeenCalled();
+    }
   });
 
   it("submits the GPT-OSS identity with a self-hosted serving model name", async () => {
@@ -1018,7 +1491,7 @@ describe("Connection management", () => {
     mocked.createLLMManagedConnection.mockResolvedValue({
       lifecycleState: "draft",
       connectionRef: managedConnectionRef,
-      deploymentRef: deploymentRef,
+      deploymentRef: null,
       verification: null,
       runnability: {
         status: "capability_unknown",
@@ -1076,6 +1549,14 @@ describe("Connection management", () => {
           wire_model_id: "team/model",
         }),
       );
+      expect(mocked.refreshLLMManagedConnectionInventory).toHaveBeenCalledWith(
+        "ollama_openai_compatible_chat",
+        {
+          api_key: "sk-managed",
+          connection_ref: managedConnectionRef,
+        },
+      );
+      expect(mocked.enableLLMManagedConnection).not.toHaveBeenCalled();
     });
   });
 });

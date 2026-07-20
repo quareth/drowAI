@@ -1,51 +1,39 @@
 /**
- * Metadata-driven proving connection controls for one approved LLM preset.
+ * Metadata-driven managed connection controls for one approved LLM preset.
  *
  * The panel renders only backend-declared user configuration fields and never
- * accepts endpoint URLs, headers, or arbitrary provider inventory values.
+ * accepts headers or arbitrary provider inventory values.
  */
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle, Key, Loader2 } from "lucide-react";
+import { Key, Loader2 } from "lucide-react";
 
 import {
   createLLMManagedConnection,
-  createLLMProvingConnection,
   enableLLMManagedConnection,
-  enableLLMProvingConnection,
   refreshLLMManagedConnectionInventory,
   testLLMManagedConnection,
-  testLLMProvingConnection,
 } from "@/features/llm-provider/api";
 import type {
   LLMCatalogModel,
   LLMConnectionMetadata,
   LLMConnectionRef,
   LLMDeploymentRef,
-  LLMDeploymentStatusOverride,
   LLMManagedConnectionCreateRequest,
-  LLMManagedConnectionRefreshRequest,
-  LLMProvingConnectionCreateRequest,
   LLMProvingConnectionStatus,
-  LLMProvingMetadata,
-  LLMProvingVerification,
 } from "@/features/llm-provider/types";
 import {
   ProviderApiKeyField,
   ProviderSettingsCard,
 } from "@/features/llm-provider/ProviderSettingsCard";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 export interface ConnectionSettingsPanelProps {
   model: LLMCatalogModel;
-  connection: LLMConnectionMetadata | LLMProvingMetadata;
-  usesProvingRoutes?: boolean;
+  connection: LLMConnectionMetadata;
   setupNote?: string | null;
-  showOperationalDetails?: boolean;
-  onDeploymentStatusChange?: (status: LLMDeploymentStatusOverride) => void;
   onSuccess: (title: string, description: string) => void;
   onError: (title: string, error: Error) => void;
 }
@@ -55,10 +43,7 @@ const catalogQueryKey = ["/api/llm/models"] as const;
 export function ConnectionSettingsPanel({
   model,
   connection,
-  usesProvingRoutes = false,
   setupNote = null,
-  showOperationalDetails = true,
-  onDeploymentStatusChange,
   onSuccess,
   onError,
 }: ConnectionSettingsPanelProps) {
@@ -70,282 +55,47 @@ export function ConnectionSettingsPanel({
   const [deploymentRef, setDeploymentRef] = useState<LLMDeploymentRef | null>(
     connection.deploymentRef ?? model.deploymentRef ?? null,
   );
-  const [lifecycleState, setLifecycleState] = useState(
-    connection.lifecycleState || "unknown",
-  );
-  const [verification, setVerification] = useState<LLMProvingVerification | null>(
-    connection.verification ?? null,
-  );
   const [runnable, setRunnable] = useState(
     Boolean(connection.runnability?.runnable ?? model.runnable),
-  );
-  const [runnabilityStatus, setRunnabilityStatus] = useState(
-    connection.runnability?.status ?? "unknown",
   );
   const configFields = connection.configFields?.length
     ? connection.configFields
     : connection.userConfigFields.map((name) => ({
         name,
-        label: fallbackFieldLabel(name, showOperationalDetails),
+        label: fallbackFieldLabel(name),
         fieldType: name === "api_key" ? "password" : "text",
         required: name === "api_key",
         secret: name === "api_key",
       }));
   const visibleConfigFields = configFields
-    .filter((field) => showOperationalDetails || field.name !== "display_label")
+    .filter((field) => field.name !== "display_label")
     .map((field) => {
-      if (!showOperationalDetails && field.name === "wire_model_id") {
+      if (field.name === "wire_model_id") {
         return { ...field, label: "Model name" };
       }
       return field;
     });
 
-  const requiresApiKey = useMemo(
-    () => visibleConfigFields.some((field) => field.name === "api_key" && field.required),
-    [visibleConfigFields],
-  );
   const apiKey = fieldValues.api_key ?? "";
   const requiredFieldsComplete = visibleConfigFields.every((field) =>
     !field.required || Boolean((fieldValues[field.name] ?? "").trim()),
   );
-  const canTest = Boolean((apiKey.trim() || !requiresApiKey) && connectionRef);
-  const canEnable = verification?.status === "passed" && Boolean(connectionRef && deploymentRef);
 
   const invalidateCatalog = async () => {
     await queryClient.invalidateQueries({ queryKey: catalogQueryKey });
   };
 
-  const publishDeploymentStatus = (
-    nextDeploymentRef: LLMDeploymentRef | null | undefined,
-    status: {
-      lifecycleState?: string | null;
-      runnable?: boolean | null;
-      runnabilityStatus?: string | null;
-      reason?: string | null;
-    },
-  ) => {
-    if (!nextDeploymentRef) {
-      return;
-    }
-    onDeploymentStatusChange?.({
-      deploymentRef: nextDeploymentRef,
-      lifecycleState: status.lifecycleState,
-      runnable: status.runnable,
-      status: status.runnabilityStatus,
-      reason: status.reason,
-    });
+  const applyConnectionStatus = (status: LLMProvingConnectionStatus) => {
+    setConnectionRef(status.connectionRef ?? connectionRef);
+    setDeploymentRef(status.deploymentRef ?? deploymentRef);
+    setRunnable(Boolean(status.runnability?.runnable ?? runnable));
   };
-
-  const applyConnectionStatus = (
-    status: LLMProvingConnectionStatus,
-    fallbackRefs?: {
-      connectionRef?: LLMConnectionRef | null;
-      deploymentRef?: LLMDeploymentRef | null;
-    },
-  ) => {
-    const nextConnectionRef = status.connectionRef ?? fallbackRefs?.connectionRef ?? connectionRef;
-    const nextDeploymentRef = status.deploymentRef ?? fallbackRefs?.deploymentRef ?? deploymentRef;
-    setConnectionRef(nextConnectionRef ?? null);
-    setDeploymentRef(nextDeploymentRef ?? null);
-    setLifecycleState(status.lifecycleState);
-    if (status.verification) {
-      setVerification(status.verification);
-    }
-    const nextRunnable = Boolean(status.runnability?.runnable ?? runnable);
-    const nextStatus = status.runnability?.status ?? runnabilityStatus;
-    setRunnable(nextRunnable);
-    setRunnabilityStatus(nextStatus);
-    publishDeploymentStatus(nextDeploymentRef, {
-      lifecycleState: status.lifecycleState,
-      runnable: nextRunnable,
-      runnabilityStatus: nextStatus,
-      reason: status.runnability?.reason,
-    });
-    return { nextConnectionRef, nextDeploymentRef, nextRunnable, nextStatus };
-  };
-
-  const createMutation = useMutation({
-    mutationFn: () => {
-      const displayLabel = fieldValues.display_label?.trim() || "";
-      if (usesProvingRoutes) {
-        const request: LLMProvingConnectionCreateRequest = {
-          api_key: apiKey.trim() || null,
-        };
-        if (displayLabel) {
-          request.display_label = displayLabel;
-        }
-        return createLLMProvingConnection(connection.presetId, request);
-      }
-
-      const request: LLMManagedConnectionCreateRequest = {
-        api_key: apiKey.trim() || null,
-        display_label: displayLabel || null,
-        base_url: fieldValues.base_url?.trim() || null,
-        wire_model_id: fieldValues.wire_model_id?.trim() || model.exactWireModelId || model.id,
-        model_label: model.label,
-        canonical_model_id: managedCanonicalModelId(model, connection),
-      };
-      return createLLMManagedConnection(connection.presetId, request);
-    },
-    onSuccess: async (status) => {
-      setConnectionRef(status.connectionRef ?? connectionRef);
-      setDeploymentRef(status.deploymentRef ?? deploymentRef);
-      setLifecycleState(status.lifecycleState);
-      if (status.verification) {
-        setVerification(status.verification);
-      }
-      const nextRunnable = Boolean(status.runnability?.runnable ?? false);
-      const nextStatus = status.runnability?.status ?? "unknown";
-      setRunnable(nextRunnable);
-      setRunnabilityStatus(nextStatus);
-      publishDeploymentStatus(status.deploymentRef ?? deploymentRef, {
-        lifecycleState: status.lifecycleState,
-        runnable: nextRunnable,
-        runnabilityStatus: nextStatus,
-        reason: status.runnability?.reason,
-      });
-      await invalidateCatalog();
-      onSuccess(
-        usesProvingRoutes ? "Proving draft created" : "Connection draft created",
-        usesProvingRoutes
-          ? "The proving connection draft is ready."
-          : "The connection draft is ready.",
-      );
-    },
-    onError: (error) => onError(
-      usesProvingRoutes ? "Proving draft failed" : "Connection draft failed",
-      error instanceof Error ? error : new Error(String(error)),
-    ),
-  });
-
-  const testMutation = useMutation({
-    mutationFn: () => usesProvingRoutes
-      ? testLLMProvingConnection(connection.presetId, {
-          api_key: apiKey.trim(),
-          connection_ref: connectionRef,
-          deployment_ref: deploymentRef,
-        })
-      : testLLMManagedConnection(connection.presetId, {
-          api_key: apiKey.trim() || null,
-          connection_ref: connectionRef,
-        }),
-    onSuccess: async (result) => {
-      setVerification(result);
-      await invalidateCatalog();
-      onSuccess(
-        usesProvingRoutes ? "Proving connection verified" : "Connection verified",
-        result.message,
-      );
-    },
-    onError: (error) => onError(
-      usesProvingRoutes ? "Proving connection test failed" : "Connection test failed",
-      error instanceof Error ? error : new Error(String(error)),
-    ),
-  });
-
-  const refreshMutation = useMutation({
-    mutationFn: () => {
-      const request: LLMManagedConnectionRefreshRequest = {
-        api_key: apiKey.trim() || null,
-        connection_ref: connectionRef as LLMConnectionRef,
-      };
-      return refreshLLMManagedConnectionInventory(connection.presetId, request);
-    },
-    onSuccess: async (status) => {
-      setLifecycleState(status.lifecycleState);
-      setConnectionRef(status.connectionRef ?? connectionRef);
-      setDeploymentRef(status.deploymentRef ?? deploymentRef);
-      const nextRunnable = Boolean(status.runnability?.runnable ?? runnable);
-      const nextStatus = status.runnability?.status ?? runnabilityStatus;
-      setRunnable(nextRunnable);
-      setRunnabilityStatus(nextStatus);
-      publishDeploymentStatus(status.deploymentRef ?? deploymentRef, {
-        lifecycleState: status.lifecycleState,
-        runnable: nextRunnable,
-        runnabilityStatus: nextStatus,
-        reason: status.runnability?.reason,
-      });
-      await invalidateCatalog();
-      onSuccess("Inventory refreshed", "Backend inventory is updated for this connection.");
-    },
-    onError: (error) => onError(
-      "Inventory refresh failed",
-      error instanceof Error ? error : new Error(String(error)),
-    ),
-  });
-
-  const enableMutation = useMutation({
-    mutationFn: () => usesProvingRoutes
-      ? enableLLMProvingConnection(connection.presetId, {
-          connection_ref: connectionRef as LLMConnectionRef,
-          deployment_ref: deploymentRef as LLMDeploymentRef,
-        })
-      : enableLLMManagedConnection(connection.presetId, {
-          connection_ref: connectionRef as LLMConnectionRef,
-          deployment_ref: deploymentRef,
-        }),
-    onSuccess: async (status) => {
-      setLifecycleState(status.lifecycleState);
-      setConnectionRef(status.connectionRef ?? connectionRef);
-      setDeploymentRef(status.deploymentRef ?? deploymentRef);
-      const nextRunnable = Boolean(status.runnability?.runnable ?? runnable);
-      const nextStatus = status.runnability?.status ?? runnabilityStatus;
-      setRunnable(nextRunnable);
-      setRunnabilityStatus(nextStatus);
-      publishDeploymentStatus(status.deploymentRef ?? deploymentRef, {
-        lifecycleState: status.lifecycleState,
-        runnable: nextRunnable,
-        runnabilityStatus: nextStatus,
-        reason: status.runnability?.reason,
-      });
-      await invalidateCatalog();
-      onSuccess(
-        usesProvingRoutes ? "Proving connection enabled" : "Connection enabled",
-        usesProvingRoutes
-          ? "The proving deployment can be selected."
-          : "The managed deployment can be selected.",
-      );
-    },
-    onError: (error) => onError(
-      usesProvingRoutes ? "Proving enable failed" : "Connection enable failed",
-      error instanceof Error ? error : new Error(String(error)),
-    ),
-  });
 
   const connectMutation = useMutation({
     mutationFn: async () => {
-      const displayLabel = fieldValues.display_label?.trim() || "";
-      if (usesProvingRoutes) {
-        const createRequest: LLMProvingConnectionCreateRequest = {
-          api_key: apiKey.trim() || null,
-        };
-        if (displayLabel) {
-          createRequest.display_label = displayLabel;
-        }
-        const created = await createLLMProvingConnection(connection.presetId, createRequest);
-        const nextConnectionRef = created.connectionRef ?? connectionRef;
-        const nextDeploymentRef = created.deploymentRef ?? deploymentRef;
-        if (!nextConnectionRef || !nextDeploymentRef) {
-          return created;
-        }
-        const verified = await testLLMProvingConnection(connection.presetId, {
-          api_key: apiKey.trim() || null,
-          connection_ref: nextConnectionRef,
-          deployment_ref: nextDeploymentRef,
-        });
-        setVerification(verified);
-        if (verified.status !== "passed") {
-          return { ...created, verification: verified };
-        }
-        return enableLLMProvingConnection(connection.presetId, {
-          connection_ref: nextConnectionRef,
-          deployment_ref: nextDeploymentRef,
-        });
-      }
-
       const createRequest: LLMManagedConnectionCreateRequest = {
         api_key: apiKey.trim() || null,
-        display_label: displayLabel || null,
+        display_label: null,
         base_url: fieldValues.base_url?.trim() || null,
         wire_model_id: fieldValues.wire_model_id?.trim() || model.exactWireModelId || model.id,
         model_label: model.label,
@@ -362,7 +112,6 @@ export function ConnectionSettingsPanel({
         api_key: apiKey.trim() || null,
         connection_ref: nextConnectionRef,
       });
-      setVerification(verified);
 
       let connectionStatus = created;
       if (!nextDeploymentRef) {
@@ -399,12 +148,6 @@ export function ConnectionSettingsPanel({
     ),
   });
 
-  const busy =
-    createMutation.isPending ||
-    testMutation.isPending ||
-    refreshMutation.isPending ||
-    enableMutation.isPending ||
-    connectMutation.isPending;
   const statusLabel = runnable ? "Ready" : connectionRef ? "Connected" : "Not connected";
 
   return (
@@ -413,19 +156,6 @@ export function ConnectionSettingsPanel({
       setupNote={setupNote}
       statusLabel={statusLabel}
       statusPositive={Boolean(runnable || connectionRef)}
-      headerDetails={showOperationalDetails ? (
-        <div className="flex flex-wrap gap-2 text-xs">
-          <Badge className="bg-slate-700 text-slate-200">
-            Lifecycle: {lifecycleState}
-          </Badge>
-          <Badge className="bg-slate-700 text-slate-200">
-            Verification: {verification?.code ?? "not_tested"}
-          </Badge>
-          <Badge className="bg-slate-700 text-slate-200">
-            Runnability: {runnabilityStatus}
-          </Badge>
-        </div>
-      ) : null}
     >
       {visibleConfigFields.map((field) => (
         field.name === "api_key" ? (
@@ -441,11 +171,7 @@ export function ConnectionSettingsPanel({
                 ? "Enter a new API key to update"
                 : "Enter provider API key"
             }
-            label={
-              usesProvingRoutes && showOperationalDetails
-                ? "Proving API Key"
-                : "API Key"
-            }
+            label="API Key"
           />
         ) : (
           <div key={field.name}>
@@ -481,69 +207,20 @@ export function ConnectionSettingsPanel({
       ))}
 
       <div className="flex flex-wrap gap-3">
-        {!showOperationalDetails ? (
-          <Button
-            type="button"
-            aria-label={`${connectionRef ? "Update" : "Connect"} ${connection.displayName}`}
-            onClick={() => { connectMutation.mutate(); }}
-            disabled={busy || !requiredFieldsComplete}
-            className="bg-blue-600 hover:bg-blue-700"
-          >
-            {connectMutation.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Key className="h-4 w-4" />
-            )}
-            {connectionRef ? "Update" : "Connect"}
-          </Button>
-        ) : (
-          <>
-            <Button
-              type="button"
-              onClick={() => { createMutation.mutate(); }}
-              disabled={busy || !requiredFieldsComplete}
-              className="bg-blue-600 hover:bg-blue-700"
-            >
-              {createMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Create draft
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => { testMutation.mutate(); }}
-              disabled={busy || !canTest}
-              className="border-slate-600 text-slate-200 hover:text-white"
-            >
-              {testMutation.isPending ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <CheckCircle className="h-4 w-4" />
-              )}
-              {usesProvingRoutes ? "Test proving" : "Test connection"}
-            </Button>
-            {!usesProvingRoutes ? (
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => { refreshMutation.mutate(); }}
-                disabled={busy || !connectionRef}
-                className="border-slate-600 text-slate-200 hover:text-white"
-              >
-                {refreshMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-                Refresh inventory
-              </Button>
-            ) : null}
-            <Button
-              type="button"
-              variant="outline"
-              onClick={() => { enableMutation.mutate(); }}
-              disabled={busy || !canEnable}
-              className="border-slate-600 text-slate-200 hover:text-white"
-            >
-              Enable
-            </Button>
-          </>
-        )}
+        <Button
+          type="button"
+          aria-label={`${connectionRef ? "Update" : "Connect"} ${connection.displayName}`}
+          onClick={() => { connectMutation.mutate(); }}
+          disabled={connectMutation.isPending || !requiredFieldsComplete}
+          className="bg-blue-600 hover:bg-blue-700"
+        >
+          {connectMutation.isPending ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Key className="h-4 w-4" />
+          )}
+          {connectionRef ? "Update" : "Connect"}
+        </Button>
       </div>
     </ProviderSettingsCard>
   );
@@ -551,7 +228,7 @@ export function ConnectionSettingsPanel({
 
 function managedCanonicalModelId(
   model: LLMCatalogModel,
-  connection: LLMConnectionMetadata | LLMProvingMetadata,
+  connection: LLMConnectionMetadata,
 ): string | null {
   const canonical = model.canonicalModelId?.trim();
   if (
@@ -571,9 +248,9 @@ function managedCanonicalModelId(
   return canonical;
 }
 
-function fallbackFieldLabel(name: string, showOperationalDetails: boolean): string {
+function fallbackFieldLabel(name: string): string {
   if (name === "api_key") {
-    return showOperationalDetails ? "Proving API Key" : "API key";
+    return "API key";
   }
   if (name === "display_label") {
     return "Display name";

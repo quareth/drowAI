@@ -224,7 +224,6 @@ export function ProviderSettingsSection({
                     model={model}
                     connection={connection}
                     setupNote={connectionSetupNote(connection.presetId)}
-                    showOperationalDetails={false}
                     onSuccess={handleProviderSuccess}
                     onError={onError}
                   />
@@ -252,7 +251,6 @@ export function ProviderSettingsSection({
                       model={model}
                       connection={connection}
                       setupNote="Run GPT-OSS 20B through your own HTTPS endpoint."
-                      showOperationalDetails={false}
                       onSuccess={handleProviderSuccess}
                       onError={onError}
                     />
