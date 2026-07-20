@@ -7,7 +7,6 @@ controls such as conversation reset.
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
-from typing import Dict, Any
 import json
 import logging
 from pydantic import BaseModel
@@ -62,12 +61,11 @@ from ..services.llm_provider import (
     LLMConnectionOperation,
     LLMConnectionState,
     LLMConversationLifecycleService,
+    LLMCatalogApplicationService,
     LLMDeploymentService,
     EffectiveProfileService,
     LLMInventoryService,
-    LLMProviderCatalogService,
     LLMProviderHealthService,
-    LLMProviderMigrationService,
     LLMProviderServiceError,
     LLMProviderSelectionService,
     ProviderConfigurationError,
@@ -158,339 +156,6 @@ def _deployment_ref(
         "deployment_id": str(deployment.id),
         "expected_revision": int(deployment.revision),
     }
-
-
-def _catalog_deployment_map(
-    db: Session,
-    *,
-    user_id: int,
-) -> dict[tuple[str, str], tuple[object, object]]:
-    """Map catalog provider/model keys to current owner-scoped deployments."""
-
-    LLMProviderMigrationService(db).backfill_deployment_identity_for_user(user_id)
-    connections = LLMConnectionService(db).list_for_user(user_id=user_id)
-    deployments = LLMDeploymentService(db)
-    mapped: dict[tuple[str, str], tuple[object, object]] = {}
-    for connection in connections:
-        if connection.legacy_default_provider is None:
-            continue
-        for deployment in deployments.list_deployments(
-            user_id=user_id,
-            connection_id=connection.id,
-        ):
-            model = deployment.canonical_model_id or deployment.wire_model_id
-            mapped[(connection.connection_preset_id, model.strip().lower())] = (
-                connection,
-                deployment,
-            )
-    return mapped
-
-
-def _catalog_deployment_fields(
-    *,
-    provider: str,
-    model: str,
-    deployment_map: dict[tuple[str, str], tuple[object, object]],
-    credential_runnable: bool,
-) -> dict[str, object]:
-    """Return public deployment metadata for one catalog model."""
-
-    target = deployment_map.get((provider, model))
-    if target is None:
-        return {"deploymentRef": None, "runnable": False}
-    connection, deployment = target
-    return {
-        "deploymentRef": {
-            "deployment_id": str(deployment.id),
-            "expected_revision": int(deployment.revision),
-        },
-        "runnable": bool(
-            credential_runnable
-            and connection.state == "enabled"
-            and deployment.enabled
-            and deployment.lifecycle_state == "active"
-        ),
-    }
-
-
-def _catalog_connection_provider_rows(
-    db: Session,
-    *,
-    user_id: int,
-) -> list[dict[str, object]]:
-    """Project reviewed connection presets and user deployments into catalog rows."""
-
-    registry = ConnectionOperationRegistry()
-    connections = LLMConnectionService(db).list_for_user(user_id=user_id)
-    by_preset: dict[str, list[object]] = {}
-    for connection in connections:
-        by_preset.setdefault(connection.connection_preset_id, []).append(connection)
-
-    rows: list[dict[str, object]] = []
-    deployments = LLMDeploymentService(db)
-    for preset_id in registry.list_public_gpt_oss_20b_preset_ids():
-        try:
-            preset = registry.get_connection_preset(preset_id)
-        except OperationRegistryError:
-            continue
-        models: list[dict[str, object]] = []
-        for connection in by_preset.get(preset.id, []):
-            owned_deployments = deployments.list_deployments(
-                user_id=user_id,
-                connection_id=connection.id,
-            )
-            owned_deployments = tuple(
-                deployment
-                for deployment in owned_deployments
-                if _deployment_matches_product_preset(preset, deployment)
-            )
-            if not owned_deployments:
-                models.append(
-                    _connection_catalog_model(
-                        db,
-                        user_id=user_id,
-                        preset=preset,
-                        connection=connection,
-                        deployment=None,
-                    )
-                )
-                continue
-            for deployment in owned_deployments:
-                models.append(
-                    _connection_catalog_model(
-                        db,
-                        user_id=user_id,
-                        preset=preset,
-                        connection=connection,
-                        deployment=deployment,
-                    )
-                )
-        if not models:
-            models.append(
-                _connection_catalog_model(
-                    db,
-                    user_id=user_id,
-                    preset=preset,
-                    connection=None,
-                    deployment=None,
-                )
-            )
-        if preset.id in PUBLIC_GPT_OSS_20B_PRESET_IDS:
-            models = [max(models, key=_product_catalog_model_score)]
-        rows.append(
-            {
-                "id": preset.id,
-                "label": _connection_provider_label(preset),
-                "capabilities": sorted(
-                    capability.value for capability in preset.capability_ceiling
-                ),
-                "available": True,
-                "selectable": True,
-                "credential": {
-                    "user_id": user_id,
-                    "provider": preset.id,
-                    "enabled": any(
-                        connection.state == LLMConnectionState.ENABLED.value
-                        for connection in by_preset.get(preset.id, [])
-                    ),
-                    "has_api_key": bool(by_preset.get(preset.id)),
-                    "masked_api_key": None,
-                    "connection_ref": (
-                        _connection_ref(by_preset[preset.id][0])
-                        if by_preset.get(preset.id)
-                        else None
-                    ),
-                    "auth_mode": "bearer",
-                },
-                "models": models,
-                "defaultModel": str(models[0]["id"]),
-            }
-        )
-    return rows
-
-
-def _product_catalog_model_score(model: dict[str, object]) -> tuple[int, int, int]:
-    """Prefer the usable configured route when old connection records coexist."""
-
-    connection = model.get("connection")
-    connection_metadata = connection if isinstance(connection, dict) else {}
-    return (
-        int(bool(model.get("runnable"))),
-        int(model.get("deploymentRef") is not None),
-        int(connection_metadata.get("lifecycleState") == "enabled"),
-    )
-
-
-def _deployment_matches_product_preset(preset, deployment) -> bool:
-    """Return whether a persisted route belongs to the shipped GPT-OSS product."""
-
-    if preset.id not in PUBLIC_GPT_OSS_20B_PRESET_IDS:
-        return False
-    if preset.exact_wire_model_id:
-        return deployment.wire_model_id == preset.exact_wire_model_id
-    canonical_model_id = deployment.canonical_model_id or deployment.wire_model_id
-    return canonical_model_id == preset.canonical_model_id
-
-
-def _connection_catalog_model(
-    db: Session,
-    *,
-    user_id: int,
-    preset,
-    connection,
-    deployment,
-) -> dict[str, object]:
-    """Return one deployment-aware catalog model row for a connection preset."""
-
-    route = None
-    if deployment is not None:
-        try:
-            route = _first_route_for_deployment(
-                db,
-                user_id=user_id,
-                deployment_id=deployment.id,
-            )
-        except HTTPException:
-            route = None
-    runnability = _connection_runnability(
-        db,
-        user_id=user_id,
-        connection=connection,
-        deployment=deployment,
-        route=route,
-    )
-    wire_model_id = (
-        getattr(deployment, "wire_model_id", None)
-        or preset.exact_wire_model_id
-        or None
-    )
-    model_id = wire_model_id or preset.id
-    label = (
-        f"GPT-OSS 20B via {_connection_provider_label(preset)}"
-        if preset.id in PUBLIC_GPT_OSS_20B_PRESET_IDS
-        else getattr(deployment, "display_name", None) or preset.display_name
-    )
-    deployment_ref = _deployment_ref_from_row(deployment) if deployment is not None else None
-    return {
-        "id": model_id,
-        "canonicalModelId": (
-            getattr(deployment, "canonical_model_id", None)
-            or preset.canonical_model_id
-            or model_id
-        ),
-        "exactWireModelId": wire_model_id,
-        "label": label,
-        "apiSurface": preset.api_surface,
-        "capabilities": sorted(capability.value for capability in preset.capability_ceiling),
-        "contextWindowTokens": 128000,
-        "maxOutputTokens": 10000,
-        "reasoningEfforts": [],
-        "visibleReasoningEfforts": [],
-        "defaultReasoningEffort": None,
-        "defaultVisibleReasoningEffort": None,
-        "toolChoiceModes": ["auto"],
-        "structuredOutputStrategies": [],
-        "pricingStatus": "unavailable",
-        "deploymentRef": deployment_ref,
-        "runnable": bool(runnability["runnable"]),
-        "connection": _connection_catalog_metadata(
-            preset=preset,
-            connection=connection,
-            deployment=deployment,
-            runnability=runnability,
-        ),
-        "proving": None,
-    }
-
-
-def _connection_catalog_metadata(
-    *,
-    preset,
-    connection,
-    deployment,
-    runnability: dict[str, object],
-) -> dict[str, object]:
-    """Return generic backend-declared connection management metadata."""
-
-    fields = _connection_config_fields(
-        preset,
-        needs_wire_model=(
-            deployment is None and preset.endpoint_config_field == "base_url"
-        ),
-    )
-    return {
-        "presetId": preset.id,
-        "displayName": preset.display_name,
-        "enabled": True,
-        "authMode": preset.auth_mode,
-        "userConfigFields": [field["name"] for field in fields],
-        "configFields": fields,
-        "lifecycleState": (
-            connection.state if connection is not None else "not_created"
-        ),
-        "connectionRef": _connection_ref(connection) if connection is not None else None,
-        "deploymentRef": (
-            _deployment_ref_from_row(deployment) if deployment is not None else None
-        ),
-        "verification": _not_tested_verification(),
-        "runnability": runnability,
-    }
-
-
-def _connection_config_fields(preset, *, needs_wire_model: bool) -> list[dict[str, object]]:
-    """Return typed field metadata for one reviewed connection preset."""
-
-    fields: list[dict[str, object]] = []
-    for name in preset.user_config_fields:
-        if name == "display_label":
-            continue
-        elif name == "api_key":
-            fields.append(
-                {
-                    "name": "api_key",
-                    "label": "API key",
-                    "fieldType": "password",
-                    "required": True,
-                    "secret": True,
-                }
-            )
-        elif name == "base_url":
-            fields.append(
-                {
-                    "name": "base_url",
-                    "label": "Base URL",
-                    "fieldType": "url",
-                    "required": True,
-                    "secret": False,
-                }
-            )
-    if needs_wire_model:
-        fields.append(
-            {
-                "name": "wire_model_id",
-                "label": "Wire model ID",
-                "fieldType": "text",
-                "required": True,
-                "secret": False,
-            }
-        )
-    return fields
-
-
-def _connection_provider_label(preset) -> str:
-    """Return a concise product label for a connection preset provider group."""
-
-    if preset.serving_operator_id == "huggingface":
-        return "Hugging Face"
-    if preset.serving_operator_id == "nvidia_nim":
-        return "NVIDIA NIM"
-    if preset.serving_operator_id == "ollama_compatible":
-        return "Ollama"
-    if preset.serving_operator_id == "vllm":
-        return "vLLM"
-    if preset.serving_operator_id == "organization_managed":
-        return "Custom OpenAI-compatible"
-    return preset.display_name
 
 
 def _connection_runnability(
@@ -798,14 +463,15 @@ def _product_connection_deployment(
         user_id=user_id,
         connection_id=connection.id,
     )
-    return next(
-        (
-            deployment
-            for deployment in deployments
-            if _deployment_matches_product_preset(preset, deployment)
-        ),
-        None,
-    )
+    for deployment in deployments:
+        if preset.exact_wire_model_id:
+            if deployment.wire_model_id == preset.exact_wire_model_id:
+                return deployment
+            continue
+        canonical_model_id = deployment.canonical_model_id or deployment.wire_model_id
+        if canonical_model_id == preset.canonical_model_id:
+            return deployment
+    return None
 
 
 def _inventory_model_ids_from_response(body: bytes) -> tuple[str, ...]:
@@ -864,75 +530,6 @@ def _refresh_proving_observation_revision(
     db.flush()
 
 
-def _catalog_proving_metadata(
-    db: Session,
-    *,
-    user_id: int,
-    model: str,
-    deployment_map: dict[tuple[str, str], tuple[object, object]],
-) -> dict[str, object] | None:
-    """Project the one Phase 4 proving preset into GPT-OSS catalog metadata."""
-
-    if model != "gpt-oss-20b":
-        return None
-    preset = ConnectionOperationRegistry().get_proving_preset(
-        GPT_OSS_20B_PROVING_PRESET_ID
-    )
-    base = {
-        "presetId": preset.id,
-        "displayName": preset.display_name,
-        "enabled": True,
-        "authMode": preset.auth_mode,
-        "userConfigFields": list(preset.user_config_fields),
-        "lifecycleState": "not_created",
-        "connectionRef": None,
-        "deploymentRef": None,
-        "verification": _not_tested_verification(),
-        "runnability": {
-            "status": "capability_unknown",
-            "selectable": True,
-            "runnable": False,
-            "reason": "Usage evidence is required.",
-        },
-    }
-    target = deployment_map.get((GPT_OSS_20B_PROVING_PRESET_ID, "openai/gpt-oss-20b"))
-    if target is None:
-        return base
-    connection, deployment = target
-    route = _first_route_for_deployment(
-        db,
-        user_id=user_id,
-        deployment_id=deployment.id,
-    )
-    runnability = _proving_runnability(
-        db,
-        connection=connection,
-        deployment=deployment,
-        route=route,
-    )
-    return {
-        **base,
-        "lifecycleState": connection.state,
-        "connectionRef": _connection_ref(connection),
-        "deploymentRef": _deployment_ref_from_row(deployment),
-        "verification": (
-            {
-                "status": "passed",
-                "code": "verified",
-                "message": "GPT-OSS proving endpoint verified",
-                "retryable": False,
-                "observed_at": None,
-                "expires_at": None,
-                "model_present": True,
-                "usage": None,
-            }
-            if runnability["runnable"]
-            else _not_tested_verification()
-        ),
-        "runnability": runnability,
-    }
-
-
 def _memory_selection_service(db: Session) -> EmbeddingRuntimeSelectionService:
     """Build the service that owns memory dependency selections."""
 
@@ -954,75 +551,19 @@ def _ensure_semantic_memory_enabled() -> None:
 async def list_models(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
-) -> Dict[str, Any]:
+) -> LLMModelCatalogResponse:
     """Return available providers, curated models, and public capability metadata."""
-    catalog = LLMProviderCatalogService()
-    credential_service = LLMCredentialService(db, catalog_service=catalog)
-    providers = catalog.list_providers()
-    credential_statuses = {
-        provider.id: credential_service.get_masked_status(
-            current_user.id,
-            provider.id,
+    try:
+        outcome = LLMCatalogApplicationService(db).list_models(
+            user_id=current_user.id,
         )
-        for provider in providers
-    }
-    deployment_map = _catalog_deployment_map(db, user_id=current_user.id)
-    provider_rows = [
-            {
-                "id": provider.id,
-                "label": provider.label,
-                "capabilities": list(provider.capabilities),
-                "available": provider.available,
-                "selectable": provider.selectable,
-                "credential": _credential_status_response(
-                    credential_statuses[provider.id],
-                    db=db,
-                ).model_dump(),
-                "models": [
-                    {
-                        "id": model.id,
-                        "canonicalModelId": model.canonical_model_id,
-                        "exactWireModelId": model.exact_wire_model_id,
-                        "label": model.label,
-                        "apiSurface": model.api_surface,
-                        "capabilities": list(model.capabilities),
-                        "contextWindowTokens": model.context_window_tokens,
-                        "maxOutputTokens": model.max_output_tokens,
-                        "reasoningEfforts": list(model.reasoning_efforts),
-                        "visibleReasoningEfforts": list(model.visible_reasoning_efforts),
-                        "defaultReasoningEffort": model.default_reasoning_effort,
-                        "defaultVisibleReasoningEffort": model.default_visible_reasoning_effort,
-                        "toolChoiceModes": list(model.tool_choice_modes),
-                        "structuredOutputStrategies": list(model.structured_output_strategies),
-                        "pricingStatus": model.pricing_status,
-                        **_catalog_deployment_fields(
-                            provider=provider.id,
-                            model=model.id,
-                            deployment_map=deployment_map,
-                            credential_runnable=bool(
-                                credential_statuses[provider.id].enabled
-                                and credential_statuses[provider.id].has_api_key
-                            ),
-                        ),
-                        "proving": _catalog_proving_metadata(
-                            db,
-                            user_id=current_user.id,
-                            model=model.id,
-                            deployment_map=deployment_map,
-                        ),
-                    }
-                    for model in provider.models
-                ],
-                "defaultModel": provider.default_model,
-            }
-            for provider in providers
-        ]
-    provider_rows.extend(
-        _catalog_connection_provider_rows(db, user_id=current_user.id)
-    )
-    response = {"providers": provider_rows}
-    db.commit()
-    return response
+        return LLMModelCatalogResponse.model_validate(
+            outcome,
+            from_attributes=True,
+            by_name=True,
+        )
+    except LLMProviderServiceError as exc:
+        raise _provider_configuration_exception(exc) from exc
 
 
 @router.get(

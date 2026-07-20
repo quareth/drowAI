@@ -11,6 +11,7 @@ from .catalog_service import (
     CatalogProviderSummary,
     LLMProviderCatalogService,
 )
+from .catalog_application_service import LLMCatalogApplicationService
 from .conversation_lifecycle_service import LLMConversationLifecycleService
 from .connection_authorization import LLMConnectionAuthorizer
 from .connection_service import LLMConnectionService
@@ -93,6 +94,7 @@ __all__ = [
     "DeploymentRef",
     "LLMAuthMode",
     "LLMCallTarget",
+    "LLMCatalogApplicationService",
     "LLMConnectionAccessContext",
     "LLMConnectionAuthorizationError",
     "LLMConnectionAuthorizer",

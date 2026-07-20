@@ -160,13 +160,10 @@ def test_backfill_copies_legacy_ciphertext_without_plaintext_round_trip(
     owner, _ = identity_users
     ciphertext = "gAAAAAB-existing-fernet-ciphertext"
     exact_model = "Org/Legacy-Wire-Model:Exact"
-    llm_identity_db.add(
-        UserSettings(
-            user_id=owner.id,
-            openai_api_key=ciphertext,
-            openai_model=exact_model,
-        )
-    )
+    settings = UserSettings(user_id=owner.id)
+    settings.openai_api_key = ciphertext
+    settings.openai_model = exact_model
+    llm_identity_db.add(settings)
     llm_identity_db.flush()
 
     stats = LLMProviderMigrationService(

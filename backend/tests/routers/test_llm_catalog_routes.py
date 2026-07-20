@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from uuid import UUID, uuid4
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.database import SessionLocal
@@ -23,8 +23,12 @@ from backend.models import (
 from backend.models.llm import UserLLMSelection
 from backend.routers import llm as llm_routes
 from backend.services.llm_provider import (
+    LLMCatalogApplicationService,
     LLMConnectionService,
     LLMDeploymentService,
+)
+from backend.services.llm_provider.catalog_projection_service import (
+    LLMCatalogProjectionService,
 )
 from backend.services.llm_provider.credential_service import encrypt_api_key
 from backend.services.llm_provider.operation_registry import (
@@ -128,10 +132,24 @@ def _model(provider: dict, model_id: str) -> dict:
     return next(model for model in provider["models"] if model["id"] == model_id)
 
 
-def test_catalog_static_provider_model_order_defaults_and_proving_metadata() -> None:
+def test_catalog_static_provider_model_order_defaults_and_proving_metadata(
+    monkeypatch,
+) -> None:
     """Static catalog order, default models, field casing, and proving metadata stay stable."""
 
     user = _user("llm-catalog-static")
+    application_calls: list[int] = []
+    original_list_models = LLMCatalogApplicationService.list_models
+
+    def recording_list_models(self, *, user_id: int):
+        application_calls.append(user_id)
+        return original_list_models(self, user_id=user_id)
+
+    monkeypatch.setattr(
+        LLMCatalogApplicationService,
+        "list_models",
+        recording_list_models,
+    )
     client, app = _client(user)
     try:
         response = client.get("/api/llm/models")
@@ -198,6 +216,7 @@ def test_catalog_static_provider_model_order_defaults_and_proving_metadata() -> 
             "claude-haiku-4-5-20251001",
             "claude-opus-4-7",
         ]
+        assert application_calls == [user.id]
     finally:
         app.dependency_overrides.clear()
 
@@ -335,23 +354,23 @@ def test_catalog_failure_rolls_back_backfill_and_does_not_leak_secret(monkeypatc
     _seed_legacy_selection(user_id=user.id, model="gpt-5.2")
     captured_exceptions: list[BaseException] = []
 
-    def fail_connection_rows(*_args, **_kwargs):
-        exc = HTTPException(status_code=418, detail="catalog projection failed")
+    def fail_projection(*_args, **_kwargs):
+        exc = RuntimeError("catalog projection failed")
         captured_exceptions.append(exc)
         raise exc
 
     monkeypatch.setattr(
-        llm_routes,
-        "_catalog_connection_provider_rows",
-        fail_connection_rows,
+        LLMCatalogProjectionService,
+        "project",
+        fail_projection,
     )
 
     client, app = _client(user)
     try:
         response = client.get("/api/llm/models")
 
-        assert response.status_code == 418, response.text
-        assert response.json() == {"detail": "catalog projection failed"}
+        assert response.status_code == 400, response.text
+        assert response.json() == {"detail": "LLM catalog application failed"}
         _assert_secret_absent(
             _CATALOG_SECRET,
             response.text,
