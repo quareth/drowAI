@@ -1,4 +1,4 @@
-"""Characterize runtime client resolver boundary behavior before extraction.
+"""Characterize the runtime client resolver boundary locked before extraction.
 
 Scope: lock the public facade, live deployment resolution, and legacy
 compatibility outcomes. The tests intentionally avoid asserting future module

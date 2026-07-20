@@ -1,7 +1,7 @@
-"""Direct proof tests for the extracted legacy LLM target resolver.
+"""Direct proof tests for the canonical legacy LLM target resolver.
 
 Purpose: prove mapped, live-unmapped, and detached legacy compatibility
-resolution beside the currently wired facade branch before production cutover.
+resolution against the facade delegation that now composes it.
 Scope boundary: these tests cover legacy authorization order, metrics,
 deterministic target assembly, credential fallback, and mapped live delegation;
 they do not exercise facade parsing or provider-client construction.

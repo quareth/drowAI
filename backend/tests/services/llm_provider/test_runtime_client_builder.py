@@ -1,9 +1,8 @@
-"""Direct tests for the extracted runtime client builder boundary.
+"""Direct tests for the canonical runtime client builder boundary.
 
 Scope: prove factory argument assembly, reasoning validation, guarded callback
 adaptation, secret failure timing, and budget wrapping through
-``runtime_client_builder`` while the legacy facade construction path remains
-wired for Task 5.1.
+``runtime_client_builder`` after facade cutover.
 """
 
 from __future__ import annotations

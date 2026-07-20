@@ -1,7 +1,7 @@
-"""Direct proof tests for the extracted live LLM target resolver.
+"""Direct proof tests for the canonical live LLM target resolver.
 
-Purpose: compare the extracted deployment-aware resolver against the currently
-wired facade branch before production cutover.
+Purpose: compare the deployment-aware resolver against the facade delegation
+that now composes it.
 Scope boundary: these tests cover V2 lookup order, target fields, credentials,
 metrics, and exceptions only; they do not exercise legacy compatibility or
 provider-client construction.
