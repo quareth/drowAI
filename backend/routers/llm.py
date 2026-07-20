@@ -4,19 +4,18 @@ This router exposes user-facing model selection along with task-scoped runtime
 controls such as conversation reset.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 import logging
-from pydantic import BaseModel
 
-from agent.providers.llm.core.capabilities import LLMCapability
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
 from agent.providers.llm.core.identity import OPENAI_PROVIDER_ID
 
 from ..auth import get_current_user
 from ..config.feature_flags import is_semantic_memory_runtime_enabled
 from ..database import get_db
-from ..models import User, LLMCapabilityObservation, LLMConversation, LLMConversationResponse
+from ..models import User, LLMConversation, LLMConversationResponse
 from ..schemas.llm import (
     LLMModelCatalogResponse,
     LLMManagedConnectionCreateRequest,
@@ -52,15 +51,12 @@ from ..services.embeddings.selection_service import EmbeddingRuntimeSelectionSer
 from ..services.llm_provider import (
     CredentialNotFoundError,
     LLMCredentialService,
-    LLMAuthMode,
     LLMConnectionService,
-    LLMConnectionCredentialRef,
-    LLMConnectionState,
     LLMConversationLifecycleService,
     LLMCatalogApplicationService,
     LLMDeploymentService,
-    EffectiveProfileService,
     LLMManagedConnectionLifecycleService,
+    LLMProvingConnectionLifecycleService,
     LLMProviderHealthService,
     LLMProviderServiceError,
     LLMProviderSelectionService,
@@ -148,26 +144,8 @@ def _deployment_ref(
     }
 
 
-def _connection_ref(connection) -> dict[str, object]:
-    """Return the current opaque connection ref for API responses."""
-
-    return {
-        "connection_id": str(connection.id),
-        "expected_revision": int(connection.revision),
-    }
-
-
-def _deployment_ref_from_row(deployment) -> dict[str, object]:
-    """Return the current opaque deployment ref for API responses."""
-
-    return {
-        "deployment_id": str(deployment.id),
-        "expected_revision": int(deployment.revision),
-    }
-
-
 def _require_gpt_oss_proving_preset(preset_id: str) -> None:
-    """Reject every Phase 4 proving route except the one code-owned preset."""
+    """Reject every proving route except the one code-owned preset."""
 
     if preset_id != GPT_OSS_20B_PROVING_PRESET_ID:
         raise HTTPException(status_code=404, detail="Unknown proving preset")
@@ -175,170 +153,6 @@ def _require_gpt_oss_proving_preset(preset_id: str) -> None:
         ConnectionOperationRegistry().get_proving_preset(preset_id)
     except OperationRegistryError as exc:
         raise HTTPException(status_code=404, detail="Unknown proving preset") from exc
-
-
-def _first_route_for_deployment(
-    db: Session,
-    *,
-    user_id: int,
-    deployment_id,
-):
-    """Return the single code-owned proving route for a deployment."""
-
-    routes = LLMDeploymentService(db).list_routes(
-        user_id=user_id,
-        deployment_id=deployment_id,
-    )
-    if not routes:
-        raise HTTPException(status_code=400, detail="Deployment route is unavailable")
-    return routes[0]
-
-
-def _proving_verification_response(result) -> dict[str, object]:
-    """Serialize sanitized proving verification output without secrets."""
-
-    return {
-        "status": result.status,
-        "code": result.code,
-        "message": result.message,
-        "retryable": result.retryable,
-        "observed_at": result.observed_at,
-        "expires_at": result.expires_at,
-        "model_present": result.model_present,
-        "usage": result.usage,
-    }
-
-
-def _not_tested_verification() -> dict[str, object]:
-    """Return a stable no-evidence verification status for catalog metadata."""
-
-    return {
-        "status": "failed",
-        "code": "not_tested",
-        "message": "Verification has not run.",
-        "retryable": False,
-        "observed_at": None,
-        "expires_at": None,
-        "model_present": None,
-        "usage": None,
-    }
-
-
-def _proving_runnability(
-    db: Session,
-    *,
-    connection,
-    deployment,
-    route,
-) -> dict[str, object]:
-    """Return chat and usage evidence status for a proving deployment."""
-
-    try:
-        credential_fingerprint = LLMCredentialService(
-            db
-        ).connection_credential_fingerprint(
-            user_id=int(connection.user_id),
-            connection_ref=LLMConnectionCredentialRef(
-                connection_id=str(connection.id),
-                expected_revision=int(connection.revision),
-            ),
-            provider=GPT_OSS_20B_PROVING_PRESET_ID,
-        )
-    except LLMProviderServiceError:
-        return {
-            "status": "credential_missing",
-            "selectable": True,
-            "runnable": False,
-            "reason": "Stored proving credential is required.",
-        }
-    decision = EffectiveProfileService(db).classify_runnability(
-        deployment=deployment,
-        route=route,
-        required_capabilities=(
-            LLMCapability.CHAT,
-            LLMCapability.USAGE_REPORTING,
-        ),
-        connection_id=str(connection.id),
-        connection_revision=int(connection.revision),
-        credential_fingerprint=credential_fingerprint,
-    )
-    if decision.runnable:
-        return {
-            "status": "runnable",
-            "selectable": True,
-            "runnable": True,
-            "reason": None,
-        }
-    return {
-        "status": decision.status,
-        "selectable": True,
-        "runnable": False,
-        "reason": "Usage evidence is required.",
-    }
-
-
-def _proving_status_response(
-    db: Session,
-    *,
-    user_id: int,
-    connection,
-    deployment,
-    verification: dict[str, object] | None = None,
-) -> dict[str, object]:
-    """Return one public proving lifecycle response."""
-
-    route = _first_route_for_deployment(
-        db,
-        user_id=user_id,
-        deployment_id=deployment.id,
-    )
-    return {
-        "lifecycle_state": connection.state,
-        "connection_ref": _connection_ref(connection),
-        "deployment_ref": _deployment_ref_from_row(deployment),
-        "verification": verification,
-        "runnability": _proving_runnability(
-            db,
-            connection=connection,
-            deployment=deployment,
-            route=route,
-        ),
-    }
-
-
-def _refresh_proving_observation_revision(
-    db: Session,
-    *,
-    deployment,
-    route,
-    connection,
-    previous_connection_revision: int,
-) -> None:
-    """Bind already-verified proving observations to the enabled revision."""
-
-    rows = db.execute(
-        select(LLMCapabilityObservation).where(
-            LLMCapabilityObservation.deployment_id == deployment.id,
-            LLMCapabilityObservation.route_id == route.id,
-        )
-    ).scalars()
-    for row in rows:
-        constraints = row.constraints
-        if not isinstance(constraints, dict):
-            continue
-        if str(constraints.get("connection_id")) != str(connection.id):
-            continue
-        try:
-            observed_revision = int(constraints.get("connection_revision"))
-        except (TypeError, ValueError):
-            continue
-        if observed_revision != int(previous_connection_revision):
-            continue
-        row.constraints = {
-            **constraints,
-            "connection_revision": int(connection.revision),
-        }
-    db.flush()
 
 
 def _memory_selection_service(db: Session) -> EmbeddingRuntimeSelectionService:
@@ -907,39 +721,18 @@ async def create_proving_connection(
     if not api_key:
         raise HTTPException(status_code=400, detail="Proving API key is required")
     try:
-        connections = LLMConnectionService(db)
-        connection = connections.create_gpt_oss_20b_proving_draft(
+        outcome = LLMProvingConnectionLifecycleService(db).create_connection(
             user_id=current_user.id,
+            preset_id=preset_id,
+            api_key=api_key,
             display_label=body.display_label,
         )
-        LLMCredentialService(db).upsert_connection_api_key(
-            user_id=current_user.id,
-            connection_ref=LLMConnectionCredentialRef(
-                connection_id=str(connection.id),
-                expected_revision=int(connection.revision),
-            ),
-            provider=GPT_OSS_20B_PROVING_PRESET_ID,
-            api_key=api_key,
+        return LLMProvingConnectionStatusResponse.model_validate(
+            outcome,
+            from_attributes=True,
+            by_name=True,
         )
-        db.refresh(connection)
-        deployment, _route = LLMDeploymentService(
-            db
-        ).create_gpt_oss_20b_proving_deployment(
-            user_id=current_user.id,
-            connection_id=connection.id,
-            expected_connection_revision=int(connection.revision),
-        )
-        response = _proving_status_response(
-            db,
-            user_id=current_user.id,
-            connection=connection,
-            deployment=deployment,
-            verification=_not_tested_verification(),
-        )
-        db.commit()
-        return response
     except LLMProviderServiceError as exc:
-        db.rollback()
         raise _provider_configuration_exception(exc) from exc
 
 
@@ -960,56 +753,21 @@ async def test_proving_connection(
     if not api_key:
         raise HTTPException(status_code=400, detail="Proving API key is required")
     try:
-        deployment = LLMDeploymentService(db).get_deployment(
+        outcome = LLMProvingConnectionLifecycleService(db).test_connection(
             user_id=current_user.id,
-            deployment_id=body.deployment_ref.deployment_id,
-        )
-        if int(deployment.revision) != body.deployment_ref.expected_revision:
-            raise HTTPException(status_code=400, detail="Deployment revision is stale")
-        route = _first_route_for_deployment(
-            db,
-            user_id=current_user.id,
-            deployment_id=deployment.id,
-        )
-        credential_service = LLMCredentialService(db)
-        connection_ref = LLMConnectionCredentialRef(
-            connection_id=body.connection_ref.connection_id,
-            expected_revision=body.connection_ref.expected_revision,
-        )
-        stored_auth = credential_service.resolve_connection_auth(
-            connection_ref,
-            runtime_user_id=current_user.id,
-            purpose="gpt-oss-proving-test",
-            auth_mode=LLMAuthMode.BEARER,
-        )
-        stored_secret = stored_auth.secret.value if stored_auth.secret is not None else ""
-        if stored_secret != api_key:
-            raise HTTPException(
-                status_code=400,
-                detail="Stored proving credential must pass verification",
-            )
-        credential_fingerprint = credential_service.connection_credential_fingerprint(
-            user_id=current_user.id,
-            connection_ref=connection_ref,
-            provider=GPT_OSS_20B_PROVING_PRESET_ID,
-        )
-        result = LLMProviderHealthService(db).verify_gpt_oss_20b_proving_connection(
-            user_id=current_user.id,
+            preset_id=preset_id,
+            api_key=api_key,
             connection_id=body.connection_ref.connection_id,
             expected_connection_revision=body.connection_ref.expected_revision,
-            deployment_id=deployment.id,
-            route_id=route.id,
-            api_key=api_key,
-            credential_fingerprint=credential_fingerprint,
+            deployment_id=body.deployment_ref.deployment_id,
+            expected_deployment_revision=body.deployment_ref.expected_revision,
         )
-        response = _proving_verification_response(result)
-        db.commit()
-        return response
-    except HTTPException:
-        db.rollback()
-        raise
+        return LLMProvingVerificationResponse.model_validate(
+            outcome,
+            from_attributes=True,
+            by_name=True,
+        )
     except LLMProviderServiceError as exc:
-        db.rollback()
         raise _provider_configuration_exception(exc) from exc
 
 
@@ -1027,86 +785,20 @@ async def enable_proving_connection(
 
     _require_gpt_oss_proving_preset(preset_id)
     try:
-        connections = LLMConnectionService(db)
-        connection = connections.get_owned_at_revision(
+        outcome = LLMProvingConnectionLifecycleService(db).enable_connection(
             user_id=current_user.id,
+            preset_id=preset_id,
             connection_id=body.connection_ref.connection_id,
-            expected_revision=body.connection_ref.expected_revision,
-        )
-        deployment = LLMDeploymentService(db).get_deployment(
-            user_id=current_user.id,
+            expected_connection_revision=body.connection_ref.expected_revision,
             deployment_id=body.deployment_ref.deployment_id,
+            expected_deployment_revision=body.deployment_ref.expected_revision,
         )
-        if int(deployment.revision) != body.deployment_ref.expected_revision:
-            raise HTTPException(status_code=400, detail="Deployment revision is stale")
-        if str(deployment.connection_id) != str(connection.id):
-            raise HTTPException(status_code=400, detail="Deployment route is unavailable")
-        route = _first_route_for_deployment(
-            db,
-            user_id=current_user.id,
-            deployment_id=deployment.id,
+        return LLMProvingConnectionStatusResponse.model_validate(
+            outcome,
+            from_attributes=True,
+            by_name=True,
         )
-        runnability = _proving_runnability(
-            db,
-            connection=connection,
-            deployment=deployment,
-            route=route,
-        )
-        if not runnability["runnable"]:
-            raise HTTPException(
-                status_code=400,
-                detail="Successful proving verification is required before enablement",
-            )
-        verified_connection_revision = int(connection.revision)
-        if connection.state == LLMConnectionState.DRAFT.value:
-            connection = connections.transition_state(
-                user_id=current_user.id,
-                connection_id=connection.id,
-                expected_revision=int(connection.revision),
-                target_state=LLMConnectionState.DISABLED,
-            )
-        if connection.state == LLMConnectionState.DISABLED.value:
-            connection = connections.transition_state(
-                user_id=current_user.id,
-                connection_id=connection.id,
-                expected_revision=int(connection.revision),
-                target_state=LLMConnectionState.ENABLED,
-            )
-        elif connection.state != LLMConnectionState.ENABLED.value:
-            raise HTTPException(
-                status_code=400,
-                detail="Proving connection is not enableable",
-            )
-        _refresh_proving_observation_revision(
-            db,
-            deployment=deployment,
-            route=route,
-            connection=connection,
-            previous_connection_revision=verified_connection_revision,
-        )
-        response = _proving_status_response(
-            db,
-            user_id=current_user.id,
-            connection=connection,
-            deployment=deployment,
-            verification={
-                "status": "passed",
-                "code": "verified",
-                "message": "GPT-OSS proving endpoint verified",
-                "retryable": False,
-                "observed_at": None,
-                "expires_at": None,
-                "model_present": True,
-                "usage": None,
-            },
-        )
-        db.commit()
-        return response
-    except HTTPException:
-        db.rollback()
-        raise
     except LLMProviderServiceError as exc:
-        db.rollback()
         raise _provider_configuration_exception(exc) from exc
 
 

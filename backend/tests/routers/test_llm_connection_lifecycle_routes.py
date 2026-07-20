@@ -1,9 +1,8 @@
-"""Focused managed and proving connection lifecycle route characterization.
+"""Focused managed and proving connection lifecycle route contracts.
 
-These tests lock the current seven lifecycle HTTP routes before orchestration
-moves out of `backend.routers.llm`. They intentionally exercise the wired
-router, persistence authorities, authorization boundary, transaction effects,
-and sanitized response contracts without changing production code.
+These tests exercise the seven wired HTTP adapters, delegated application
+workflows, persistence authorities, authorization boundary, transaction
+effects, and sanitized response contracts.
 """
 
 from __future__ import annotations
@@ -37,6 +36,7 @@ from backend.services.llm_provider import (
     LLMConnectionService,
     LLMDeploymentService,
     LLMManagedConnectionLifecycleService,
+    LLMProvingConnectionLifecycleService,
     LLMProviderServiceError,
 )
 from backend.services.llm_provider.application_contracts import (
@@ -547,6 +547,162 @@ def test_managed_routes_delegate_once_with_exact_request_adaptation(monkeypatch)
             {
                 "user_id": user.id,
                 "preset_id": HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+                "connection_id": connection_id,
+                "expected_connection_revision": 2,
+                "deployment_id": deployment_id,
+                "expected_deployment_revision": 1,
+            },
+        ),
+    ]
+
+
+def test_proving_routes_delegate_once_with_exact_request_adaptation(monkeypatch) -> None:
+    """The three proving HTTP adapters pass only explicit primitive workflow inputs."""
+
+    user = _user("llm-proving-adapters")
+    connection_id = str(uuid4())
+    deployment_id = str(uuid4())
+    calls: list[tuple[str, dict[str, object]]] = []
+    status_outcome = ConnectionStatusOutcome(
+        lifecycle_state="draft",
+        connection_ref=ConnectionRefOutcome(
+            connection_id=connection_id,
+            expected_revision=2,
+        ),
+        deployment_ref=DeploymentRefOutcome(
+            deployment_id=deployment_id,
+            expected_revision=1,
+        ),
+        verification=VerificationOutcome(
+            status="failed",
+            code="not_tested",
+            message="Verification has not run.",
+            retryable=False,
+        ),
+        runnability=RunnabilityOutcome(
+            status="capability_unknown",
+            selectable=True,
+            runnable=False,
+            reason="Usage evidence is required.",
+        ),
+    )
+    verification_outcome = VerificationOutcome(
+        status="passed",
+        code="verified",
+        message="GPT-OSS proving endpoint verified",
+        retryable=False,
+        model_present=True,
+    )
+
+    def record(name: str, outcome):
+        def invoke(_self, **kwargs):
+            calls.append((name, kwargs))
+            return outcome
+
+        return invoke
+
+    monkeypatch.setattr(
+        LLMProvingConnectionLifecycleService,
+        "create_connection",
+        record("create", status_outcome),
+    )
+    monkeypatch.setattr(
+        LLMProvingConnectionLifecycleService,
+        "test_connection",
+        record("test", verification_outcome),
+    )
+    monkeypatch.setattr(
+        LLMProvingConnectionLifecycleService,
+        "enable_connection",
+        record("enable", status_outcome),
+    )
+    counter = _patch_transaction_counter(monkeypatch)
+    client, app = _client(user)
+    try:
+        created = _during_request(
+            counter,
+            lambda: client.post(
+                f"/api/llm/proving-presets/{GPT_OSS_20B_PROVING_PRESET_ID}/connection",
+                json={
+                    "api_key": _PROVING_SECRET,
+                    "display_label": "Proof endpoint",
+                },
+            ),
+        )
+        assert counter.commits == 0
+        assert counter.rollbacks == 0
+        tested = _during_request(
+            counter,
+            lambda: client.post(
+                f"/api/llm/proving-presets/{GPT_OSS_20B_PROVING_PRESET_ID}/connection/test",
+                json={
+                    "api_key": _PROVING_SECRET,
+                    "connection_ref": {
+                        "connection_id": connection_id,
+                        "expected_revision": 2,
+                    },
+                    "deployment_ref": {
+                        "deployment_id": deployment_id,
+                        "expected_revision": 1,
+                    },
+                },
+            ),
+        )
+        assert counter.commits == 0
+        assert counter.rollbacks == 0
+        enabled = _during_request(
+            counter,
+            lambda: client.post(
+                f"/api/llm/proving-presets/{GPT_OSS_20B_PROVING_PRESET_ID}/connection/enable",
+                json={
+                    "connection_ref": {
+                        "connection_id": connection_id,
+                        "expected_revision": 2,
+                    },
+                    "deployment_ref": {
+                        "deployment_id": deployment_id,
+                        "expected_revision": 1,
+                    },
+                },
+            ),
+        )
+        assert counter.commits == 0
+        assert counter.rollbacks == 0
+    finally:
+        app.dependency_overrides.clear()
+
+    assert [response.status_code for response in (created, tested, enabled)] == [
+        200,
+        200,
+        200,
+    ]
+    assert calls == [
+        (
+            "create",
+            {
+                "user_id": user.id,
+                "preset_id": GPT_OSS_20B_PROVING_PRESET_ID,
+                "api_key": _PROVING_SECRET,
+                "display_label": "Proof endpoint",
+            },
+        ),
+        (
+            "test",
+            {
+                "user_id": user.id,
+                "preset_id": GPT_OSS_20B_PROVING_PRESET_ID,
+                "api_key": _PROVING_SECRET,
+                "connection_id": connection_id,
+                "expected_connection_revision": 2,
+                "deployment_id": deployment_id,
+                "expected_deployment_revision": 1,
+            },
+        ),
+        (
+            "enable",
+            {
+                "user_id": user.id,
+                "preset_id": GPT_OSS_20B_PROVING_PRESET_ID,
                 "connection_id": connection_id,
                 "expected_connection_revision": 2,
                 "deployment_id": deployment_id,

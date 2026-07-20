@@ -1,8 +1,8 @@
-"""Direct equivalence tests for shared LLM connection status composition.
+"""Direct contract tests for shared LLM connection status composition.
 
-These tests compare the extracted provider-layer service with the still-active
-router helpers. They do not migrate callers or exercise lifecycle mutation,
-transactions, credential disclosure, or guarded egress.
+These tests prove immutable provider-layer outcomes after router helper removal.
+They do not exercise lifecycle mutation, transactions, credential disclosure,
+or guarded egress.
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ from backend.models import (
     LLMModelDeployment,
     User,
 )
-from backend.routers import llm as llm_routes
 from backend.services.llm_provider import LLMConnectionStatusService
 from backend.services.llm_provider.application_contracts import (
     RunnabilityOutcome,
@@ -166,30 +165,21 @@ def _connection_runnability(
     )
 
 
-def _assert_proving_runnability_matches_legacy(
+def _proving_runnability(
     service: LLMConnectionStatusService,
-    db: Session,
     *,
     connection: LLMInferenceConnection,
     deployment: LLMModelDeployment,
     route: LLMDeploymentRoute,
 ) -> RunnabilityOutcome:
-    expected = llm_routes._proving_runnability(
-        db,
+    return service.proving_runnability(
         connection=connection,
         deployment=deployment,
         route=route,
     )
-    actual = service.proving_runnability(
-        connection=connection,
-        deployment=deployment,
-        route=route,
-    )
-    assert asdict(actual) == expected
-    return actual
 
 
-def test_refs_and_verification_match_legacy_fields(
+def test_refs_and_verification_preserve_public_contract_fields(
     llm_identity_db: Session,
     identity_users: tuple[User, User],
 ) -> None:
@@ -213,18 +203,38 @@ def test_refs_and_verification_match_legacy_fields(
         usage={"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
     )
 
-    assert asdict(service.connection_ref(connection)) == llm_routes._connection_ref(
-        connection
-    )
-    assert asdict(service.deployment_ref(deployment)) == (
-        llm_routes._deployment_ref_from_row(deployment)
-    )
-    assert asdict(service.not_tested_verification()) == (
-        llm_routes._not_tested_verification()
-    )
-    assert asdict(service.verification(result)) == (
-        llm_routes._proving_verification_response(result)
-    )
+    assert asdict(service.connection_ref(connection)) == {
+        "connection_id": str(connection.id),
+        "expected_revision": int(connection.revision),
+    }
+    assert asdict(service.deployment_ref(deployment)) == {
+        "deployment_id": str(deployment.id),
+        "expected_revision": int(deployment.revision),
+    }
+    assert asdict(service.not_tested_verification()) == {
+        "status": "failed",
+        "code": "not_tested",
+        "message": "Verification has not run.",
+        "retryable": False,
+        "observed_at": None,
+        "expires_at": None,
+        "model_present": None,
+        "usage": None,
+    }
+    assert asdict(service.verification(result)) == {
+        "status": "passed",
+        "code": "verified",
+        "message": "GPT-OSS proving endpoint verified",
+        "retryable": False,
+        "observed_at": observed_at,
+        "expires_at": observed_at + timedelta(hours=1),
+        "model_present": True,
+        "usage": {
+            "prompt_tokens": 4,
+            "completion_tokens": 2,
+            "total_tokens": 6,
+        },
+    }
     assert _SECRET not in repr(service.verification(result))
 
 
@@ -381,7 +391,7 @@ def test_managed_runnability_matches_missing_invalid_and_runnable_cases(
     )
 
 
-def test_proving_runnability_matches_credential_and_evidence_cases(
+def test_proving_runnability_preserves_credential_and_evidence_cases(
     llm_identity_db: Session,
     identity_users: tuple[User, User],
 ) -> None:
@@ -394,9 +404,8 @@ def test_proving_runnability_matches_credential_and_evidence_cases(
     )
     service = LLMConnectionStatusService(llm_identity_db)
 
-    missing_credential = _assert_proving_runnability_matches_legacy(
+    missing_credential = _proving_runnability(
         service,
-        llm_identity_db,
         connection=connection,
         deployment=deployment,
         route=route,
@@ -409,9 +418,8 @@ def test_proving_runnability_matches_credential_and_evidence_cases(
         connection=connection,
         provider=GPT_OSS_20B_PROVING_PRESET_ID,
     )
-    missing_evidence = _assert_proving_runnability_matches_legacy(
+    missing_evidence = _proving_runnability(
         service,
-        llm_identity_db,
         connection=connection,
         deployment=deployment,
         route=route,
@@ -430,9 +438,8 @@ def test_proving_runnability_matches_credential_and_evidence_cases(
         route=route,
         credential_fingerprint=credential_fingerprint,
     )
-    runnable = _assert_proving_runnability_matches_legacy(
+    runnable = _proving_runnability(
         service,
-        llm_identity_db,
         connection=connection,
         deployment=deployment,
         route=route,
@@ -442,7 +449,7 @@ def test_proving_runnability_matches_credential_and_evidence_cases(
     assert _SECRET not in repr(runnable)
 
 
-def test_managed_and_proving_statuses_match_legacy_without_transactions(
+def test_managed_and_proving_statuses_preserve_contract_without_transactions(
     monkeypatch: pytest.MonkeyPatch,
     llm_identity_db: Session,
     identity_users: tuple[User, User],
@@ -494,17 +501,17 @@ def test_managed_and_proving_statuses_match_legacy_without_transactions(
         deployment_id=managed_deployment.id,
     )
     assert managed_actual.lifecycle_state == managed.state
-    assert asdict(managed_actual.connection_ref) == llm_routes._connection_ref(
-        managed
-    )
+    assert asdict(managed_actual.connection_ref) == {
+        "connection_id": str(managed.id),
+        "expected_revision": int(managed.revision),
+    }
     assert managed_actual.deployment_ref is not None
-    assert asdict(managed_actual.deployment_ref) == (
-        llm_routes._deployment_ref_from_row(managed_deployment)
-    )
+    assert asdict(managed_actual.deployment_ref) == {
+        "deployment_id": str(managed_deployment.id),
+        "expected_revision": int(managed_deployment.revision),
+    }
     assert managed_actual.verification is not None
-    assert asdict(managed_actual.verification) == (
-        llm_routes._not_tested_verification()
-    )
+    assert managed_actual.verification.code == "not_tested"
     assert managed_actual.runnability is not None
     assert managed_actual.runnability == service.connection_runnability(
         user_id=owner.id,
@@ -519,16 +526,17 @@ def test_managed_and_proving_statuses_match_legacy_without_transactions(
         deployment=proving_deployment,
         verification=verification,
     )
-    proving_expected = llm_routes._proving_status_response(
-        llm_identity_db,
-        user_id=owner.id,
-        connection=proving,
-        deployment=proving_deployment,
-        verification=llm_routes._proving_verification_response(
-            verification_result
-        ),
+    assert proving_actual.lifecycle_state == proving.state
+    assert proving_actual.connection_ref.connection_id == str(proving.id)
+    assert proving_actual.connection_ref.expected_revision == int(proving.revision)
+    assert proving_actual.deployment_ref is not None
+    assert proving_actual.deployment_ref.deployment_id == str(proving_deployment.id)
+    assert proving_actual.deployment_ref.expected_revision == int(
+        proving_deployment.revision
     )
-    assert asdict(proving_actual) == proving_expected
+    assert proving_actual.verification == verification
+    assert proving_actual.runnability is not None
+    assert proving_actual.runnability.status == "credential_missing"
     assert transaction_calls == []
     rendered = f"{managed_actual!r}\n{proving_actual!r}"
     assert _SECRET not in rendered

@@ -35,6 +35,9 @@ from .inventory_service import LLMInventoryService
 from .managed_connection_lifecycle_service import (
     LLMManagedConnectionLifecycleService,
 )
+from .proving_connection_lifecycle_service import (
+    LLMProvingConnectionLifecycleService,
+)
 from .migration_service import LLMProviderMigrationService
 from .runtime_client_resolver import LLMRuntimeClientResolver, resolve_call_target
 from .runtime_config_service import LLMRuntimeConfigService
@@ -126,6 +129,7 @@ __all__ = [
     "LLMProviderMigrationService",
     "LLMProviderSelectionService",
     "LLMProviderServiceError",
+    "LLMProvingConnectionLifecycleService",
     "ReportingLLMSelectionMissingError",
     "ReportingLLMSelectionRead",
     "ReportingLLMSelectionService",
