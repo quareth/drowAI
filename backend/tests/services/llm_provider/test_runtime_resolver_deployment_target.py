@@ -123,7 +123,7 @@ def test_v2_resolver_normalizes_live_target_through_factory_and_budget(
         return object()
 
     monkeypatch.setattr(
-        "backend.services.llm_provider.runtime_client_resolver.LLMClientFactory.get_client",
+        "backend.services.llm_provider.runtime_client_builder.LLMClientFactory.get_client",
         fake_get_client,
     )
     resolver = LLMRuntimeClientResolver(credentials, db=llm_identity_db)

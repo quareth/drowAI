@@ -277,7 +277,7 @@ async def test_gpt_oss_runtime_uses_shared_authorities_without_fallback(
         )
 
     monkeypatch.setattr(
-        "backend.services.llm_provider.runtime_client_resolver.GuardedTransport.execute",
+        "backend.services.llm_provider.runtime_client_builder.GuardedTransport.execute",
         fake_execute,
     )
     owner, _ = identity_users
@@ -497,7 +497,7 @@ async def test_custom_compatible_runtime_uses_guarded_executor_without_sdk_fallb
         return factory_get_client(**kwargs)
 
     monkeypatch.setattr(
-        "backend.services.llm_provider.runtime_client_resolver."
+        "backend.services.llm_provider.runtime_client_builder."
         "LLMClientFactory.get_client",
         recording_get_client,
     )
@@ -534,7 +534,7 @@ async def test_custom_compatible_runtime_uses_guarded_executor_without_sdk_fallb
         )
 
     monkeypatch.setattr(
-        "backend.services.llm_provider.runtime_client_resolver.GuardedTransport.execute",
+        "backend.services.llm_provider.runtime_client_builder.GuardedTransport.execute",
         fake_execute,
     )
     owner, _ = identity_users

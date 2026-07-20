@@ -56,6 +56,7 @@ from backend.services.llm_provider import (
     attach_runtime_services,
     strip_runtime_services,
 )
+from backend.services.llm_provider import runtime_client_builder as client_builder_module
 from backend.services.llm_provider import runtime_client_resolver as resolver_module
 from backend.services.llm_provider import reporting_selection_service as reporting_selection_module
 from core.llm.role_policy import ROLE_TOOL_OUTPUT_COMPRESSOR
@@ -519,7 +520,7 @@ def test_runtime_client_resolver_uses_explicit_role_target(monkeypatch: pytest.M
             )
             return object()
 
-        monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+        monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
         client = resolver_module.LLMRuntimeClientResolver(service).get_client(
             selection,
@@ -569,7 +570,7 @@ def test_runtime_client_resolver_uses_selected_credential_for_same_provider(
         calls.append({"provider_model": provider_model, "api_key": api_key})
         return object()
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider="openai",
@@ -622,7 +623,7 @@ def test_runtime_client_resolver_resolves_target_provider_credential(
         calls.append({"provider_model": provider_model, "api_key": api_key})
         return object()
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider="openai",
@@ -673,7 +674,7 @@ def test_runtime_client_resolver_delegates_anthropic_profile_default_to_adapter(
         )
         return object()
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider="anthropic",
@@ -717,7 +718,7 @@ def test_runtime_client_resolver_propagates_supported_anthropic_reasoning_effort
         calls.append({"provider_model": provider_model, "kwargs": kwargs})
         return object()
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider="anthropic",
@@ -762,7 +763,7 @@ def test_runtime_client_resolver_rejects_explicit_haiku_reasoning_effort(
         factory_called = True
         return object()
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider="anthropic",
@@ -803,7 +804,7 @@ def test_runtime_client_resolver_rejects_kwarg_haiku_reasoning_effort(
         factory_called = True
         return object()
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider="anthropic",
@@ -844,7 +845,7 @@ def test_runtime_client_resolver_rejects_openai_chat_reasoning_effort(
         factory_called = True
         return object()
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider="openai",
@@ -894,7 +895,7 @@ async def test_runtime_client_resolver_preserves_openai_intent_classifier_budget
     def fake_get_client(*_args: Any, **_kwargs: Any) -> _Client:
         return fake_client
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider=OPENAI_PROVIDER_ID,
@@ -944,7 +945,7 @@ async def test_runtime_client_resolver_clamps_openai_budget_above_profile_max(
     def fake_get_client(*_args: Any, **_kwargs: Any) -> _Client:
         return fake_client
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider=OPENAI_PROVIDER_ID,
@@ -994,7 +995,7 @@ async def test_runtime_client_resolver_clamps_openai_chat_budget_to_legacy_ceili
     def fake_get_client(*_args: Any, **_kwargs: Any) -> _Client:
         return fake_client
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider=OPENAI_PROVIDER_ID,
@@ -1047,7 +1048,7 @@ async def test_runtime_client_resolver_applies_default_output_budget_when_omitte
     def fake_get_client(*_args: Any, **_kwargs: Any) -> _Client:
         return fake_client
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider=OPENAI_PROVIDER_ID,
@@ -1097,7 +1098,7 @@ async def test_runtime_client_resolver_rejects_anthropic_output_budget_before_ca
     def fake_get_client(*_args: Any, **_kwargs: Any) -> _Client:
         return fake_client
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider=ANTHROPIC_PROVIDER_ID,
@@ -1151,7 +1152,7 @@ async def test_runtime_client_resolver_rejects_context_overflow_before_call(
     def fake_get_client(*_args: Any, **_kwargs: Any) -> _Client:
         return fake_client
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
     monkeypatch.setattr(
         budget_module,
         "estimate_chat_history_tokens",
@@ -1213,7 +1214,7 @@ async def test_runtime_client_resolver_rejects_context_estimation_failure_before
     def fail_estimate(**_kwargs: Any) -> SimpleNamespace:
         raise ValueError("estimator failure")
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
     monkeypatch.setattr(budget_module, "estimate_chat_history_tokens", fail_estimate)
 
     selection = LLMRuntimeSelection(
@@ -1268,7 +1269,7 @@ async def test_runtime_client_resolver_counts_tool_payloads_for_context_fit(
     def fake_get_client(*_args: Any, **_kwargs: Any) -> _Client:
         return fake_client
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
     monkeypatch.setattr(
         budget_module,
         "estimate_chat_history_tokens",

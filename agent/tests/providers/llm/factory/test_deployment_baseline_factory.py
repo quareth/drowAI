@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import agent.providers.llm.factory.client_factory as factory_module
+import backend.services.llm_provider.runtime_client_builder as runtime_builder_module
 import backend.services.llm_provider.runtime_client_resolver as runtime_resolver_module
 from agent.providers.llm.adapters.anthropic.client import AnthropicMessagesClient
 from agent.providers.llm.adapters.openai.chat import OpenAIChatClient
@@ -97,18 +98,25 @@ def test_factory_provider_registrations_are_the_current_adapter_authority() -> N
     assert LLMClientFactory.list_models(ANTHROPIC_PROVIDER_ID, listable=True)
 
 
-def test_backend_runtime_resolver_delegates_adapter_construction_to_factory() -> None:
+def test_runtime_client_builder_delegates_adapter_construction_to_factory() -> None:
     resolver_source = inspect.getsource(
         runtime_resolver_module.LLMRuntimeClientResolver.get_client
     )
-    module_source = inspect.getsource(runtime_resolver_module)
+    resolver_module_source = inspect.getsource(runtime_resolver_module)
+    builder_source = inspect.getsource(runtime_builder_module.LLMRuntimeClientBuilder.build)
+    builder_module_source = inspect.getsource(runtime_builder_module)
 
-    assert runtime_resolver_module.LLMClientFactory is LLMClientFactory
-    assert "LLMClientFactory.get_client" in resolver_source
-    assert "provider_model=call_ref" in resolver_source
-    assert "agent.providers.llm.adapters." not in module_source
-    assert "AsyncOpenAI" not in module_source
-    assert "AsyncAnthropic" not in module_source
+    assert runtime_builder_module.LLMClientFactory is LLMClientFactory
+    assert "self._client_builder.build" in resolver_source
+    assert "LLMClientFactory.get_client" not in resolver_source
+    assert "LLMClientFactory.get_client" in builder_source
+    assert "provider_model=call_ref" in builder_source
+    assert "agent.providers.llm.adapters." not in resolver_module_source
+    assert "agent.providers.llm.adapters." not in builder_module_source
+    assert "AsyncOpenAI" not in resolver_module_source
+    assert "AsyncOpenAI" not in builder_module_source
+    assert "AsyncAnthropic" not in resolver_module_source
+    assert "AsyncAnthropic" not in builder_module_source
 
 
 def test_legacy_openai_model_only_prefix_fallback_is_compatibility_only() -> None:

@@ -291,7 +291,7 @@ def test_chat_route_reaches_anthropic_facade_and_graph_resolver(monkeypatch) -> 
         _no_timeout,
     )
     monkeypatch.setattr(
-        "backend.services.llm_provider.runtime_client_resolver.LLMClientFactory.get_client",
+        "backend.services.llm_provider.runtime_client_builder.LLMClientFactory.get_client",
         fake_get_client,
     )
 

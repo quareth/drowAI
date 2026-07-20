@@ -1,12 +1,14 @@
-"""Characterize runtime client construction through the facade and builder.
+"""Direct tests for the extracted runtime client builder boundary.
 
-Scope: lock factory arguments, guarded callback adaptation, reasoning validation
-timing, secret failure timing, and wrapper application at the resolver boundary
-while patching construction seams at their canonical builder owner.
+Scope: prove factory argument assembly, reasoning validation, guarded callback
+adaptation, secret failure timing, and budget wrapping through
+``runtime_client_builder`` while the legacy facade construction path remains
+wired for Task 5.1.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, AsyncIterator
 from uuid import uuid4
@@ -14,25 +16,21 @@ from uuid import uuid4
 import pytest
 
 from agent.providers.llm.core.base import ChatMessage, LLMClient, LLMResponse, ToolCallResult
+from agent.providers.llm.core.budget_enforcing_client import BudgetEnforcingLLMClient
 from agent.providers.llm.core.exceptions import (
     LLMCapabilityNotSupportedError,
     LLMConfigurationError,
 )
-from agent.providers.llm.core.budget_enforcing_client import BudgetEnforcingLLMClient
 from agent.providers.llm.core.identity import ProviderModelRef
 from agent.providers.llm.profiles.registry import require_model_profile
 from backend.services.llm_provider import runtime_client_builder as builder_module
-from backend.services.llm_provider import runtime_client_resolver as resolver_module
-from backend.services.llm_provider.runtime_client_resolver import (
-    LLMRuntimeClientResolver,
-)
+from backend.services.llm_provider.runtime_client_builder import LLMRuntimeClientBuilder
 from backend.services.llm_provider.types import (
     DeploymentRef,
     LLMAuthMode,
     LLMCallTarget,
     LLMConnectionOperation,
     LLMCredentialRef,
-    LLMRuntimeAccessContext,
     LLMRuntimeSelection,
     LLMRuntimeSelectionV2,
     ProviderSecret,
@@ -41,13 +39,6 @@ from backend.services.llm_provider.types import (
     ResolvedConnectionTarget,
     ResolvedLLMTarget,
 )
-
-
-class _CredentialService:
-    """Minimal credential double; resolved targets carry request secrets."""
-
-    def resolve_secret(self, *_args: Any, **_kwargs: Any) -> ProviderSecret:
-        raise AssertionError("resolve_secret is not used by get_client after target resolution")
 
 
 class _MinimalClient(LLMClient):
@@ -124,16 +115,17 @@ def _resolved_target(
     exact_wire_model_id: str = "gpt-5.2",
     effective_model: str | None = "gpt-5.2",
     secret: ProviderSecret | None = None,
+    auth_none: bool = False,
     dialect_policy_id: str = "openai_responses.native_v1",
 ) -> ResolvedLLMTarget:
     resolved_auth = (
-        ResolvedAuth.with_secret(
+        ResolvedAuth.none()
+        if auth_none
+        else ResolvedAuth.with_secret(
             mode=LLMAuthMode.API_KEY,
             provider=provider,
             secret=secret or ProviderSecret(provider=provider, value="sk-builder-secret"),
         )
-        if secret is not None or provider != "none"
-        else ResolvedAuth.none()
     )
     return ResolvedLLMTarget(
         connection=ResolvedConnectionTarget(
@@ -165,86 +157,48 @@ def _resolved_target(
     )
 
 
-def test_legacy_reasoning_validation_precedes_trusted_context_and_target_resolution(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Legacy capability failures occur before trusted context normalization."""
+def test_builder_import_boundary_excludes_facade_and_persistence() -> None:
+    """The extraction owns construction without depending on resolver or models."""
 
-    resolver = LLMRuntimeClientResolver(_CredentialService())
-    selection = LLMRuntimeSelection(
-        provider="anthropic",
-        model="claude-haiku-4-5-20251001",
-        credential_ref=LLMCredentialRef(user_id=7, provider="anthropic"),
-        reasoning_effort="medium",
+    source = Path(builder_module.__file__).read_text()
+
+    assert "runtime_client_resolver" not in source
+    assert "backend.models" not in source
+    assert "sqlalchemy" not in source
+
+
+def test_builder_reasoning_validation_matches_current_policy() -> None:
+    """Reasoning normalization and unsupported-model errors match baseline."""
+
+    builder = LLMRuntimeClientBuilder()
+
+    assert (
+        builder.resolve_supported_reasoning_effort(
+            ProviderModelRef("openai", "gpt-5.2"),
+            " HIGH ",
+        )
+        == "high"
     )
 
-    def fail_resolve_target(*_args: Any, **_kwargs: Any) -> None:
-        raise AssertionError("target resolution should not run before legacy reasoning validation")
-
-    monkeypatch.setattr(resolver, "resolve_target", fail_resolve_target)
-
     with pytest.raises(LLMCapabilityNotSupportedError, match="reasoning_effort"):
-        resolver.get_client(
-            selection,
-            access_context={"runtime_user_id": 7},  # type: ignore[arg-type]
-            purpose="legacy-reasoning",
+        builder.resolve_supported_reasoning_effort(
+            ProviderModelRef("anthropic", "claude-haiku-4-5-20251001"),
+            "medium",
         )
 
 
-def test_v2_reasoning_validation_uses_effective_profile_after_target_resolution(
+def test_builder_factory_arguments_and_budget_wrapper_are_field_for_field(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """V2 reasoning validation waits for the resolved effective profile."""
+    """Direct builder construction sends exact non-secret target fields to the factory."""
 
-    resolver = LLMRuntimeClientResolver(_CredentialService())
-    selection = LLMRuntimeSelectionV2(
-        deployment_ref=DeploymentRef(str(uuid4()), 1),
-        reasoning_effort="medium",
-    )
-    events: list[str] = []
-
-    def fake_resolve_target(*_args: Any, **_kwargs: Any) -> ResolvedLLMTarget:
-        events.append("resolve_target")
-        return _resolved_target(
-            provider="anthropic",
-            connection_preset_id="anthropic",
-            exact_wire_model_id="claude-haiku-4-5-20251001",
-            effective_model="claude-haiku-4-5-20251001",
-            secret=ProviderSecret(provider="anthropic", value="sk-v2-secret"),
-            dialect_policy_id="anthropic_messages.native_v1",
-        )
-
-    def fail_factory(*_args: Any, **_kwargs: Any) -> None:
-        events.append("factory")
-        raise AssertionError("factory should not run after V2 reasoning validation failure")
-
-    monkeypatch.setattr(resolver, "resolve_target", fake_resolve_target)
-    monkeypatch.setattr(builder_module.LLMClientFactory, "get_client", fail_factory)
-
-    with pytest.raises(LLMCapabilityNotSupportedError, match="reasoning_effort"):
-        resolver.get_client(
-            selection,
-            access_context=LLMRuntimeAccessContext(runtime_user_id=7),
-            purpose="v2-reasoning",
-        )
-
-    assert events == ["resolve_target"]
-
-
-def test_v2_factory_arguments_and_wrapper_are_field_for_field(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Current construction sends exact non-secret target fields to the factory."""
-
-    resolver = LLMRuntimeClientResolver(_CredentialService())
+    builder = LLMRuntimeClientBuilder()
     target = _resolved_target(
         exact_wire_model_id="Org/Model-Case:Exact",
         secret=ProviderSecret(provider="openai", value="sk-factory-secret"),
     )
     calls: list[dict[str, Any]] = []
     fake_client = _MinimalClient()
-
-    monkeypatch.setattr(resolver, "resolve_target", lambda *_args, **_kwargs: target)
 
     def fake_get_client(*, provider_model: ProviderModelRef, api_key: str, **kwargs: Any) -> _MinimalClient:
         calls.append(
@@ -258,21 +212,24 @@ def test_v2_factory_arguments_and_wrapper_are_field_for_field(
 
     monkeypatch.setattr(builder_module.LLMClientFactory, "get_client", fake_get_client)
 
-    client = resolver.get_client(
-        LLMRuntimeSelectionV2(deployment_ref=DeploymentRef(str(uuid4()), 1)),
-        access_context=LLMRuntimeAccessContext(runtime_user_id=7),
+    client = builder.build(
+        selection=LLMRuntimeSelectionV2(deployment_ref=DeploymentRef(str(uuid4()), 1)),
+        resolved_target=target,
         target=LLMCallTarget(
             provider="openai",
             model="Org/Model-Case:Exact",
             reasoning_effort="HIGH",
             role="planner",
         ),
-        purpose="factory",
-        temperature=0.2,
-        extra_option={"stable": True},
+        legacy_call_ref=None,
+        legacy_reasoning_effort=None,
+        reasoning_effort="HIGH",
+        reasoning_effort_was_explicit=False,
+        client_kwargs={"temperature": 0.2, "extra_option": {"stable": True}},
     )
 
     assert isinstance(client, BudgetEnforcingLLMClient)
+    assert getattr(client, "_role") == "planner"
     assert calls[0]["provider_model"] == ProviderModelRef("openai", "Org/Model-Case:Exact")
     assert calls[0]["api_key"] == target.connection.resolved_auth.secret.value
     kwargs = calls[0]["kwargs"]
@@ -286,17 +243,18 @@ def test_v2_factory_arguments_and_wrapper_are_field_for_field(
     assert callable(kwargs["guarded_executor"])
 
 
-def test_legacy_matching_profile_omits_model_profile_and_profileless_target_is_unwrapped(
+def test_builder_legacy_profile_rules_and_profileless_wrapper_condition(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Legacy construction currently omits matching profiles and skips profile-less wrapping."""
+    """Legacy matching profiles omit model_profile and profile-less targets stay unwrapped."""
 
-    resolver = LLMRuntimeClientResolver(_CredentialService())
+    builder = LLMRuntimeClientBuilder()
     selection = LLMRuntimeSelection(
         provider="openai",
         model="gpt-5.2",
         credential_ref=LLMCredentialRef(user_id=7, provider="openai"),
     )
+    legacy_call_ref = ProviderModelRef("openai", "gpt-5.2")
     calls: list[dict[str, Any]] = []
     fake_client = _MinimalClient()
 
@@ -305,76 +263,50 @@ def test_legacy_matching_profile_omits_model_profile_and_profileless_target_is_u
         return fake_client
 
     monkeypatch.setattr(builder_module.LLMClientFactory, "get_client", fake_get_client)
-    monkeypatch.setattr(
-        resolver,
-        "resolve_target",
-        lambda *_args, **_kwargs: _resolved_target(
+
+    wrapped = builder.build(
+        selection=selection,
+        resolved_target=_resolved_target(
             exact_wire_model_id="gpt-5.2",
             effective_model="gpt-5.2",
             secret=ProviderSecret(provider="openai", value="sk-legacy-secret"),
         ),
-    )
-
-    wrapped = resolver.get_client(
-        selection,
-        access_context=LLMRuntimeAccessContext(runtime_user_id=7),
-        purpose="legacy-profile",
+        target=None,
+        legacy_call_ref=legacy_call_ref,
+        legacy_reasoning_effort=None,
+        reasoning_effort=None,
+        reasoning_effort_was_explicit=False,
+        client_kwargs={},
     )
 
     assert isinstance(wrapped, BudgetEnforcingLLMClient)
     assert "model_profile" not in calls[-1]["kwargs"]
 
-    monkeypatch.setattr(
-        resolver,
-        "resolve_target",
-        lambda *_args, **_kwargs: _resolved_target(
+    unwrapped = builder.build(
+        selection=selection,
+        resolved_target=_resolved_target(
             exact_wire_model_id="detached-model",
             effective_model=None,
             secret=ProviderSecret(provider="openai", value="sk-profileless-secret"),
         ),
-    )
-
-    unwrapped = resolver.get_client(
-        selection,
-        access_context=LLMRuntimeAccessContext(runtime_user_id=7),
-        purpose="legacy-profileless",
+        target=None,
+        legacy_call_ref=legacy_call_ref,
+        legacy_reasoning_effort=None,
+        reasoning_effort=None,
+        reasoning_effort_was_explicit=False,
+        client_kwargs={},
     )
 
     assert unwrapped is fake_client
     assert "model_profile" not in calls[-1]["kwargs"]
 
 
-def test_missing_secret_fails_before_factory(
+def test_builder_v2_profile_and_secret_failures_precede_factory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Unauthenticated resolved auth is rejected before adapter construction."""
+    """V2 profile-less and unauthenticated targets fail before adapter construction."""
 
-    resolver = LLMRuntimeClientResolver(_CredentialService())
-    target = _resolved_target(secret=ProviderSecret(provider="openai", value="sk-unused"))
-    target = ResolvedLLMTarget(
-        connection=ResolvedConnectionTarget(
-            connection_id=target.connection.connection_id,
-            connection_revision=target.connection.connection_revision,
-            connection_preset_id=target.connection.connection_preset_id,
-            runtime_family_id=target.connection.runtime_family_id,
-            serving_operator_id=target.connection.serving_operator_id,
-            transport_origin=target.connection.transport_origin,
-            endpoint_policy_id=target.connection.endpoint_policy_id,
-            endpoint=target.connection.endpoint,
-            operation_target=target.connection.operation_target,
-            resolved_auth=ResolvedAuth.none(),
-        ),
-        deployment_id=target.deployment_id,
-        deployment_revision=target.deployment_revision,
-        route_id=target.route_id,
-        adapter_id=target.adapter_id,
-        adapter_version=target.adapter_version,
-        api_surface=target.api_surface,
-        dialect_policy_id=target.dialect_policy_id,
-        canonical_model_id=target.canonical_model_id,
-        exact_wire_model_id=target.exact_wire_model_id,
-        effective_profile=target.effective_profile,
-    )
+    builder = LLMRuntimeClientBuilder()
     factory_called = False
 
     def fake_get_client(*_args: Any, **_kwargs: Any) -> _MinimalClient:
@@ -382,25 +314,42 @@ def test_missing_secret_fails_before_factory(
         factory_called = True
         return _MinimalClient()
 
-    monkeypatch.setattr(resolver, "resolve_target", lambda *_args, **_kwargs: target)
     monkeypatch.setattr(builder_module.LLMClientFactory, "get_client", fake_get_client)
+    selection = LLMRuntimeSelectionV2(deployment_ref=DeploymentRef(str(uuid4()), 1))
+
+    with pytest.raises(LLMConfigurationError, match="effective profile is unavailable"):
+        builder.build(
+            selection=selection,
+            resolved_target=_resolved_target(effective_model=None),
+            target=None,
+            legacy_call_ref=None,
+            legacy_reasoning_effort=None,
+            reasoning_effort=None,
+            reasoning_effort_was_explicit=False,
+            client_kwargs={},
+        )
+    assert factory_called is False
 
     with pytest.raises(LLMConfigurationError, match="unauthenticated construction"):
-        resolver.get_client(
-            LLMRuntimeSelectionV2(deployment_ref=DeploymentRef(str(uuid4()), 1)),
-            access_context=LLMRuntimeAccessContext(runtime_user_id=7),
-            purpose="missing-secret",
+        builder.build(
+            selection=selection,
+            resolved_target=_resolved_target(auth_none=True),
+            target=None,
+            legacy_call_ref=None,
+            legacy_reasoning_effort=None,
+            reasoning_effort=None,
+            reasoning_effort_was_explicit=False,
+            client_kwargs={},
         )
-
     assert factory_called is False
 
 
-def test_guarded_executor_uses_registered_operation_and_sanitized_failure(
+def test_builder_guarded_executor_uses_registered_operation_and_sanitized_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Guarded callback forwards only the approved operation target and secret object."""
 
-    resolver = LLMRuntimeClientResolver(_CredentialService())
+    builder = LLMRuntimeClientBuilder()
     secret = ProviderSecret(provider="openai", value="sk-guarded-secret")
     target = _resolved_target(secret=secret)
     execute_calls: list[dict[str, Any]] = []
@@ -410,9 +359,7 @@ def test_guarded_executor_uses_registered_operation_and_sanitized_failure(
             execute_calls.append({"operation": operation, **kwargs})
             return SimpleNamespace(body=b'{"ok":true}')
 
-    monkeypatch.setattr(resolver, "resolve_target", lambda *_args, **_kwargs: target)
     monkeypatch.setattr(builder_module, "GuardedTransport", _GuardedTransport)
-
     captured_executor: list[Any] = []
 
     def fake_get_client(*, provider_model: ProviderModelRef, api_key: str, **kwargs: Any) -> _MinimalClient:
@@ -421,10 +368,15 @@ def test_guarded_executor_uses_registered_operation_and_sanitized_failure(
 
     monkeypatch.setattr(builder_module.LLMClientFactory, "get_client", fake_get_client)
 
-    resolver.get_client(
-        LLMRuntimeSelectionV2(deployment_ref=DeploymentRef(str(uuid4()), 1)),
-        access_context=LLMRuntimeAccessContext(runtime_user_id=7),
-        purpose="guarded",
+    builder.build(
+        selection=LLMRuntimeSelectionV2(deployment_ref=DeploymentRef(str(uuid4()), 1)),
+        resolved_target=target,
+        target=None,
+        legacy_call_ref=None,
+        legacy_reasoning_effort=None,
+        reasoning_effort=None,
+        reasoning_effort_was_explicit=False,
+        client_kwargs={},
     )
     body = {"model": "gpt-5.2", "messages": [{"role": "user", "content": "hi"}]}
 
@@ -444,12 +396,16 @@ def test_guarded_executor_uses_registered_operation_and_sanitized_failure(
             raise LLMConfigurationError("guarded transport rejected request")
 
     monkeypatch.setattr(builder_module, "GuardedTransport", _FailingGuardedTransport)
-    monkeypatch.setattr(builder_module.LLMClientFactory, "get_client", fake_get_client)
     captured_executor.clear()
-    resolver.get_client(
-        LLMRuntimeSelectionV2(deployment_ref=DeploymentRef(str(uuid4()), 1)),
-        access_context=LLMRuntimeAccessContext(runtime_user_id=7),
-        purpose="guarded-failure",
+    builder.build(
+        selection=LLMRuntimeSelectionV2(deployment_ref=DeploymentRef(str(uuid4()), 1)),
+        resolved_target=target,
+        target=None,
+        legacy_call_ref=None,
+        legacy_reasoning_effort=None,
+        reasoning_effort=None,
+        reasoning_effort_was_explicit=False,
+        client_kwargs={},
     )
 
     with pytest.raises(LLMConfigurationError, match="guarded transport rejected request") as exc_info:
