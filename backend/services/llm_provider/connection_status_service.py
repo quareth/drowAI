@@ -2,7 +2,7 @@
 
 This service owns owner-scoped route lookup and read-only status composition
 over existing LLM provider authorities. It must not own HTTP adaptation,
-transactions, lifecycle mutation, credential resolution, or guarded egress.
+transactions, lifecycle mutation, raw credential resolution, or guarded egress.
 """
 
 from __future__ import annotations
@@ -46,7 +46,6 @@ class LLMConnectionStatusService:
     """Build typed connection status without workflow side effects."""
 
     def __init__(self, db: Session) -> None:
-        self._db = db
         self._credentials = LLMCredentialService(db)
         self._deployments = LLMDeploymentService(db)
         self._profiles = EffectiveProfileService()

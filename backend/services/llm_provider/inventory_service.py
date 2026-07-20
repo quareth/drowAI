@@ -17,9 +17,17 @@ from uuid import UUID, uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from agent.providers.llm.core.capabilities import CapabilityInput, LLMCapability, freeze_capabilities
-from backend.models import LLMCapabilityObservation, LLMDeploymentRoute, LLMModelDeployment
-from backend.models import LLMInferenceConnection
+from agent.providers.llm.core.capabilities import (
+    CapabilityInput,
+    LLMCapability,
+    freeze_capabilities,
+)
+from backend.models import (
+    LLMCapabilityObservation,
+    LLMDeploymentRoute,
+    LLMInferenceConnection,
+    LLMModelDeployment,
+)
 
 from .connection_authorization import LLMConnectionAuthorizer
 from .connection_service import LLMConnectionService
