@@ -129,15 +129,23 @@ function buildPublisherGroups(providers: LLMCatalogProvider[]): PublisherGroup[]
       if (deploymentBacked && !runnable) {
         continue;
       }
-      const selectable = providerSelectable && (!deploymentBacked || Boolean(deploymentRef && runnable));
+      const legacyCredentialReady =
+        provider.credential.enabled && provider.credential.has_api_key;
+      const selectable =
+        providerSelectable &&
+        (deploymentBacked
+          ? Boolean(deploymentRef && runnable)
+          : legacyCredentialReady);
       const publisherKey = canonicalPublisherKey(provider, model);
       const modelKey = model.canonicalModelId?.trim() || `${provider.id}:${model.id}`;
       const groupLabel = canonicalModelLabel(model);
       const statusLabel = selectable
         ? null
-        : providerSelectable
-          ? "Not ready"
-          : "Unavailable";
+        : !providerSelectable
+          ? "Unavailable"
+          : !deploymentBacked && !legacyCredentialReady
+            ? "Configure credentials"
+            : "Not ready";
       const choice: ModelChoice = {
         key: `${provider.id}:${model.id}:${deploymentRef?.deployment_id ?? "legacy"}`,
         label: deploymentRef ? deploymentChoiceLabel(provider, model) : model.label,

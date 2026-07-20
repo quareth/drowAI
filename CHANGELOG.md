@@ -67,3 +67,5 @@ Target version: `0.1.0`.
   instead of duplicating cards for provider inventory models.
 - Chat requests now use usage-tracked non-streaming responses when a selected
   model route cannot report token usage during streaming.
+- Chat model selection now prevents unbound provider models from being chosen
+  until the required API credential is configured.

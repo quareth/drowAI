@@ -196,6 +196,50 @@ describe("ProviderModelMenu", () => {
     });
   });
 
+  it("requires enabled credentials for legacy model selection", async () => {
+    const onModelChange = vi.fn();
+    const credentialMissingCatalog: LLMModelCatalogResponse = {
+      providers: catalog.providers.map((provider) =>
+        provider.id === "openai"
+          ? {
+              ...provider,
+              credential: {
+                ...provider.credential,
+                enabled: false,
+                has_api_key: false,
+                masked_api_key: null,
+              },
+            }
+          : provider,
+      ),
+    };
+
+    render(
+      <ProviderModelMenu
+        catalog={credentialMissingCatalog}
+        selectedSelection={{ provider: "anthropic", model: "claude-sonnet-4-6" }}
+        selectedReasoningEffort="medium"
+        onModelChange={onModelChange}
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Select model" }));
+
+    const openAIPublisher = await screen.findByText("OpenAI");
+    const openAIPublisherItem = openAIPublisher.closest("[role='menuitem']") as HTMLElement;
+    fireEvent.pointerEnter(openAIPublisherItem, { pointerType: "mouse" });
+    fireEvent.pointerMove(openAIPublisherItem, { pointerType: "mouse" });
+    fireEvent.mouseMove(openAIPublisherItem);
+
+    const openAIModel = await screen.findByText("GPT-5 mini");
+    expect(await screen.findByText("Configure credentials")).toBeTruthy();
+    fireEvent.click(openAIModel);
+
+    await waitFor(() => {
+      expect(onModelChange).not.toHaveBeenCalled();
+    });
+  });
+
   it("groups GPT-OSS once and selects an explicit deployment ref", async () => {
     const onModelChange = vi.fn();
     const hfDeploymentRef = {
