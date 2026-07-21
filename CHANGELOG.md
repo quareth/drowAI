@@ -18,6 +18,8 @@ The format is based on
   attribution, and explicit deployment selection contracts.
 - GPT-OSS 20B deployment choices now appear under one canonical model entry
   while preserving explicit provider-specific deployment selection.
+- Repository-local implementation quality review and fixer workflows can audit
+  a frozen branch or commit scope before publication.
 
 ### Changed
 
