@@ -178,6 +178,30 @@ operations return immediately as accepted/running, while read-like operations
 can request bounded waiting through metadata such as `wait_for_result` and
 `wait_timeout_seconds`.
 
+Runner terminal handling is a hybrid of durable lifecycle jobs and live stream
+I/O:
+
+- `open_terminal_session` dispatches a durable `terminal.open` runtime job. When
+  the caller requests result waiting, the provider waits for a validated
+  `terminal.result` with `terminal_operation=open`, then attaches a
+  `CloudTerminalStreamClient` only if the assigned runner advertises
+  `terminal_stream_v1`, the runner channel is currently connected, and the open
+  result includes both `session_id` and `runtime_job_id`.
+- `send_terminal_input` and `resize_terminal_session` can still use durable
+  `terminal.input` and `terminal.resize` jobs when no stream client is present.
+  With an attached stream client, they send non-durable stream-mode
+  `terminal.input` and `terminal.resize` envelopes over the live runner channel
+  using the existing terminal runtime job id; the provider rejects the operation
+  if that live channel is no longer connected.
+- `read_terminal_output` reads from the live stream buffer when a stream client
+  is present. Without a stream client it performs a bounded compatibility read
+  from validated `terminal.frame` data keyed by tenant, task, runtime job, and
+  session.
+- `close_terminal_session` closes the in-memory stream binding when present but
+  keeps PTY cleanup authoritative in the durable `terminal.close` operation. A
+  successful close result clears buffered frame state and unbinds the terminal
+  session from its runtime route.
+
 ## Runner Control Channel Contract
 
 Runner registration and the durable command channel are exposed through the
@@ -187,9 +211,36 @@ runner-control router:
 - `WS   /api/runner-control/channel`
 
 Managed runner processes start the control-plane client with `drowai_runner run`.
-The channel carries `task.start`, `runtime.started`, `terminal.result`,
-`tool.command`, `artifact.manifest`, `artifact.upload.request`, and
-`artifact.upload.complete` messages.
+The channel carries `task.start`, runtime lifecycle events, terminal operations,
+tool commands, and artifact messages. Terminal message types are:
+
+- `terminal.open`
+- `terminal.input`
+- `terminal.resize`
+- `terminal.close`
+- `terminal.result`
+- `terminal.frame`
+
+Durable terminal operation jobs use `terminal.open`, `terminal.input`,
+`terminal.resize`, and `terminal.close`; runner responses arrive as
+`terminal.result` and are checked against the persisted runtime job type and
+requested session id. Successful open results bind the terminal session to the
+task/runtime-job route before frames are accepted. Successful close results
+clear the session buffers and remove the binding.
+
+Live stream-mode terminal input and resize messages reuse the runner websocket
+channel but do not create a new durable runtime job. Their ACKs are consumed by
+the terminal stream registry without durable message ingest. Stream-mode
+`terminal.frame` messages for active streams are likewise consumed on the
+router fast path and pushed into the stream buffer; non-stream compatibility
+frames flow through runtime-event validation and the bounded terminal frame
+buffer.
+
+The terminal frame buffer bounds memory per session, enforces monotonic frame
+ordering, and scopes reads by tenant, task, runtime job, and session. Runner
+channel disconnect cleanup clears runner-owned terminal buffers and closes
+terminal manager sessions for the runner's tasks. Runner-control retention later
+removes bounded terminal runtime jobs and terminal control messages.
 
 Product Runner configuration is read from the generated Runner config file:
 

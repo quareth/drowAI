@@ -10,9 +10,11 @@ The model layer lets the app use multiple LLM providers without graph nodes,
 routers, or tool planners constructing provider SDK clients directly.
 
 The backend owns user-facing model catalog, credential storage, saved
-selection, and runtime-safe selection payloads. The agent provider layer owns
-provider/model metadata, provider-neutral LLM contracts, factory registration,
-and provider-specific adapters for OpenAI and Anthropic.
+selection, and runtime-safe selection payloads. The reviewed catalog manifest
+owns exact model metadata that is loaded into immutable provider profiles. The
+provider profile modules own provider defaults and compatibility helpers, while
+the agent provider layer owns provider-neutral LLM contracts, factory
+registration, and provider-specific adapters for OpenAI and Anthropic.
 
 The deployment-aware text-LLM implementation follows the
 [Deployment-aware LLM HLD](../devdocs/hldd/deployment-aware-llm-architecture-hld.md)
@@ -60,8 +62,10 @@ Not owned by the model layer:
 ## Plane Placement
 
 - Management plane:
-  - Exposes catalog, selection, credential, credential-test, and task model
-    switch routes.
+  - Exposes catalog, global selection, reporting and memory selection,
+    credential, credential-test, reviewed connection lifecycle, GPT-OSS
+    proving lifecycle, inventory, deployment, guarded operation, and
+    conversation lifecycle routes.
   - Validates model selectability and credential presence before runtime use.
 - Data plane:
   - Stores encrypted direct-provider and connection-owned credentials, saved
@@ -78,15 +82,43 @@ Not owned by the model layer:
 Backend management and runtime wiring:
 
 - `backend/routers/llm.py`
-  - Public model catalog, conversation/reporting selection, credential,
-    deployment-aware memory dependency, and conversation lifecycle routes.
+  - Public model catalog, conversation/reporting/memory selection, credential,
+    reviewed managed connection, GPT-OSS proving, and conversation lifecycle
+    routes. Selection routes update user-global defaults for later workload
+    invocations; the legacy task model-switch route is removed.
 - `backend/routers/chat/submit.py`
   - Builds the runtime LLM selection for chat turns.
+- `backend/services/llm_provider/catalog_application_service.py`
+  - Owns catalog request transaction boundaries, deployment backfill, static
+    provider loading, credential status loading, projection, commit, and
+    rollback.
+- `backend/services/llm_provider/catalog_projection_service.py`
+  - Composes owner-scoped catalog outcomes from static providers plus reviewed
+    connections, deployments, runnability, credential status, and GPT-OSS
+    proving metadata.
 - `backend/services/llm_provider/catalog_service.py`
-  - Lists provider/model profiles and validates selectable models.
+  - Lists static provider/model summaries from immutable profiles and validates
+    selectable models.
 - `backend/services/llm_provider/credential_service.py`
   - Stores encrypted direct-provider or connection-owned credentials and
     resolves short-lived provider secrets only after live authorization.
+- `backend/services/llm_provider/managed_connection_lifecycle_service.py`
+  - Owns reviewed non-proving connection create, health or capability test,
+    inventory refresh, enablement, and transaction boundaries.
+- `backend/services/llm_provider/proving_connection_lifecycle_service.py`
+  - Owns the GPT-OSS proving create, bounded test, evidence rebinding,
+    enablement, and transaction boundaries.
+- `backend/services/llm_provider/connection_service.py`,
+  `deployment_service.py`, `inventory_service.py`, and
+  `connection_status_service.py`
+  - Own connection rows, deployments/routes, inventory observations, status,
+    runnability, and public references used by catalog projection and lifecycle
+    responses.
+- `backend/services/llm_provider/operation_registry.py`,
+  `guarded_transport.py`, and `connection_presets_manifest.json`
+  - Own the reviewed preset manifest, fixed operation vocabulary, endpoint
+    target resolution, and guarded backend egress for managed/proving
+    connection operations.
 - `backend/services/llm_provider/selection_service.py`
   - Persists the user's default conversation deployment reference and
     provider/model compatibility snapshot.
@@ -118,11 +150,16 @@ Agent provider and graph wiring:
   - Provider-neutral `LLMClient`, response, streaming, tool-call, and
     structured-output contracts.
 - `agent/providers/llm/profiles/registry.py`
-  - Immutable provider/model profile registry.
+  - Immutable provider/model profile registry built from the reviewed catalog
+    manifest plus provider defaults and compatibility rules.
+- `agent/providers/llm/catalog/catalog_manifest.json` and
+  `agent/providers/llm/catalog/manifest_loader.py`
+  - Reviewed exact model metadata source and loader for immutable profile
+    inputs.
 - `agent/providers/llm/profiles/openai.py`
-  - OpenAI model profiles, API surfaces, capabilities, and limits.
+  - OpenAI provider defaults and legacy compatibility helpers.
 - `agent/providers/llm/profiles/anthropic.py`
-  - Anthropic model profiles, capabilities, and limits.
+  - Anthropic provider defaults.
 - `agent/providers/llm/factory/client_factory.py`
   - Provider/model-aware adapter factory.
 - `agent/providers/llm/adapters/openai/*`
@@ -136,17 +173,32 @@ Agent provider and graph wiring:
 
 ## Model Catalog And Profiles
 
-Model metadata lives in the provider profile registry, not in routers.
+Exact model metadata lives in the reviewed catalog manifest, not in routers or
+provider-specific profile modules. The manifest loader validates the active
+revision, falls back to the last-known-good revision when possible, and builds
+immutable `ModelProfile` inputs for the profile registry. Provider profile
+modules supply provider defaults and compatibility rules that do not replace
+the manifest as the review boundary for exact catalog facts.
 
 ```mermaid
 flowchart LR
-    Profiles[Provider model profiles]
+    Manifest[Reviewed catalog_manifest.json]
+    Loader[manifest_loader.py]
+    Profiles[Immutable profile registry]
     Catalog[LLMProviderCatalogService]
-    Router[/api/llm/models]
+    App[LLMCatalogApplicationService]
+    Projection[LLMCatalogProjectionService]
+    Connections[Owner connections, deployments, status]
+    Router[GET /api/llm/models]
     UI[Client model picker]
 
+    Manifest --> Loader
+    Loader --> Profiles
     Profiles --> Catalog
-    Catalog --> Router
+    Catalog --> App
+    Connections --> Projection
+    App --> Projection
+    Projection --> Router
     Router --> UI
 ```
 
@@ -163,10 +215,19 @@ Profiles declare:
 - tool-choice modes
 - structured-output strategies
 
-`LLMProviderCatalogService` reads listable profiles and adapter availability
-from `LLMClientFactory`. A model is selectable only when its profile is valid,
-the provider adapter is registered, and the model supports chat. OpenAI
-selection is additionally constrained to the Responses API public model family.
+`LLMProviderCatalogService` reads listable immutable profiles and adapter
+availability from `LLMClientFactory`. `LLMCatalogApplicationService` owns the
+request transaction: it backfills deployment identity, loads static providers,
+loads masked credential status, invokes projection, commits, and rolls back on
+provider errors. `LLMCatalogProjectionService` then composes the owner-scoped
+transport-neutral response from static providers plus reviewed connections,
+deployments, runnability, credential status, and GPT-OSS proving metadata.
+
+A static model is selectable only when its profile is valid, the provider
+adapter is registered, and the model supports chat. OpenAI selection is
+additionally constrained to the Responses API public model family. Reviewed
+connection providers are projected from code-owned presets and owner-owned
+connection/deployment state rather than from the static model manifest.
 
 ## Credential And Selection State
 
@@ -207,19 +268,20 @@ Durable state is split deliberately:
   - Live invocation-only service bag containing the runtime client resolver.
 
 Decrypted provider API keys are not stored in graph metadata, checkpoint state,
-stream packets, or task workspace files. Managed text-LLM calls resolve the
-credential owned by the authorized connection; direct provider calls resolve
-the user/provider row. Both paths enter through `LLMRuntimeClientResolver` when
-constructing a concrete client. A separate
-OpenAI-only local-Docker compatibility path resolves the selected credential
-through `LLMProviderEnvironmentService` and injects `OPENAI_API_KEY` into the
-task container environment during provisioning. The credential service always
-checks that the credential-ref user matches the runtime user and additionally
-checks task ownership when a task ID is supplied. Task-scoped provider calls
-and local-container provisioning supply that task context. Engagement report
-sections instead enter through tenant permission and owned-engagement checks,
-then resolve the requesting user's credential without a task ID. Container
-injection does not add the secret to graph metadata or checkpoints.
+stream packets, task workspace files, or task-container environments. Managed
+text-LLM calls resolve the credential owned by the authorized connection;
+direct provider calls resolve the user/provider row. Both paths enter through
+`LLMRuntimeClientResolver` when constructing a concrete client. Local-Docker
+provisioning uses `LLMProviderEnvironmentService` only to expose non-secret
+compatibility metadata for the selected provider and model. The container
+configuration path sanitizes provider metadata before applying it, so task
+containers receive diagnostic provider/model fields such as `LLM_PROVIDER` and
+`LLM_MODEL`, not `OPENAI_API_KEY` or other decrypted provider credentials. The
+credential service always checks that the credential-ref user matches the
+runtime user and additionally checks task ownership when a task ID is supplied
+for task-scoped provider calls. Engagement report sections instead enter
+through tenant permission and owned-engagement checks, then resolve the
+requesting user's credential without a task ID.
 
 ## Runtime Flow
 
@@ -454,11 +516,17 @@ Recommended steps:
 
 1. Add provider/model identity constants only if a new stable provider id is
    needed.
-2. Add provider and model profiles under `agent/providers/llm/profiles/`.
+2. Add reviewed exact model metadata to
+   `agent/providers/llm/catalog/catalog_manifest.json`, or add provider
+   defaults/compatibility helpers under `agent/providers/llm/profiles/` when
+   the model uses an approved compatibility family.
 3. Declare exact capabilities, API surface, context window, max output,
-   reasoning-effort support, tool-choice modes, structured-output strategies,
-   and listable/selectable intent.
-4. Register the provider profiles in `agent/providers/llm/profiles/registry.py`.
+   lifecycle, support tier, aliases, pricing provenance, reasoning-effort
+   support, tool-choice modes, structured-output strategies, and
+   listable/selectable intent in the manifest.
+4. Ensure `agent/providers/llm/catalog/manifest_loader.py` validates the new
+   manifest fields and `agent/providers/llm/profiles/registry.py` builds the
+   resulting immutable profiles.
 5. Implement a provider adapter that satisfies `LLMClient`.
 6. Keep provider SDK payload shaping inside provider-local adapter helpers.
 7. Normalize every documented non-streaming and streaming refusal signal into
@@ -483,16 +551,16 @@ or router code should change.
 - Provider API keys are encrypted at rest.
 - Graph metadata carries only provider/model and credential references.
 - Decrypted secrets are resolved at the runtime client boundary for provider
-  calls; local-Docker provisioning also resolves the selected OpenAI secret for
-  the task container's `OPENAI_API_KEY` compatibility environment.
+  calls. Local-Docker provisioning does not resolve or inject provider secrets;
+  task containers receive only sanitized, non-secret provider/model
+  compatibility metadata.
 - Credential resolution always validates the credential-ref user against the
   runtime user. It additionally validates task ownership when a task ID is
-  supplied, including task-scoped provider calls and local-container
-  provisioning. Engagement report sections rely on upstream tenant permission
-  and owned-engagement checks, then resolve the requesting user's credential
-  without a task ID.
-- The local-container secret is distinct from graph metadata and checkpoint
-  persistence, which remain non-secret.
+  supplied for task-scoped provider calls. Engagement report sections rely on
+  upstream tenant permission and owned-engagement checks, then resolve the
+  requesting user's credential without a task ID.
+- Local-container provider metadata, graph metadata, and checkpoint persistence
+  remain non-secret.
 - Live runtime services are not checkpointed.
 - Output budget and context-window checks run before provider API calls.
 - Provider adapters normalize errors into provider-neutral exceptions.

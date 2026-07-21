@@ -27,9 +27,10 @@ Owned by the data plane:
   non-durable last resort. PostgreSQL checkpoint DDL has a separate startup
   owner.
 - Task, engagement, chat, stream, artifact, knowledge, runner-control, reporting,
-  usage, and LLM selection records. Product task runtime records use Runner
-  placement metadata; local placement metadata is explicit dev/test/diagnostic
-  state, not product fallback state.
+  usage, LLM selection, CVE index, HITL/resume, semantic-memory, and platform
+  installation records. Product task runtime records use Runner placement
+  metadata; local placement metadata is explicit dev/test/diagnostic state, not
+  product fallback state.
 - Task-local writable workspaces and separate host/runner-owned task control
   roots for VPN and runtime-input material.
 - Object-key-backed artifact payload records for the managed Runner artifact
@@ -72,6 +73,16 @@ Not owned by the data plane:
 - `backend/models/knowledge.py`
   - Engagement-scoped knowledge, evidence, assets, services, findings, and
     relationships.
+- `backend/models/cve.py`
+  - Global CVE settings, sync runs, cursor/lease state, canonical CVE records,
+    and affected-product projection rows.
+- `backend/models/hitl.py`
+  - Durable turn workflows and interrupt tickets used as resume authority for
+    paused LangGraph turns.
+- `backend/models/semantic_memory.py`
+  - Vector-backed user-profile and tenant/task/engagement-scoped semantic memory.
+- `backend/models/platform_installation.py`
+  - Singleton setup-wizard installation state used during backend startup.
 - `backend/config/workspace_config.py`
   - Local task workspace and host-owned task control-root layout authority.
 - `backend/services/streaming/event_store.py`
@@ -97,6 +108,20 @@ Not owned by the data plane:
     Runner channel.
 - `backend/services/workspace/runtime_file_explorer_service.py`
   - Owns live runtime workspace browsing, separately from durable artifacts.
+- `backend/routers/cve_settings.py` and `backend/services/cve_indexing/*`
+  - Global CVE settings, manual/scheduled sync dispatch, DB-backed leases, run
+    bookkeeping, record upserts, affected-product projection, and purge/reset.
+- `backend/routers/tasks/interrupts.py`,
+  `backend/routers/tasks/interrupt_inbox.py`, and
+  `backend/services/langgraph_chat/checkpoint/*`
+  - Task-scoped interrupt lookup, inbox reads, resume claims, checkpoint retry,
+    HITL workflow state, interrupt-ticket lifecycle, and resume-state retention.
+- `backend/services/memory/*`
+  - Runtime semantic-memory extraction/retrieval, scoped vector writes, embedding
+    identity filtering, deduplication, and stale-memory retention.
+- `backend/services/platform/installation_service.py` and `backend/main.py`
+  - Platform installation singleton repair/read/write path and setup-gated
+    background service startup.
 - `backend/routers/agent_reasoning.py`
   - `/tasks/{task_id}/reasoning/history` returns the filtered reasoning-panel
     view; `/tasks/{task_id}/reasoning/replay` returns authorized, cursor-paged,
@@ -125,6 +150,24 @@ Not owned by the data plane:
 - **Streaming replay:** normalized stream packets and reasoning/system logs.
 - **Runtime control:** execution sites, runners, enrollment/install tokens,
   credentials, runtime jobs, runner connections, control messages.
+- **CVE indexing:** global CVE settings, sync-run history, operational
+  cursor/health state, lease owner/heartbeat/expiry fields, canonical
+  `CveRecord` snapshots, and `CveAffectedProduct` projections. This family is
+  global rather than tenant-owned; the API and background scheduler own manual
+  and scheduled dispatch, and purge resets indexed records, run history, cursor,
+  rebuild, active-run, and lease state after rejecting or force-clearing an
+  active run.
+- **HITL and resume authority:** `TurnWorkflow` rows track per-task turn state,
+  graph/checkpoint identity, interrupt type, reserved assistant message id,
+  resume key, retry metadata, and lifecycle timestamps. `InterruptTicket` rows
+  hold canonical interrupt identity, tenant/task scope, checkpoint/thread/turn
+  references, pending payload snapshots, and the authoritative
+  pending/resuming/resumed/completed/expired/failed state machine.
+- **Semantic memory:** durable pgvector-backed `SemanticMemory` rows store
+  masked content, metadata, scope key/content hash, ownership tier, embedding
+  provider/model/dimension/family, and access counters. User-profile memories
+  are user-private; task-engagement memories must carry tenant scope plus an
+  engagement or task parent.
 - **Artifacts/provenance:** tool executions, manifests, execution-artifact rows,
   and object-key-backed payloads. Runner manifests create scoped placeholder
   rows and just-in-time upload requests. Readiness follows accepted completion
@@ -156,6 +199,12 @@ Not owned by the data plane:
   worker recovery requeues its job.
 - **Provider/runtime settings:** LLM provider credentials, selections, memory
   dependency selections, usage records.
+- **Platform installation:** the singleton `PlatformInstallation` row records
+  first-run setup status, sanitized setup errors, provisioning metadata,
+  deployment profile, placeholder network/display defaults, setup version, and
+  completion timestamp. Startup reads this row, repairs legacy installations
+  that already have users, and defers background services while setup is
+  required.
 
 Runner-control registry rows are operational state rather than durable task
 ownership. Guarded Runner Site deletion removes runtime jobs before registry
@@ -215,6 +264,25 @@ Common write paths:
   `StreamEvent` rows for replay.
 - Runner operations persist `RuntimeJob` and `RunnerControlMessage` rows before
   connected runners act.
+- CVE settings writes update the global settings singleton. Manual sync requests
+  and scheduled ticks claim durable CVE lease ownership before creating a
+  running `CveIndexSyncRun`; the sync service updates run/state progress,
+  upserts canonical records and affected-product projections, and clears
+  active-run/lease fields on success or failure. Purge deletes records,
+  projections, and run history after resetting cursor and lease fields.
+- Interrupt observations create or refresh a pending `InterruptTicket` and pair
+  it with `TurnWorkflow` checkpoint metadata. Resume routes first authorize the
+  task, then atomically claim the pending ticket as `RESUMING`; enqueue failure
+  may explicitly requeue it to `PENDING`, while normal completion moves tickets
+  and workflows forward. Checkpoint retry claims are stored on `TurnWorkflow`
+  metadata so duplicate retry requests return the existing retry identity
+  instead of scheduling another worker.
+- Finalizer nodes enqueue best-effort memory extraction. The memory runtime
+  resolves live LLM/embedding dependencies, `MemoryStore` masks durable content,
+  writes scoped embedding rows, filters retrieval by active embedding identity,
+  and updates access counters. Semantic-memory retention deletes stale
+  tenant-scoped task-engagement rows only when active engagement protection does
+  not apply.
 - On Runner placement, `artifact.manifest` creates tenant/task/runtime-bound
   manifest and artifact placeholders and returns an `artifact.upload.request`.
   With the only registered local backend, that request contains a
@@ -260,6 +328,12 @@ Common write paths:
   durable record must derive tenant/user scope from that record before
   downstream scoped data access; the production report worker follows this
   boundary.
+- Interrupt inbox, task interrupt, resume, and checkpoint-retry reads/writes are
+  task-bound and tenant-scoped before ticket or workflow state is returned or
+  claimed. Pending interrupt tickets are protected from resume-state retention.
+- Semantic-memory writes validate tenant/task/engagement ownership before
+  task-engagement rows are stored; retrieval applies ownership filters and the
+  active embedding identity before vector search results are returned.
 - Stream replay packets are normalized and masked before durable persistence.
 - Provider credentials are stored in credential rows and surfaced through masked
   status responses, not plaintext read models.
@@ -291,6 +365,11 @@ Common write paths:
   `WORKSPACE_ROOT/<task_id>/checkpoints.db` (default
   `workspace/<task_id>/checkpoints.db`); the task deletion path does not remove
   this file, so checkpoint contents can survive irreversible task deletion.
+- Startup repairs legacy installs by marking setup complete when users exist but
+  no installation row exists. If setup is still required, `backend/main.py`
+  skips background service startup; after setup is complete, the background
+  lifecycle starts metrics, CVE sync scheduling, report scheduling, terminal
+  session cleanup, WebSocket cleanup, and retention.
 - Retention is orchestrated by backend services but candidate selection belongs
   to owning data families.
 - The object-store registry currently supports only the local filesystem-backed
