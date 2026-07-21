@@ -14,7 +14,11 @@ from agent.providers.llm.factory.client_factory import LLMClientFactory
 from agent.providers.llm.adapters.anthropic.client import AnthropicMessagesClient
 from agent.providers.llm.core.identity import ANTHROPIC_PROVIDER_ID, OPENAI_PROVIDER_ID, ProviderModelRef
 from agent.providers.llm.adapters.openai.chat import OpenAIChatClient
+from agent.providers.llm.adapters.openai.compatible_chat import (
+    OpenAICompatibleChatClient,
+)
 from agent.providers.llm.adapters.openai.responses.client import OpenAIResponsesClient
+from agent.providers.llm.profiles import OPENAI_GPT_OSS_20B_MODEL_ID
 
 
 class _PrefixFallbackClient(LLMClient):
@@ -144,6 +148,30 @@ def test_explicit_openai_family_compatibility_preserves_raw_model() -> None:
 
     assert isinstance(client, OpenAIResponsesClient)
     assert client.model == "gpt-5-preview"
+
+
+def test_compatible_factory_uses_the_same_explicit_base_url_contract() -> None:
+    """Compatible clients receive the resolved base URL without a second API."""
+
+    _register_default_openai()
+    with patch(
+        "agent.providers.llm.adapters.openai.compatible_chat.openai.AsyncOpenAI"
+    ) as mock_openai:
+        mock_openai.return_value = MagicMock()
+        client = LLMClientFactory.get_client(
+            provider_model=ProviderModelRef(
+                OPENAI_PROVIDER_ID,
+                OPENAI_GPT_OSS_20B_MODEL_ID,
+            ),
+            api_key="key",
+            base_url="http://127.0.0.1:4000/v1",
+            wire_model_id="openai/gpt-oss-20b",
+            inference_transport=MagicMock(),
+        )
+
+    assert isinstance(client, OpenAICompatibleChatClient)
+    assert client.model == "openai/gpt-oss-20b"
+    mock_openai.assert_not_called()
 
 
 def test_explicit_provider_path_bypasses_legacy_prefix_matching() -> None:

@@ -2,12 +2,6 @@
 
 from __future__ import annotations
 
-from core.llm.role_contracts import (
-    ROLE_POST_TOOL_ARTICULATOR,
-    ROLE_TOOL_CATEGORY_SELECTOR,
-    ROLE_TOOL_OUTPUT_COMPRESSOR,
-)
-
 from ..contracts.structured_output_strategy import freeze_structured_output_strategies
 from ..contracts.tool_contracts import freeze_tool_choice_modes
 from ..core.capabilities import LLMCapability, freeze_capabilities
@@ -55,12 +49,6 @@ ANTHROPIC_MODEL_LIMITS: dict[str, tuple[int, int]] = {
     "claude-haiku-4-5-20251001": (200_000, 64_000),
 }
 
-ANTHROPIC_INTERNAL_ROLE_MODELS: dict[str, str] = {
-    ROLE_TOOL_OUTPUT_COMPRESSOR: "claude-haiku-4-5-20251001",
-    ROLE_TOOL_CATEGORY_SELECTOR: "claude-haiku-4-5-20251001",
-    ROLE_POST_TOOL_ARTICULATOR: "claude-haiku-4-5-20251001",
-}
-
 _ANTHROPIC_MESSAGES_MODEL_CAPABILITIES = freeze_capabilities(
     (
         LLMCapability.CHAT,
@@ -104,7 +92,6 @@ def build_anthropic_provider_profile() -> ProviderProfile:
         id=ANTHROPIC_PROVIDER_ID,
         display_name="Anthropic",
         capabilities=frozenset(),
-        internal_role_models=ANTHROPIC_INTERNAL_ROLE_MODELS,
     )
 
 
@@ -151,7 +138,6 @@ __all__ = [
     "ANTHROPIC_API_SURFACE_MESSAGES",
     "ANTHROPIC_DEFAULT_MODEL_ID",
     "ANTHROPIC_EXACT_MODEL_IDS",
-    "ANTHROPIC_INTERNAL_ROLE_MODELS",
     "ANTHROPIC_LISTABLE_MODEL_IDS",
     "ANTHROPIC_NON_LISTABLE_MODEL_IDS",
     "build_anthropic_model_profiles",

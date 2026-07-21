@@ -28,12 +28,12 @@ import {
 import {
   getBlockingSelectionStatus,
   getFirstCatalogDefaultSelection,
+  sameDeploymentRef,
 } from "@/features/llm-provider/catalog";
 import { getSupportedReasoningEffortForPayload } from "@/features/llm-provider/capability-controls";
 import type {
   LLMModelCatalogResponse,
   LLMSelection,
-  RuntimeModelSwitchPayload,
   SelectedLLMModel,
 } from "@/features/llm-provider/types";
 import { useUnifiedChat } from "@/hooks/useUnifiedChat";
@@ -85,6 +85,23 @@ import {
 import type { MessageBubbleRetryState } from "./MessageBubble";
 
 const deterministicE2EMode = import.meta.env.VITE_E2E_DETERMINISTIC_MODE === "true";
+
+function hasSameLLMSelectionIdentity(
+  nextSelection: SelectedLLMModel | LLMSelection,
+  currentSelection: SelectedLLMModel | null,
+): boolean {
+  if (
+    !currentSelection
+    || nextSelection.provider !== currentSelection.provider
+    || nextSelection.model !== currentSelection.model
+  ) {
+    return false;
+  }
+  if (nextSelection.deploymentRef || currentSelection.deploymentRef) {
+    return sameDeploymentRef(nextSelection.deploymentRef, currentSelection.deploymentRef);
+  }
+  return true;
+}
 
 interface UnifiedAgentChatProps {
   taskId: number | null;
@@ -176,19 +193,19 @@ export function UnifiedAgentChat({
     useState<ReasoningEffort>("medium");
   const [isTranscriptExporting, setIsTranscriptExporting] = useState(false);
   useEffect(() => {
-    if (
-      llmSelection?.model
-      && (
-        llmSelection.provider !== selectedLLMModel?.provider
-        || llmSelection.model !== selectedLLMModel?.model
-      )
-    ) {
-      setSelectedLLMModel({
-        provider: llmSelection.provider,
-        model: llmSelection.model,
+    if (llmSelection?.model) {
+      setSelectedLLMModel((currentSelection) => {
+        if (hasSameLLMSelectionIdentity(llmSelection, currentSelection)) {
+          return currentSelection;
+        }
+        return {
+          provider: llmSelection.provider,
+          model: llmSelection.model,
+          ...(llmSelection.deploymentRef ? { deploymentRef: llmSelection.deploymentRef } : {}),
+        };
       });
     }
-  }, [llmSelection, selectedLLMModel]);
+  }, [llmSelection]);
 
   useEffect(() => {
     if (!selectedLLMModel && isLLMSelectionFetched && !llmSelection?.model) {
@@ -348,6 +365,7 @@ export function UnifiedAgentChat({
         conversation_id: currentConversationId ?? undefined,
         provider: selectedLLMModel?.provider,
         model: selectedLLMModel?.model,
+        deployment_ref: selectedLLMModel?.deploymentRef ?? undefined,
         agent_mode: agentModeTransport.agent_mode,
         plan_mode: agentModeTransport.plan_mode,
         client_message_id: clientMessageId,
@@ -452,30 +470,6 @@ export function UnifiedAgentChat({
     onError: (error: Error, selection) => {
       toast({
         title: `Model update failed: ${selection.provider}/${selection.model}`,
-        description: error.message,
-        variant: "destructive",
-      });
-    },
-  });
-
-  const switchTaskModel = useMutation({
-    mutationFn: async ({ taskId: taskIdentifier, provider, model }: RuntimeModelSwitchPayload) => {
-      const response = await apiRequest("POST", `/api/llm/tasks/${taskIdentifier}/switch`, { provider, model });
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(errText || "Failed to switch model at runtime");
-      }
-      return response.json();
-    },
-    onSuccess: () => {
-      toast({
-        title: "Runtime model switched",
-        description: "The running agent will use the new model.",
-      });
-    },
-    onError: (error: Error, variables) => {
-      toast({
-        title: `Runtime switch failed: ${variables.provider}/${variables.model}`,
         description: error.message,
         variant: "destructive",
       });
@@ -915,22 +909,13 @@ export function UnifiedAgentChat({
       if (options?.reasoningEffort) {
         setSelectedReasoningEffort(options.reasoningEffort);
       }
-      if (
-        !selection.model
-        || (
-          selection.provider === selectedLLMModel?.provider
-          && selection.model === selectedLLMModel?.model
-        )
-      ) {
+      if (!selection.model || hasSameLLMSelectionIdentity(selection, selectedLLMModel)) {
         return;
       }
       setSelectedLLMModel(selection);
       updateSelection.mutate(selection);
-      if (activeTaskId && !featureFlags.enableBasicChat) {
-        switchTaskModel.mutate({ taskId: activeTaskId, ...selection });
-      }
     },
-    [activeTaskId, switchTaskModel, updateSelection, selectedLLMModel],
+    [updateSelection, selectedLLMModel],
   );
 
   const handleDownloadTranscript = useCallback(async () => {

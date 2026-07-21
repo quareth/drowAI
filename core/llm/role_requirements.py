@@ -1,10 +1,10 @@
 """
 Shared role classifications and model requirement contracts.
 
-This module defines which roles are user-selected versus internally managed,
-and the provider-neutral capabilities each internal role requires from its
-resolved model. It is the small policy layer that lets provider profiles be
-validated without putting provider defaults in core role resolution.
+This module classifies user-selected, conversation-inherited, and internally
+managed roles, and declares the provider-neutral capabilities their resolved
+models require. It lets provider profiles be validated without putting
+provider defaults in core role resolution.
 
 Boundary: requirements are expressed as simple strings and booleans so this
 module stays independent from agent provider imports. Concrete capability
@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .role_contracts import (
+    ROLE_CONTEXT_COMPRESSOR,
     ROLE_CONVERSATION_MAIN,
     ROLE_INTENT_CLASSIFIER,
     ROLE_POST_TOOL_ARTICULATOR,
@@ -52,13 +53,62 @@ INTERNAL_ROLE_KEYS: frozenset[str] = frozenset(
     }
 )
 
+CONVERSATION_INHERITED_ROLE_KEYS: frozenset[str] = frozenset(
+    {
+        ROLE_CONTEXT_COMPRESSOR,
+    }
+)
+
 ROLE_REQUIREMENTS: dict[str, RoleRequirements] = {
-    ROLE_TOOL_OUTPUT_COMPRESSOR: RoleRequirements(required_capabilities=("chat",)),
-    ROLE_TOOL_CATEGORY_SELECTOR: RoleRequirements(
-        required_capabilities=("chat",),
+    ROLE_CONVERSATION_MAIN: RoleRequirements(
+        required_capabilities=(
+            "chat",
+            "streaming",
+            "streaming_usage_reporting",
+            "usage_reporting",
+        )
+    ),
+    ROLE_REASONING_MAIN: RoleRequirements(
+        required_capabilities=("chat", "tools", "usage_reporting"),
         structured_output_required=True,
     ),
-    ROLE_POST_TOOL_ARTICULATOR: RoleRequirements(required_capabilities=("chat",)),
+    ROLE_POST_TOOL_OBSERVATION: RoleRequirements(
+        required_capabilities=(
+            "chat",
+            "streaming",
+            "streaming_usage_reporting",
+            "usage_reporting",
+        ),
+        structured_output_required=True,
+    ),
+    ROLE_INTENT_CLASSIFIER: RoleRequirements(
+        required_capabilities=("chat", "usage_reporting"),
+        structured_output_required=True,
+    ),
+    ROLE_CONTEXT_COMPRESSOR: RoleRequirements(
+        required_capabilities=(
+            "chat",
+            "context_window",
+            "max_output_tokens",
+            "usage_reporting",
+        )
+    ),
+    ROLE_TOOL_OUTPUT_COMPRESSOR: RoleRequirements(
+        required_capabilities=("chat", "usage_reporting"),
+        structured_output_required=True,
+    ),
+    ROLE_TOOL_CATEGORY_SELECTOR: RoleRequirements(
+        required_capabilities=("chat", "usage_reporting"),
+        structured_output_required=True,
+    ),
+    ROLE_POST_TOOL_ARTICULATOR: RoleRequirements(
+        required_capabilities=(
+            "chat",
+            "streaming",
+            "streaming_usage_reporting",
+            "usage_reporting",
+        )
+    ),
 }
 
 
@@ -68,6 +118,7 @@ def get_role_requirements(role: RoleKey | str) -> RoleRequirements:
 
 
 __all__ = [
+    "CONVERSATION_INHERITED_ROLE_KEYS",
     "INTERNAL_ROLE_KEYS",
     "ROLE_REQUIREMENTS",
     "RoleRequirements",

@@ -3,8 +3,9 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { SESSION_EXPIRED_MESSAGE } from "@/components/settings/lib/settings-mutation-helpers";
+import { toApiError } from "@/lib/api-config";
 import { apiRequest } from "@/lib/queryClient";
-import { SESSION_EXPIRED_MESSAGE, toApiError } from "@/components/settings/lib/settings-mutation-helpers";
 
 export interface UserSettings {
   id: number;

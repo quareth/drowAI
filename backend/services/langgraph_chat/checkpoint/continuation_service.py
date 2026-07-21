@@ -11,9 +11,13 @@ import inspect
 import logging
 from typing import TYPE_CHECKING, Any, Callable, Dict, Mapping, Optional
 
+from agent.graph.infrastructure.state_models import checkpoint_safe_llm_runtime_selection
 from backend.config import E2E_DETERMINISTIC_MODE
 from backend.database import SessionLocal
 from backend.services.chat.message_service import ChatMessageService
+from backend.services.langgraph_chat.checkpoint.runtime_selection_resolver import (
+    resolve_checkpoint_runtime_selection,
+)
 from backend.services.langgraph_chat.contracts import LangGraphChatResult
 from backend.services.langgraph_chat.exceptions import HITLError
 from backend.services.langgraph_chat.hitl_constants import (
@@ -481,8 +485,11 @@ class CheckpointContinuationService:
             interrupt_metadata = {"interrupt": True, "graph_name": graph_name}
             if isinstance(execution_result.metadata, dict):
                 interrupt_metadata.update(execution_result.metadata)
-            if isinstance(llm_runtime_selection, Mapping):
-                interrupt_metadata["llm_runtime_selection"] = dict(llm_runtime_selection)
+            safe_runtime_selection = checkpoint_safe_llm_runtime_selection(
+                llm_runtime_selection,
+            )
+            if safe_runtime_selection:
+                interrupt_metadata["llm_runtime_selection"] = safe_runtime_selection
 
             return LangGraphChatResult(
                 final_text=None,
@@ -532,8 +539,11 @@ class CheckpointContinuationService:
             metadata["id"] = turn_id
         if isinstance(execution_result.metadata, dict):
             metadata.update(execution_result.metadata)
-        if isinstance(llm_runtime_selection, Mapping):
-            metadata["llm_runtime_selection"] = dict(llm_runtime_selection)
+        safe_runtime_selection = checkpoint_safe_llm_runtime_selection(
+            llm_runtime_selection,
+        )
+        if safe_runtime_selection:
+            metadata["llm_runtime_selection"] = safe_runtime_selection
 
         from backend.services.langgraph_chat.handlers.normal_chat_handler import (
             _extract_usage_from_state,
@@ -617,14 +627,11 @@ class CheckpointContinuationService:
                     raise
                 except ProviderConfigurationError:
                     logger.info(
-                        "[HITL] Ignoring invalid checkpoint runtime hint for task "
-                        "continuation; resolving current user selection"
+                        "[HITL] Checkpoint runtime hint is not runnable; "
+                        "continuation requires user reselection",
+                        exc_info=True,
                     )
-                    if llm_runtime_selection is None:
-                        selection = runtime_config_service.build_continuation_selection(
-                            user_id=user_id,
-                        )
-                        llm_runtime_selection = selection.to_dict()
+                    raise
             elif llm_runtime_selection is None:
                 selection = runtime_config_service.build_continuation_selection(
                     user_id=user_id,
@@ -688,53 +695,11 @@ class CheckpointContinuationService:
             values = snapshot.get("values") or snapshot
         return self._extract_checkpoint_runtime_hint(values)
 
-    @classmethod
-    def _extract_checkpoint_runtime_hint(cls, values: Any) -> Optional[Dict[str, Any]]:
-        """Extract the provider/model continuation hint from checkpoint values."""
-
-        if not isinstance(values, Mapping):
-            return None
-
-        candidates: list[Mapping[str, Any]] = []
-        cls._append_runtime_hint_candidates(candidates, values)
-        facts = values.get("facts")
-        if isinstance(facts, Mapping):
-            cls._append_runtime_hint_candidates(candidates, facts)
-            metadata = facts.get("metadata")
-        else:
-            metadata = getattr(facts, "metadata", None)
-        if isinstance(metadata, Mapping):
-            cls._append_runtime_hint_candidates(candidates, metadata)
-
-        for candidate in candidates:
-            hint = cls._sanitize_runtime_hint(candidate)
-            if hint:
-                return hint
-        return None
-
     @staticmethod
-    def _append_runtime_hint_candidates(
-        candidates: list[Mapping[str, Any]],
-        source: Mapping[str, Any],
-    ) -> None:
-        """Collect possible runtime hint mappings from a checkpoint payload."""
+    def _extract_checkpoint_runtime_hint(values: Any) -> Optional[Dict[str, Any]]:
+        """Resolve the authoritative non-secret runtime identity from state."""
 
-        candidates.append(source)
-        for key in ("llm_runtime_selection", "graph_runtime_context"):
-            value = source.get(key)
-            if isinstance(value, Mapping):
-                candidates.append(value)
-
-    @staticmethod
-    def _sanitize_runtime_hint(source: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
-        """Return only non-secret runtime hint fields used for fresh resolution."""
-
-        hint: Dict[str, Any] = {}
-        for key in ("provider", "model", "reasoning_effort"):
-            value = source.get(key)
-            if isinstance(value, str) and value.strip():
-                hint[key] = value.strip()
-        return hint or None
+        return resolve_checkpoint_runtime_selection(values)
 
     async def _compile_graph_for_name(
         self,

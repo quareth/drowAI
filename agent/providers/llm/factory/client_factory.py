@@ -31,6 +31,7 @@ from ..profiles import (
     ANTHROPIC_API_SURFACE_MESSAGES,
     OPENAI_API_SURFACE_CHAT_COMPLETIONS,
     OPENAI_API_SURFACE_RESPONSES,
+    OPENAI_GPT_OSS_20B_MODEL_ID,
     ModelProfile,
     list_model_profiles,
     require_model_profile,
@@ -204,6 +205,7 @@ class LLMClientFactory:
         api_key: str,
         provider: str | None = None,
         provider_model: ProviderModelRef | None = None,
+        model_profile: ModelProfile | None = None,
         **kwargs: Any,
     ) -> LLMClient:
         """Create a client for the requested provider/model.
@@ -247,6 +249,7 @@ class LLMClientFactory:
             return cls._create_provider_client(
                 resolution=resolution,
                 api_key=api_key,
+                model_profile=model_profile,
                 **kwargs,
             )
 
@@ -346,12 +349,18 @@ class LLMClientFactory:
         *,
         resolution: ProviderModelResolution,
         api_key: str,
+        model_profile: ModelProfile | None = None,
         **kwargs: Any,
     ) -> LLMClient:
         """Instantiate the provider adapter for a resolved provider/model."""
         lookup_ref = resolution.lookup_ref.normalized()
         registration = cls._get_provider_registration(lookup_ref.provider)
-        profile = require_model_profile(lookup_ref)
+        profile = model_profile or require_model_profile(lookup_ref)
+        if profile.ref.provider != lookup_ref.provider:
+            raise LLMConfigurationError(
+                "model_profile provider must match the requested provider",
+                provider=lookup_ref.provider,
+            )
         provider_class = registration.resolver(profile)
         if not isinstance(provider_class, type) or not issubclass(provider_class, LLMClient):
             raise LLMConfigurationError(
@@ -366,6 +375,33 @@ class LLMClientFactory:
             resolution.provider_request_model,
             profile.ref,
         )
+        if provider_class is _openai_compatible_chat_client_class():
+            base_url = kwargs.pop("base_url", None)
+            wire_model_id = kwargs.pop(
+                "wire_model_id",
+                resolution.provider_request_model,
+            )
+            dialect_policy_id = kwargs.pop("dialect_policy_id", None)
+            dialect_policy = kwargs.pop("dialect_policy", None)
+            if dialect_policy is None:
+                dialect_policy = _resolve_openai_compatible_dialect(dialect_policy_id)
+            kwargs.pop("resolution_role", None)
+            kwargs.pop("resolution_source", None)
+            if not isinstance(base_url, str) or not base_url.strip():
+                raise LLMConfigurationError(
+                    "OpenAI-compatible adapter requires a base URL",
+                    provider=lookup_ref.provider,
+            )
+            return provider_class(
+                base_url=base_url,
+                auth=_openai_compatible_bearer_auth(api_key),
+                wire_model_id=wire_model_id,
+                dialect_policy=dialect_policy,
+                **kwargs,
+            )
+        kwargs.pop("wire_model_id", None)
+        kwargs.pop("dialect_policy_id", None)
+        kwargs.pop("inference_transport", None)
         return provider_class(
             api_key=api_key,
             model=resolution.provider_request_model,
@@ -502,9 +538,12 @@ def _register_default_providers() -> None:
     """
     from ..adapters.anthropic.client import AnthropicMessagesClient
     from ..adapters.openai.chat import OpenAIChatClient
+    from ..adapters.openai.compatible_chat import OpenAICompatibleChatClient
     from ..adapters.openai.responses.client import OpenAIResponsesClient
 
     def _resolve_openai_adapter(profile: ModelProfile) -> Type[LLMClient]:
+        if profile.ref.model == OPENAI_GPT_OSS_20B_MODEL_ID:
+            return OpenAICompatibleChatClient
         if profile.api_surface == OPENAI_API_SURFACE_RESPONSES:
             return OpenAIResponsesClient
         if profile.api_surface == OPENAI_API_SURFACE_CHAT_COMPLETIONS:
@@ -544,6 +583,8 @@ def _register_default_providers() -> None:
     # routing and catalog/profile metadata cannot drift silently.
     # -----------------------------------------------------------------------
     for profile in list_model_profiles(provider_id=OPENAI_PROVIDER_ID):
+        if profile.ref.model == OPENAI_GPT_OSS_20B_MODEL_ID:
+            continue
         LLMClientFactory.register(
             profile.ref.model,
             _resolve_openai_adapter(profile),
@@ -554,6 +595,40 @@ def _register_default_providers() -> None:
 
 # Auto-register default providers when module is loaded
 _register_default_providers()
+
+
+def _openai_compatible_chat_client_class() -> Type[LLMClient]:
+    """Return the compatible adapter class without importing it at module top."""
+
+    from ..adapters.openai.compatible_chat import OpenAICompatibleChatClient
+
+    return OpenAICompatibleChatClient
+
+
+def _openai_compatible_bearer_auth(api_key: str) -> Any:
+    """Return typed bearer auth for the compatible adapter."""
+
+    from ..adapters.openai.compatible_chat import CompatibleChatAuth
+
+    return CompatibleChatAuth.bearer(api_key)
+
+
+def _resolve_openai_compatible_dialect(policy_id: Any) -> Any:
+    """Resolve code-owned compatible policy inside the adapter factory boundary."""
+
+    from ..adapters.openai.compatible_dialects import (
+        AGENT_OPENAI_COMPATIBLE_DIALECT,
+        resolve_openai_compatible_dialect,
+    )
+
+    if policy_id is None:
+        return AGENT_OPENAI_COMPATIBLE_DIALECT
+    if not isinstance(policy_id, str) or not policy_id.strip():
+        raise LLMConfigurationError(
+            "OpenAI-compatible adapter requires a dialect policy id",
+            provider=OPENAI_PROVIDER_ID,
+        )
+    return resolve_openai_compatible_dialect(policy_id)
 
 
 __all__ = ["LLMClientFactory"]

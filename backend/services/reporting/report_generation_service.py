@@ -396,10 +396,16 @@ class ReportGenerationService:
 
 
 def _runtime_selection_key(value: Mapping[str, object]) -> str:
-    provider = str(value.get("provider") or "unknown")
-    model = str(value.get("model") or "unknown")
+    provider = str(value.get("provider") or value.get("legacy_provider") or "unknown")
+    model = str(value.get("model") or value.get("legacy_model") or "unknown")
+    deployment_ref = value.get("deployment_ref")
+    deployment_id = ""
+    deployment_revision = ""
+    if isinstance(deployment_ref, Mapping):
+        deployment_id = str(deployment_ref.get("deployment_id") or "")
+        deployment_revision = str(deployment_ref.get("expected_revision") or "")
     reasoning_effort = str(value.get("reasoning_effort") or "")
-    return f"{provider}:{model}:{reasoning_effort}"
+    return f"{provider}:{model}:{deployment_id}:{deployment_revision}:{reasoning_effort}"
 
 
 __all__ = [

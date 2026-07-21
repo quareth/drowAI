@@ -3,7 +3,7 @@
  */
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { toApiError } from "@/components/settings/lib/settings-mutation-helpers";
+import { toApiError } from "@/lib/api-config";
 import { apiRequest } from "@/lib/queryClient";
 
 export interface DataManagementSettingsResponse {

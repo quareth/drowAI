@@ -174,12 +174,11 @@ async function verifySettingsPage(
   await timezoneSelect.click();
   await page.getByRole("option", { name: "Istanbul", exact: true }).click();
   await expect(timezoneSelect).toHaveText("Istanbul");
-  const userSettings = await readJson<{ timezone: string; openai_api_key: string | null }>(
+  const userSettings = await readJson<{ timezone: string }>(
     await api.get("/api/settings/", { headers: actorHeaders(owner) }),
     "User settings",
   );
   expect(userSettings.timezone).toBe("Europe/Istanbul");
-  expect(userSettings.openai_api_key).toBe("***");
 
   await page.getByRole("tab", { name: "Data Management", exact: true }).click();
   await page.getByLabel("Historical report retention days").fill("91");

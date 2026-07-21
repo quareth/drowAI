@@ -16,7 +16,7 @@ Design decisions:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
@@ -24,14 +24,21 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from backend.models.core import Task
-from backend.models.llm import LLMUsageRecord
+from backend.models.llm import (
+    LLMDeploymentRoute,
+    LLMInferenceConnection,
+    LLMModelDeployment,
+    LLMUsageRecord,
+)
 
 from .insights_models import UsageRecordMetadata, serialize_usage_metadata
-from .models import TaskUsageSummary, UsageData
+from .models import TaskUsageSummary, UsageAttributionContext, UsageData
 from .pricing import (
     PRICING_UNAVAILABLE,
     aggregate_pricing_statuses,
     calculate_cost,
+    calculate_cost_breakdown,
+    pricing_quote_for_usage,
     pricing_status_for_usage,
     usage_from_persisted_record,
 )
@@ -105,6 +112,9 @@ class UsageTrackingService:
         conversation_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
         usage_metadata: Optional[UsageRecordMetadata] = None,
+        connection_id: Optional[str] = None,
+        deployment_id: Optional[str] = None,
+        route_id: Optional[str] = None,
     ) -> Optional[LLMUsageRecord]:
         """Record a single LLM call's usage.
 
@@ -132,6 +142,12 @@ class UsageTrackingService:
                 ``source`` strings. When omitted, the record is written
                 without structured metadata (legacy behavior) or with the
                 legacy ``metadata`` dict if provided.
+            connection_id: Optional deployment-aware connection identity for
+                this call. When omitted and ``deployment_id`` is present, the
+                connection is resolved from the deployment row.
+            deployment_id: Optional deployment identity for this call.
+            route_id: Optional route identity for this call. Ignored unless it
+                belongs to ``deployment_id``.
 
         Returns:
             Created LLMUsageRecord if successful, None on failure
@@ -141,6 +157,27 @@ class UsageTrackingService:
             return None
 
         tenant_id = self._resolve_tenant_id(task_id=task_id, user_id=user_id)
+        (
+            resolved_connection_id,
+            resolved_deployment_id,
+            resolved_route_id,
+        ) = self._resolve_usage_identity(
+            user_id=user_id,
+            connection_id=connection_id,
+            deployment_id=deployment_id,
+            route_id=route_id,
+        )
+        usage_attribution = self._usage_attribution_for_record(
+            usage=usage,
+            connection_id=resolved_connection_id,
+            deployment_id=resolved_deployment_id,
+            route_id=resolved_route_id,
+        )
+        usage_for_pricing = (
+            replace(usage, usage_attribution=usage_attribution)
+            if usage_attribution is not None
+            else usage
+        )
 
         # Canonical metadata wins when provided; legacy ``metadata`` dict is
         # preserved as a fallback for callers that still pass debug-only info.
@@ -191,6 +228,18 @@ class UsageTrackingService:
                 str(usage.api_surface or "").strip().lower(),
             )
 
+        if usage_attribution is not None:
+            if request_metadata_payload is None:
+                request_metadata_payload = {}
+            elif isinstance(request_metadata_payload, dict):
+                request_metadata_payload = dict(request_metadata_payload)
+            else:
+                request_metadata_payload = {"legacy_metadata": request_metadata_payload}
+            request_metadata_payload["usage_attribution"] = usage_attribution.to_dict()
+            request_metadata_payload["pricing_quote"] = _pricing_quote_snapshot(
+                usage_for_pricing
+            )
+
         try:
             record = LLMUsageRecord(
                 task_id=task_id,
@@ -203,6 +252,9 @@ class UsageTrackingService:
                 reasoning_tokens=usage.reasoning_tokens,
                 model=usage.model,
                 provider=usage.provider,
+                connection_id=resolved_connection_id,
+                deployment_id=resolved_deployment_id,
+                route_id=resolved_route_id,
                 source=source,
                 conversation_id=conversation_id,
                 request_metadata=request_metadata_payload,
@@ -234,6 +286,132 @@ class UsageTrackingService:
             except Exception:
                 pass
             return None
+
+    def _resolve_usage_identity(
+        self,
+        *,
+        user_id: int,
+        connection_id: Optional[str],
+        deployment_id: Optional[str],
+        route_id: Optional[str],
+    ) -> tuple[object | None, object | None, object | None]:
+        """Validate optional deployment refs before writing a usage row."""
+
+        resolved_connection_id: object | None = None
+        resolved_deployment_id: object | None = None
+        resolved_route_id: object | None = None
+
+        if deployment_id:
+            deployment = self._db.get(LLMModelDeployment, deployment_id)
+            if deployment is None:
+                return None, None, None
+            connection = self._db.get(LLMInferenceConnection, deployment.connection_id)
+            if connection is None or int(connection.user_id) != int(user_id):
+                return None, None, None
+            resolved_connection_id = connection.id
+            resolved_deployment_id = deployment.id
+            if route_id:
+                route = self._db.get(LLMDeploymentRoute, route_id)
+                if route is not None and route.deployment_id == deployment.id:
+                    resolved_route_id = route.id
+            return resolved_connection_id, resolved_deployment_id, resolved_route_id
+
+        if connection_id:
+            connection = self._db.get(LLMInferenceConnection, connection_id)
+            if connection is not None and int(connection.user_id) == int(user_id):
+                resolved_connection_id = connection.id
+
+        return resolved_connection_id, resolved_deployment_id, resolved_route_id
+
+    def _usage_attribution_for_record(
+        self,
+        *,
+        usage: UsageData,
+        connection_id: object | None,
+        deployment_id: object | None,
+        route_id: object | None,
+    ) -> UsageAttributionContext | None:
+        """Build durable deployment attribution from resolved DB identity."""
+
+        db_attribution = self._db_usage_attribution(
+            usage=usage,
+            connection_id=connection_id,
+            deployment_id=deployment_id,
+            route_id=route_id,
+        )
+        explicit = usage.usage_attribution
+        if db_attribution is None:
+            return explicit
+        if explicit is None:
+            return db_attribution
+        merged = db_attribution.to_dict()
+        merged.update(explicit.to_dict())
+        return UsageAttributionContext.from_mapping(merged)
+
+    def _db_usage_attribution(
+        self,
+        *,
+        usage: UsageData,
+        connection_id: object | None,
+        deployment_id: object | None,
+        route_id: object | None,
+    ) -> UsageAttributionContext | None:
+        if connection_id is None and deployment_id is None and route_id is None:
+            return None
+
+        connection = (
+            self._db.get(LLMInferenceConnection, connection_id)
+            if connection_id is not None
+            else None
+        )
+        deployment = (
+            self._db.get(LLMModelDeployment, deployment_id)
+            if deployment_id is not None
+            else None
+        )
+        route = (
+            self._db.get(LLMDeploymentRoute, route_id)
+            if route_id is not None
+            else None
+        )
+        billing_provider_id = (
+            route.billing_provider_id
+            if route is not None and route.billing_provider_id
+            else connection.serving_operator_id
+            if connection is not None and connection.serving_operator_id
+            else usage.provider
+        )
+        return UsageAttributionContext(
+            connection_id=str(connection.id) if connection is not None else None,
+            connection_revision=(
+                int(connection.revision) if connection is not None else None
+            ),
+            deployment_id=str(deployment.id) if deployment is not None else None,
+            deployment_revision=(
+                int(deployment.revision) if deployment is not None else None
+            ),
+            route_id=str(route.id) if route is not None else None,
+            canonical_model_id=(
+                deployment.canonical_model_id if deployment is not None else None
+            ),
+            requested_model_id=usage.model
+            or (deployment.wire_model_id if deployment is not None else None),
+            serving_operator_id=(
+                connection.serving_operator_id if connection is not None else None
+            ),
+            billing_provider_id=billing_provider_id,
+            adapter_id=route.adapter_id if route is not None else None,
+            adapter_version=route.adapter_version if route is not None else None,
+            api_surface=route.api_surface if route is not None else usage.api_surface,
+            dialect_policy_id=(
+                route.dialect_policy_id if route is not None else None
+            ),
+            usage_completeness=(
+                usage.usage_attribution.usage_completeness
+                if usage.usage_attribution is not None
+                else "actual"
+            ),
+        )
 
     def _resolve_tenant_id(self, *, task_id: int, user_id: int) -> int:
         """Resolve usage ownership from the authoritative task tenant."""
@@ -327,17 +505,14 @@ class UsageTrackingService:
                 row_pricing_statuses = [status for _record, status in record_pricing]
                 unpriced_providers = sorted(
                     {
-                        str(record.provider or "openai").strip().lower() or "openai"
+                        _record_pricing_provider_model(record)[0]
                         for record, status in record_pricing
                         if status == PRICING_UNAVAILABLE
                     }
                 )
                 unpriced_models = sorted(
                     {
-                        _provider_model_label(
-                            str(record.provider or "openai").strip().lower() or "openai",
-                            str(record.model or "unknown"),
-                        )
+                        _provider_model_label(*_record_pricing_provider_model(record))
                         for record, status in record_pricing
                         if status == PRICING_UNAVAILABLE
                     }
@@ -581,17 +756,14 @@ class UsageTrackingService:
         pricing_status = aggregate_pricing_statuses([status for _row, status in record_pricing])
         unpriced_providers = sorted(
             {
-                str(row.provider or "openai").strip().lower() or "openai"
+                _record_pricing_provider_model(row)[0]
                 for row, status in record_pricing
                 if status == PRICING_UNAVAILABLE
             }
         )
         unpriced_models = sorted(
             {
-                _provider_model_label(
-                    str(row.provider or "openai").strip().lower() or "openai",
-                    str(row.model or "unknown"),
-                )
+                _provider_model_label(*_record_pricing_provider_model(row))
                 for row, status in record_pricing
                 if status == PRICING_UNAVAILABLE
             }
@@ -685,12 +857,47 @@ def _fill_missing_metadata_value(
         metadata[key] = normalized_value
 
 
+def _pricing_quote_snapshot(usage: UsageData) -> Dict[str, Any]:
+    """Return the durable pricing quote/cost snapshot for one usage row."""
+
+    quote = pricing_quote_for_usage(usage)
+    breakdown = calculate_cost_breakdown(usage)
+    return {
+        "provider": quote.provider,
+        "model": quote.model,
+        "api_surface": quote.api_surface,
+        "status": quote.status,
+        "reason": quote.reason,
+        "pricing_revision": quote.pricing_revision,
+        "cost_usd": breakdown["total_cost"],
+        "component_costs_usd": {
+            "uncached_input_cost_usd": breakdown["input_cost"],
+            "cached_input_cost_usd": breakdown["cached_cost"],
+            "output_cost_usd": breakdown["output_cost"],
+        },
+    }
+
+
 def _provider_model_label(provider: str, model: str) -> str:
     """Return a stable provider/model label for unpriced usage reporting."""
 
     provider_id = str(provider or "openai").strip().lower() or "openai"
     model_id = str(model or "unknown").strip() or "unknown"
     return f"{provider_id}/{model_id}"
+
+
+def _record_pricing_provider_model(record: LLMUsageRecord) -> tuple[str, str]:
+    usage = usage_from_persisted_record(record)
+    attribution = usage.usage_attribution
+    provider = (
+        attribution.billing_provider_id
+        if attribution is not None and attribution.billing_provider_id
+        else str(record.provider or "openai").strip().lower() or "openai"
+    )
+    model = None
+    if attribution is not None:
+        model = attribution.canonical_model_id or attribution.requested_model_id
+    return str(provider), str(model or record.model or "unknown")
 
 
 __all__ = ["UsageTrackingService"]

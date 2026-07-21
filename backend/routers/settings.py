@@ -1,6 +1,7 @@
-"""
-User Settings API Router
-Handles user settings including OpenAI API key configuration
+"""User settings routes and legacy OpenAI compatibility facade.
+
+Non-LLM preferences remain stored directly on ``UserSettings``; legacy OpenAI
+helper functions delegate to provider/deployment authorities outside this API.
 """
 from fastapi import APIRouter, HTTPException, Depends, status
 from sqlalchemy.orm import Session
@@ -10,7 +11,6 @@ import logging
 from pydantic import BaseModel
 
 from agent.providers.llm.core.identity import OPENAI_PROVIDER_ID
-from agent.providers.llm.profiles import OPENAI_DEFAULT_MODEL_ID
 
 from ..database import get_db
 from ..auth import get_current_user
@@ -20,6 +20,7 @@ from ..services.llm_provider import (
     CredentialNotFoundError,
     LLMProviderHealthService,
     LLMProviderCatalogService,
+    LLMProviderServiceError,
     LLMCredentialService,
     LLMProviderSelectionService,
     ProviderConfigurationError,
@@ -32,7 +33,6 @@ from ..services.llm_provider.credential_service import (
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/settings", tags=["settings"])
-GPT5_DEFAULT_MODEL = OPENAI_DEFAULT_MODEL_ID
 
 def get_encryption_key() -> bytes:
     """Compatibility wrapper for the provider credential encryption key."""
@@ -77,29 +77,22 @@ def is_supported_openai_model(model: Optional[str]) -> bool:
     return True
 
 
-def _normalize_openai_model(model: Optional[str]) -> str:
-    """Normalize null/legacy model values to the enforced GPT-5 default."""
-    normalized = normalize_openai_model_identifier(model)
-    if not is_supported_openai_model(normalized):
-        return GPT5_DEFAULT_MODEL
-    return normalized or GPT5_DEFAULT_MODEL
+def _settings_response_data(
+    *,
+    settings: UserSettings,
+) -> dict[str, object]:
+    """Build non-LLM settings response fields."""
 
-
-def _reconcile_legacy_openai_model(settings: UserSettings, db: Session) -> None:
-    """Idempotently migrate legacy per-user model values during settings reads."""
-    normalized_model = _normalize_openai_model(getattr(settings, "openai_model", None))
-    changed = False
-    if settings.openai_model != normalized_model:
-        settings.openai_model = normalized_model
-        changed = True
-    if not settings.enable_ai:
-        settings.enable_ai = True
-        changed = True
-    if not changed:
-        return
-    db.add(settings)
-    db.commit()
-    db.refresh(settings)
+    return {
+        "id": settings.id,
+        "user_id": settings.user_id,
+        "shodan_api_key": "***" if getattr(settings, "shodan_api_key", None) else None,
+        "session_timeout": settings.session_timeout,
+        "theme": settings.theme,
+        "timezone": settings.timezone,
+        "created_at": settings.created_at,
+        "updated_at": settings.updated_at,
+    }
 
 @router.get("/", response_model=UserSettingsResponse)
 async def get_user_settings(
@@ -117,8 +110,6 @@ async def get_user_settings(
             # Create default settings for user
             settings = UserSettings(
                 user_id=current_user.id,
-                openai_model=GPT5_DEFAULT_MODEL,
-                enable_ai=True,
                 session_timeout=1800,
                 theme="dark",
                 timezone="UTC",
@@ -126,24 +117,12 @@ async def get_user_settings(
             db.add(settings)
             db.commit()
             db.refresh(settings)
-        else:
-            _reconcile_legacy_openai_model(settings, db)
         
-        # Create response with masked API keys for security
-        response_data = {
-            "id": settings.id,
-            "user_id": settings.user_id,
-            "openai_api_key": "***" if getattr(settings, 'openai_api_key', None) else None,
-            "openai_model": settings.openai_model,
-            "enable_ai": True,
-            "shodan_api_key": "***" if getattr(settings, 'shodan_api_key', None) else None,
-            "session_timeout": settings.session_timeout,
-            "theme": settings.theme,
-            "timezone": settings.timezone,
-            "created_at": settings.created_at,
-            "updated_at": settings.updated_at
-        }
-        
+        response_data = _settings_response_data(
+            settings=settings,
+        )
+        db.commit()
+        db.refresh(settings)
         return UserSettingsResponse(**response_data)
         
     except Exception as e:
@@ -172,71 +151,21 @@ async def update_user_settings(
             db.add(settings)
         
         # Update fields if provided
-        update_data = settings_update.dict(exclude_unset=True)
-        credential_service = LLMCredentialService(db)
-        selection_service = LLMProviderSelectionService(
-            db,
-            credential_service=credential_service,
-        )
-        
+        update_data = settings_update.model_dump(exclude_unset=True)
         for field, value in update_data.items():
-            if field == "enable_ai":
-                continue
-            if field == "openai_api_key":
-                if value:
-                    credential_service.upsert_api_key(
-                        user_id=current_user.id,
-                        provider=OPENAI_PROVIDER_ID,
-                        api_key=value,
-                    )
-                else:
-                    credential_service.disable(
-                        user_id=current_user.id,
-                        provider=OPENAI_PROVIDER_ID,
-                    )
-                db.refresh(settings)
-            elif field == "shodan_api_key" and value:
+            if field == "shodan_api_key" and value:
                 # Encrypt API key before storage
                 setattr(settings, field, encrypt_api_key(value))
-            elif field == "openai_model" and value is not None:
-                if not is_supported_openai_model(value):
-                    raise HTTPException(
-                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                        detail="Invalid OpenAI model. Only GPT-5 family models are supported.",
-                    )
-                selection_service.set_selection(
-                    user_id=current_user.id,
-                    provider=OPENAI_PROVIDER_ID,
-                    model=value,
-                    require_enabled_credential=False,
-                )
-                db.refresh(settings)
             else:
                 setattr(settings, field, value)
         
         db.commit()
         db.refresh(settings)
-        if not settings.enable_ai:
-            settings.enable_ai = True
-            db.add(settings)
-            db.commit()
-            db.refresh(settings)
         
-        # Return response without actual API keys
-        response_data = {
-            "id": settings.id,
-            "user_id": settings.user_id,
-            "openai_api_key": "***" if getattr(settings, 'openai_api_key', None) else None,
-            "openai_model": settings.openai_model,
-            "enable_ai": True,
-            "shodan_api_key": "***" if getattr(settings, 'shodan_api_key', None) else None,
-            "session_timeout": settings.session_timeout,
-            "theme": settings.theme,
-            "timezone": settings.timezone,
-            "created_at": settings.created_at,
-            "updated_at": settings.updated_at
-        }
-        
+        response_data = _settings_response_data(
+            settings=settings,
+        )
+        db.commit()
         return UserSettingsResponse(**response_data)
         
     except HTTPException:
@@ -282,7 +211,7 @@ async def test_openai_connection(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No OpenAI API key found. Please enter an API key to test.",
         )
-    except ProviderConfigurationError as exc:
+    except LLMProviderServiceError as exc:
         detail = str(exc)
         status_code = status.HTTP_429_TOO_MANY_REQUESTS if "rate limit" in detail.lower() else status.HTTP_400_BAD_REQUEST
         raise HTTPException(status_code=status_code, detail=detail)

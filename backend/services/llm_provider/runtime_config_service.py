@@ -7,19 +7,35 @@ carrying decrypted provider secrets.
 
 from __future__ import annotations
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from agent.providers.llm.core.exceptions import LLMProfileNotFoundError
+from agent.providers.llm.core.identity import ProviderModelRef
 from backend.config import E2E_DETERMINISTIC_MODE
 from backend.config.feature_flags import is_semantic_memory_runtime_enabled
+from backend.models import LLMInferenceConnection, LLMModelDeployment
 from core.llm.role_policy import ModelRoleRegistry, RoleKey
 
 from .catalog_service import LLMProviderCatalogService
 from .credential_service import LLMCredentialService
+from .deployment_service import LLMDeploymentService
+from .effective_profile_service import EffectiveProfileService
 from .migration_service import LLMProviderMigrationService
+from .operation_registry import OperationRegistryError
 from .runtime_client_resolver import LLMRuntimeClientResolver
 from .runtime_services import LLMRuntimeServices
 from .selection_service import LLMProviderSelectionService
-from .types import LLMCallTarget, LLMCredentialRef, LLMRuntimeSelection
+from .types import (
+    DeploymentRef,
+    LLMCallTarget,
+    LLMCredentialRef,
+    LLMDeploymentNotFoundError,
+    LLMDeploymentValidationError,
+    LLMRuntimeSelection,
+    LLMRuntimeSelectionV2,
+    ProviderConfigurationError,
+)
 
 
 class LLMRuntimeConfigService:
@@ -93,10 +109,101 @@ class LLMRuntimeConfigService:
             reasoning_effort=reasoning_effort,
         )
 
+    def build_conversation_runtime_selection(
+        self,
+        *,
+        user_id: int,
+        deployment_ref: DeploymentRef | None = None,
+        provider: str | None = None,
+        model: str | None = None,
+        reasoning_effort: str | None = None,
+        require_enabled_credential: bool = True,
+    ) -> LLMRuntimeSelection | LLMRuntimeSelectionV2:
+        """Return the current conversation runtime identity, preferring deployments."""
+
+        if deployment_ref is not None:
+            return self._selection_service.build_explicit_deployment_runtime_selection(
+                user_id=user_id,
+                deployment_ref=deployment_ref,
+                reasoning_effort=reasoning_effort,
+            )
+        if provider is None and model is None:
+            if E2E_DETERMINISTIC_MODE:
+                return self.build_runtime_selection(
+                    user_id=user_id,
+                    reasoning_effort=reasoning_effort,
+                    require_enabled_credential=False,
+                )
+            return self._selection_service.build_deployment_runtime_selection(
+                user_id=user_id,
+                reasoning_effort=reasoning_effort,
+            )
+        if E2E_DETERMINISTIC_MODE:
+            return self.build_runtime_selection(
+                user_id=user_id,
+                provider=provider,
+                model=model,
+                reasoning_effort=reasoning_effort,
+                require_enabled_credential=False,
+            )
+        return self._build_provider_model_conversation_runtime_selection(
+            user_id=user_id,
+            provider=provider,
+            model=model,
+            reasoning_effort=reasoning_effort,
+            require_enabled_credential=require_enabled_credential,
+        )
+
+    def _build_provider_model_conversation_runtime_selection(
+        self,
+        *,
+        user_id: int,
+        provider: str | None,
+        model: str | None,
+        reasoning_effort: str | None,
+        require_enabled_credential: bool,
+    ) -> LLMRuntimeSelectionV2:
+        """Resolve explicit provider/model conversation inputs to V2 identity."""
+
+        if provider is not None and model is not None:
+            resolved_provider = provider
+            resolved_model = model
+        else:
+            current = self._selection_service.get_selection(user_id)
+            resolved_provider = provider or current.provider
+            resolved_model = model or current.model
+        profile = self._catalog.require_selectable_model(
+            resolved_provider,
+            resolved_model,
+        )
+        provider_id = profile.ref.provider
+        model_id = profile.ref.model
+        if require_enabled_credential:
+            self._credential_service.get_credential_ref(user_id, provider_id)
+        deployment = self._migration.ensure_legacy_default_deployment_for_model(
+            user_id=user_id,
+            provider=provider_id,
+            wire_model_id=model_id,
+        )
+        if deployment is None:
+            raise ProviderConfigurationError(
+                "Conversation runtime selection requires a deployment binding"
+            )
+        return self.build_deployment_runtime_selection(
+            user_id=user_id,
+            deployment_id=str(deployment.id),
+            reasoning_effort=reasoning_effort,
+            legacy_provider=provider_id,
+            legacy_model=model_id,
+        )
+
     def build_runtime_services(self) -> LLMRuntimeServices:
         """Return live runtime dependencies for one invocation."""
 
-        client_resolver = LLMRuntimeClientResolver(self._credential_service)
+        client_resolver = LLMRuntimeClientResolver(
+            self._credential_service,
+            db=self._db,
+        )
         memory_runtime_service = None
         if is_semantic_memory_runtime_enabled():
             from backend.services.memory.runtime_service import MemoryRuntimeService
@@ -110,13 +217,46 @@ class LLMRuntimeConfigService:
             memory_runtime_service=memory_runtime_service,
         )
 
+    def build_deployment_runtime_selection(
+        self,
+        *,
+        user_id: int,
+        deployment_id: str,
+        preferred_route_id: str | None = None,
+        reasoning_effort: str | None = None,
+        legacy_provider: str | None = None,
+        legacy_model: str | None = None,
+    ) -> LLMRuntimeSelectionV2:
+        """Build checkpoint-safe V2 identity from current owner-scoped rows."""
+
+        deployments = LLMDeploymentService(self._db)
+        deployment = deployments.get_deployment(
+            user_id=user_id,
+            deployment_id=deployment_id,
+        )
+        route = deployments.select_enabled_route(
+            user_id=user_id,
+            deployment_id=deployment.id,
+            preferred_route_id=preferred_route_id,
+        )
+        if route is not None:
+            preferred_route_id = str(route.id)
+        return LLMRuntimeSelectionV2(
+            deployment_ref=DeploymentRef(
+                deployment_id=str(deployment.id),
+                expected_revision=int(deployment.revision),
+            ),
+            preferred_route_id=preferred_route_id,
+            reasoning_effort=reasoning_effort,
+            legacy_provider=legacy_provider,
+            legacy_model=legacy_model,
+        )
+
     def resolve_role_target(
         self,
         selection: LLMRuntimeSelection,
         role: RoleKey,
         *,
-        reasoning_model: str | None = None,
-        reasoning_provider: str | None = None,
         reasoning_effort: str | None = None,
     ) -> LLMCallTarget:
         """Resolve provider/model target for a role-owned LLM call."""
@@ -125,8 +265,6 @@ class LLMRuntimeConfigService:
             role,
             conversation_model=selection.model,
             conversation_provider=selection.provider,
-            reasoning_model=reasoning_model,
-            reasoning_provider=reasoning_provider,
             reasoning_effort=reasoning_effort or selection.reasoning_effort,
         )
         return LLMCallTarget(
@@ -141,22 +279,163 @@ class LLMRuntimeConfigService:
         *,
         user_id: int,
         checkpoint_hint: dict | None = None,
-    ) -> LLMRuntimeSelection:
+    ) -> LLMRuntimeSelection | LLMRuntimeSelectionV2:
         """Rebuild runtime selection for resume/retry from authorized user context."""
 
-        hint = checkpoint_hint or {}
-        provider = hint.get("provider") if isinstance(hint.get("provider"), str) else None
-        model = hint.get("model") if isinstance(hint.get("model"), str) else None
+        if checkpoint_hint is None:
+            return self.build_conversation_runtime_selection(
+                user_id=user_id,
+                require_enabled_credential=not E2E_DETERMINISTIC_MODE,
+            )
+
+        hint = checkpoint_hint
+        if self._is_deployment_runtime_hint(hint):
+            return self._build_deployment_continuation_selection(
+                user_id=user_id,
+                checkpoint_hint=hint,
+            )
+
+        provider = self._hint_string(hint, "provider")
+        model = self._hint_string(hint, "model")
         reasoning_effort = (
             hint.get("reasoning_effort") if isinstance(hint.get("reasoning_effort"), str) else None
         )
-        return self.build_runtime_selection(
+        if provider is None or model is None:
+            raise ProviderConfigurationError(
+                "Legacy checkpoint runtime selection is incomplete and cannot run; "
+                "reselect an available LLM deployment, then retry resume."
+            )
+
+        deployment = self._find_legacy_checkpoint_deployment(
             user_id=user_id,
             provider=provider,
             model=model,
-            reasoning_effort=reasoning_effort,
-            require_enabled_credential=not E2E_DETERMINISTIC_MODE,
         )
+        if deployment is None:
+            raise ProviderConfigurationError(
+                "Legacy checkpoint runtime selection is unmapped and cannot run; "
+                "reselect an available LLM deployment, then retry resume."
+            )
+        return self.build_deployment_runtime_selection(
+            user_id=user_id,
+            deployment_id=str(deployment.id),
+            reasoning_effort=reasoning_effort,
+            legacy_provider=provider,
+            legacy_model=model,
+        )
+
+    @staticmethod
+    def _hint_string(hint: dict, key: str) -> str | None:
+        value = hint.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        return None
+
+    @staticmethod
+    def _is_deployment_runtime_hint(hint: dict) -> bool:
+        return hint.get("schema_version") == 2 or "deployment_ref" in hint
+
+    def _build_deployment_continuation_selection(
+        self,
+        *,
+        user_id: int,
+        checkpoint_hint: dict,
+    ) -> LLMRuntimeSelectionV2:
+        try:
+            selection = LLMRuntimeSelectionV2.from_mapping(checkpoint_hint)
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ProviderConfigurationError(
+                "Checkpoint deployment runtime selection is invalid and cannot run; "
+                "reselect an available LLM deployment, then retry resume."
+            ) from exc
+        deployments = LLMDeploymentService(self._db)
+        deployment = deployments.get_deployment(
+            user_id=user_id,
+            deployment_id=selection.deployment_ref.deployment_id,
+        )
+        if selection.preferred_route_id is not None:
+            route = deployments.get_route(
+                user_id=user_id,
+                route_id=selection.preferred_route_id,
+            )
+            if route.deployment_id != deployment.id or not route.enabled:
+                raise LLMDeploymentNotFoundError(
+                    "Preferred deployment route is unavailable"
+                )
+        return selection
+
+    def _find_legacy_checkpoint_deployment(
+        self,
+        *,
+        user_id: int,
+        provider: str,
+        model: str,
+    ) -> LLMModelDeployment | None:
+        self._migration.backfill_deployment_identity_for_user(user_id)
+        try:
+            legacy_ref = ProviderModelRef(provider, model).normalized()
+        except (TypeError, ValueError):
+            return None
+        rows = self._db.execute(
+            select(LLMModelDeployment, LLMInferenceConnection)
+            .join(
+                LLMInferenceConnection,
+                LLMInferenceConnection.id == LLMModelDeployment.connection_id,
+            )
+            .where(
+                LLMInferenceConnection.user_id == user_id,
+            )
+            .order_by(
+                LLMModelDeployment.created_at.asc(),
+                LLMModelDeployment.id.asc(),
+            )
+        ).all()
+        deployments = LLMDeploymentService(self._db)
+        profiles = EffectiveProfileService()
+        matches: list[LLMModelDeployment] = []
+        for deployment, connection in rows:
+            routes = deployments.list_routes(
+                user_id=user_id,
+                deployment_id=deployment.id,
+            )
+            for route in routes or (None,):
+                try:
+                    profile = profiles.resolve(
+                        connection=connection,
+                        deployment=deployment,
+                        route=route,
+                    )
+                except (
+                    LLMDeploymentValidationError,
+                    LLMProfileNotFoundError,
+                    OperationRegistryError,
+                ):
+                    continue
+                aliases = {
+                    profile.ref.normalized(),
+                    ProviderModelRef(
+                        profile.ref.provider,
+                        deployment.wire_model_id,
+                    ).normalized(),
+                }
+                if deployment.canonical_model_id:
+                    aliases.add(
+                        ProviderModelRef(
+                            profile.ref.provider,
+                            deployment.canonical_model_id,
+                        ).normalized()
+                    )
+                if legacy_ref in aliases:
+                    matches.append(deployment)
+                    break
+
+        unique_matches = {str(deployment.id): deployment for deployment in matches}
+        if len(unique_matches) > 1:
+            raise ProviderConfigurationError(
+                "Legacy checkpoint runtime selection is ambiguous and cannot run; "
+                "reselect an available LLM deployment, then retry resume."
+            )
+        return next(iter(unique_matches.values()), None)
 
 
 __all__ = ["LLMRuntimeConfigService"]

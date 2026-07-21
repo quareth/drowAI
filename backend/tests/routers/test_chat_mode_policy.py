@@ -10,19 +10,30 @@ from __future__ import annotations
 import asyncio
 from types import SimpleNamespace
 from typing import Any
+from uuid import uuid4
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from backend.database import Base
+from backend.models import LLMCapabilityObservation
 from backend.models.core import Task, User
 from backend.models.tenant import Tenant, TenantMembership
 from backend.routers import chat as chat_routes
+from backend.core.rate_limiter import rate_limiter
 from backend.services.llm_provider import LLMCredentialService, LLMProviderSelectionService
+from backend.services.llm_provider.connection_service import LLMConnectionService
+from backend.services.llm_provider.deployment_service import LLMDeploymentService
+from backend.services.llm_provider.operation_registry import (
+    HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+    NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+)
+from backend.services.llm_provider.types import LLMConnectionCredentialRef, LLMConnectionState
+from agent.providers.llm.core.capabilities import LLMCapability
 from agent.providers.llm.core.identity import ANTHROPIC_PROVIDER_ID
 from agent.providers.llm.profiles import ANTHROPIC_LISTABLE_MODEL_IDS
 
@@ -70,6 +81,7 @@ def _build_client(
     monkeypatch,
     selected_provider: str = "openai",
     selected_model: str = "gpt-5.2",
+    deployment_model: str | None = None,
 ) -> tuple[TestClient, dict[str, Any], list[dict[str, Any]]]:
     engine = create_engine(
         "sqlite://",
@@ -100,16 +112,60 @@ def _build_client(
             provider=ANTHROPIC_PROVIDER_ID,
             api_key="test-anthropic-key",
         )
-        LLMProviderSelectionService(
+        selection_service = LLMProviderSelectionService(
             db,
             credential_service=credential_service,
-        ).set_selection(
-            user_id=user.id,
-            provider=selected_provider,
-            model=selected_model,
         )
+        deployment_id = None
+        if deployment_model is not None:
+            connection_service = LLMConnectionService(db)
+            connection = connection_service.create_draft(
+                user_id=user.id,
+                display_name="Chat deployment endpoint",
+                connection_preset_id="openai",
+                runtime_family_id="openai_native",
+            )
+            connection = connection_service.transition_state(
+                user_id=user.id,
+                connection_id=connection.id,
+                expected_revision=1,
+                target_state=LLMConnectionState.DISABLED,
+            )
+            connection_service.transition_state(
+                user_id=user.id,
+                connection_id=connection.id,
+                expected_revision=connection.revision,
+                target_state=LLMConnectionState.ENABLED,
+            )
+            deployment = LLMDeploymentService(db).create_deployment(
+                user_id=user.id,
+                connection_id=connection.id,
+                expected_connection_revision=3,
+                wire_model_id=deployment_model,
+                canonical_model_id=deployment_model,
+                display_name=deployment_model,
+                discovery_source="operator",
+            )
+            selection_service.set_deployment_selection(
+                user_id=user.id,
+                deployment_id=str(deployment.id),
+                expected_deployment_revision=1,
+            )
+            deployment_id = str(deployment.id)
+        else:
+            selection = selection_service.set_selection(
+                user_id=user.id,
+                provider=selected_provider,
+                model=selected_model,
+            )
+            deployment_id = str(selection.deployment_id) if selection.deployment_id else None
         db.commit()
-        seeded = {"user_id": user.id, "task_id": task.id}
+        seeded = {
+            "user_id": user.id,
+            "task_id": task.id,
+            "deployment_id": deployment_id,
+            "session_factory": session_factory,
+        }
 
     app = FastAPI()
     app.include_router(chat_routes.router)
@@ -150,6 +206,7 @@ def _build_client(
 
     def _cleanup() -> None:
         app.dependency_overrides.clear()
+        rate_limiter.calls.clear()
         client.close()
         engine.dispose()
 
@@ -179,14 +236,171 @@ def test_chat_route_ignores_client_mode_for_generation(monkeypatch) -> None:
         generation_call = captured_calls[0]
         assert generation_call["requested_mode"] is None
         assert generation_call["provider"] == "openai"
-        assert generation_call["runtime_selection"]["provider"] == "openai"
-        assert generation_call["runtime_selection"]["model"] == "gpt-5.2"
-        assert generation_call["runtime_selection"]["credential_ref"] == {
-            "user_id": seeded["user_id"],
-            "provider": "openai",
+        assert generation_call["runtime_selection"]["schema_version"] == 2
+        assert generation_call["runtime_selection"]["deployment_ref"] == {
+            "deployment_id": seeded["deployment_id"],
+            "expected_revision": 1,
         }
+        assert generation_call["runtime_selection"]["legacy_provider"] == "openai"
+        assert generation_call["runtime_selection"]["legacy_model"] == "gpt-5.2"
+        assert "credential_ref" not in generation_call["runtime_selection"]
         assert "api_key" not in generation_call["runtime_selection"]
         assert asyncio.create_task is original_create_task
+    finally:
+        seeded["_cleanup"]()
+
+
+def test_chat_route_preserves_saved_deployment_runtime_selection(monkeypatch) -> None:
+    hub = _FakeHub(streaming=False, queued_count=0)
+    client, seeded, captured_calls = _build_client(
+        hub=hub,
+        monkeypatch=monkeypatch,
+        deployment_model="gpt-5-mini",
+    )
+    try:
+        response = client.post(
+            f"/tasks/{seeded['task_id']}/chat",
+            json={"message": "Use the saved deployment"},
+        )
+        assert response.status_code == 202, response.text
+
+        generation_call = captured_calls[0]
+        runtime_selection = generation_call["runtime_selection"]
+        assert runtime_selection["schema_version"] == 2
+        assert runtime_selection["deployment_ref"] == {
+            "deployment_id": seeded["deployment_id"],
+            "expected_revision": 1,
+        }
+        assert runtime_selection["legacy_provider"] == "openai"
+        assert runtime_selection["legacy_model"] == "gpt-5-mini"
+        assert generation_call["provider"] == "openai"
+        assert generation_call["model"] == "gpt-5-mini"
+        assert "credential_ref" not in runtime_selection
+    finally:
+        seeded["_cleanup"]()
+
+
+def test_chat_route_preserves_explicit_deployment_ref_for_same_model_choice(monkeypatch) -> None:
+    hub = _FakeHub(streaming=False, queued_count=0)
+    client, seeded, captured_calls = _build_client(
+        hub=hub,
+        monkeypatch=monkeypatch,
+        deployment_model="gpt-5.2",
+    )
+    try:
+        def create_runnable_gpt_oss_deployment(
+            db: Session,
+            *,
+            preset_id: str,
+            serving_operator_id: str,
+            display_name: str,
+            wire_model_id: str,
+        ) -> dict[str, Any]:
+            connections = LLMConnectionService(db)
+            connection = connections.create_draft(
+                user_id=seeded["user_id"],
+                display_name=display_name,
+                connection_preset_id=preset_id,
+                runtime_family_id="openai_compatible_chat",
+                serving_operator_id=serving_operator_id,
+                non_secret_config={"auth_mode": "bearer"},
+            )
+            credential_service = LLMCredentialService(db)
+            credential_service.upsert_connection_api_key(
+                user_id=seeded["user_id"],
+                connection_ref=LLMConnectionCredentialRef(
+                    connection_id=str(connection.id),
+                    expected_revision=int(connection.revision),
+                ),
+                provider=preset_id,
+                api_key=f"{preset_id}-key",
+            )
+            db.refresh(connection)
+            deployment, route = LLMDeploymentService(db).create_preset_deployment(
+                user_id=seeded["user_id"],
+                connection_id=connection.id,
+                expected_connection_revision=int(connection.revision),
+                wire_model_id=wire_model_id,
+                display_name=display_name,
+                canonical_model_id="openai/gpt-oss-20b",
+            )
+            connection = connections.transition_state(
+                user_id=seeded["user_id"],
+                connection_id=connection.id,
+                expected_revision=int(connection.revision),
+                target_state=LLMConnectionState.DISABLED,
+            )
+            connection = connections.transition_state(
+                user_id=seeded["user_id"],
+                connection_id=connection.id,
+                expected_revision=int(connection.revision),
+                target_state=LLMConnectionState.ENABLED,
+            )
+            credential_fingerprint = credential_service.connection_credential_fingerprint(
+                user_id=seeded["user_id"],
+                connection_ref=LLMConnectionCredentialRef(
+                    connection_id=str(connection.id),
+                    expected_revision=int(connection.revision),
+                ),
+                provider=preset_id,
+            )
+            db.add(
+                LLMCapabilityObservation(
+                    id=uuid4(),
+                    deployment_id=deployment.id,
+                    route_id=route.id,
+                    capability=LLMCapability.CHAT.value,
+                    support_state="supported",
+                    constraints={
+                        "connection_id": str(connection.id),
+                        "connection_revision": int(connection.revision),
+                        "credential_fingerprint": credential_fingerprint,
+                    },
+                    source="capability_probe",
+                    revision=1,
+                    fingerprint=f"{preset_id}-chat-supported",
+                )
+            )
+            return {
+                "deployment_id": str(deployment.id),
+                "expected_revision": int(deployment.revision),
+            }
+
+        with seeded["session_factory"]() as db:
+            hf_ref = create_runnable_gpt_oss_deployment(
+                db,
+                preset_id=HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+                serving_operator_id="huggingface",
+                display_name="GPT-OSS 20B via Hugging Face",
+                wire_model_id="openai/gpt-oss-20b:fireworks-ai",
+            )
+            nim_ref = create_runnable_gpt_oss_deployment(
+                db,
+                preset_id=NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+                serving_operator_id="nvidia_nim",
+                display_name="GPT-OSS 20B via NVIDIA NIM",
+                wire_model_id="openai/gpt-oss-20b:nim",
+            )
+            assert hf_ref["deployment_id"] != nim_ref["deployment_id"]
+            db.commit()
+
+        response = client.post(
+            f"/tasks/{seeded['task_id']}/chat",
+            json={
+                "message": "Use the explicitly selected deployment",
+                "provider": HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+                "model": "gpt-oss-20b",
+                "deployment_ref": nim_ref,
+            },
+        )
+        assert response.status_code == 202, response.text
+        assert len(captured_calls) == 1
+        runtime_selection = captured_calls[0]["runtime_selection"]
+        assert runtime_selection["schema_version"] == 2
+        assert runtime_selection["deployment_ref"] == nim_ref
+        assert runtime_selection["deployment_ref"]["deployment_id"] != seeded["deployment_id"]
+        assert runtime_selection["legacy_provider"] == "openai"
+        assert runtime_selection["legacy_model"] == "gpt-oss-20b"
     finally:
         seeded["_cleanup"]()
 
@@ -213,9 +427,11 @@ def test_chat_route_ignores_client_mode_for_queueing(monkeypatch) -> None:
         assert hub.queued_payload["kwargs"]["requested_mode"] is None
         assert hub.queued_payload["kwargs"]["provider"] == "openai"
         assert hub.queued_payload["kwargs"]["model"] == "gpt-5.2"
-        assert hub.queued_payload["kwargs"]["credential_ref"] == {
-            "user_id": seeded["user_id"],
-            "provider": "openai",
+        assert hub.queued_payload["kwargs"]["credential_ref"] is None
+        assert hub.queued_payload["kwargs"]["runtime_selection"]["schema_version"] == 2
+        assert hub.queued_payload["kwargs"]["runtime_selection"]["deployment_ref"] == {
+            "deployment_id": seeded["deployment_id"],
+            "expected_revision": 1,
         }
         assert "api_key" not in hub.queued_payload["kwargs"]
     finally:
@@ -239,8 +455,11 @@ def test_chat_route_accepts_provider_model_override_for_generation(monkeypatch) 
         call = captured_calls[0]
         assert call["provider"] == "openai"
         assert call["model"] == "gpt-5-mini"
-        assert call["runtime_selection"]["provider"] == "openai"
-        assert call["runtime_selection"]["model"] == "gpt-5-mini"
+        assert call["runtime_selection"]["schema_version"] == 2
+        assert call["runtime_selection"]["deployment_ref"]["expected_revision"] == 1
+        assert call["runtime_selection"]["legacy_provider"] == "openai"
+        assert call["runtime_selection"]["legacy_model"] == "gpt-5-mini"
+        assert "credential_ref" not in call["runtime_selection"]
         assert "api_key" not in call["runtime_selection"]
     finally:
         seeded["_cleanup"]()
@@ -264,12 +483,11 @@ def test_chat_route_accepts_explicit_anthropic_provider_model(monkeypatch) -> No
         call = captured_calls[0]
         assert call["provider"] == ANTHROPIC_PROVIDER_ID
         assert call["model"] == model
-        assert call["runtime_selection"]["provider"] == ANTHROPIC_PROVIDER_ID
-        assert call["runtime_selection"]["model"] == model
-        assert call["runtime_selection"]["credential_ref"] == {
-            "user_id": seeded["user_id"],
-            "provider": ANTHROPIC_PROVIDER_ID,
-        }
+        assert call["runtime_selection"]["schema_version"] == 2
+        assert call["runtime_selection"]["deployment_ref"]["expected_revision"] == 1
+        assert call["runtime_selection"]["legacy_provider"] == ANTHROPIC_PROVIDER_ID
+        assert call["runtime_selection"]["legacy_model"] == model
+        assert "credential_ref" not in call["runtime_selection"]
         assert "api_key" not in call["runtime_selection"]
     finally:
         seeded["_cleanup"]()
@@ -297,12 +515,14 @@ def test_chat_route_uses_saved_anthropic_provider_when_provider_omitted(monkeypa
         call = captured_calls[0]
         assert call["provider"] == ANTHROPIC_PROVIDER_ID
         assert call["model"] == model
-        assert call["runtime_selection"]["provider"] == ANTHROPIC_PROVIDER_ID
-        assert call["runtime_selection"]["model"] == model
-        assert call["runtime_selection"]["credential_ref"] == {
-            "user_id": seeded["user_id"],
-            "provider": ANTHROPIC_PROVIDER_ID,
+        assert call["runtime_selection"]["schema_version"] == 2
+        assert call["runtime_selection"]["deployment_ref"] == {
+            "deployment_id": seeded["deployment_id"],
+            "expected_revision": 1,
         }
+        assert call["runtime_selection"]["legacy_provider"] == ANTHROPIC_PROVIDER_ID
+        assert call["runtime_selection"]["legacy_model"] == model
+        assert "credential_ref" not in call["runtime_selection"]
         assert "api_key" not in call["runtime_selection"]
     finally:
         seeded["_cleanup"]()

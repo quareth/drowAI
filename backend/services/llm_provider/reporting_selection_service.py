@@ -1,8 +1,8 @@
 """Reporting LLM selection service for task memos and reports.
 
-This module owns user-level reporting model persistence and runtime selection
-resolution. It stores provider/model identity only; credentials remain owned by
-the provider credential service.
+This module owns user-level reporting deployment persistence and runtime
+selection resolution. Provider/model fields remain compatibility snapshots;
+credentials remain owned by the provider credential service.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from agent.providers.llm.core.capabilities import LLMCapability
 from agent.providers.llm.core.identity import normalize_provider_id
 from agent.providers.llm.core.reasoning_policy import (
     validate_reasoning_effort_for_provider_model,
@@ -22,9 +23,12 @@ from backend.config import E2E_DETERMINISTIC_MODE
 from .catalog_service import LLMProviderCatalogService
 from .credential_service import LLMCredentialService
 from .migration_service import LLMProviderMigrationService
+from .selection_deployment_resolver import LLMSelectionDeploymentResolver
 from .types import (
+    DeploymentRef,
     LLMCredentialRef,
     LLMRuntimeSelection,
+    LLMRuntimeSelectionV2,
     LLMSelectionStatus,
     ProviderConfigurationError,
 )
@@ -61,10 +65,12 @@ class ReportingLLMSelectionService:
             catalog_service=self._catalog,
             migration_service=self._migration,
         )
+        self._deployment_resolver = LLMSelectionDeploymentResolver(db)
 
     def get_selection_read(self, user_id: int) -> ReportingLLMSelectionRead:
         """Return the configured reporting selection and runnability status."""
 
+        self._migration.backfill_deployment_identity_for_user(user_id)
         selection = self._get_selection_row(user_id)
         if selection is None:
             if E2E_DETERMINISTIC_MODE:
@@ -85,6 +91,10 @@ class ReportingLLMSelectionService:
                     reason="Reporting model is not configured.",
                 ),
             )
+        try:
+            selection = self._reconcile_selection(selection)
+        except Exception:
+            pass
         return ReportingLLMSelectionRead(
             selection=selection,
             status=self._classify_selection(selection),
@@ -108,6 +118,15 @@ class ReportingLLMSelectionService:
             model=normalized_model,
             reasoning_effort=reasoning_effort,
         )
+        deployment = self._migration.ensure_legacy_default_deployment_for_model(
+            user_id=int(user_id),
+            provider=normalized_provider,
+            wire_model_id=normalized_model,
+        )
+        if deployment is None:
+            raise ProviderConfigurationError(
+                "Reporting selection requires a deployment binding."
+            )
 
         selection = self._get_selection_row(user_id)
         if selection is None:
@@ -122,11 +141,66 @@ class ReportingLLMSelectionService:
             selection.provider = normalized_provider
             selection.model = normalized_model
             selection.reasoning_effort = normalized_effort
+        selection.deployment_id = deployment.id
         self._db.flush()
         return selection
 
-    def build_runtime_selection(self, *, user_id: int) -> LLMRuntimeSelection:
-        """Return a runnable reporting runtime selection or raise a safe error."""
+    def set_deployment_selection(
+        self,
+        *,
+        user_id: int,
+        deployment_id: str,
+        expected_deployment_revision: int,
+        reasoning_effort: str | None = None,
+    ) -> UserReportingLLMSelection:
+        """Persist a reporting deployment with compatibility snapshots."""
+
+        target = self._deployment_resolver.resolve(
+            user_id=user_id,
+            deployment_id=deployment_id,
+            expected_revision=expected_deployment_revision,
+            role="reporting",
+            require_structured_output=True,
+        )
+        status = self._deployment_resolver.classify_runnability(
+            user_id=int(user_id),
+            target=target,
+            credential_available=self._credential_service.has_enabled_credential,
+            credential_fingerprint=(
+                self._credential_service.connection_credential_fingerprint
+            ),
+            missing_credential_reason=(
+                "Deployment credential is required for reporting generation"
+            ),
+            required_capabilities=(LLMCapability.CHAT,),
+            capability_missing_reason="Capability evidence is required",
+        )
+        if status is not None and not status.runnable:
+            raise ProviderConfigurationError(
+                status.reason or "Reporting deployment is not runnable."
+            )
+        normalized_effort = _normalize_reasoning_effort(
+            provider=target.profile.ref.provider,
+            model=target.profile.ref.model,
+            reasoning_effort=reasoning_effort,
+        )
+        selection = self._get_selection_row(user_id)
+        if selection is None:
+            selection = UserReportingLLMSelection(user_id=int(user_id))
+            self._db.add(selection)
+        selection.provider = target.provider
+        selection.model = target.model
+        selection.deployment_id = target.deployment.id
+        selection.reasoning_effort = normalized_effort
+        self._db.flush()
+        return selection
+
+    def build_runtime_selection(
+        self,
+        *,
+        user_id: int,
+    ) -> LLMRuntimeSelection | LLMRuntimeSelectionV2:
+        """Return a runnable deterministic or deployment-backed selection."""
 
         if E2E_DETERMINISTIC_MODE:
             return LLMRuntimeSelection(
@@ -137,25 +211,43 @@ class ReportingLLMSelectionService:
                     provider="deterministic_e2e",
                 ),
             )
+        return self.build_deployment_runtime_selection(user_id=user_id)
+
+    def build_deployment_runtime_selection(
+        self,
+        *,
+        user_id: int,
+    ) -> LLMRuntimeSelectionV2:
+        """Build V2 reporting identity after current role/auth validation."""
+
         selection = self._get_selection_row(user_id)
-        if selection is None:
+        if selection is None or selection.deployment_id is None:
             raise ReportingLLMSelectionMissingError(
-                "Reporting model is not configured."
+                "Reporting model has no deployment binding."
             )
+        selection = self._reconcile_selection(selection)
         status = self._classify_selection(selection)
         if not status.runnable:
             raise ProviderConfigurationError(
-                status.reason or "Reporting model is not runnable."
+                status.reason or "Reporting deployment is not runnable."
             )
-        credential_ref = self._credential_service.get_credential_ref(
-            int(user_id),
-            selection.provider,
+        target = self._deployment_resolver.resolve(
+            user_id=user_id,
+            deployment_id=selection.deployment_id,
+            role="reporting",
+            require_structured_output=True,
         )
-        return LLMRuntimeSelection(
-            provider=str(selection.provider),
-            model=str(selection.model),
-            credential_ref=credential_ref,
+        return LLMRuntimeSelectionV2(
+            deployment_ref=DeploymentRef(
+                deployment_id=str(target.deployment.id),
+                expected_revision=int(target.deployment.revision),
+            ),
+            preferred_route_id=(
+                str(target.route.id) if target.route is not None else None
+            ),
             reasoning_effort=selection.reasoning_effort,
+            legacy_provider=selection.provider,
+            legacy_model=selection.model,
         )
 
     def _get_selection_row(
@@ -168,21 +260,51 @@ class ReportingLLMSelectionService:
             )
         ).scalar_one_or_none()
 
+    def _reconcile_selection(
+        self,
+        selection: UserReportingLLMSelection,
+    ) -> UserReportingLLMSelection:
+        """Refresh compatibility snapshots from a saved deployment binding."""
+
+        if selection.deployment_id is None:
+            return selection
+        target = self._deployment_resolver.resolve(
+            user_id=int(selection.user_id),
+            deployment_id=selection.deployment_id,
+            role="reporting",
+            require_structured_output=True,
+        )
+        if selection.provider != target.provider or selection.model != target.model:
+            selection.provider = target.provider
+            selection.model = target.model
+            self._db.flush()
+        return selection
+
     def _classify_selection(
         self,
         selection: UserReportingLLMSelection,
     ) -> LLMSelectionStatus:
         try:
-            profile = self._require_reporting_capable_model(
-                provider=selection.provider,
-                model=selection.model,
+            if selection.deployment_id is None:
+                return LLMSelectionStatus(
+                    status="deployment_unmapped",
+                    selectable=True,
+                    runnable=False,
+                    reason="Reporting selection has no deployment binding.",
+                )
+            target = self._deployment_resolver.resolve(
+                user_id=int(selection.user_id),
+                deployment_id=selection.deployment_id,
+                role="reporting",
+                require_structured_output=True,
             )
+            profile = target.profile
             _normalize_reasoning_effort(
                 provider=profile.ref.provider,
                 model=profile.ref.model,
                 reasoning_effort=selection.reasoning_effort,
             )
-        except ProviderConfigurationError as exc:
+        except Exception as exc:
             return LLMSelectionStatus(
                 status="model_unavailable",
                 selectable=False,
@@ -190,16 +312,21 @@ class ReportingLLMSelectionService:
                 reason=str(exc),
             )
 
-        if not self._credential_service.has_enabled_credential(
+        deployment_status = self._deployment_resolver.classify_runnability(
             user_id=int(selection.user_id),
-            provider=profile.ref.provider,
-        ):
-            return LLMSelectionStatus(
-                status="credential_missing",
-                selectable=True,
-                runnable=False,
-                reason=f"{profile.ref.provider} credential is required for reporting generation",
-            )
+            target=target,
+            credential_available=self._credential_service.has_enabled_credential,
+            credential_fingerprint=(
+                self._credential_service.connection_credential_fingerprint
+            ),
+            missing_credential_reason=(
+                "Deployment credential is required for reporting generation"
+            ),
+            required_capabilities=(LLMCapability.CHAT,),
+            capability_missing_reason="Capability evidence is required",
+        )
+        if deployment_status is not None:
+            return deployment_status
 
         return LLMSelectionStatus(
             status="selectable",

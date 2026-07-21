@@ -6,6 +6,7 @@ import inspect
 import logging
 from typing import Optional
 
+from backend.services.llm_provider.environment_service import LLMProviderEnvironmentService
 from backend.services import container_utils
 from backend.services.docker import container_config
 from backend.services.docker.container_config import ContainerConfigBuilder
@@ -13,10 +14,8 @@ from backend.services.docker.runtime_config import RuntimeConfig
 
 
 SECRET = "sk-test-execution-plane-container-secret-do-not-log"
-
-
-def test_container_config_delegates_llm_environment_without_logging_secret(caplog) -> None:
-    """Docker config receives provider env from one service boundary."""
+def test_container_config_strips_llm_secrets_from_provider_environment(caplog) -> None:
+    """Docker config keeps metadata and rejects provider secret fields."""
 
     calls: list[tuple[int, Optional[int]]] = []
 
@@ -41,8 +40,45 @@ def test_container_config_delegates_llm_environment_without_logging_secret(caplo
     environment = config["environment"]
     assert environment["LLM_PROVIDER"] == "openai"
     assert environment["LLM_MODEL"] == "gpt-5.2"
-    assert environment["OPENAI_API_KEY"] == SECRET
+    assert "OPENAI_API_KEY" not in environment
     assert SECRET not in "\n".join(record.getMessage() for record in caplog.records)
+
+
+def test_openai_provider_environment_service_returns_backend_only_metadata() -> None:
+    """OpenAI selection metadata never requires or resolves a credential."""
+
+    class _RuntimeConfigService:
+        def build_runtime_selection(
+            self,
+            *,
+            user_id: int,
+            require_enabled_credential: bool,
+        ):
+            assert user_id == 34
+            assert require_enabled_credential is False
+            return type(
+                "RuntimeSelection",
+                (),
+                {
+                    "provider": "openai",
+                    "model": "gpt-5.2",
+                },
+            )()
+
+    class _CredentialService:
+        def resolve_secret(self, *_args, **_kwargs):
+            raise AssertionError("container environment must not resolve LLM secrets")
+
+    environment = LLMProviderEnvironmentService(
+        object(),
+        credential_service=_CredentialService(),
+        runtime_config_service=_RuntimeConfigService(),
+    ).build_environment(user_id=34, task_id=12)
+
+    assert environment == {
+        "LLM_PROVIDER": "openai",
+        "LLM_MODEL": "gpt-5.2",
+    }
 
 
 def test_container_config_has_no_router_credential_helper_imports() -> None:

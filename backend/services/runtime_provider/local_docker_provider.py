@@ -19,6 +19,7 @@ from typing import Any
 
 from backend.config.workspace_config import WorkspaceConfig
 from backend.core.time_utils import format_iso, utc_now
+from backend.services.docker.runtime_config import contains_llm_secret_fields
 from backend.services.unified_docker_service import unified_docker_service
 from backend.services.runtime_provider.local_file_comm_cancel import append_file_comm_cancellations
 from backend.services.workspace.manager import WorkspaceManager
@@ -65,6 +66,19 @@ class LocalDockerRuntimeProvider(TaskExecutionRuntimeProvider):
     async def provision_task_runtime(
         self, request: RuntimeOperationRequest
     ) -> RuntimeOperationResult:
+        if contains_llm_secret_fields(request.payload) or contains_llm_secret_fields(
+            request.metadata
+        ):
+            return build_runtime_result(
+                request,
+                accepted=False,
+                provider=self.provider_name,
+                status=RuntimeOperationStatus.REJECTED,
+                error_code="llm_secret_payload_forbidden",
+                error_message=(
+                    "Task runtime provisioning payloads must not contain LLM connection secrets."
+                ),
+            )
         return await self._call_delegate(
             request,
             self._docker_service.create_and_start_container,

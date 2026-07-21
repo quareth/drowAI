@@ -69,7 +69,7 @@ class _ContinuationRuntimeContext:
     """Continuation runtime objects that must be forwarded and closed together."""
 
     runtime_db: Any
-    selection_payload: Dict[str, Any]
+    selection_payload: Optional[Dict[str, Any]]
     runtime_services: Any
     provider: Optional[str]
     model: Optional[str]
@@ -106,21 +106,58 @@ def _runtime_selection_from_metadata(
     return dict(selection)
 
 
+def _runtime_selection_provider(selection: Any) -> Optional[str]:
+    """Return the display provider from legacy or deployment runtime identity."""
+
+    provider = (
+        getattr(selection, "provider", None)
+        if not isinstance(selection, Mapping)
+        else selection.get("provider")
+    )
+    if isinstance(provider, str) and provider.strip():
+        return provider
+    legacy_provider = (
+        getattr(selection, "legacy_provider", None)
+        if not isinstance(selection, Mapping)
+        else selection.get("legacy_provider")
+    )
+    if isinstance(legacy_provider, str) and legacy_provider.strip():
+        return legacy_provider
+    return None
+
+
+def _runtime_selection_model(selection: Any) -> Optional[str]:
+    """Return the display model from legacy or deployment runtime identity."""
+
+    model = (
+        getattr(selection, "model", None)
+        if not isinstance(selection, Mapping)
+        else selection.get("model")
+    )
+    if isinstance(model, str) and model.strip():
+        return model
+    legacy_model = (
+        getattr(selection, "legacy_model", None)
+        if not isinstance(selection, Mapping)
+        else selection.get("legacy_model")
+    )
+    if isinstance(legacy_model, str) and legacy_model.strip():
+        return legacy_model
+    return None
+
+
 def _build_continuation_runtime_context(*, user_id: int) -> _ContinuationRuntimeContext:
-    """Build runtime config/services for resume and retry continuation flows."""
+    """Build live runtime services while deferring selection to checkpoint state."""
 
     runtime_db = SessionLocal()
     try:
         runtime_config_service = LLMRuntimeConfigService(runtime_db)
-        runtime_selection = runtime_config_service.build_continuation_selection(
-            user_id=user_id,
-        )
         return _ContinuationRuntimeContext(
             runtime_db=runtime_db,
-            selection_payload=runtime_selection.to_dict(),
+            selection_payload=None,
             runtime_services=runtime_config_service.build_runtime_services(),
-            provider=runtime_selection.provider,
-            model=runtime_selection.model,
+            provider=None,
+            model=None,
         )
     except Exception:
         runtime_db.close()
@@ -138,15 +175,9 @@ def _apply_runtime_selection_from_result(
         return
     context.selection_payload = resolved_runtime_selection
     context.provider = (
-        resolved_runtime_selection.get("provider")
-        if isinstance(resolved_runtime_selection.get("provider"), str)
-        else context.provider
+        _runtime_selection_provider(resolved_runtime_selection) or context.provider
     )
-    context.model = (
-        resolved_runtime_selection.get("model")
-        if isinstance(resolved_runtime_selection.get("model"), str)
-        else context.model
-    )
+    context.model = _runtime_selection_model(resolved_runtime_selection) or context.model
 
 
 async def _publish_turn_result_events_for_sequence(
@@ -507,6 +538,7 @@ class TurnExecutionOrchestrator:
                 completion_source="initial_generation",
                 context_window_metadata=context_window_metadata,
                 model=model,
+                runtime_selection=runtime_selection,
                 emit_token_metrics=True,
                 base_metadata=completion_metadata,
             )
@@ -883,6 +915,7 @@ class TurnExecutionOrchestrator:
                     ),
                     context_window_metadata=context_window_metadata,
                     model=runtime_context.model,
+                    runtime_selection=runtime_context.selection_payload,
                     base_metadata=completion_metadata,
                 )
                 interrupt_completed_fn = (
@@ -1348,6 +1381,7 @@ class TurnExecutionOrchestrator:
                 completion_source="checkpoint_retry",
                 context_window_metadata=context_window_metadata,
                 model=runtime_context.model,
+                runtime_selection=runtime_context.selection_payload,
                 base_metadata=completion_metadata,
             )
             await retry_lifecycle.publish(

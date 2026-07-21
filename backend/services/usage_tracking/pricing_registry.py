@@ -36,6 +36,9 @@ OUTPUT_TOKENS = "output_tokens"
 ANTHROPIC_CACHE_CREATION_INPUT_TOKENS = "cache_creation_input_tokens"
 ANTHROPIC_CACHE_CREATION_INPUT_TOKENS_1H = "cache_creation_input_tokens_1h"
 ANTHROPIC_CACHE_READ_INPUT_TOKENS = "cache_read_input_tokens"
+OPENAI_PRICING_REVISION = "openai_text_pricing_v1"
+OPENAI_ESTIMATE_PRICING_REVISION = "openai_text_estimate_v1"
+ANTHROPIC_PRICING_REVISION = "anthropic_text_pricing_v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +62,7 @@ class PricingQuote:
     schedule: ComponentPriceSchedule | None
     api_surface: str | None = None
     reason: str | None = None
+    pricing_revision: str | None = None
 
 
 def _schedule(
@@ -328,6 +332,16 @@ def get_pricing_quote(
     surface = str(api_surface or "").strip().lower() or None
 
     if provider == OPENAI_PROVIDER_ID:
+        if model == "gpt-oss-20b":
+            return PricingQuote(
+                provider=provider,
+                model=model,
+                status=PRICING_UNAVAILABLE,
+                schedule=None,
+                api_surface=surface,
+                reason="openai_gpt_oss_pricing_not_registered",
+                pricing_revision=None,
+            )
         schedule = _resolve_openai_exact_schedule(model)
         if schedule is not None:
             return PricingQuote(
@@ -336,6 +350,7 @@ def get_pricing_quote(
                 status=PRICING_AVAILABLE,
                 schedule=schedule,
                 api_surface=surface,
+                pricing_revision=OPENAI_PRICING_REVISION,
             )
         schedule = _resolve_openai_snapshot_estimate_schedule(model)
         if schedule is not None:
@@ -346,6 +361,7 @@ def get_pricing_quote(
                 schedule=schedule,
                 api_surface=surface,
                 reason="openai_snapshot_compatibility_estimate",
+                pricing_revision=OPENAI_ESTIMATE_PRICING_REVISION,
             )
         return PricingQuote(
             provider=provider,
@@ -354,6 +370,7 @@ def get_pricing_quote(
             schedule=OPENAI_DEFAULT_ESTIMATE,
             api_surface=surface,
             reason="openai_default_compatibility_estimate",
+            pricing_revision=OPENAI_ESTIMATE_PRICING_REVISION,
         )
 
     if provider == ANTHROPIC_PROVIDER_ID:
@@ -368,6 +385,7 @@ def get_pricing_quote(
                 status=PRICING_AVAILABLE,
                 schedule=schedule,
                 api_surface=surface,
+                pricing_revision=ANTHROPIC_PRICING_REVISION,
             )
         return PricingQuote(
             provider=provider,
@@ -376,6 +394,7 @@ def get_pricing_quote(
             schedule=None,
             api_surface=surface,
             reason="anthropic_model_pricing_not_registered",
+            pricing_revision=None,
         )
 
     return PricingQuote(
@@ -385,6 +404,7 @@ def get_pricing_quote(
         schedule=None,
         api_surface=surface,
         reason="provider_pricing_not_registered",
+        pricing_revision=None,
     )
 
 
@@ -486,6 +506,7 @@ __all__ = [
     "INPUT_TOKENS",
     "OPENAI_DEFAULT_ESTIMATE",
     "OPENAI_PRICE_SCHEDULES",
+    "OPENAI_PRICING_REVISION",
     "OUTPUT_TOKENS",
     "PRICING_AVAILABLE",
     "PRICING_ESTIMATED",

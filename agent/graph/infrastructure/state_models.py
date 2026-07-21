@@ -8,6 +8,8 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from core.llm.runtime_selection import project_checkpoint_runtime_selection
+
 from ..state import FactsState, InteractiveState, TraceState
 
 logger = logging.getLogger(__name__)
@@ -253,6 +255,19 @@ def build_cancellation_tokens(
     return CancellationTokens(cancelled=cancelled, reason=reason)
 
 
+def checkpoint_safe_llm_runtime_selection(
+    value: Any,
+    *,
+    include_legacy_diagnostics: bool = True,
+) -> Optional[Dict[str, Any]]:
+    """Return the canonical checkpoint-safe V2 runtime selection payload."""
+
+    return project_checkpoint_runtime_selection(
+        value,
+        include_legacy_diagnostics=include_legacy_diagnostics,
+    )
+
+
 def initialize_extended_state(
     *,
     task_id: int,
@@ -290,5 +305,6 @@ __all__ = [
     "PersonaState",
     "build_budget_envelope",
     "build_cancellation_tokens",
+    "checkpoint_safe_llm_runtime_selection",
     "initialize_extended_state",
 ]

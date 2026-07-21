@@ -3,13 +3,12 @@ Shared LLM role contract types and constants.
 
 This module defines the vocabulary shared by backend services and agent graph
 code when they talk about role-owned LLM calls. It owns role keys, call source
-labels, reasoning-effort literals, resolved call dataclasses, and the
-provider/model override environment variable names.
+labels, reasoning-effort literals, and resolved call dataclasses.
 
 Boundary: this file is contract-only. It must not import provider registries,
 construct clients, read credentials, or encode provider-specific model
-selection policy. Resolver behavior belongs in `role_policy.py`; provider-owned
-internal defaults belong in provider profile builders.
+selection policy. Resolver behavior belongs in `role_policy.py`; concrete model
+capabilities belong in provider profile builders.
 """
 
 from __future__ import annotations
@@ -26,7 +25,7 @@ ROLE_TOOL_OUTPUT_COMPRESSOR = "tool_output_compressor"
 ROLE_TOOL_CATEGORY_SELECTOR = "tool_category_selector"
 ROLE_POST_TOOL_ARTICULATOR = "post_tool_articulator"
 
-CallSource = Literal["user_selected", "internal_fixed"]
+CallSource = Literal["user_selected"]
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh", "max"]
 RoleKey = Literal[
     "conversation_main",
@@ -34,13 +33,14 @@ RoleKey = Literal[
     "post_tool_observation",
     "post_tool_articulator",
     "intent_classifier",
+    "context_compressor",
     "tool_output_compressor",
     "tool_category_selector",
 ]
 
 DEFAULT_CONVERSATION_MAIN_MODEL = "gpt-5.2"
 DEFAULT_USER_SELECTED_REASONING_EFFORT: ReasoningEffort = "medium"
-DEFAULT_INTERNAL_REASONING_EFFORT: ReasoningEffort = "minimal"
+DEFAULT_INTERNAL_REASONING_EFFORT: ReasoningEffort = "low"
 CANONICAL_REASONING_EFFORT_VALUES: tuple[ReasoningEffort, ...] = (
     "none",
     "minimal",
@@ -51,10 +51,6 @@ CANONICAL_REASONING_EFFORT_VALUES: tuple[ReasoningEffort, ...] = (
     "max",
 )
 DEFAULT_PROVIDER_ID = "openai"
-
-TOOL_OUTPUT_COMPRESSOR_MODEL_REF_ENV = "LANGGRAPH_TOOL_OUTPUT_COMPRESSOR_MODEL_REF"
-TOOL_CATEGORY_SELECTOR_MODEL_REF_ENV = "LANGGRAPH_TOOL_CATEGORY_SELECTOR_MODEL_REF"
-POST_TOOL_ARTICULATOR_MODEL_REF_ENV = "LANGGRAPH_POST_TOOL_ARTICULATOR_MODEL_REF"
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,26 +71,6 @@ class ProviderModelBinding:
     model: str
 
 
-@dataclass(frozen=True, slots=True)
-class InternalRoleModelBinding:
-    """Provider-scoped default model for an internal role."""
-
-    role: RoleKey
-    provider: str
-    model: str
-
-
-def internal_role_model_ref_env(role: RoleKey) -> str:
-    """Return the provider/model override env var for an internal role."""
-    if role == ROLE_TOOL_OUTPUT_COMPRESSOR:
-        return TOOL_OUTPUT_COMPRESSOR_MODEL_REF_ENV
-    if role == ROLE_TOOL_CATEGORY_SELECTOR:
-        return TOOL_CATEGORY_SELECTOR_MODEL_REF_ENV
-    if role == ROLE_POST_TOOL_ARTICULATOR:
-        return POST_TOOL_ARTICULATOR_MODEL_REF_ENV
-    raise ValueError(f"Unknown internal model role: {role}")
-
-
 __all__ = [
     "CANONICAL_REASONING_EFFORT_VALUES",
     "CallSource",
@@ -102,8 +78,6 @@ __all__ = [
     "DEFAULT_INTERNAL_REASONING_EFFORT",
     "DEFAULT_PROVIDER_ID",
     "DEFAULT_USER_SELECTED_REASONING_EFFORT",
-    "InternalRoleModelBinding",
-    "POST_TOOL_ARTICULATOR_MODEL_REF_ENV",
     "ProviderModelBinding",
     "ROLE_CONTEXT_COMPRESSOR",
     "ROLE_CONVERSATION_MAIN",
@@ -116,7 +90,4 @@ __all__ = [
     "ReasoningEffort",
     "RoleCallSettings",
     "RoleKey",
-    "TOOL_CATEGORY_SELECTOR_MODEL_REF_ENV",
-    "TOOL_OUTPUT_COMPRESSOR_MODEL_REF_ENV",
-    "internal_role_model_ref_env",
 ]

@@ -11,7 +11,8 @@ Boundary:
 """
 
 import logging
-from typing import Dict, List, Tuple
+from collections.abc import Mapping, Sequence
+from typing import Any, Dict, List, Tuple
 
 from runtime_shared.docker_contracts import (
     CONTAINER_CONTROL_PATH,
@@ -29,9 +30,69 @@ from runtime_shared.docker_contracts import (
 
 logger = logging.getLogger(__name__)
 
+_LLM_SECRET_FIELD_NAMES = frozenset(
+    {
+        "API_KEY",
+        "ACCESS_TOKEN",
+        "REFRESH_TOKEN",
+        "CLIENT_SECRET",
+        "PASSWORD",
+        "SECRET",
+        "TOKEN",
+        "AUTHORIZATION",
+        "PROXY_AUTHORIZATION",
+        "AZURE_OPENAI_KEY",
+        "AWS_SECRET_ACCESS_KEY",
+    }
+)
+_LLM_SECRET_FIELD_SUFFIXES = (
+    "_API_KEY",
+    "_ACCESS_TOKEN",
+    "_REFRESH_TOKEN",
+    "_CLIENT_SECRET",
+    "_PRIVATE_KEY",
+    "_PASSWORD",
+    "_SECRET",
+    "_TOKEN",
+)
+
+
+def is_llm_secret_field_name(field_name: object) -> bool:
+    """Return whether a field name denotes decrypted LLM auth material."""
+
+    normalized = str(field_name or "").strip().replace("-", "_").upper()
+    return normalized in _LLM_SECRET_FIELD_NAMES or normalized.endswith(
+        _LLM_SECRET_FIELD_SUFFIXES
+    )
+
+
+def contains_llm_secret_fields(value: Any) -> bool:
+    """Detect secret-bearing fields in a nested runtime payload without reading values."""
+
+    if isinstance(value, Mapping):
+        return any(
+            is_llm_secret_field_name(key) or contains_llm_secret_fields(item)
+            for key, item in value.items()
+        )
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
+        return any(contains_llm_secret_fields(item) for item in value)
+    return False
+
 
 class RuntimeConfig:
     """Stateless runtime/mount-policy helpers extracted from UnifiedDockerService."""
+
+    def sanitize_llm_provider_environment(
+        self,
+        environment: Mapping[str, str],
+    ) -> Dict[str, str]:
+        """Remove all secret-bearing fields from provider container metadata."""
+
+        return {
+            str(key): str(value)
+            for key, value in environment.items()
+            if not is_llm_secret_field_name(key)
+        }
 
     def resolve_runtime_path_mode_with_activation(self) -> Tuple[str, str]:
         """Resolve canonical runtime path mode plus deterministic activation reason."""

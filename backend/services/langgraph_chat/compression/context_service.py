@@ -18,11 +18,11 @@ from math import ceil, floor
 from typing import Any, Awaitable, Callable, Literal, Mapping, Optional
 
 from agent.providers.llm.core.budget_policy import decide_output_budget
-from agent.providers.llm.core.identity import ProviderModelRef
 from backend.config import ENABLE_CONTEXT_COMPRESSION
 from backend.services.metrics.utils import safe_gauge, safe_inc
 from core.llm import LLM_TIMEOUT_CONTEXT_COMPRESSOR_SEC, wait_for_with_timeout
 from core.llm.role_contracts import ROLE_CONTEXT_COMPRESSOR, RoleCallSettings
+from core.llm.role_policy import ModelRoleRegistry
 from core.prompts.registry import PromptRegistry
 
 from backend.services.langgraph_chat.compression.context_models import (
@@ -60,12 +60,19 @@ class ContextCompressionService:
         prompt_registry: Optional[PromptRegistry] = None,
         compressor: Optional[CompressorCallable] = None,
         context_window_manager_factory: Optional[ContextWindowManagerFactory] = None,
+        model_role_registry: Optional[ModelRoleRegistry] = None,
     ) -> None:
         self._prompt_registry = prompt_registry or PromptRegistry()
         self._compressor = compressor
         self._context_window_manager_factory = (
-            context_window_manager_factory or (lambda max_tokens: ContextWindowManager(max_tokens=max_tokens))
+            context_window_manager_factory
+            or (
+                lambda max_tokens: ContextWindowManager(
+                    max_tokens=max_tokens
+                )
+            )
         )
+        self._model_role_registry = model_role_registry or ModelRoleRegistry()
 
     @staticmethod
     def is_enabled() -> bool:
@@ -380,21 +387,23 @@ class ContextCompressionService:
             "runtime_selection, and runtime_user_id"
         )
 
-    @staticmethod
     def _resolve_compressor_settings(
+        self,
         request: ContextCompressionRequest,
     ) -> RoleCallSettings:
-        """Use the task-selected provider/model as the compressor target."""
-        selected_ref = ProviderModelRef(
-            request.provider,
-            request.model,
-        ).normalized()
-        return RoleCallSettings(
-            provider=selected_ref.provider,
-            model=selected_ref.model,
-            reasoning_effort=None,
-            source="user_selected",
-        )
+        """Resolve explicit conversation-target inheritance through role policy."""
+
+        try:
+            return self._model_role_registry.resolve_call_settings(
+                ROLE_CONTEXT_COMPRESSOR,
+                conversation_provider=request.provider,
+                conversation_model=request.model,
+            )
+        except ValueError as exc:
+            raise CompressionRequiredError(
+                reason="compressor_target_incompatible",
+                detail=str(exc),
+            ) from exc
 
     @staticmethod
     def _validate_compressor_request_fit(

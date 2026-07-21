@@ -350,6 +350,9 @@ class EngagementReportRepository(ReportingRepositoryBase):
         expected_memo_ids = self._canonical_memo_id_strings(selected_task_memo_ids)
         if not expected_memo_ids:
             return None
+        requested_model_identity = _reporting_model_identity(llm_runtime_selection)
+        if requested_model_identity is None:
+            return None
 
         rows = (
             self.db.query(EngagementReport)
@@ -370,9 +373,13 @@ class EngagementReportRepository(ReportingRepositoryBase):
             generation_metadata = row.generation_metadata or {}
             if not isinstance(generation_metadata, dict):
                 continue
-            if _reporting_model_identity(
+            stored_model_identity = _reporting_model_identity(
                 generation_metadata.get("llm_runtime_selection")
-            ) != _reporting_model_identity(llm_runtime_selection):
+            )
+            if (
+                stored_model_identity is None
+                or stored_model_identity != requested_model_identity
+            ):
                 continue
             if generation_metadata.get(
                     GENERATION_METADATA_SOURCE_WATERMARK_HASH_KEY
@@ -631,14 +638,37 @@ class EngagementReportRepository(ReportingRepositoryBase):
         return report
 
 
-def _canonical_json_mapping(value: Any) -> dict[str, Any]:
-    return dict(value) if isinstance(value, dict) else {}
+def _reporting_model_identity(value: Any) -> tuple[Any, ...] | None:
+    """Return a report-reuse key, or no key for malformed runtime identity."""
 
-
-def _reporting_model_identity(value: Any) -> dict[str, Any]:
-    mapping = _canonical_json_mapping(value)
-    return {
-        "provider": mapping.get("provider"),
-        "model": mapping.get("model"),
-        "reasoning_effort": mapping.get("reasoning_effort"),
-    }
+    if not isinstance(value, dict):
+        return ("missing",)
+    if value.get("schema_version") == 2 or "deployment_ref" in value:
+        deployment_ref = value.get("deployment_ref")
+        if not isinstance(deployment_ref, dict):
+            return None
+        deployment_id = deployment_ref.get("deployment_id")
+        expected_revision = deployment_ref.get("expected_revision")
+        if (
+            not isinstance(deployment_id, str)
+            or not deployment_id.strip()
+            or isinstance(expected_revision, bool)
+            or not isinstance(expected_revision, int)
+            or expected_revision <= 0
+        ):
+            return None
+        return (
+            "deployment",
+            deployment_id.strip(),
+            expected_revision,
+            value.get("preferred_route_id"),
+            value.get("reasoning_effort"),
+        )
+    if "schema_version" in value:
+        return None
+    return (
+        "legacy",
+        value.get("provider"),
+        value.get("model"),
+        value.get("reasoning_effort"),
+    )

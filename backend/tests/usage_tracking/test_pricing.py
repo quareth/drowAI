@@ -37,6 +37,7 @@ from backend.services.usage_tracking.pricing_registry import (
     CACHE_WRITE_TOKENS,
     INPUT_TOKENS,
     OUTPUT_TOKENS,
+    PRICING_UNAVAILABLE,
     PricingQuote,
     get_pricing_quote,
 )
@@ -754,6 +755,11 @@ class TestPricingDataIntegrity:
         for profile in list_catalog_model_profiles(provider):
             quote = get_pricing_quote(ProviderModelRef(provider, profile.ref.model))
 
+            if str(profile.ref) == "openai/gpt-oss-20b":
+                assert quote.status == PRICING_UNAVAILABLE
+                assert quote.reason == "openai_gpt_oss_pricing_not_registered"
+                assert quote.schedule is None
+                continue
             assert quote.status == PRICING_AVAILABLE, profile.ref.model
             assert quote.reason is None, profile.ref.model
             assert quote.schedule is not None, profile.ref.model

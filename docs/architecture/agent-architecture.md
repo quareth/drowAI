@@ -144,8 +144,9 @@ Tool execution boundaries:
 - OpenAI and Anthropic adapters translate neutral tool, structured-output,
   usage, and request settings into native provider payloads.
 - Backend runtime services resolve credential refs and attach live runtime
-  services at invocation time. Graph state carries serializable provider/model
-  metadata, not decrypted credentials or SDK clients.
+  services at invocation time. Graph state carries serializable deployment
+  references plus compatibility provider/model snapshots, not decrypted
+  credentials or SDK clients.
 
 ## Context And Memory
 

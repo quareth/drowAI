@@ -94,7 +94,7 @@ Selection inputs:
 
 - normalized `agent_mode`
 - `plan_mode`
-- provider/model/runtime metadata
+- deployment-aware provider/model/runtime metadata
 - intent classifier enrichment
 - feature flags for simple-tool and deep-reasoning availability
 - deterministic test mode overrides
@@ -110,22 +110,25 @@ Route policy:
 ### Pre-classifier context compaction
 
 For non-deterministic turns, `LangGraphChatFacade` resolves the classifier's
-task-selected provider/model, prepares the exact classifier request, and counts
-that request's system prompt, user prompt, structured-output schema, and output
-reservation before classification. The soft trigger is
+V2 deployment runtime selection, prepares the exact classifier request, and
+counts that request's system prompt, user prompt, structured-output schema, and
+output reservation before classification. The soft trigger is
 `floor((context_limit - reserved_output_tokens) * 0.80)`; the optional
 `LANGGRAPH_CONTEXT_COMPACTION_TRIGGER_TOKENS_OVERRIDE` changes only that trigger
 when it is positive and below the usable prompt budget. It does not change the
 model's hard context limit. Deterministic mode bypasses both classification and
 this compaction decision.
 
-When compaction triggers, every compressor pass uses the same task-selected
-provider/model through the existing runtime client resolver. For each retained-
-tail candidate, the facade rebuilds and recounts the exact candidate classifier
-request through `IntentClassifier.prepare_request`; only a candidate that fits
-the hard limit is persisted and installed, and that already-counted request is
-the object sent to the classifier. Provider failures are not compatibility-
-resubmitted for compatibility. Each compressor provider request receives at
+When compaction triggers, every compressor pass uses the same V2 deployment
+runtime selection through the existing runtime client resolver. Legacy
+provider/model checkpoints are not written for new turns; serializable graph
+state retains deployment references and compatibility snapshots only. For each
+retained-tail candidate, the facade rebuilds and recounts the exact candidate
+classifier request through `IntentClassifier.prepare_request`; only a
+candidate that fits the hard limit is persisted and installed, and that
+already-counted request is the object sent to the classifier. Provider failures
+are not compatibility-resubmitted for compatibility. Each compressor provider
+request receives at
 most one short jittered retry for provider-neutral timeout, rate-limit, or
 temporary upstream failures; invalid output, refusal, authorization,
 configuration, request-fit, and persistence failures are not retried. This

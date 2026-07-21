@@ -32,6 +32,7 @@ from ..state import InteractiveState
 from ..utils.llm_resolver import (
     ROLE_CONVERSATION_MAIN,
     get_llm_reasoning_effort,
+    has_llm_runtime_services,
     resolve_llm_call_settings,
     resolve_llm_client,
 )
@@ -146,6 +147,8 @@ async def articulate_tool_intent(
             )
             reasoning_effort = get_llm_reasoning_effort(llm_client, call_settings)
         except LLMConfigurationError:
+            if has_llm_runtime_services(config):
+                raise
             # Fallback: use hardcoded articulation when no API key
             articulation_text = f"To meet your request, I will execute {selected_tool}."
             interactive.trace.reasoning.append(f"[ARTICULATION] {articulation_text}")

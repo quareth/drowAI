@@ -10,6 +10,7 @@ import pytest
 
 from agent.providers.llm.contracts.tool_contracts import FunctionToolSpec
 from agent.providers.llm.factory import LLMClientFactory
+from agent.providers.llm.core import budget_enforcing_client as budget_module
 from agent.providers.llm.core.base import LLMResponse
 from agent.providers.llm.core.exceptions import (
     LLMCapabilityNotSupportedError,
@@ -29,6 +30,7 @@ from backend.models import (
     UserLLMProviderCredential,
     UserLLMSelection,
     UserMemoryLLMSelection,
+    UserReportingLLMSelection,
     UserSettings,
 )
 from backend.services.container_utils import cache_api_key, get_cached_api_key
@@ -45,15 +47,16 @@ from backend.services.llm_provider import (
     LLMRuntimeConfigService,
     LLMRuntimeServices,
     LLMRuntimeSelection,
+    LLMRuntimeSelectionV2,
     ProviderConfigurationError,
     ProviderHealthCheckResult,
     ProviderSecret,
     ReportingLLMSelectionMissingError,
     ReportingLLMSelectionService,
     attach_runtime_services,
-    encrypt_api_key,
     strip_runtime_services,
 )
+from backend.services.llm_provider import runtime_client_builder as client_builder_module
 from backend.services.llm_provider import runtime_client_resolver as resolver_module
 from backend.services.llm_provider import reporting_selection_service as reporting_selection_module
 from core.llm.role_policy import ROLE_TOOL_OUTPUT_COMPRESSOR
@@ -136,10 +139,9 @@ def test_credential_service_stores_encrypted_mirror_and_resolves_with_authorizat
         db.commit()
 
         credential = db.query(UserLLMProviderCredential).filter_by(user_id=user.id).one()
-        settings = db.query(UserSettings).filter_by(user_id=user.id).one()
         assert status.masked_api_key == "***"
         assert credential.encrypted_api_key != "sk-provider-secret"
-        assert credential.encrypted_api_key == settings.openai_api_key
+        assert db.query(UserSettings).filter_by(user_id=user.id).one_or_none() is None
         assert get_cached_api_key(user.id) is None
 
         service = LLMCredentialService(db)
@@ -162,7 +164,7 @@ def test_credential_service_stores_encrypted_mirror_and_resolves_with_authorizat
         db.close()
 
 
-def test_empty_legacy_openai_mirror_does_not_disable_provider_credential() -> None:
+def test_missing_legacy_openai_mirror_does_not_disable_provider_credential() -> None:
     db = SessionLocal()
     try:
         user = _create_user(db)
@@ -172,10 +174,6 @@ def test_empty_legacy_openai_mirror_does_not_disable_provider_credential() -> No
             provider=OPENAI_PROVIDER_ID,
             api_key="sk-canonical",
         )
-        db.commit()
-
-        settings = db.query(UserSettings).filter_by(user_id=user.id).one()
-        settings.openai_api_key = None
         db.commit()
 
         secret = service.resolve_secret(
@@ -197,42 +195,29 @@ def test_migration_service_copies_legacy_ciphertext_without_double_encrypting() 
     db = SessionLocal()
     try:
         user = _create_user(db)
-        encrypted = encrypt_api_key("sk-legacy")
-        settings = UserSettings(
-            user_id=user.id,
-            openai_api_key=encrypted,
-            openai_model="gpt-5-mini",
-        )
-        db.add(settings)
+        db.add(UserSettings(user_id=user.id))
         db.commit()
 
         LLMProviderMigrationService(db).backfill_legacy_openai_for_user(user.id)
         db.commit()
 
-        credential = db.query(UserLLMProviderCredential).filter_by(user_id=user.id).one()
-        selection = db.query(UserLLMSelection).filter_by(user_id=user.id).one()
-        assert credential.encrypted_api_key == encrypted
-        assert selection.provider == OPENAI_PROVIDER_ID
-        assert selection.model == "gpt-5-mini"
-        assert LLMCredentialService(db).get_openai_api_key_compat(user.id) == "sk-legacy"
+        assert db.query(UserLLMProviderCredential).filter_by(user_id=user.id).count() == 0
+        assert db.query(UserLLMSelection).filter_by(user_id=user.id).count() == 0
+        assert LLMCredentialService(db).get_openai_api_key_compat(user.id) == ""
     finally:
         db.close()
 
 
-def test_selection_service_reconciles_legacy_invalid_model_to_current_default() -> None:
+def test_selection_service_compat_model_uses_provider_selection_default() -> None:
     db = SessionLocal()
     try:
         user = _create_user(db)
-        db.add(UserSettings(user_id=user.id, openai_model="gpt-4o-mini"))
-        db.commit()
 
         model = LLMProviderSelectionService(db).get_openai_model_compat(user.id)
         db.commit()
 
-        settings = db.query(UserSettings).filter_by(user_id=user.id).one()
         selection = db.query(UserLLMSelection).filter_by(user_id=user.id).one()
         assert model == OPENAI_DEFAULT_MODEL_ID
-        assert settings.openai_model == OPENAI_DEFAULT_MODEL_ID
         assert selection.provider == OPENAI_PROVIDER_ID
         assert selection.model == OPENAI_DEFAULT_MODEL_ID
     finally:
@@ -290,8 +275,8 @@ def test_selection_read_preserves_unavailable_saved_provider_without_runtime_fal
 
         assert read.selection.provider == ANTHROPIC_PROVIDER_ID
         assert read.selection.model == saved_model
-        assert read.status.status == "adapter_unavailable"
-        assert read.status.selectable is False
+        assert read.status.status == "deployment_unmapped"
+        assert read.status.selectable is True
         assert read.status.runnable is False
 
         runtime_service = LLMRuntimeConfigService(
@@ -300,7 +285,7 @@ def test_selection_read_preserves_unavailable_saved_provider_without_runtime_fal
             selection_service=selection_service,
         )
         with pytest.raises(ProviderConfigurationError, match="adapter is not registered"):
-            runtime_service.build_runtime_selection(user_id=user.id)
+            runtime_service.build_conversation_runtime_selection(user_id=user.id)
 
         explicit_openai = runtime_service.build_runtime_selection(
             user_id=user.id,
@@ -420,12 +405,10 @@ def test_reporting_selection_builds_runtime_selection_with_enabled_credential() 
 
         selection = service.build_runtime_selection(user_id=user.id)
 
-        assert selection.provider == ANTHROPIC_PROVIDER_ID
-        assert selection.model == model
-        assert selection.credential_ref == LLMCredentialRef(
-            user_id=user.id,
-            provider=ANTHROPIC_PROVIDER_ID,
-        )
+        assert isinstance(selection, LLMRuntimeSelectionV2)
+        assert selection.legacy_provider == ANTHROPIC_PROVIDER_ID
+        assert selection.legacy_model == model
+        assert selection.deployment_ref.deployment_id
         assert "sk-ant-reporting" not in repr(selection.to_dict())
     finally:
         db.close()
@@ -436,16 +419,18 @@ def test_reporting_selection_runtime_requires_enabled_credential() -> None:
     try:
         user = _create_user(db, "llm-provider-reporting-no-credential")
         service = ReportingLLMSelectionService(db)
-        service.set_selection(
-            user_id=user.id,
-            provider=OPENAI_PROVIDER_ID,
-            model="gpt-5.2",
+        db.add(
+            UserReportingLLMSelection(
+                user_id=user.id,
+                provider=OPENAI_PROVIDER_ID,
+                model="gpt-5.2",
+            )
         )
         db.commit()
 
         read = service.get_selection_read(user.id)
 
-        assert read.status.status == "credential_missing"
+        assert read.status.status == "deployment_unmapped"
         assert read.status.runnable is False
         with pytest.raises(ProviderConfigurationError):
             service.build_runtime_selection(user_id=user.id)
@@ -535,7 +520,7 @@ def test_runtime_client_resolver_uses_explicit_role_target(monkeypatch: pytest.M
             )
             return object()
 
-        monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+        monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
         client = resolver_module.LLMRuntimeClientResolver(service).get_client(
             selection,
@@ -548,9 +533,9 @@ def test_runtime_client_resolver_uses_explicit_role_target(monkeypatch: pytest.M
         assert client is not None
         assert calls == [
             {
-                "provider_model": ProviderModelRef(OPENAI_PROVIDER_ID, "gpt-5-nano"),
+                "provider_model": ProviderModelRef(OPENAI_PROVIDER_ID, "gpt-5.2"),
                 "api_key": "sk-resolver",
-                "reasoning_effort": "minimal",
+                "reasoning_effort": "low",
             }
         ]
     finally:
@@ -585,7 +570,7 @@ def test_runtime_client_resolver_uses_selected_credential_for_same_provider(
         calls.append({"provider_model": provider_model, "api_key": api_key})
         return object()
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider="openai",
@@ -638,7 +623,7 @@ def test_runtime_client_resolver_resolves_target_provider_credential(
         calls.append({"provider_model": provider_model, "api_key": api_key})
         return object()
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider="openai",
@@ -689,7 +674,7 @@ def test_runtime_client_resolver_delegates_anthropic_profile_default_to_adapter(
         )
         return object()
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider="anthropic",
@@ -733,7 +718,7 @@ def test_runtime_client_resolver_propagates_supported_anthropic_reasoning_effort
         calls.append({"provider_model": provider_model, "kwargs": kwargs})
         return object()
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider="anthropic",
@@ -778,7 +763,7 @@ def test_runtime_client_resolver_rejects_explicit_haiku_reasoning_effort(
         factory_called = True
         return object()
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider="anthropic",
@@ -819,7 +804,7 @@ def test_runtime_client_resolver_rejects_kwarg_haiku_reasoning_effort(
         factory_called = True
         return object()
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider="anthropic",
@@ -860,7 +845,7 @@ def test_runtime_client_resolver_rejects_openai_chat_reasoning_effort(
         factory_called = True
         return object()
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider="openai",
@@ -910,7 +895,7 @@ async def test_runtime_client_resolver_preserves_openai_intent_classifier_budget
     def fake_get_client(*_args: Any, **_kwargs: Any) -> _Client:
         return fake_client
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider=OPENAI_PROVIDER_ID,
@@ -960,7 +945,7 @@ async def test_runtime_client_resolver_clamps_openai_budget_above_profile_max(
     def fake_get_client(*_args: Any, **_kwargs: Any) -> _Client:
         return fake_client
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider=OPENAI_PROVIDER_ID,
@@ -1010,7 +995,7 @@ async def test_runtime_client_resolver_clamps_openai_chat_budget_to_legacy_ceili
     def fake_get_client(*_args: Any, **_kwargs: Any) -> _Client:
         return fake_client
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider=OPENAI_PROVIDER_ID,
@@ -1063,7 +1048,7 @@ async def test_runtime_client_resolver_applies_default_output_budget_when_omitte
     def fake_get_client(*_args: Any, **_kwargs: Any) -> _Client:
         return fake_client
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider=OPENAI_PROVIDER_ID,
@@ -1113,7 +1098,7 @@ async def test_runtime_client_resolver_rejects_anthropic_output_budget_before_ca
     def fake_get_client(*_args: Any, **_kwargs: Any) -> _Client:
         return fake_client
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
 
     selection = LLMRuntimeSelection(
         provider=ANTHROPIC_PROVIDER_ID,
@@ -1167,9 +1152,9 @@ async def test_runtime_client_resolver_rejects_context_overflow_before_call(
     def fake_get_client(*_args: Any, **_kwargs: Any) -> _Client:
         return fake_client
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
     monkeypatch.setattr(
-        resolver_module,
+        budget_module,
         "estimate_chat_history_tokens",
         lambda **_kwargs: SimpleNamespace(tokens=199_500),
     )
@@ -1229,8 +1214,8 @@ async def test_runtime_client_resolver_rejects_context_estimation_failure_before
     def fail_estimate(**_kwargs: Any) -> SimpleNamespace:
         raise ValueError("estimator failure")
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
-    monkeypatch.setattr(resolver_module, "estimate_chat_history_tokens", fail_estimate)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(budget_module, "estimate_chat_history_tokens", fail_estimate)
 
     selection = LLMRuntimeSelection(
         provider=ANTHROPIC_PROVIDER_ID,
@@ -1284,9 +1269,9 @@ async def test_runtime_client_resolver_counts_tool_payloads_for_context_fit(
     def fake_get_client(*_args: Any, **_kwargs: Any) -> _Client:
         return fake_client
 
-    monkeypatch.setattr(resolver_module.LLMClientFactory, "get_client", fake_get_client)
+    monkeypatch.setattr(client_builder_module.LLMClientFactory, "get_client", fake_get_client)
     monkeypatch.setattr(
-        resolver_module,
+        budget_module,
         "estimate_chat_history_tokens",
         lambda **_kwargs: SimpleNamespace(tokens=198_500),
     )
@@ -1297,7 +1282,7 @@ async def test_runtime_client_resolver_counts_tool_payloads_for_context_fit(
         return SimpleNamespace(tokens=700)
 
     monkeypatch.setattr(
-        resolver_module,
+        budget_module,
         "estimate_json_tokens",
         fake_estimate_json_tokens,
     )
@@ -1397,7 +1382,7 @@ def test_runtime_services_strip_removes_live_resolver() -> None:
         db.close()
 
 
-def test_environment_service_preserves_openai_container_variables() -> None:
+def test_environment_service_returns_backend_only_openai_metadata() -> None:
     db = SessionLocal()
     try:
         user = _create_user(db)
@@ -1415,7 +1400,6 @@ def test_environment_service_preserves_openai_container_variables() -> None:
         assert environment == {
             "LLM_PROVIDER": OPENAI_PROVIDER_ID,
             "LLM_MODEL": "gpt-5.2",
-            "OPENAI_API_KEY": "sk-env",
         }
     finally:
         db.close()
@@ -1498,10 +1482,9 @@ def test_credential_disable_clears_legacy_mirror_and_prevents_resolution() -> No
         db.commit()
 
         credential = db.query(UserLLMProviderCredential).filter_by(user_id=user.id).one()
-        settings = db.query(UserSettings).filter_by(user_id=user.id).one()
         assert credential.enabled is False
         assert credential.encrypted_api_key == ""
-        assert settings.openai_api_key is None
+        assert db.query(UserSettings).filter_by(user_id=user.id).one_or_none() is None
         with pytest.raises(CredentialNotFoundError):
             service.get_credential_ref(user.id, OPENAI_PROVIDER_ID)
     finally:

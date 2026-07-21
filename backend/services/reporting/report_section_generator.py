@@ -19,7 +19,11 @@ from backend.services.llm_provider import (
 from backend.services.llm_provider.reporting_selection_service import (
     ReportingLLMSelectionService,
 )
-from backend.services.llm_provider.types import LLMRuntimeSelection
+from backend.services.llm_provider.types import (
+    LLMRuntimeSelection,
+    LLMRuntimeSelectionV2,
+    parse_llm_runtime_selection,
+)
 from backend.services.reporting.contracts import (
     GENERATION_METADATA_DURATION_MS_KEY,
     GENERATION_METADATA_MODEL_KEY,
@@ -104,7 +108,9 @@ class ReportSectionGenerator:
         user_id: int,
         rendered_prompt: RenderedReportSectionPrompt,
         task_id: int | None = None,
-        runtime_selection: LLMRuntimeSelection | dict[str, Any] | None = None,
+        runtime_selection: (
+            LLMRuntimeSelection | LLMRuntimeSelectionV2 | dict[str, Any] | None
+        ) = None,
     ) -> ReportSectionGenerationResult:
         """Call the configured LLM runtime for exactly one rendered section."""
 
@@ -131,7 +137,7 @@ class ReportSectionGenerator:
 
         try:
             runtime_selection_value = (
-                LLMRuntimeSelection.from_mapping(runtime_selection)
+                parse_llm_runtime_selection(runtime_selection)
                 if runtime_selection is not None
                 else self._reporting_selection_service.build_runtime_selection(
                     user_id=user_id
@@ -161,10 +167,12 @@ class ReportSectionGenerator:
                 retryable=retryable,
             ) from exc
 
-        provider = str(getattr(runtime_selection_value, "provider", "unknown"))
+        provider = _selection_provider(runtime_selection_value)
         model = str(
             getattr(
-                client, "model", getattr(runtime_selection_value, "model", "unknown")
+                client,
+                "model",
+                _selection_model(runtime_selection_value),
             )
         )
         call_metadata = {
@@ -231,6 +239,28 @@ class ReportSectionGenerator:
 def _safe_section_id(metadata: Mapping[str, Any]) -> str:
     section_id = str(metadata.get("section_id") or "").strip()
     return section_id or "unknown"
+
+
+def _selection_provider(
+    selection: LLMRuntimeSelection | LLMRuntimeSelectionV2,
+) -> str:
+    """Return a safe provider snapshot for generation metadata."""
+
+    return str(
+        getattr(selection, "provider", None)
+        or getattr(selection, "legacy_provider", None)
+        or "unknown"
+    )
+
+
+def _selection_model(selection: LLMRuntimeSelection | LLMRuntimeSelectionV2) -> str:
+    """Return a safe model snapshot for generation metadata."""
+
+    return str(
+        getattr(selection, "model", None)
+        or getattr(selection, "legacy_model", None)
+        or "unknown"
+    )
 
 
 def _deterministic_e2e_payload(

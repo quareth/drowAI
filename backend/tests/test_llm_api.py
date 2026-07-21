@@ -11,6 +11,7 @@ from backend.models.core import User, UserSettings, Task
 from backend.models.llm import (
     LLMConversation,
     UserEmbeddingSelection,
+    UserLLMProviderCredential,
     UserLLMSelection,
     UserMemoryLLMSelection,
 )
@@ -18,13 +19,10 @@ from backend.models.tenant import Tenant, TenantMembership
 from backend.routers.settings import get_user_openai_model, is_supported_openai_model
 from backend.services.llm_provider import (
     LLMCredentialService,
-    LLMProviderSelectionService,
     ProviderConfigurationError,
     ProviderHealthCheckResult,
 )
-from agent.providers.llm.adapters.openai.responses.client import OpenAIResponsesClient
 from agent.providers.llm.core.identity import ANTHROPIC_PROVIDER_ID
-from agent.providers.llm.factory import LLMClientFactory
 from agent.providers.llm.profiles import (
     ANTHROPIC_DEFAULT_MODEL_ID,
     ANTHROPIC_LISTABLE_MODEL_IDS,
@@ -54,7 +52,7 @@ def _ensure_user_task_and_settings(db, username="llmtester"):
 
     settings = db.query(UserSettings).filter(UserSettings.user_id == user.id).first()
     if not settings:
-        settings = UserSettings(user_id=user.id, openai_model="gpt-5.2")
+        settings = UserSettings(user_id=user.id)
         db.add(settings)
         db.commit()
         db.refresh(settings)
@@ -144,7 +142,7 @@ def _seed_shared_tenant_conversation(db):
     db.refresh(foreign)
 
     for user in (owner, peer, foreign):
-        db.add(UserSettings(user_id=user.id, openai_model="gpt-5.2"))
+        db.add(UserSettings(user_id=user.id))
     db.commit()
 
     tenant_shared = Tenant(
@@ -258,7 +256,7 @@ def _patch_conversation_manager(monkeypatch, calls, active_id=None):
 def test_list_models(client):
     db = SessionLocal()
     try:
-        user, settings, task = _ensure_user_task_and_settings(db)
+        user, _settings, _task = _ensure_user_task_and_settings(db)
         headers = _auth_header_for(user)
         resp = client.get("/api/llm/models", headers=headers)
         assert resp.status_code == 200, resp.text
@@ -306,7 +304,12 @@ def test_list_models(client):
         assert first_openai_model["structuredOutputStrategies"] == ["native_schema"]
         for provider in (openai_provider, anthropic_provider):
             for model in provider["models"]:
-                assert model["pricingStatus"] == "available", model["id"]
+                if model["id"] == "gpt-oss-20b":
+                    assert model["canonicalModelId"] == "openai/gpt-oss-20b"
+                    assert model["exactWireModelId"] is None
+                    assert model["pricingStatus"] == "unavailable"
+                else:
+                    assert model["pricingStatus"] == "available", model["id"]
         gpt55_model = next(model for model in openai_provider["models"] if model["id"] == "gpt-5.5")
         assert gpt55_model["visibleReasoningEfforts"] == ["low", "medium", "high", "xhigh"]
         assert gpt55_model["defaultReasoningEffort"] == "medium"
@@ -365,30 +368,31 @@ def test_openai_settings_model_policy_is_profile_backed():
     assert is_supported_openai_model("unknown-model") is False
 
 
-def test_get_and_set_selection_without_api_key_reports_credential_missing(client):
+def test_selection_without_deployment_binding_reports_unmapped(client):
     db = SessionLocal()
     try:
-        user, settings, task = _ensure_user_task_and_settings(db)
+        user, _settings, _task = _ensure_user_task_and_settings(db)
         headers = _auth_header_for(user)
 
-        # No API key set yet; preference writes should still succeed.
         resp = client.put("/api/llm/selection", headers=headers, json={"provider": "openai", "model": "gpt-5.2"})
-        assert resp.status_code == 200, resp.text
+        assert resp.status_code == 400, resp.text
+        assert resp.json()["detail"] == "Conversation selection requires a deployment binding"
 
-        # Set API key via settings
-        resp2 = client.put("/api/settings", headers=headers, json={"openai_api_key": "sk-test"})
-        assert resp2.status_code in (200, 201), resp2.text
+        LLMCredentialService(db).upsert_api_key(
+            user_id=user.id,
+            provider="openai",
+            api_key="sk-test",
+        )
+        db.commit()
 
-        # Now selection should succeed
         resp3 = client.put("/api/llm/selection", headers=headers, json={"provider": "openai", "model": "gpt-5"})
         assert resp3.status_code == 200, resp3.text
-        data = resp3.json()
-        assert data["model"] == "gpt-5"
+        assert resp3.json()["model"] == "gpt-5"
+        assert resp3.json()["deployment_ref"]["expected_revision"] == 1
 
-        # And get should reflect it
         resp4 = client.get("/api/llm/selection", headers=headers)
         assert resp4.status_code == 200
-        assert resp4.json()["model"] in ("gpt-5", "gpt-5.2")
+        assert resp4.json()["model"] == "gpt-5"
         assert resp4.json()["selection_status"]["status"] == "selectable"
     finally:
         db.close()
@@ -472,8 +476,9 @@ def test_provider_credential_routes_mask_test_and_delete_openai_credential(clien
         assert disabled.status_code == 200, disabled.text
         assert disabled.json()["has_api_key"] is False
         db.expire_all()
-        settings = db.query(UserSettings).filter(UserSettings.user_id == user.id).one()
-        assert settings.openai_api_key is None
+        credential = db.query(UserLLMProviderCredential).filter_by(user_id=user.id).one()
+        assert credential.enabled is False
+        assert credential.encrypted_api_key == ""
 
         stored = client.put(
             "/api/llm/providers/openai/credential",
@@ -483,16 +488,17 @@ def test_provider_credential_routes_mask_test_and_delete_openai_credential(clien
         assert stored.status_code == 200, stored.text
         assert stored.json()["masked_api_key"] == "***"
         db.expire_all()
-        settings = db.query(UserSettings).filter(UserSettings.user_id == user.id).one()
-        assert settings.openai_api_key
-        assert settings.openai_api_key != "sk-route"
+        credential = db.query(UserLLMProviderCredential).filter_by(user_id=user.id).one()
+        assert credential.enabled is True
+        assert credential.encrypted_api_key
+        assert credential.encrypted_api_key != "sk-route"
 
         deleted = client.delete("/api/llm/providers/openai/credential", headers=headers)
         assert deleted.status_code == 200, deleted.text
         assert deleted.json() == {"success": True}
         db.expire_all()
-        settings = db.query(UserSettings).filter(UserSettings.user_id == user.id).one()
-        assert settings.openai_api_key is None
+        credential = db.query(UserLLMProviderCredential).filter_by(user_id=user.id).one_or_none()
+        assert credential is None
 
         after_delete = client.get("/api/llm/providers/openai/credential", headers=headers)
         assert after_delete.status_code == 200, after_delete.text
@@ -649,8 +655,8 @@ def test_memory_dependency_selection_routes_persist_identity_without_credentials
                 "extraction_model": "gpt-5-mini",
             },
         )
-        assert memory_llm.status_code == 200, memory_llm.text
-        assert memory_llm.json()["provider"] == "openai"
+        assert memory_llm.status_code == 400, memory_llm.text
+        assert memory_llm.json()["detail"] == "Memory LLM selection requires deployment bindings"
 
         db.expire_all()
         assert (
@@ -665,7 +671,7 @@ def test_memory_dependency_selection_routes_persist_identity_without_credentials
             .filter(UserMemoryLLMSelection.user_id == user.id)
             .one()
             .extraction_model
-            == "gpt-5-mini"
+            == DEFAULT_MEMORY_EXTRACTION_MODEL
         )
     finally:
         db.close()
@@ -709,302 +715,113 @@ def test_memory_dependency_selection_routes_reject_unverified_providers(client, 
         db.close()
 
 
-def test_switch_requires_api_key_and_model_allowed(client, monkeypatch):
+def test_task_switch_route_is_removed_without_mutating_selection(client):
     db = SessionLocal()
     try:
-        user, settings, task = _ensure_user_task_and_settings(
+        user, _settings, task = _ensure_user_task_and_settings(
             db,
-            username=_unique_username("llmtester-switch"),
+            username=_unique_username("llmtester-switch-removed"),
         )
         LLMCredentialService(db).delete(user_id=user.id, provider="openai")
-        settings.openai_api_key = None
-        db.add(settings)
-        db.commit()
-        headers = _auth_header_for(user)
-        runtime_inputs = []
-
-        async def _fake_append_and_signal(*args, **kwargs):
-            runtime_inputs.append({"args": args, "kwargs": kwargs})
-            return SimpleNamespace(
-                persisted=True,
-                signal_sent=False,
-                detail="signal not available in test environment",
+        db.query(UserLLMSelection).filter(UserLLMSelection.user_id == user.id).delete()
+        db.add(
+            UserLLMSelection(
+                user_id=user.id,
+                provider="openai",
+                model="gpt-5.2",
             )
-
-        monkeypatch.setattr(
-            "backend.routers.llm._runtime_input_service",
-            SimpleNamespace(append_and_signal=_fake_append_and_signal),
-        )
-
-        # Without API key -> 400
-        resp = client.post(f"/api/llm/tasks/{task.id}/switch", headers=headers, json={"model": "gpt-5.2"})
-        assert resp.status_code == 400
-
-        # With API key
-        client.put("/api/settings", headers=headers, json={"openai_api_key": "sk-test"})
-
-        # Unknown model -> 400
-        resp2 = client.post(f"/api/llm/tasks/{task.id}/switch", headers=headers, json={"model": "unknown-model"})
-        assert resp2.status_code == 400
-
-        # Allowed model -> 200 or 202 (signal may fail in tests, but endpoint should respond OK with signal_sent False)
-        resp3 = client.post(f"/api/llm/tasks/{task.id}/switch", headers=headers, json={"model": "gpt-5.2"})
-        assert resp3.status_code in (200, 202), resp3.text
-        data = resp3.json()
-        assert "success" in data
-        assert runtime_inputs == [
-            {
-                "args": (task.id,),
-                "kwargs": {
-                    "message": "__switch_model:gpt-5.2",
-                    "strict_persistence": True,
-                    "user_id": user.id,
-                    "metadata": {
-                        "type": "switch_llm",
-                        "command": "switch_llm_model",
-                        "provider": "openai",
-                        "model": "gpt-5.2",
-                        "credential_ref": {
-                            "user_id": user.id,
-                            "provider": "openai",
-                        },
-                    },
-                },
-            }
-        ]
-    finally:
-        db.close()
-
-
-def test_switch_accepts_explicit_anthropic_provider_model(client, monkeypatch):
-    db = SessionLocal()
-    try:
-        user, _settings, task = _ensure_user_task_and_settings(
-            db,
-            username=_unique_username("llmtester-switch-anthropic"),
-        )
-        LLMCredentialService(db).upsert_api_key(
-            user_id=user.id,
-            provider=ANTHROPIC_PROVIDER_ID,
-            api_key="sk-ant-switch",
         )
         db.commit()
+        selection_before = (
+            db.query(UserLLMSelection)
+            .filter(UserLLMSelection.user_id == user.id)
+            .one()
+        )
+        before_id = selection_before.id
+        before_model = selection_before.model
         headers = _auth_header_for(user)
-        runtime_inputs = []
-
-        async def _fake_append_and_signal(*args, **kwargs):
-            runtime_inputs.append({"args": args, "kwargs": kwargs})
-            return SimpleNamespace(
-                persisted=True,
-                signal_sent=False,
-                detail="signal not available in test environment",
-            )
-
-        monkeypatch.setattr(
-            "backend.routers.llm._runtime_input_service",
-            SimpleNamespace(append_and_signal=_fake_append_and_signal),
-        )
-
-        model = ANTHROPIC_LISTABLE_MODEL_IDS[0]
-        resp = client.post(
-            f"/api/llm/tasks/{task.id}/switch",
-            headers=headers,
-            json={"provider": ANTHROPIC_PROVIDER_ID, "model": model},
-        )
-
-        assert resp.status_code in (200, 202), resp.text
-        assert runtime_inputs[0]["kwargs"]["metadata"] == {
-            "type": "switch_llm",
-            "command": "switch_llm_model",
-            "provider": ANTHROPIC_PROVIDER_ID,
-            "model": model,
-            "credential_ref": {
-                "user_id": user.id,
-                "provider": ANTHROPIC_PROVIDER_ID,
-            },
-        }
-    finally:
-        db.close()
-
-
-def test_switch_uses_saved_anthropic_provider_when_provider_omitted(client, monkeypatch):
-    db = SessionLocal()
-    try:
-        user, _settings, task = _ensure_user_task_and_settings(
-            db,
-            username=_unique_username("llmtester-switch-saved-anthropic"),
-        )
-        credential_service = LLMCredentialService(db)
-        credential_service.upsert_api_key(
-            user_id=user.id,
-            provider=ANTHROPIC_PROVIDER_ID,
-            api_key="sk-ant-switch",
-        )
-        model = ANTHROPIC_LISTABLE_MODEL_IDS[0]
-        LLMProviderSelectionService(db, credential_service=credential_service).set_selection(
-            user_id=user.id,
-            provider=ANTHROPIC_PROVIDER_ID,
-            model=model,
-        )
-        db.commit()
-        headers = _auth_header_for(user)
-        runtime_inputs = []
-
-        async def _fake_append_and_signal(*args, **kwargs):
-            runtime_inputs.append({"args": args, "kwargs": kwargs})
-            return SimpleNamespace(
-                persisted=True,
-                signal_sent=False,
-                detail="signal not available in test environment",
-            )
-
-        monkeypatch.setattr(
-            "backend.routers.llm._runtime_input_service",
-            SimpleNamespace(append_and_signal=_fake_append_and_signal),
-        )
 
         resp = client.post(
             f"/api/llm/tasks/{task.id}/switch",
             headers=headers,
-            json={"model": model},
+            json={"model": "gpt-5-mini"},
         )
 
-        assert resp.status_code in (200, 202), resp.text
-        assert runtime_inputs[0]["kwargs"]["metadata"] == {
-            "type": "switch_llm",
-            "command": "switch_llm_model",
-            "provider": ANTHROPIC_PROVIDER_ID,
-            "model": model,
-            "credential_ref": {
-                "user_id": user.id,
-                "provider": ANTHROPIC_PROVIDER_ID,
-            },
-        }
+        assert resp.status_code == 404
+        selection_after = (
+            db.query(UserLLMSelection)
+            .filter(UserLLMSelection.user_id == user.id)
+            .one()
+        )
+        assert selection_after.id == before_id
+        assert selection_after.model == before_model
     finally:
         db.close()
 
 
-def test_switch_rejects_unavailable_provider_without_openai_fallback(client, monkeypatch):
-    original_provider_registry = LLMClientFactory._provider_registry.copy()
-    original_prefix_registry = LLMClientFactory._registry.copy()
+def test_task_switch_route_removal_leaves_global_selection_route_available(client):
     db = SessionLocal()
     try:
-        LLMClientFactory.clear_registry()
-        LLMClientFactory.register_provider("openai", OpenAIResponsesClient)
-        user, _settings, task = _ensure_user_task_and_settings(
+        user, _settings, _task = _ensure_user_task_and_settings(
             db,
-            username=_unique_username("llmtester-switch-unavailable-provider"),
+            username=_unique_username("llmtester-global-selection-after-switch"),
         )
         LLMCredentialService(db).upsert_api_key(
             user_id=user.id,
             provider="openai",
-            api_key="sk-switch",
-        )
-        model = ANTHROPIC_LISTABLE_MODEL_IDS[0]
-        db.add(
-            UserLLMSelection(
-                user_id=user.id,
-                provider=ANTHROPIC_PROVIDER_ID,
-                model=model,
-            )
+            api_key="sk-selection-route",
         )
         db.commit()
         headers = _auth_header_for(user)
-        runtime_inputs = []
 
-        async def _fake_append_and_signal(*args, **kwargs):
-            runtime_inputs.append({"args": args, "kwargs": kwargs})
-            return SimpleNamespace(
-                persisted=True,
-                signal_sent=False,
-                detail="signal not available in test environment",
-            )
-
-        monkeypatch.setattr(
-            "backend.routers.llm._runtime_input_service",
-            SimpleNamespace(append_and_signal=_fake_append_and_signal),
-        )
-
-        explicit_unavailable = client.post(
-            f"/api/llm/tasks/{task.id}/switch",
-            headers=headers,
-            json={"provider": ANTHROPIC_PROVIDER_ID, "model": model},
-        )
-        assert explicit_unavailable.status_code == 400
-        assert "adapter is not registered" in explicit_unavailable.text
-
-        saved_unavailable = client.post(
-            f"/api/llm/tasks/{task.id}/switch",
-            headers=headers,
-            json={"model": model},
-        )
-        assert saved_unavailable.status_code == 400
-        assert "adapter is not registered" in saved_unavailable.text
-
-        explicit_openai = client.post(
-            f"/api/llm/tasks/{task.id}/switch",
+        resp = client.put(
+            "/api/llm/selection",
             headers=headers,
             json={"provider": "openai", "model": "gpt-5.2"},
         )
-        assert explicit_openai.status_code in (200, 202), explicit_openai.text
-        assert runtime_inputs == [
-            {
-                "args": (task.id,),
-                "kwargs": {
-                    "message": "__switch_model:gpt-5.2",
-                    "strict_persistence": True,
-                    "user_id": user.id,
-                    "metadata": {
-                        "type": "switch_llm",
-                        "command": "switch_llm_model",
-                        "provider": "openai",
-                        "model": "gpt-5.2",
-                        "credential_ref": {
-                            "user_id": user.id,
-                            "provider": "openai",
-                        },
-                    },
-                },
-            }
-        ]
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["provider"] == "openai"
+        assert resp.json()["model"] == "gpt-5.2"
+        assert resp.json()["deployment_ref"]["expected_revision"] == 1
+        selection = (
+            db.query(UserLLMSelection)
+            .filter(UserLLMSelection.user_id == user.id)
+            .one()
+        )
+        assert (selection.provider, selection.model) == ("openai", "gpt-5.2")
     finally:
         db.close()
-        LLMClientFactory._provider_registry = original_provider_registry
-        LLMClientFactory._registry = original_prefix_registry
 
 
-def test_legacy_user_model_is_auto_migrated_to_gpt5_default():
+def test_missing_user_selection_uses_gpt5_default():
     db = SessionLocal()
     try:
-        user, settings, task = _ensure_user_task_and_settings(
+        user, _settings, _task = _ensure_user_task_and_settings(
             db,
             username=_unique_username("llmtester-legacy-model"),
         )
         db.query(UserLLMSelection).filter(UserLLMSelection.user_id == user.id).delete()
-        settings.openai_model = "gpt-4o-mini"
-        db.add(settings)
         db.commit()
-        db.refresh(settings)
 
         resolved_model = get_user_openai_model(user.id, db)
         assert resolved_model == OPENAI_DEFAULT_MODEL_ID
 
-        db.refresh(settings)
-        assert settings.openai_model == OPENAI_DEFAULT_MODEL_ID
+        selection = db.query(UserLLMSelection).filter(UserLLMSelection.user_id == user.id).one()
+        assert selection.provider == "openai"
+        assert selection.model == OPENAI_DEFAULT_MODEL_ID
     finally:
         db.close()
 
 
-def test_selection_get_reconciles_legacy_user_model(client):
+def test_selection_get_defaults_missing_user_selection(client):
     db = SessionLocal()
     try:
-        user, settings, task = _ensure_user_task_and_settings(
+        user, _settings, _task = _ensure_user_task_and_settings(
             db,
             username=_unique_username("llmtester-selection-legacy"),
         )
         db.query(UserLLMSelection).filter(UserLLMSelection.user_id == user.id).delete()
-        settings.openai_model = "gpt-4o-mini"
-        db.add(settings)
         db.commit()
         headers = _auth_header_for(user)
 
@@ -1013,9 +830,7 @@ def test_selection_get_reconciles_legacy_user_model(client):
         assert resp.status_code == 200, resp.text
         assert resp.json()["provider"] == "openai"
         assert resp.json()["model"] == OPENAI_DEFAULT_MODEL_ID
-        assert resp.json()["selection_status"]["status"] == "credential_missing"
-        db.refresh(settings)
-        assert settings.openai_model == OPENAI_DEFAULT_MODEL_ID
+        assert resp.json()["selection_status"]["status"] == "deployment_unmapped"
     finally:
         db.close()
 
@@ -1102,6 +917,12 @@ def test_create_conversation_fails_before_openai_sdk_without_capability(
             db,
             username=_unique_username("llmtester-create-gated"),
         )
+        LLMCredentialService(db).upsert_api_key(
+            user_id=user.id,
+            provider="openai",
+            api_key="sk-gated",
+        )
+        db.commit()
         headers = _auth_header_for(user)
         sdk_calls = []
         monkeypatch.setattr(
@@ -1224,10 +1045,10 @@ def test_non_openai_conversation_rows_do_not_trigger_openai_side_effects(
             headers=headers,
         )
 
-        assert activate.status_code == 501, activate.text
-        assert "does not support remote conversation lifecycle" in activate.json()["detail"]
-        assert delete.status_code == 501, delete.text
-        assert "does not support remote conversation lifecycle" in delete.json()["detail"]
+        assert activate.status_code == 400, activate.text
+        assert "origin is unmapped" in activate.json()["detail"]
+        assert delete.status_code == 400, delete.text
+        assert "origin is unmapped" in delete.json()["detail"]
         assert mirror_calls == []
         db.refresh(row)
         assert row.is_active is False

@@ -11,8 +11,13 @@ import logging
 from typing import Any, Mapping
 
 from sqlalchemy.orm import Session
+
 from backend.config.feature_flags import is_semantic_memory_runtime_enabled
 from backend.services.metrics.utils import safe_inc
+from core.llm.runtime_selection import (
+    has_versioned_runtime_selection_marker,
+    project_checkpoint_runtime_selection,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +38,11 @@ def _coerce_runtime_selection(
 
     if not isinstance(value, Mapping):
         return None
+    if has_versioned_runtime_selection_marker(value):
+        try:
+            return project_checkpoint_runtime_selection(value)
+        except (KeyError, TypeError, ValueError):
+            return None
     credential_ref = value.get("credential_ref")
     if not isinstance(credential_ref, Mapping):
         return None

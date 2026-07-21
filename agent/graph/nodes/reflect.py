@@ -24,10 +24,12 @@ from .node_utils import (
 from ..utils.llm_resolver import (
     ROLE_REASONING_MAIN,
     get_llm_reasoning_effort,
+    has_llm_runtime_services,
     resolve_llm_client,
 )
 from agent.providers.llm.core.exceptions import (
     LLMConfigurationError,
+    LLMProviderError,
     LLMRefusalError,
 )
 from agent.tools.capability_surface import render_capability_surface
@@ -95,6 +97,8 @@ async def reflect_node(
         )
         reasoning_effort = get_llm_reasoning_effort(llm_client)
     except LLMConfigurationError:
+        if has_llm_runtime_services(config):
+            raise
         # Fallback: simple reflection without LLM
         logger.warning("No LLMClient for reflection, using simple fallback")
         fallback_guidance = _apply_fallback_reflection(interactive, problem_description)
@@ -153,6 +157,8 @@ async def reflect_node(
                 used_fallback_reflection = True
                 
         except LLMRefusalError:
+            raise
+        except LLMProviderError:
             raise
         except Exception as exc:
             logger.error(f"Reflect node LLM call failed: {exc}")

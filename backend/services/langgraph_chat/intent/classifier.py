@@ -36,7 +36,7 @@ from agent.graph.context.serialization import (
 )
 from agent.graph.infrastructure.state_models import CapabilityType, IntentSignals
 from agent.providers.llm.core.base import LLMClient
-from agent.providers.llm.core.exceptions import LLMRefusalError
+from agent.providers.llm.core.exceptions import LLMProviderError, LLMRefusalError
 from agent.providers.llm.core.identity import (
     ANTHROPIC_PROVIDER_ID,
     ProviderModelRef,
@@ -62,6 +62,7 @@ from backend.services.langgraph_chat.model_role_registry import (
     RoleCallSettings,
 )
 from backend.services.metrics.utils import safe_inc
+from backend.services.llm_provider.types import LLMProviderServiceError
 
 if TYPE_CHECKING:
     from backend.services.usage_tracking.models import UsageData
@@ -765,18 +766,23 @@ class IntentClassifier:
         """Resolve the existing role-policy settings for this classifier turn."""
         chat_inputs = runtime_config.chat_inputs
         runtime_selection = runtime_config.llm_runtime_selection
+        conversation_provider = chat_inputs.provider
+        conversation_model = chat_inputs.model
+        if isinstance(runtime_selection, dict):
+            conversation_provider = (
+                runtime_selection.get("provider")
+                or runtime_selection.get("legacy_provider")
+                or conversation_provider
+            )
+            conversation_model = (
+                runtime_selection.get("model")
+                or runtime_selection.get("legacy_model")
+                or conversation_model
+            )
         return self._model_role_registry.resolve_call_settings(
             ROLE_INTENT_CLASSIFIER,
-            conversation_provider=(
-                runtime_selection.get("provider")
-                if isinstance(runtime_selection, dict)
-                else chat_inputs.provider
-            ),
-            conversation_model=(
-                runtime_selection.get("model")
-                if isinstance(runtime_selection, dict)
-                else chat_inputs.model
-            ),
+            conversation_provider=conversation_provider,
+            conversation_model=conversation_model,
             reasoning_effort=chat_inputs.reasoning_effort,
         )
 
@@ -877,6 +883,14 @@ class IntentClassifier:
                     resolution_role=ROLE_INTENT_CLASSIFIER,
                     resolution_source=call_settings.source,
                 )
+        except (LLMProviderError, LLMProviderServiceError) as exc:
+            metadata["intent_classifier_error_type"] = type(exc).__name__
+            metadata["intent_classifier_skipped"] = "client_init_failed"
+            logger.error(
+                "Failed to initialize required intent classifier: %s",
+                type(exc).__name__,
+            )
+            raise
         except Exception as exc:
             _set_execution_mode_from_hints(runtime_config)
             metadata["intent_classifier_skipped"] = "client_init_failed"
@@ -974,6 +988,14 @@ class IntentClassifier:
             write_intent_brief_seed(metadata)
             return None
         except LLMRefusalError:
+            raise
+        except LLMProviderError as exc:
+            metadata["intent_classifier_error_type"] = type(exc).__name__
+            metadata["intent_classifier_skipped"] = "llm_error"
+            logger.error(
+                "Required intent classifier call failed: %s",
+                type(exc).__name__,
+            )
             raise
         except Exception as exc:
             _set_execution_mode_from_hints(runtime_config)

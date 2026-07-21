@@ -19,9 +19,11 @@ from ...services.chat.conversation_history_reader import ConversationHistoryRead
 from ...services.langgraph_chat.contracts import AgentMode, ExecutionMode
 from ...services.llm_provider import (
     CredentialNotFoundError,
+    LLMProviderServiceError,
     LLMRuntimeConfigService,
     ProviderConfigurationError,
 )
+from ...services.llm_provider.types import DeploymentRef
 from ...services.tenant.authorization import ACTION_CHAT_WRITE
 from ...services.tenant.context import TenantRequestContext
 from ...services.tenant.dependencies import get_tenant_request_context
@@ -93,6 +95,35 @@ def _requested_provider_for_chat(payload: ChatRequest) -> Optional[str]:
     if provider:
         return provider
     return None
+
+
+def _selection_provider(selection: Any) -> str:
+    """Return the compatibility provider snapshot for legacy or V2 selections."""
+
+    return str(
+        getattr(selection, "provider", None)
+        or getattr(selection, "legacy_provider", None)
+        or ""
+    )
+
+
+def _selection_model(selection: Any) -> str:
+    """Return the compatibility model snapshot for legacy or V2 selections."""
+
+    return str(
+        getattr(selection, "model", None)
+        or getattr(selection, "legacy_model", None)
+        or ""
+    )
+
+
+def _selection_credential_ref_payload(selection: Any) -> dict[str, Any] | None:
+    """Return legacy credential metadata when present."""
+
+    credential_ref = getattr(selection, "credential_ref", None)
+    if credential_ref is None:
+        return None
+    return credential_ref.to_dict()
 
 
 def _build_conversation_history(
@@ -175,9 +206,16 @@ async def _submit_chat_request(
     runtime_provider = _requested_provider_for_chat(payload)
     raw_requested_model = payload.model.strip() if isinstance(payload.model, str) else None
     requested_model = raw_requested_model
+    deployment_ref = None
     try:
-        runtime_selection = runtime_config_service.build_runtime_selection(
+        deployment_ref = (
+            DeploymentRef.from_mapping(payload.deployment_ref.model_dump())
+            if payload.deployment_ref is not None
+            else None
+        )
+        runtime_selection = runtime_config_service.build_conversation_runtime_selection(
             user_id=current_user.id,
+            deployment_ref=deployment_ref,
             provider=runtime_provider,
             model=requested_model,
             reasoning_effort=payload.reasoning_effort,
@@ -194,18 +232,27 @@ async def _submit_chat_request(
             else exc_detail
         )
         raise HTTPException(status_code=400, detail=detail) from exc
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
     except ProviderConfigurationError as exc:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except LLMProviderServiceError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
-    model = runtime_selection.model
-    if runtime_selection.provider == OPENAI_PROVIDER_ID:
-        if requested_model and not compat.is_supported_openai_model(requested_model):
+    selection_provider = _selection_provider(runtime_selection)
+    model = _selection_model(runtime_selection)
+    if selection_provider == OPENAI_PROVIDER_ID:
+        if (
+            deployment_ref is None
+            and requested_model
+            and not compat.is_supported_openai_model(requested_model)
+        ):
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="Invalid model. Only GPT-5 family models are supported.",
             )
         if requested_model:
-            model = runtime_selection.model
+            model = _selection_model(runtime_selection)
         try:
             normalized_reasoning_effort = compat.validate_reasoning_effort_for_model(
                 effort=payload.reasoning_effort,
@@ -220,7 +267,7 @@ async def _submit_chat_request(
         try:
             normalized_reasoning_effort = compat.validate_reasoning_effort_for_model(
                 effort=payload.reasoning_effort,
-                provider=runtime_selection.provider,
+                provider=selection_provider,
                 model=model,
             )
         except ValueError as exc:
@@ -326,9 +373,10 @@ async def _submit_chat_request(
                     anchor_sequence=anchor_sequence,
                     user_event_published=True,
                     requested_mode=requested_mode,
-                    provider=runtime_selection.provider,
-                    model=runtime_selection.model,
-                    credential_ref=runtime_selection.credential_ref.to_dict(),
+                    provider=selection_provider,
+                    model=model,
+                    credential_ref=_selection_credential_ref_payload(runtime_selection),
+                    runtime_selection=runtime_selection_payload,
                     reasoning_effort=normalized_reasoning_effort,
                     deterministic_mode=deterministic_mode,
                     agent_mode=agent_mode,
@@ -348,7 +396,7 @@ async def _submit_chat_request(
             task_id=task_id,
             user_id=current_user.id,
             tenant_id=task.tenant_id,
-            provider=runtime_selection.provider,
+            provider=selection_provider,
             model=model,
             runtime_selection=runtime_selection_payload,
             message=payload.message,

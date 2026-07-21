@@ -184,8 +184,16 @@ def final_generation_metadata(
         **safe_report_metadata(checkpoint.base_generation_metadata),
         **safe_report_metadata(renderer_metadata),
         "llm_runtime_selection": {
-            "provider": str(llm_runtime_selection.get("provider") or ""),
-            "model": str(llm_runtime_selection.get("model") or ""),
+            "provider": str(
+                llm_runtime_selection.get("provider")
+                or llm_runtime_selection.get("legacy_provider")
+                or ""
+            ),
+            "model": str(
+                llm_runtime_selection.get("model")
+                or llm_runtime_selection.get("legacy_model")
+                or ""
+            ),
             "reasoning_effort": (
                 str(llm_runtime_selection["reasoning_effort"])
                 if llm_runtime_selection.get("reasoning_effort") is not None

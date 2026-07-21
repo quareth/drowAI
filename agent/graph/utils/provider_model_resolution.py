@@ -39,34 +39,6 @@ def resolve_graph_provider_model_ref(
     return None
 
 
-def resolve_graph_reasoning_provider_model_ref(
-    metadata: Mapping[str, Any],
-    context: Optional[Any] = None,
-) -> Optional[ProviderModelRef]:
-    """Resolve the optional reasoning provider/model pair from metadata/context."""
-    metadata_ref = _pair_from_mapping(
-        metadata,
-        model_key="reasoning_model",
-        provider_key="reasoning_provider",
-    )
-    if metadata_ref is not None:
-        return metadata_ref
-
-    runtime_ref = _pair_from_mapping(
-        metadata,
-        model_key="runtime_reasoning_model",
-        provider_key="runtime_reasoning_provider",
-    )
-    if runtime_ref is not None:
-        return runtime_ref
-
-    return _pair_from_context(
-        context,
-        model_attr="reasoning_model",
-        provider_attr="reasoning_provider",
-    )
-
-
 def _pair_from_mapping(
     source: Mapping[str, Any],
     *,
@@ -113,5 +85,4 @@ def _is_valid_string(value: Any) -> bool:
 
 __all__ = [
     "resolve_graph_provider_model_ref",
-    "resolve_graph_reasoning_provider_model_ref",
 ]

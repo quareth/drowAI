@@ -14,7 +14,6 @@ from agent.providers.llm.core.exceptions import (
     LLMCapabilityNotSupportedError,
     LLMConfigurationError,
     LLMRefusalError,
-    LLMResponseError,
     LLMStructuredOutputParseError,
 )
 from agent.providers.llm.contracts.tool_contracts import FunctionToolSpec, ToolChoice
@@ -146,6 +145,31 @@ def _client(
         reasoning_effort=reasoning_effort,
     )
     return client, fake_messages
+
+
+def test_anthropic_forwards_explicit_resolved_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The native Messages adapter does not depend on ambient SDK configuration."""
+
+    mock_sdk = MagicMock(
+        return_value=SimpleNamespace(messages=_FakeMessages(_text_response()))
+    )
+    monkeypatch.setattr(
+        "agent.providers.llm.adapters.anthropic.client.anthropic.AsyncAnthropic",
+        mock_sdk,
+    )
+
+    AnthropicMessagesClient(
+        api_key="gateway-key",
+        model="claude-sonnet-4-6",
+        base_url="http://127.0.0.1:4200",
+    )
+
+    mock_sdk.assert_called_once_with(
+        api_key="gateway-key",
+        base_url="http://127.0.0.1:4200",
+    )
 
 
 @pytest.mark.asyncio

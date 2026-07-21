@@ -3,15 +3,14 @@ Shared role-based model and reasoning-effort policy authority.
 
 This module resolves role-owned provider/model/effort targets used by both
 backend LangGraph services and agent graph/runtime callsites. Role contracts
-and role requirements live in sibling modules; provider-specific model defaults
-live in provider profile builders.
+and role requirements live in sibling modules; model capabilities live in
+provider profile builders.
 """
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
-from typing import Callable, Optional, cast
+from typing import Optional, cast
 
 from .role_contracts import (
     CANONICAL_REASONING_EFFORT_VALUES,
@@ -19,9 +18,8 @@ from .role_contracts import (
     DEFAULT_INTERNAL_REASONING_EFFORT,
     DEFAULT_PROVIDER_ID,
     DEFAULT_USER_SELECTED_REASONING_EFFORT,
-    InternalRoleModelBinding,
-    POST_TOOL_ARTICULATOR_MODEL_REF_ENV,
     ProviderModelBinding,
+    ROLE_CONTEXT_COMPRESSOR,
     ROLE_CONVERSATION_MAIN,
     ROLE_INTENT_CLASSIFIER,
     ROLE_POST_TOOL_ARTICULATOR,
@@ -32,17 +30,13 @@ from .role_contracts import (
     ReasoningEffort,
     RoleCallSettings,
     RoleKey,
-    TOOL_CATEGORY_SELECTOR_MODEL_REF_ENV,
-    TOOL_OUTPUT_COMPRESSOR_MODEL_REF_ENV,
-    internal_role_model_ref_env,
 )
 from .role_requirements import (
+    CONVERSATION_INHERITED_ROLE_KEYS,
     INTERNAL_ROLE_KEYS,
     USER_SELECTED_ROLE_KEYS,
     get_role_requirements,
 )
-
-InternalModelResolver = Callable[[str, RoleKey], ProviderModelBinding]
 
 
 def _normalize_model_name(model: Optional[str]) -> Optional[str]:
@@ -80,15 +74,13 @@ def validate_reasoning_effort_for_model(
 
 @dataclass(slots=True)
 class ModelRoleRegistry:
-    """Resolve model names by role using deterministic precedence rules."""
+    """Resolve one selected model with deterministic per-role call policy."""
 
     conversation_main_default: str = DEFAULT_CONVERSATION_MAIN_MODEL
-    internal_model_resolver: InternalModelResolver | None = None
     user_selected_reasoning_default: ReasoningEffort = (
         DEFAULT_USER_SELECTED_REASONING_EFFORT
     )
     internal_reasoning_default: ReasoningEffort = DEFAULT_INTERNAL_REASONING_EFFORT
-    env_getter: Callable[[str], Optional[str]] = os.getenv
 
     def resolve_call_settings(
         self,
@@ -96,52 +88,58 @@ class ModelRoleRegistry:
         *,
         conversation_model: Optional[str] = None,
         conversation_provider: Optional[str] = None,
-        reasoning_model: Optional[str] = None,
-        reasoning_provider: Optional[str] = None,
         reasoning_effort: Optional[str] = None,
     ) -> RoleCallSettings:
-        """Resolve model + effort + source for a role-owned call."""
+        """Resolve the selected target and provider-neutral effort for one role.
 
-        if role in USER_SELECTED_ROLE_KEYS:
-            resolved_model = self._resolve_user_selected_model(
+        Model identity is deliberately owned only by the submitted conversation
+        selection; roles may vary effort, not deployment or model.
+        """
+
+        allowed_roles = (
+            USER_SELECTED_ROLE_KEYS
+            | CONVERSATION_INHERITED_ROLE_KEYS
+            | INTERNAL_ROLE_KEYS
+        )
+        if role not in allowed_roles:
+            raise ValueError(f"Unknown model role: {role}")
+
+        provider = _normalize_provider_id(conversation_provider) or DEFAULT_PROVIDER_ID
+        model = (
+            _normalize_model_name(conversation_model)
+            or _normalize_model_name(self.conversation_main_default)
+        )
+        if model is None:
+            raise ValueError(f"Role '{role}' requires a selected model")
+
+        binding = ProviderModelBinding(provider=provider, model=model)
+        if role in (CONVERSATION_INHERITED_ROLE_KEYS | INTERNAL_ROLE_KEYS):
+            _validate_role_binding(
                 role=role,
-                conversation_model=conversation_model,
-                reasoning_model=reasoning_model,
+                binding=binding,
+                binding_kind="selected-model",
             )
-            resolved_provider = self._resolve_user_selected_provider(
-                role=role,
-                conversation_model=conversation_model,
-                conversation_provider=conversation_provider,
-                reasoning_model=reasoning_model,
-                reasoning_provider=reasoning_provider,
+
+        if role in INTERNAL_ROLE_KEYS:
+            resolved_effort = self._resolve_internal_reasoning_effort(
+                provider=provider,
+                model=model,
             )
+        elif role in CONVERSATION_INHERITED_ROLE_KEYS:
+            resolved_effort = None
+        else:
             resolved_effort = self._resolve_reasoning_effort(
-                provider=resolved_provider,
-                model=resolved_model,
+                provider=provider,
+                model=model,
                 requested_effort=reasoning_effort,
                 default_effort=self.user_selected_reasoning_default,
             )
-            return RoleCallSettings(
-                provider=resolved_provider,
-                model=resolved_model,
-                reasoning_effort=resolved_effort,
-                source="user_selected",
-            )
 
-        resolved_internal = self._resolve_internal_model_binding(
-            role,
-            conversation_provider=conversation_provider,
-        )
         return RoleCallSettings(
-            provider=resolved_internal.provider,
-            model=resolved_internal.model,
-            reasoning_effort=self._resolve_reasoning_effort(
-                provider=resolved_internal.provider,
-                model=resolved_internal.model,
-                requested_effort=None,
-                default_effort=self.internal_reasoning_default,
-            ),
-            source="internal_fixed",
+            provider=provider,
+            model=model,
+            reasoning_effort=resolved_effort,
+            source="user_selected",
         )
 
     def resolve(
@@ -150,8 +148,6 @@ class ModelRoleRegistry:
         *,
         conversation_model: Optional[str] = None,
         conversation_provider: Optional[str] = None,
-        reasoning_model: Optional[str] = None,
-        reasoning_provider: Optional[str] = None,
     ) -> str:
         """Resolve model for `role` with explicit role-specific precedence."""
 
@@ -159,85 +155,57 @@ class ModelRoleRegistry:
             role,
             conversation_model=conversation_model,
             conversation_provider=conversation_provider,
-            reasoning_model=reasoning_model,
-            reasoning_provider=reasoning_provider,
         ).model
 
-    def _resolve_user_selected_model(
+    def _resolve_internal_reasoning_effort(
         self,
         *,
-        role: RoleKey,
-        conversation_model: Optional[str],
-        reasoning_model: Optional[str],
-    ) -> str:
-        normalized_conversation = _normalize_model_name(conversation_model)
-        normalized_reasoning = _normalize_model_name(reasoning_model)
+        provider: str,
+        model: str,
+    ) -> Optional[ReasoningEffort]:
+        """Return low reasoning, or the closest supported lower-cost effort."""
 
-        if role == ROLE_CONVERSATION_MAIN:
-            return normalized_conversation or self.conversation_main_default
+        from agent.providers.llm.core.capabilities import LLMCapability
+        from agent.providers.llm.core.exceptions import LLMProfileNotFoundError
+        from agent.providers.llm.core.identity import ProviderModelRef
+        from agent.providers.llm.profiles.registry import require_model_profile
 
-        if role in {ROLE_REASONING_MAIN, ROLE_POST_TOOL_OBSERVATION}:
-            return (
-                normalized_reasoning
-                or normalized_conversation
-                or self.conversation_main_default
+        try:
+            profile = require_model_profile(ProviderModelRef(provider, model))
+        except LLMProfileNotFoundError:
+            return None
+        if not profile.supports(LLMCapability.REASONING_EFFORT):
+            return None
+
+        preferred = self.internal_reasoning_default
+        supported = profile.reasoning_efforts
+        if not supported:
+            return None
+        if preferred in supported:
+            selected = preferred
+        else:
+            ranks = {
+                effort: index
+                for index, effort in enumerate(CANONICAL_REASONING_EFFORT_VALUES)
+            }
+            preferred_rank = ranks[preferred]
+            ranked_supported = [
+                effort for effort in supported if effort in ranks
+            ]
+            if not ranked_supported:
+                return None
+            selected = min(
+                ranked_supported,
+                key=lambda effort: (
+                    ranks[effort] > preferred_rank,
+                    abs(ranks[effort] - preferred_rank),
+                ),
             )
-
-        if role == ROLE_INTENT_CLASSIFIER:
-            return normalized_conversation or self.conversation_main_default
-
-        raise ValueError(f"Unknown user-selected model role: {role}")
-
-    def _resolve_user_selected_provider(
-        self,
-        *,
-        role: RoleKey,
-        conversation_model: Optional[str],
-        conversation_provider: Optional[str],
-        reasoning_model: Optional[str],
-        reasoning_provider: Optional[str],
-    ) -> str:
-        normalized_conversation = _normalize_model_name(conversation_model)
-        normalized_reasoning = _normalize_model_name(reasoning_model)
-        normalized_conversation_provider = _normalize_provider_id(conversation_provider)
-        normalized_reasoning_provider = _normalize_provider_id(reasoning_provider)
-
-        if role == ROLE_CONVERSATION_MAIN:
-            return normalized_conversation_provider or DEFAULT_PROVIDER_ID
-
-        if role in {ROLE_REASONING_MAIN, ROLE_POST_TOOL_OBSERVATION}:
-            if normalized_reasoning:
-                return normalized_reasoning_provider or DEFAULT_PROVIDER_ID
-            if normalized_conversation:
-                return normalized_conversation_provider or DEFAULT_PROVIDER_ID
-            return DEFAULT_PROVIDER_ID
-
-        if role == ROLE_INTENT_CLASSIFIER:
-            if normalized_conversation:
-                return normalized_conversation_provider or DEFAULT_PROVIDER_ID
-            return DEFAULT_PROVIDER_ID
-
-        raise ValueError(f"Unknown user-selected model role: {role}")
-
-    def _resolve_internal_model_binding(
-        self,
-        role: RoleKey,
-        *,
-        conversation_provider: Optional[str],
-    ) -> ProviderModelBinding:
-        env_ref = _parse_provider_model_ref_env(
-            self.env_getter(internal_role_model_ref_env(role)),
-            env_name=internal_role_model_ref_env(role),
+        return validate_reasoning_effort_for_model(
+            effort=selected,
+            provider=provider,
+            model=model,
         )
-        if env_ref is not None:
-            _validate_internal_role_binding(role=role, binding=env_ref)
-            return env_ref
-
-        provider = _normalize_provider_id(conversation_provider) or DEFAULT_PROVIDER_ID
-        resolver = self.internal_model_resolver or _resolve_profile_internal_model_binding
-        if role in INTERNAL_ROLE_KEYS:
-            return resolver(provider, role)
-        raise ValueError(f"Unknown model role: {role}")
 
     def _resolve_reasoning_effort(
         self,
@@ -247,7 +215,7 @@ class ModelRoleRegistry:
         requested_effort: Optional[str],
         default_effort: ReasoningEffort,
     ) -> Optional[ReasoningEffort]:
-        """Resolve role reasoning without applying OpenAI defaults to other providers."""
+        """Resolve role reasoning without applying OpenAI defaults elsewhere."""
 
         if requested_effort is not None:
             return validate_reasoning_effort_for_model(
@@ -273,27 +241,6 @@ class ModelRoleRegistry:
         ) or resolved_default
 
 
-def _resolve_profile_internal_model_binding(
-    provider: str,
-    role: RoleKey,
-) -> ProviderModelBinding:
-    """Resolve provider-owned internal role defaults through model profiles."""
-    from agent.providers.llm.core.exceptions import LLMProfileNotFoundError
-    from agent.providers.llm.profiles.registry import resolve_provider_internal_role_model
-
-    try:
-        ref = resolve_provider_internal_role_model(provider, role)
-    except LLMProfileNotFoundError as exc:
-        normalized_provider = _normalize_provider_id(provider) or DEFAULT_PROVIDER_ID
-        if role in INTERNAL_ROLE_KEYS:
-            raise ValueError(
-                f"No internal model configured for provider '{normalized_provider}' "
-                f"and role '{role}'"
-            ) from exc
-        raise
-    return ProviderModelBinding(provider=ref.provider, model=ref.model)
-
-
 def _model_reasoning_default(
     *,
     provider: str,
@@ -315,31 +262,11 @@ def _model_reasoning_default(
     return True, cast(Optional[ReasoningEffort], profile.default_reasoning_effort)
 
 
-def _parse_provider_model_ref_env(
-    value: Optional[str],
-    *,
-    env_name: str,
-) -> Optional[ProviderModelBinding]:
-    if value is None:
-        return None
-    raw = value.strip()
-    if not raw:
-        return None
-    provider, separator, model = raw.partition("/")
-    normalized_provider = _normalize_provider_id(provider)
-    normalized_model = _normalize_model_name(model)
-    if separator != "/" or normalized_provider is None or normalized_model is None:
-        raise ValueError(
-            f"{env_name} must be a provider/model reference, for example "
-            "'openai/gpt-5-mini'"
-        )
-    return ProviderModelBinding(provider=normalized_provider, model=normalized_model)
-
-
-def _validate_internal_role_binding(
+def _validate_role_binding(
     *,
     role: RoleKey,
     binding: ProviderModelBinding,
+    binding_kind: str,
 ) -> None:
     from agent.providers.llm.core.exceptions import LLMProfileNotFoundError
     from agent.providers.llm.core.identity import ProviderModelRef
@@ -351,19 +278,24 @@ def _validate_internal_role_binding(
         )
     except LLMProfileNotFoundError as exc:
         raise ValueError(
-            f"No model profile registered for internal role '{role}' target "
+            f"No model profile registered for {binding_kind} role '{role}' target "
             f"'{binding.provider}/{binding.model}'"
         ) from exc
     requirements = get_role_requirements(role)
     for capability in requirements.required_capabilities:
         if not profile.supports(capability):
             raise ValueError(
-                f"Internal role '{role}' target '{profile.ref}' must support "
+                f"{binding_kind.capitalize()} role '{role}' target "
+                f"'{profile.ref}' must support "
                 f"{capability}"
             )
-    if requirements.structured_output_required and not profile.structured_output_strategies:
+    if (
+        requirements.structured_output_required
+        and not profile.structured_output_strategies
+    ):
         raise ValueError(
-            f"Internal role '{role}' target '{profile.ref}' must support a "
+            f"{binding_kind.capitalize()} role '{role}' target "
+            f"'{profile.ref}' must support a "
             "structured output strategy"
         )
 
@@ -373,10 +305,9 @@ __all__ = [
     "DEFAULT_CONVERSATION_MAIN_MODEL",
     "DEFAULT_INTERNAL_REASONING_EFFORT",
     "DEFAULT_USER_SELECTED_REASONING_EFFORT",
-    "InternalRoleModelBinding",
     "ModelRoleRegistry",
-    "POST_TOOL_ARTICULATOR_MODEL_REF_ENV",
     "ProviderModelBinding",
+    "ROLE_CONTEXT_COMPRESSOR",
     "ROLE_CONVERSATION_MAIN",
     "ROLE_INTENT_CLASSIFIER",
     "ROLE_POST_TOOL_OBSERVATION",
@@ -387,7 +318,5 @@ __all__ = [
     "RoleCallSettings",
     "RoleKey",
     "ReasoningEffort",
-    "TOOL_CATEGORY_SELECTOR_MODEL_REF_ENV",
-    "TOOL_OUTPUT_COMPRESSOR_MODEL_REF_ENV",
     "validate_reasoning_effort_for_model",
 ]

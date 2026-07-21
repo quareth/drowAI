@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.services.usage_tracking.extraction import UsageExtractionTarget
+from backend.services.usage_tracking.extraction import (
+    UsageExtractionTarget,
+    response_usage_attribution,
+)
 from backend.services.usage_tracking.models import (
     ProviderUsageComponents,
     UsageData,
@@ -26,6 +29,8 @@ class OpenAIChatCompletionsUsageExtractor:
                 api_surface=target.api_surface,
             )
 
+        parser_provider = target.parser_provider or target.provider
+        api_surface = target.api_surface
         details = getattr(usage, "prompt_tokens_details", None)
         cached = _usage_token_attr(details, "cached_tokens") if details else 0
         cache_write_tokens = (
@@ -40,8 +45,8 @@ class OpenAIChatCompletionsUsageExtractor:
         provider_usage_components = None
         if cache_write_tokens > 0:
             provider_usage_components = ProviderUsageComponents(
-                provider="openai",
-                api_surface="chat_completions",
+                provider=target.provider,
+                api_surface=api_surface,
                 components={
                     "input_tokens": max(0, prompt - cached - cache_write_tokens),
                     "cached_input_tokens": cached,
@@ -55,12 +60,17 @@ class OpenAIChatCompletionsUsageExtractor:
             completion_tokens=completion,
             total_tokens=total,
             model=target.model,
-            provider="openai",
+            provider=target.provider,
             cached_tokens=cached,
             reasoning_tokens=0,
-            api_surface="chat_completions",
-            cache_reporting=classify_cache_reporting("openai", "chat_completions"),
+            api_surface=api_surface,
+            cache_reporting=classify_cache_reporting(parser_provider, api_surface),
             provider_usage_components=provider_usage_components,
+            usage_attribution=response_usage_attribution(
+                response,
+                target,
+                usage_completeness="actual",
+            ),
         )
 
 
@@ -77,6 +87,8 @@ class OpenAIResponsesUsageExtractor:
                 api_surface=target.api_surface,
             )
 
+        parser_provider = target.parser_provider or target.provider
+        api_surface = target.api_surface
         input_tokens = _usage_token_attr(usage, "input_tokens")
         output_tokens = _usage_token_attr(usage, "output_tokens")
         total_tokens = _usage_token_attr(usage, "total_tokens")
@@ -108,8 +120,8 @@ class OpenAIResponsesUsageExtractor:
         provider_usage_components = None
         if cache_write_tokens > 0:
             provider_usage_components = ProviderUsageComponents(
-                provider="openai",
-                api_surface="responses",
+                provider=target.provider,
+                api_surface=api_surface,
                 components={
                     "input_tokens": max(
                         0,
@@ -126,12 +138,17 @@ class OpenAIResponsesUsageExtractor:
             completion_tokens=output_tokens,
             total_tokens=total_tokens,
             model=target.model,
-            provider="openai",
+            provider=target.provider,
             cached_tokens=cached_tokens,
             reasoning_tokens=reasoning,
-            api_surface="responses",
-            cache_reporting=classify_cache_reporting("openai", "responses"),
+            api_surface=api_surface,
+            cache_reporting=classify_cache_reporting(parser_provider, api_surface),
             provider_usage_components=provider_usage_components,
+            usage_attribution=response_usage_attribution(
+                response,
+                target,
+                usage_completeness="actual",
+            ),
         )
 
 

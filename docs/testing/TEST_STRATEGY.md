@@ -7,8 +7,8 @@ This document defines how DrowAI turns a large historical test surface into unde
 ## Current Test-Suite Maturity
 
 > **Important:** DrowAI contains a large historical test surface that is still
-> being audited. The generated inventory currently records 1,091 test files;
-> 1,043 are `untriaged`, 31 contain trusted CI selections, ten are useful slow
+> being audited. The generated inventory currently records 1,173 test files;
+> 1,125 are `untriaged`, 31 contain trusted CI selections, ten are useful slow
 > journeys, one is candidate E2E coverage, five are curated manual coverage,
 > and one is environment-dependent.
 > Only the documented curated gates currently represent release evidence. The

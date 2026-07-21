@@ -208,9 +208,7 @@ async def test_classifier_sends_exact_current_request_to_selected_model(monkeypa
         "build_intent_classifier_request",
         _capture_request,
     )
-    classifier = IntentClassifier(
-        model_role_registry=ModelRoleRegistry(env_getter=lambda _name: None),
-    )
+    classifier = IntentClassifier(model_role_registry=ModelRoleRegistry())
 
     result = await classifier.enrich_runtime_config(config)
 

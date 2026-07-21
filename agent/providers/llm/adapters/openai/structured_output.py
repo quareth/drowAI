@@ -7,6 +7,7 @@ providers do not inherit OpenAI request payload rules by default.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Dict
 
 from ...contracts.structured_output_strategy import select_structured_output_strategy
@@ -44,6 +45,36 @@ def build_chat_response_format(spec: StructuredOutputSpec) -> Dict[str, Any]:
             "schema": spec.schema,
         },
     }
+
+
+def build_chat_structured_output_diagnostics(response: Any | None) -> Dict[str, object]:
+    """Extract best-effort Chat Completions structured-output diagnostics."""
+
+    if response is None:
+        return {}
+
+    diagnostics: Dict[str, object] = {}
+    response_id = getattr(response, "id", None)
+    if isinstance(response_id, str) and response_id.strip():
+        diagnostics["response_id"] = response_id.strip()
+
+    choices = getattr(response, "choices", None)
+    if choices:
+        try:
+            finish_reason = getattr(choices[0], "finish_reason", None)
+        except Exception:
+            finish_reason = None
+        if isinstance(finish_reason, str) and finish_reason.strip():
+            diagnostics["finish_reason"] = finish_reason.strip()
+
+    return diagnostics
+
+
+def structured_metric_suffix(schema_name: str) -> str:
+    """Return a metric-safe structured-output schema suffix."""
+
+    normalized = re.sub(r"[^a-zA-Z0-9_]+", "_", str(schema_name).strip()).strip("_")
+    return normalized or "unknown"
 
 
 def require_openai_native_structured_output_strategy(
@@ -117,8 +148,10 @@ def validate_openai_strict_schema(spec: StructuredOutputSpec) -> None:
 
 __all__ = [
     "StructuredOutputSchemaError",
+    "build_chat_structured_output_diagnostics",
     "build_chat_response_format",
     "build_responses_text_format",
     "require_openai_native_structured_output_strategy",
+    "structured_metric_suffix",
     "validate_openai_strict_schema",
 ]

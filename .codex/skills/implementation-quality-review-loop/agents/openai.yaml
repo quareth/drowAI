@@ -1,0 +1,4 @@
+interface:
+  display_name: "Implementation Quality Review"
+  short_description: "Review and fix maintainability issues"
+  default_prompt: "Use $implementation-quality-review-loop to assess and clean the implementation quality of the branch or commit recorded in quality state without changing behavior."

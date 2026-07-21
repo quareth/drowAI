@@ -1078,7 +1078,7 @@ async def test_resolve_parameters_preserves_raw_ffuf_planner_payload_and_compile
 @pytest.mark.asyncio
 async def test_parameter_resolver_output_matches_planner_for_direct_tool_call():
     config = DummyConfig()
-    selected_tools = ["shell.exec"]
+    selected_tools = ["information_gathering.network_discovery.nmap"]
     usage = {
         "prompt_tokens": 9,
         "completion_tokens": 5,
@@ -1089,7 +1089,7 @@ async def test_parameter_resolver_output_matches_planner_for_direct_tool_call():
     resolver_llm, planner_llm, resolver_result, planner_result = await _run_resolver_parity_case(
         config=config,
         selected_tools=selected_tools,
-        initial_tool_calls=[{"arguments": json.dumps({"command": "echo parity"})}],
+        initial_tool_calls=[{"arguments": json.dumps({"ports": "80"})}],
         retry_tool_calls=[],
         context={},
         parameter_usage=usage,
@@ -1104,10 +1104,10 @@ async def test_parameter_resolver_output_matches_planner_for_direct_tool_call():
 @pytest.mark.asyncio
 async def test_enhanced_planner_exposes_neutral_function_specs_to_parameter_resolver():
     config = DummyConfig()
-    selected_tools = ["shell.exec"]
+    selected_tools = ["information_gathering.network_discovery.nmap"]
     planner_llm = ScriptedParityLLM(
         selected_tools=selected_tools,
-        initial_tool_calls=[{"arguments": json.dumps({"command": "echo neutral"})}],
+        initial_tool_calls=[{"arguments": json.dumps({"ports": "80"})}],
     )
     planner = EnhancedActionPlanner(config, llm_client=planner_llm)
 
@@ -1121,7 +1121,7 @@ async def test_enhanced_planner_exposes_neutral_function_specs_to_parameter_reso
         },
     )
 
-    assert result.tool_parameters["shell.exec"]["command"] == "echo neutral"
+    assert result.tool_parameters[selected_tools[0]]["ports"] == "80"
     assert planner_llm.exposed_tools
     assert all(
         type(tool).__name__ == "FunctionToolSpec"
@@ -1138,16 +1138,16 @@ async def test_parameter_resolver_empty_native_response_matches_planner_contract
         fill_defaults_for_missing = False
 
     config = RequireAllConfig()
-    selected_tools = ["shell.exec"]
+    selected_tools = ["information_gathering.network_discovery.nmap"]
     resolver_llm = ScriptedParityLLM(
         selected_tools=selected_tools,
         initial_tool_calls=[],
-        retry_tool_calls=[[{"arguments": json.dumps({"command": "echo retry"})}]],
+        retry_tool_calls=[[{"arguments": json.dumps({"ports": "80"})}]],
     )
     planner_llm = ScriptedParityLLM(
         selected_tools=selected_tools,
         initial_tool_calls=[],
-        retry_tool_calls=[[{"arguments": json.dumps({"command": "echo retry"})}]],
+        retry_tool_calls=[[{"arguments": json.dumps({"ports": "80"})}]],
     )
     resolver = _build_resolver(resolver_llm, config=config)
     planner = EnhancedActionPlanner(config, llm_client=planner_llm)
@@ -1184,18 +1184,18 @@ async def test_parameter_resolver_empty_native_response_matches_planner_contract
 
 
 @pytest.mark.asyncio
-async def test_parameter_resolver_shell_validation_error_matches_planner_structure():
+async def test_parameter_resolver_validation_error_matches_planner_structure():
     config = DummyConfig()
-    selected_tools = ["shell.exec"]
+    selected_tools = ["information_gathering.network_discovery.nmap"]
     resolver_llm = ScriptedParityLLM(
         selected_tools=selected_tools,
-        initial_tool_calls=[{"arguments": json.dumps({})}],
-        retry_tool_calls=[[{"arguments": json.dumps({})}]],
+        initial_tool_calls=[{"arguments": json.dumps({"scan_types": ["invalid"]})}],
+        retry_tool_calls=[[{"arguments": json.dumps({"scan_types": ["invalid"]})}]],
     )
     planner_llm = ScriptedParityLLM(
         selected_tools=selected_tools,
-        initial_tool_calls=[{"arguments": json.dumps({})}],
-        retry_tool_calls=[[{"arguments": json.dumps({})}]],
+        initial_tool_calls=[{"arguments": json.dumps({"scan_types": ["invalid"]})}],
+        retry_tool_calls=[[{"arguments": json.dumps({"scan_types": ["invalid"]})}]],
     )
     resolver = _build_resolver(resolver_llm, config=config)
     planner = EnhancedActionPlanner(config, llm_client=planner_llm)

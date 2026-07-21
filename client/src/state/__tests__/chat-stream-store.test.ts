@@ -31,6 +31,64 @@ afterEach(() => {
 });
 
 describe("chat-stream-store persistence contracts", () => {
+  it("treats assistant_final as a task-local terminal boundary", () => {
+    applyStreamMessage(TASK_ID, {
+      type: "reasoning_delta",
+      content: "thinking",
+      metadata: {
+        id: "turn-terminal",
+        turn_sequence: 9,
+        reasoning_section_id: "turn-terminal:reasoning:0",
+        step_type: "reasoning_delta",
+        streaming: true,
+      },
+    });
+    applyStreamMessage(TASK_ID, {
+      type: "message_delta",
+      content: "answer",
+      metadata: {
+        id: "turn-terminal",
+        turn_sequence: 9,
+        step_type: "message_delta",
+        streaming: true,
+      },
+    });
+
+    applyStreamMessage(TASK_ID, {
+      type: "assistant_final",
+      content: "answer",
+      metadata: {
+        id: "terminal-sentinel",
+        turn_sequence: 9,
+        subtype: "assistant_final",
+        streaming: false,
+      },
+    });
+
+    const snapshot = getTaskStreamSnapshot(TASK_ID);
+    expect(snapshot.hasStreaming).toBe(false);
+    expect(snapshot.items.every((item) => item.isStreaming !== true)).toBe(true);
+  });
+
+  it("keeps terminal cleanup idempotent when assistant_final is replayed", () => {
+    applyStreamMessage(TASK_ID, {
+      type: "message_delta",
+      content: "answer",
+      metadata: { id: "turn-replay", step_type: "message_delta", streaming: true },
+    });
+    const terminal = {
+      type: "assistant_final" as const,
+      content: "answer",
+      metadata: { id: "turn-replay", subtype: "assistant_final", streaming: false },
+    };
+
+    applyStreamMessage(TASK_ID, terminal);
+    applyStreamMessage(TASK_ID, terminal);
+
+    expect(getTaskStreamSnapshot(TASK_ID).hasStreaming).toBe(false);
+    expect(snapshotItems().filter((item) => item.type === "assistant_final")).toHaveLength(1);
+  });
+
   it("keeps stable order after live stream then history remount merge", () => {
     applyStreamMessage(TASK_ID, {
       type: "reasoning_delta",

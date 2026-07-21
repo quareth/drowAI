@@ -392,6 +392,27 @@ export const apiRequest = {
   delete: (endpoint: string) => apiFetch(endpoint, { method: 'DELETE' })
 };
 
+/** Convert a failed API response into a user-facing error without raw JSON. */
+export async function toApiError(
+  response: Response,
+  fallbackMessage: string,
+): Promise<Error> {
+  let detail = fallbackMessage;
+  try {
+    const payload = await response.json();
+    if (payload && typeof payload === "object") {
+      const value = (payload as { detail?: unknown; message?: unknown }).detail
+        ?? (payload as { detail?: unknown; message?: unknown }).message;
+      if (typeof value === "string" && value.trim()) {
+        detail = value;
+      }
+    }
+  } catch {
+    // Use fallback when response body is not JSON.
+  }
+  return new Error(detail);
+}
+
 /**
  * Helper function for API calls that return JSON
  */
@@ -402,8 +423,7 @@ export async function apiCall<T = any>(
   const response = await apiFetch(endpoint, options);
   
   if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`API Error ${response.status}: ${errorText}`);
+    throw await toApiError(response, `API Error ${response.status}`);
   }
   
   return response.json();

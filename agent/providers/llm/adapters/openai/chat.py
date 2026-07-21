@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-import re
 from typing import Any, AsyncIterator, Dict, List, Optional
 
 from ...core.base import (
@@ -25,8 +24,8 @@ from ...core.base import (
     LLMResponse,
     LLMStreamingResponse,
     StructuredOutputSpec,
-    ToolChoiceInput,
     ToolCall,
+    ToolChoiceInput,
     ToolCallResult,
     ToolSpecInput,
 )
@@ -44,13 +43,21 @@ from ...contracts.structured_output import (
 from ...contracts.recovery import (
     ResponseParseRetryState,
 )
+from ...contracts.tool_call_normalization import (
+    ContentEncodedToolCallError,
+    normalize_content_encoded_tool_calls,
+)
 from .structured_output import (
     StructuredOutputSchemaError,
+    build_chat_structured_output_diagnostics,
     build_chat_response_format,
     require_openai_native_structured_output_strategy,
+    structured_metric_suffix,
     validate_openai_strict_schema,
 )
 from .tool_contracts import (
+    build_openai_chat_request,
+    extract_openai_chat_tool_calls,
     normalize_openai_chat_tool_choice,
     normalize_openai_chat_tool_spec,
 )
@@ -59,6 +66,7 @@ from .refusal import (
     raise_for_openai_chat_refusal,
     raise_for_openai_chat_stream_refusal,
 )
+from .client_options import openai_sdk_client_options
 
 # Import UsageData for token tracking
 try:
@@ -163,16 +171,83 @@ class OpenAIChatClient(LLMClient):
                 provider="OpenAI",
             )
         
+        self._initialize_client_state(
+            api_key=api_key,
+            model=model,
+            sdk_client=openai.AsyncOpenAI(
+                **openai_sdk_client_options(
+                    api_key=api_key,
+                    base_url=kwargs.get("base_url"),
+                )
+            ),
+        )
+
+        logger.debug(f"Initialized OpenAIChatClient with model={model}")
+
+    def _initialize_client_state(
+        self,
+        *,
+        api_key: str | None,
+        model: str,
+        sdk_client: Any,
+    ) -> None:
+        """Initialize shared Chat Completions adapter and lifecycle state."""
+
         self._api_key = api_key
         self._model = model
-        self._client = openai.AsyncOpenAI(api_key=api_key)
-        
-        logger.debug(f"Initialized OpenAIChatClient with model={model}")
+        self._client = sdk_client
+        self._close_lock = asyncio.Lock()
+        self._closed = False
     
     @property
     def model(self) -> str:
         """Return the model identifier."""
         return self._model
+
+    async def aclose(self) -> None:
+        """Close the owned OpenAI SDK client exactly once."""
+        async with self._close_lock:
+            if self._closed:
+                return
+            await self._client.close()
+            self._closed = True
+
+    def _extract_requested_tool_calls(
+        self,
+        message: Any,
+        tools: List[ToolSpecInput],
+    ) -> tuple[Optional[List[ToolCall]], bool]:
+        """Prefer native calls, then normalize a request-authorized JSON envelope."""
+
+        native_calls = extract_openai_chat_tool_calls(message)
+        if native_calls:
+            return native_calls, False
+
+        try:
+            content_calls = normalize_content_encoded_tool_calls(
+                getattr(message, "content", None),
+                tools=tools,
+            )
+        except ContentEncodedToolCallError as exc:
+            _safe_inc("llm_content_encoded_tool_calls_rejected_openai_chat")
+            logger.warning(
+                "Content-encoded tool-call normalization rejected "
+                "(provider=openai_chat model=%s reason=%s)",
+                self._model,
+                exc.reason,
+            )
+            return None, False
+
+        if not content_calls:
+            return None, False
+        _safe_inc("llm_content_encoded_tool_calls_normalized_openai_chat")
+        logger.warning(
+            "Normalized content-encoded tool calls "
+            "(provider=openai_chat model=%s count=%s)",
+            self._model,
+            len(content_calls),
+        )
+        return content_calls, True
     
     # -------------------------------------------------------------------------
     # Core API Methods
@@ -232,12 +307,12 @@ class OpenAIChatClient(LLMClient):
         for attempt in range(1, max_attempts + 1):
             try:
                 structured_spec = self._get_structured_output_spec(kwargs)
-                request_kwargs = {
-                    "model": self._model,
-                    "messages": messages,
-                    "temperature": kwargs.get("temperature", DEFAULT_TEMPERATURE),
-                    "max_tokens": kwargs.get("max_tokens", DEFAULT_MAX_TOKENS),
-                }
+                request_kwargs = build_openai_chat_request(
+                    wire_model_id=self._model,
+                    messages=messages,
+                    temperature=kwargs.get("temperature", DEFAULT_TEMPERATURE),
+                    max_tokens=kwargs.get("max_tokens", DEFAULT_MAX_TOKENS),
+                )
                 tools = kwargs.get("tools") or []
                 if tools:
                     request_kwargs["tools"] = [
@@ -337,13 +412,14 @@ class OpenAIChatClient(LLMClient):
             LLMAPIError: If the API call fails
         """
         try:
-            stream = await self._client.chat.completions.create(
-                model=self._model,
+            request_kwargs = build_openai_chat_request(
+                wire_model_id=self._model,
                 messages=messages,
                 temperature=kwargs.get("temperature", DEFAULT_TEMPERATURE),
                 max_tokens=kwargs.get("max_tokens", DEFAULT_MAX_TOKENS),
                 stream=True,
             )
+            stream = await self._client.chat.completions.create(**request_kwargs)
             
             partial_chunks: List[str] = []
             refusal_parts: List[str] = []
@@ -469,12 +545,12 @@ class OpenAIChatClient(LLMClient):
         for attempt in range(1, max_attempts + 1):
             try:
                 structured_spec = self._get_structured_output_spec(kwargs)
-                request_kwargs = {
-                    "model": self._model,
-                    "messages": messages,
-                    "temperature": kwargs.get("temperature", DEFAULT_TEMPERATURE),
-                    "max_tokens": kwargs.get("max_tokens", DEFAULT_MAX_TOKENS),
-                }
+                request_kwargs = build_openai_chat_request(
+                    wire_model_id=self._model,
+                    messages=messages,
+                    temperature=kwargs.get("temperature", DEFAULT_TEMPERATURE),
+                    max_tokens=kwargs.get("max_tokens", DEFAULT_MAX_TOKENS),
+                )
                 tools = kwargs.get("tools") or []
                 if tools:
                     request_kwargs["tools"] = [
@@ -603,14 +679,15 @@ class OpenAIChatClient(LLMClient):
             response_chunk: Any = None
             try:
                 # CRITICAL: include_usage=True enables usage in final chunk
-                stream = await self._client.chat.completions.create(
-                    model=self._model,
+                request_kwargs = build_openai_chat_request(
+                    wire_model_id=self._model,
                     messages=messages,
                     temperature=kwargs.get("temperature", DEFAULT_TEMPERATURE),
                     max_tokens=kwargs.get("max_tokens", DEFAULT_MAX_TOKENS),
                     stream=True,
-                    stream_options={"include_usage": True},
+                    include_stream_usage=True,
                 )
+                stream = await self._client.chat.completions.create(**request_kwargs)
                 
                 async for chunk in stream:
                     chunk_id = getattr(chunk, "id", None)
@@ -698,15 +775,15 @@ class OpenAIChatClient(LLMClient):
         
         for attempt in range(1, max_attempts + 1):
             try:
-                request_kwargs: Dict[str, Any] = {
-                    "model": self._model,
-                    "messages": [
+                request_kwargs = build_openai_chat_request(
+                    wire_model_id=self._model,
+                    messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    "temperature": kwargs.get("temperature", DEFAULT_TEMPERATURE),
-                    "max_tokens": kwargs.get("max_tokens", DEFAULT_MAX_TOKENS),
-                }
+                    temperature=kwargs.get("temperature", DEFAULT_TEMPERATURE),
+                    max_tokens=kwargs.get("max_tokens", DEFAULT_MAX_TOKENS),
+                )
                 
                 if tools:
                     request_kwargs["tools"] = [
@@ -728,17 +805,10 @@ class OpenAIChatClient(LLMClient):
                     partial_content=content if isinstance(content, str) else None,
                 )
                 
-                # Extract tool calls
-                tool_calls: Optional[List[ToolCall]] = None
-                if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
-                    tool_calls = [
-                        ToolCall(
-                            id=tc.id,
-                            name=tc.function.name,
-                            arguments=tc.function.arguments,
-                        )
-                        for tc in choice.message.tool_calls
-                    ]
+                tool_calls, content_was_tool_call = self._extract_requested_tool_calls(
+                    choice.message,
+                    tools,
+                )
                 
                 logger.debug(
                     f"OpenAI chat_with_tools completed: model={self._model}, "
@@ -747,7 +817,7 @@ class OpenAIChatClient(LLMClient):
                 )
                 
                 return ToolCallResult(
-                    content=content,
+                    content=None if content_was_tool_call else content,
                     tool_calls=tool_calls,
                     raw=response,
                 )
@@ -812,15 +882,15 @@ class OpenAIChatClient(LLMClient):
         
         for attempt in range(1, max_attempts + 1):
             try:
-                request_kwargs: Dict[str, Any] = {
-                    "model": self._model,
-                    "messages": [
+                request_kwargs = build_openai_chat_request(
+                    wire_model_id=self._model,
+                    messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    "temperature": kwargs.get("temperature", DEFAULT_TEMPERATURE),
-                    "max_tokens": kwargs.get("max_tokens", DEFAULT_MAX_TOKENS),
-                }
+                    temperature=kwargs.get("temperature", DEFAULT_TEMPERATURE),
+                    max_tokens=kwargs.get("max_tokens", DEFAULT_MAX_TOKENS),
+                )
                 
                 if tools:
                     request_kwargs["tools"] = [
@@ -843,17 +913,10 @@ class OpenAIChatClient(LLMClient):
                     partial_content=content if isinstance(content, str) else None,
                 )
                 
-                # Extract tool calls
-                tool_calls: Optional[List[ToolCall]] = None
-                if hasattr(choice.message, "tool_calls") and choice.message.tool_calls:
-                    tool_calls = [
-                        ToolCall(
-                            id=tc.id,
-                            name=tc.function.name,
-                            arguments=tc.function.arguments,
-                        )
-                        for tc in choice.message.tool_calls
-                    ]
+                tool_calls, content_was_tool_call = self._extract_requested_tool_calls(
+                    choice.message,
+                    tools,
+                )
                 
                 # Extract usage data
                 logger.debug(
@@ -864,7 +927,7 @@ class OpenAIChatClient(LLMClient):
                 )
                 
                 return ToolCallResult(
-                    content=content,
+                    content=None if content_was_tool_call else content,
                     tool_calls=tool_calls,
                     raw=response,
                     usage=usage,
@@ -904,8 +967,7 @@ class OpenAIChatClient(LLMClient):
 
     def _structured_metric_suffix(self, schema_name: str) -> str:
         """Return metric-safe schema suffix."""
-        normalized = re.sub(r"[^a-zA-Z0-9_]+", "_", str(schema_name).strip()).strip("_")
-        return normalized or "unknown"
+        return structured_metric_suffix(schema_name)
 
     def _get_structured_output_spec(self, kwargs: Dict[str, Any]) -> Optional[StructuredOutputSpec]:
         """Extract and type-check structured output spec from call kwargs."""
@@ -973,24 +1035,7 @@ class OpenAIChatClient(LLMClient):
 
     def _build_structured_output_diagnostics(self, response: Any | None) -> Dict[str, object]:
         """Extract best-effort diagnostics for structured parse failures."""
-        if response is None:
-            return {}
-
-        diagnostics: Dict[str, object] = {}
-        response_id = getattr(response, "id", None)
-        if isinstance(response_id, str) and response_id.strip():
-            diagnostics["response_id"] = response_id.strip()
-
-        choices = getattr(response, "choices", None)
-        if choices:
-            try:
-                finish_reason = getattr(choices[0], "finish_reason", None)
-            except Exception:
-                finish_reason = None
-            if isinstance(finish_reason, str) and finish_reason.strip():
-                diagnostics["finish_reason"] = finish_reason.strip()
-
-        return diagnostics
+        return build_chat_structured_output_diagnostics(response)
     
     def _extract_usage_from_response(self, response: Any) -> Optional["UsageData"]:
         """Extract UsageData from Chat Completions API response.

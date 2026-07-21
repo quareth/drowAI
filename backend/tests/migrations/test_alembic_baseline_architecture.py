@@ -33,7 +33,7 @@ def test_active_alembic_graph_is_linear_from_static_baseline() -> None:
     script = _script_directory()
 
     assert script.get_bases() == ["0001_initial_current_schema"]
-    assert script.get_heads() == ["0005_resumable_reports"]
+    assert script.get_heads() == ["0011_connection_credentials"]
     assert [
         revision.revision for revision in reversed(list(script.walk_revisions()))
     ] == [
@@ -42,6 +42,12 @@ def test_active_alembic_graph_is_linear_from_static_baseline() -> None:
         "0003_runner_peer_ip",
         "0004_purge_retired_sites",
         "0005_resumable_reports",
+        "0006_llm_deployment_identity",
+        "0007_llm_deployment_backfill",
+        "0008_llm_conversation_origin",
+        "0009_llm_legacy_retirement",
+        "0010_gpt_oss_agent_dialect",
+        "0011_connection_credentials",
     ]
 
 
@@ -266,6 +272,11 @@ def test_empty_sqlite_database_upgrades_to_required_baseline_tables(
         "runner_connections",
         "runner_control_messages",
         "user_llm_provider_credentials",
+        "llm_connection_credentials",
+        "llm_inference_connections",
+        "llm_model_deployments",
+        "llm_deployment_routes",
+        "llm_capability_observations",
     }
     with engine.connect() as connection:
         inspector = inspect(connection)

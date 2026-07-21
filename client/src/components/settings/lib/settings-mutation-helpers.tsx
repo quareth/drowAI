@@ -14,23 +14,6 @@ type ToastFn = (payload: {
   action?: ToastActionElement;
 }) => void;
 
-export async function toApiError(response: Response, fallbackMessage: string): Promise<Error> {
-  let detail = fallbackMessage;
-  try {
-    const payload = await response.json();
-    if (payload && typeof payload === "object") {
-      const value = (payload as { detail?: unknown; message?: unknown }).detail
-        ?? (payload as { detail?: unknown; message?: unknown }).message;
-      if (typeof value === "string" && value.trim()) {
-        detail = value;
-      }
-    }
-  } catch {
-    // Use fallback when response body is not JSON.
-  }
-  return new Error(detail);
-}
-
 export function showSessionExpiredToast(toast: ToastFn): void {
   toast({
     title: "Session Expired",
@@ -43,4 +26,3 @@ export function showSessionExpiredToast(toast: ToastFn): void {
     ),
   });
 }
-

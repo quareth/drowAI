@@ -1,7 +1,7 @@
 # Model Architecture
 
 Code-verified overview of how LLM providers, model profiles, credentials,
-runtime selection, multi-model role routing, and provider adapters are wired
+runtime selection, role execution policy, and provider adapters are wired
 through the system.
 
 ## Purpose
@@ -13,6 +13,13 @@ The backend owns user-facing model catalog, credential storage, saved
 selection, and runtime-safe selection payloads. The agent provider layer owns
 provider/model metadata, provider-neutral LLM contracts, factory registration,
 and provider-specific adapters for OpenAI and Anthropic.
+
+The deployment-aware text-LLM implementation follows the
+[Deployment-aware LLM HLD](../devdocs/hldd/deployment-aware-llm-architecture-hld.md)
+as design context. This document describes the verified wired state.
+Deployment references are authoritative for active text-LLM selections;
+provider/model values remain compatibility snapshots and historical
+attribution fields.
 
 GPT-5.6 is represented by exact OpenAI profiles for `gpt-5.6-sol`,
 `gpt-5.6-terra`, and `gpt-5.6-luna`; the non-listable `gpt-5.6` API alias uses
@@ -29,8 +36,11 @@ Owned by the model layer:
 - Provider and model identity contracts.
 - Provider/model capability profiles.
 - Public catalog metadata and selectable-model validation.
-- Encrypted per-user provider credentials.
+- Encrypted per-user provider credentials and per-connection managed endpoint
+  credentials.
 - Saved per-user conversation and reporting LLM selections.
+- User-owned inference connections, deployments, routes, and capability
+  observations for text-LLM resolution.
 - Runtime-safe provider/model/credential-ref payloads.
 - Role-aware call target resolution for multi-model execution.
 - Provider-neutral `LLMClient` interface.
@@ -54,8 +64,8 @@ Not owned by the model layer:
     switch routes.
   - Validates model selectability and credential presence before runtime use.
 - Data plane:
-  - Stores encrypted provider credentials, saved selections, conversation
-    metadata, and usage records.
+  - Stores encrypted direct-provider and connection-owned credentials, saved
+    selections, conversation metadata, and usage records.
   - Stores only non-secret credential references in runtime/checkpoint-facing
     metadata.
 - Execution plane:
@@ -69,17 +79,20 @@ Backend management and runtime wiring:
 
 - `backend/routers/llm.py`
   - Public model catalog, conversation/reporting selection, credential,
-    runtime switch, and conversation lifecycle routes.
+    deployment-aware memory dependency, and conversation lifecycle routes.
 - `backend/routers/chat/submit.py`
   - Builds the runtime LLM selection for chat turns.
 - `backend/services/llm_provider/catalog_service.py`
   - Lists provider/model profiles and validates selectable models.
 - `backend/services/llm_provider/credential_service.py`
-  - Stores encrypted credentials and resolves short-lived provider secrets.
+  - Stores encrypted direct-provider or connection-owned credentials and
+    resolves short-lived provider secrets only after live authorization.
 - `backend/services/llm_provider/selection_service.py`
-  - Persists the user's default provider/model selection.
+  - Persists the user's default conversation deployment reference and
+    provider/model compatibility snapshot.
 - `backend/services/llm_provider/reporting_selection_service.py`
-  - Persists and validates the independent reporting provider/model selection.
+  - Persists and validates the independent reporting deployment reference and
+    provider/model/reasoning compatibility snapshot.
 - `backend/services/llm_provider/runtime_config_service.py`
   - Builds `LLMRuntimeSelection` and live `LLMRuntimeServices`.
 - `backend/services/llm_provider/runtime_client_resolver.py`
@@ -107,9 +120,9 @@ Agent provider and graph wiring:
 - `agent/providers/llm/profiles/registry.py`
   - Immutable provider/model profile registry.
 - `agent/providers/llm/profiles/openai.py`
-  - OpenAI model profiles, API surfaces, limits, and internal role defaults.
+  - OpenAI model profiles, API surfaces, capabilities, and limits.
 - `agent/providers/llm/profiles/anthropic.py`
-  - Anthropic model profiles, limits, and internal role defaults.
+  - Anthropic model profiles, capabilities, and limits.
 - `agent/providers/llm/factory/client_factory.py`
   - Provider/model-aware adapter factory.
 - `agent/providers/llm/adapters/openai/*`
@@ -149,7 +162,6 @@ Profiles declare:
 - reasoning-effort values
 - tool-choice modes
 - structured-output strategies
-- provider-owned internal role defaults
 
 `LLMProviderCatalogService` reads listable profiles and adapter availability
 from `LLMClientFactory`. A model is selectable only when its profile is valid,
@@ -161,23 +173,44 @@ selection is additionally constrained to the Responses API public model family.
 Durable state is split deliberately:
 
 - `UserLLMProviderCredential`
-  - Encrypted provider credential row.
+  - Encrypted direct-provider credential row keyed by user and provider.
+- `LLMConnectionCredential`
+  - Encrypted managed-endpoint credential keyed one-to-one by inference
+    connection. The connection remains the authority for owner and preset.
 - `LLMCredentialRef`
   - Non-secret `{user_id, provider}` pointer used in runtime payloads.
+- `LLMInferenceConnection`, `LLMModelDeployment`, `LLMDeploymentRoute`, and
+  `LLMCapabilityObservation`
+  - User-owned text-LLM endpoint identity, exact wire model, route metadata,
+    and capability evidence.
 - `UserLLMSelection`
-  - User's default conversation provider/model.
+  - User's default conversation deployment reference plus provider/model
+    compatibility snapshot.
 - `UserReportingLLMSelection`
-  - Independent provider/model/reasoning-effort selection for task memos and
-    engagement report sections.
+  - Independent reporting deployment reference plus provider/model/reasoning
+    compatibility snapshot for task memos and engagement report sections.
+- `UserMemoryLLMSelection`
+  - Memory gate/extraction deployment references plus provider/model
+    compatibility snapshots.
+- `UserEmbeddingSelection`
+  - Semantic-memory embedding provider/model, dimensions, and vector-family
+    identity. Embedding provider/model, dimensions, and vector-family fields
+    remain unchanged and are not deployment-aware in Phases 1-6.
 - `LLMRuntimeSelection`
-  - Non-secret runtime payload: provider, model, credential ref, and optional
-    reasoning effort.
+  - Legacy non-secret runtime payload: provider, model, credential ref, and
+    optional reasoning effort. New text-LLM turns use the V2 deployment form
+    outside deterministic tests.
+- `LLMRuntimeSelectionV2`
+  - Checkpoint-safe deployment reference, expected revision, optional route,
+    reasoning effort, and compatibility provider/model snapshot.
 - `LLMRuntimeServices`
   - Live invocation-only service bag containing the runtime client resolver.
 
 Decrypted provider API keys are not stored in graph metadata, checkpoint state,
-stream packets, or task workspace files. Provider calls resolve them through
-`LLMRuntimeClientResolver` when constructing a concrete client. A separate
+stream packets, or task workspace files. Managed text-LLM calls resolve the
+credential owned by the authorized connection; direct provider calls resolve
+the user/provider row. Both paths enter through `LLMRuntimeClientResolver` when
+constructing a concrete client. A separate
 OpenAI-only local-Docker compatibility path resolves the selected credential
 through `LLMProviderEnvironmentService` and injects `OPENAI_API_KEY` into the
 task container environment during provisioning. The credential service always
@@ -200,12 +233,12 @@ sequenceDiagram
     participant Factory as LLMClientFactory
     participant Adapter as Provider adapter
 
-    API->>Runtime: build_runtime_selection(user, provider, model, effort)
-    Runtime-->>API: LLMRuntimeSelection + LLMRuntimeServices
+    API->>Runtime: build_conversation_runtime_selection(user, override, effort)
+    Runtime-->>API: LLMRuntimeSelectionV2 + LLMRuntimeServices
     API->>Graph: metadata + llm_runtime_selection + runtime_services
     Node->>Resolver: get_client(selection, role target, user, task)
-    Resolver->>Resolver: resolve credential ref to short-lived secret
-    Resolver->>Factory: get_client(provider_model, api_key)
+    Resolver->>Resolver: authorize deployment and resolve short-lived secret
+    Resolver->>Factory: get_client(effective provider/model, api_key)
     Factory-->>Resolver: LLMClient adapter
     Resolver-->>Node: budget-enforcing LLMClient
     Node->>Adapter: provider-neutral chat/tool/stream call
@@ -217,7 +250,29 @@ Raw API keys in metadata are not supported.
 
 `runtime_services` is a live object, so it is attached only to local invocation
 config and stripped before checkpoint/state inspection. The serializable state
-keeps provider/model and credential references only.
+keeps V2 deployment references plus compatibility provider/model snapshots
+only. Legacy provider/model checkpoints are no longer written for new
+non-deterministic turns.
+
+`core/llm/runtime_selection.py` is the shared contract and safe-projection
+authority for deployment runtime identity. New graph state has one durable
+selection at `facts.metadata.llm_runtime_selection`; the current invocation has
+one executable copy at `configurable.llm_runtime_selection`. Runtime projections
+and `graph_runtime_context` do not mirror the selection. The surrounding
+`provider` and `model` fields remain display and compatibility metadata, not
+resume routing authority.
+
+Checkpoint continuation reads only explicit current and historical selection
+locations. If any location claims a versioned deployment selection, V2 is
+authoritative: identical historical mirrors are accepted, conflicting mirrors
+fail closed, and malformed or unsupported V2 payloads cannot downgrade to
+legacy provider/model resolution. Legacy checkpoints are considered only when
+no versioned marker exists; their provider/model identity must map to exactly
+one owned deployment using its effective compatibility profile and canonical or
+wire-model aliases. Zero matches are unmapped and multiple matches are
+ambiguous. In every case, the resulting deployment reference still passes
+through live owner, revision, route, connection, credential, capability, and
+guarded-egress validation before a provider call.
 
 Reporting generation follows a separate saved-selection lifecycle from the
 default conversation selection. Authenticated `GET` and `PUT`
@@ -229,14 +284,14 @@ the shared `LLMRuntimeClientResolver`.
 
 ## Multi-Model Support
 
-The user's selected provider/model is the default conversation target, but it
-is not the only model a turn can use.
+The user's selected deployment is the model target for every call in the
+agent turn. Hidden graph roles do not select another model or provider.
 
 `core/llm/role_policy.py` resolves a provider/model/reasoning-effort tuple for
-each role-owned call. User-selected roles can use the conversation model or an
-explicit reasoning model. Internal roles use provider-owned defaults declared in
-provider profiles, with environment variable overrides for specific internal
-roles.
+each role-owned call. Conversation, reasoning, classification, compression,
+tool selection, post-tool observation, and articulation all resolve to the
+selected deployment and its exact serving route for OpenAI, Anthropic, and
+reviewed compatible models.
 
 Current role families:
 
@@ -245,23 +300,20 @@ Current role families:
   - `reasoning_main`
   - `post_tool_observation`
   - `intent_classifier`
-- Internal fixed roles:
+- Lightweight internal roles:
   - `tool_output_compressor`
   - `tool_category_selector`
   - `post_tool_articulator`
 
 Conversation-context compression also uses the task-selected provider/model,
-but resolves that target directly from the compaction request. It has no
-internal lightweight-model profile default or role-policy environment override.
-
-When a role resolves to a provider different from the conversation selection,
-`LLMRuntimeClientResolver` fetches an enabled credential ref for the target
-provider. This means multi-provider execution is supported, but every target
-provider still requires a valid credential for the runtime user.
+but resolves that target directly from the compaction request.
 
 Capability checks stay profile-driven. Reasoning effort is passed only to
-models that declare `REASONING_EFFORT`; unsupported efforts fail before the
-provider call.
+models that declare `REASONING_EFFORT`. User-facing reasoning roles preserve
+the submitted effort. Lightweight internal roles request `low`; the shared
+policy chooses the closest supported effort without escalating into a hidden
+high-effort call when a lower level exists. Non-reasoning models omit the
+setting.
 
 ## OpenAI Implementation
 
@@ -295,6 +347,53 @@ OpenAI-specific translation is isolated in adapter helpers:
 - OpenAI native JSON schema output:
   - `agent/providers/llm/adapters/openai/structured_output.py`
 
+## OpenAI-Compatible Implementation
+
+Reviewed GPT-OSS routes use `OpenAICompatibleChatClient` with the code-owned
+`openai_compatible_chat.agent_v1` dialect and the same deployment-aware resolver
+and factory boundary as native providers. The dialect admits only the agent
+contracts DrowAI exercises: chat, usage-aware streaming, native JSON-schema
+output, function tools, and `auto` or `required` tool choice. It does not claim
+reasoning-effort or parallel-tool controls. Connection presets supply the normal
+provider endpoint and exact wire model identifier; graph nodes do not construct
+endpoints or clients.
+
+Arbitrary custom compatible endpoints retain the conservative dialect. They do
+not become agent-capable merely because they implement an endpoint named
+`/v1/chat/completions`; unsupported calls fail before outbound inference.
+
+Reporting and semantic-memory generation retain their independent user
+selections. When either selection points at a reviewed GPT-OSS deployment, the
+shared effective-profile and runtime-client path supplies the same structured
+output dialect instead of a reporting- or memory-specific adapter.
+
+Deployment selections snapshot the deterministic enabled route when one is
+available. Turn finalization forwards that authoritative selection into usage
+persistence, preserving connection, deployment, and route attribution for all
+role-owned calls in the turn.
+
+Endpoint resolution is connection-scoped and declarative. Native OpenAI and
+Anthropic routes use `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL`; hosted NVIDIA
+and Hugging Face routes use `DROWAI_NVIDIA_NIM_BASE_URL` and
+`DROWAI_HUGGINGFACE_BASE_URL`. An override changes only its named provider.
+User-configured custom, Ollama, and vLLM connections retain their saved base
+URL. The registry resolves one SDK client base URL and one guarded operation
+URL, and the runtime passes the client base URL explicitly through the shared
+factory contract. A configured base URL may already include the declared
+client path such as `/v1`; paths are composed exactly once.
+
+The runtime client builder injects a provider-neutral asynchronous inference
+transport into compatible adapters. The backend implementation binds one
+authorized operation target and short-lived credential, returns bounded JSON
+for non-streaming calls, and decodes SSE incrementally so graph events and the
+first provider chunk remain observable before response completion. Other
+code-owned connection operations retain the bounded synchronous transport.
+
+Both guarded transports disable ambient HTTP proxy inheritance, keep
+credentials connection-owned, and reject redirects. Public destinations
+require HTTPS and globally routable DNS. Local development permits HTTP only
+for a hostname or literal address that resolves entirely to loopback.
+
 ## Anthropic Implementation
 
 Anthropic is registered under provider id `anthropic`.
@@ -306,8 +405,9 @@ Anthropic model profiles declare provider-published context and max-output
 limits, streaming, tool use, usage reporting, and prompt-parse structured
 output. Claude Sonnet 5 and Claude Fable 5 are public catalog models;
 Claude Mythos 5 has an exact non-listable Anthropic Messages profile and is
-excluded from normal user selection. Active 4.x profiles remain available, and
-Haiku 4.5 remains the provider-owned model for all internal lightweight roles.
+excluded from normal user selection. Active 4.x profiles remain available.
+Every agent-turn role uses the selected Anthropic deployment; lightweight
+roles use the shared low-effort policy.
 
 Effort-capable Anthropic profiles expose only the levels accepted by each
 model. The adapter sends the resolved value through `output_config.effort` and
@@ -358,22 +458,20 @@ Recommended steps:
 3. Declare exact capabilities, API surface, context window, max output,
    reasoning-effort support, tool-choice modes, structured-output strategies,
    and listable/selectable intent.
-4. Add provider-owned internal role model defaults when internal graph roles can
-   use that provider.
-5. Register the provider profiles in `agent/providers/llm/profiles/registry.py`.
-6. Implement a provider adapter that satisfies `LLMClient`.
-7. Keep provider SDK payload shaping inside provider-local adapter helpers.
-8. Normalize every documented non-streaming and streaming refusal signal into
+4. Register the provider profiles in `agent/providers/llm/profiles/registry.py`.
+5. Implement a provider adapter that satisfies `LLMClient`.
+6. Keep provider SDK payload shaping inside provider-local adapter helpers.
+7. Normalize every documented non-streaming and streaming refusal signal into
    `LLMRefusalOutcome`, and re-raise `LLMRefusalError` unchanged through parse,
    recovery, tool, and retry layers. Application and UI code must not inspect
    provider-native refusal payloads.
-9. Register the adapter resolver in `LLMClientFactory.register_provider`.
-10. Extend catalog validation only when the new provider needs provider-specific
+8. Register the adapter resolver in `LLMClientFactory.register_provider`.
+9. Extend catalog validation only when the new provider needs provider-specific
    selectability rules.
-11. Add tests for catalog listing, selection validation, credential resolution,
+10. Add tests for catalog listing, selection validation, credential resolution,
     factory construction, role targeting, tool calls, structured output,
     streaming usage, refusals, and budget enforcement.
-12. Update UI/schema code only if the public catalog or selection response shape
+11. Update UI/schema code only if the public catalog or selection response shape
     changes.
 
 For a new model under an existing provider, prefer adding a profile first. If
@@ -399,14 +497,28 @@ or router code should change.
 - Output budget and context-window checks run before provider API calls.
 - Provider adapters normalize errors into provider-neutral exceptions.
 
+## Deployment-Aware Implementation Notes
+
+- Active text-LLM execution resolves through deployment references. Provider
+  and model fields on text selections remain compatibility snapshots and are
+  not sufficient runtime authority.
+- `/api/settings` no longer exposes or accepts OpenAI text-LLM mirrors; OpenAI
+  credentials and selections are owned by provider/deployment services.
+- The legacy task-switch route is removed. Selection changes are user-global
+  and affect later workload invocations, not running or paused work.
+- Tenant-admin connection sharing, relay egress, and dynamic policy routing are
+  deferred. The current implementation is user-owned and fails closed instead
+  of falling back to another deployment.
+- Embedding provider/model, dimensions, and vector-family fields remain
+  unchanged. The provider-based embedding credential resolver remains available
+  for the unchanged embedding path.
+
 ## Operational Notes
 
 - Adapter availability affects catalog availability and selectability.
-- The default provider/model comes from the profile registry and selection
-  service defaults.
-- OpenAI legacy settings mirrors still exist for compatibility paths.
-- Runtime model switching writes a task-scoped control message carrying the new
-  non-secret runtime selection.
+- The default compatibility provider/model comes from the profile registry and
+  selection service defaults when a user has no saved text selection.
+- Text-LLM selections must map to a user-owned deployment to be runnable.
 - Multi-provider role routing requires credentials for every target provider.
 - Model profile limits should be updated before increasing runtime defaults.
 

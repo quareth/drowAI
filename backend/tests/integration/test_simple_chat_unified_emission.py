@@ -330,6 +330,90 @@ class TestPerformanceRegression:
         )
 
 
+class TestNonStreamingFallback:
+    """Visible chat falls back when streamed usage is unavailable."""
+
+    @pytest.mark.asyncio
+    async def test_writer_falls_back_to_usage_tracked_non_streaming_call(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A visible chat stream must not reject clients lacking streamed usage."""
+
+        events: List[Dict[str, Any]] = []
+        calls: List[Dict[str, Any]] = []
+
+        def writer(event: Dict[str, Any]) -> None:
+            events.append(dict(event))
+
+        class _Response:
+            content = "Hello from a compatible endpoint"
+            usage = UsageData(
+                prompt_tokens=8,
+                completion_tokens=5,
+                total_tokens=13,
+                model="gpt-oss-20b",
+                provider="openai",
+                api_surface="chat_completions",
+            )
+
+        class _NonStreamingClient:
+            async def chat_messages_with_usage(
+                self,
+                _messages: List[Dict[str, Any]],
+                **kwargs: Any,
+            ) -> _Response:
+                calls.append(dict(kwargs))
+                return _Response()
+
+        class _CallSettings:
+            provider = "openai"
+            model = "gpt-oss-20b"
+            reasoning_effort = None
+
+        monkeypatch.setattr(
+            "agent.graph.nodes.simple_chat.get_stream_writer",
+            lambda: writer,
+        )
+        monkeypatch.setattr(
+            "agent.graph.nodes.simple_chat.resolve_llm_client",
+            lambda *args, **kwargs: _NonStreamingClient(),
+        )
+        monkeypatch.setattr(
+            "agent.graph.nodes.simple_chat.resolve_llm_call_settings",
+            lambda *args, **kwargs: _CallSettings(),
+        )
+        payload = InteractiveInput(
+            task_id=13,
+            message="Hi",
+            metadata={
+                "simple_chat_runtime": {"model": "stub"},
+                METADATA_CONTEXT_BUNDLE_KEY: _empty_bundle("fallback-conv"),
+            },
+        )
+
+        result = await run_simple_chat(
+            payload.to_state().as_graph_state(),
+            context=None,
+            config={"configurable": {"thread_id": "fallback-thread"}},
+        )
+
+        updated = InteractiveState.from_mapping(result)
+        assert updated.trace.final_error is None
+        assert updated.trace.final_text == _Response.content
+        assert len(calls) == 1
+        assert calls[0]["temperature"] == 0.2
+        assert calls[0]["max_tokens"] > 0
+        assert "reasoning_effort" not in calls[0]
+        assert any(
+            event.get("type") == "message_delta"
+            and event.get("content") == _Response.content
+            for event in events
+        )
+        assert any(event.get("type") == "section_end" for event in events)
+        assert updated.trace.usage_records[-1]["request_mode"] == "non_streaming"
+
+
 class TestStreamingTimeouts:
     """Streaming idle timeouts are logged when chunk delivery stalls."""
 

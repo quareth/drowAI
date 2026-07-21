@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
 /**
- * Verifies provider-first model picker behavior from backend catalog data.
+ * Verifies model-first picker behavior from backend catalog data.
  */
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ProviderModelMenu } from "../ProviderModelMenu";
-import type { LLMModelCatalogResponse } from "../types";
+import type { LLMCatalogProvider, LLMModelCatalogResponse } from "../types";
 
 const catalog: LLMModelCatalogResponse = {
   providers: [
@@ -78,11 +78,91 @@ const catalog: LLMModelCatalogResponse = {
 };
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   cleanup();
 });
 
 describe("ProviderModelMenu", () => {
-  it("opens with provider rows and selects an Anthropic model from catalog data", async () => {
+  it("hides runnable self-hosted deployments unless the temporary gate is enabled", () => {
+    const localDeploymentRef = {
+      deployment_id: "33333333-3333-4333-8333-333333333333",
+      expected_revision: 1,
+    };
+    const localProvider: LLMCatalogProvider = {
+      ...catalog.providers[0],
+      id: "ollama_openai_compatible_chat",
+      label: "Ollama",
+      credential: {
+        ...catalog.providers[0].credential,
+        provider: "ollama_openai_compatible_chat",
+      },
+      defaultModel: "gpt-oss:20b",
+      models: [{
+        ...catalog.providers[0].models[0],
+        id: "gpt-oss:20b",
+        canonicalModelId: "openai/gpt-oss-20b",
+        label: "GPT-OSS 20B via Ollama",
+        deploymentRef: localDeploymentRef,
+        runnable: true,
+        connection: {
+          presetId: "ollama_openai_compatible_chat",
+          displayName: "Ollama",
+          enabled: true,
+          authMode: "bearer_api_key",
+          userConfigFields: ["base_url", "api_key"],
+          configFields: [],
+          lifecycleState: "enabled",
+          connectionRef: null,
+          deploymentRef: localDeploymentRef,
+          verification: null,
+          runnability: {
+            status: "runnable",
+            selectable: true,
+            runnable: true,
+            reason: null,
+          },
+        },
+      }],
+    };
+    const localCatalog: LLMModelCatalogResponse = {
+      providers: [...catalog.providers, localProvider],
+    };
+
+    const { unmount } = render(
+      <ProviderModelMenu
+        catalog={localCatalog}
+        selectedSelection={{
+          provider: localProvider.id,
+          model: "gpt-oss:20b",
+          deploymentRef: localDeploymentRef,
+        }}
+        selectedReasoningEffort="medium"
+        onModelChange={() => undefined}
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Select model" }));
+    expect(screen.queryByText("Ollama")).toBeNull();
+    unmount();
+
+    vi.stubEnv("VITE_ENABLE_INCOMPLETE_SELF_HOSTED_LLM_SETTINGS", "true");
+    render(
+      <ProviderModelMenu
+        catalog={localCatalog}
+        selectedSelection={{
+          provider: localProvider.id,
+          model: "gpt-oss:20b",
+          deploymentRef: localDeploymentRef,
+        }}
+        selectedReasoningEffort="medium"
+        onModelChange={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Select model" }).textContent).toContain("GPT-OSS 20B");
+  });
+
+  it("opens with publisher groups and selects an Anthropic model from catalog data", async () => {
     const onModelChange = vi.fn();
     render(
       <ProviderModelMenu
@@ -95,14 +175,14 @@ describe("ProviderModelMenu", () => {
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Select model" }));
 
+    const anthropicPublisher = await screen.findByText("Anthropic");
     expect(await screen.findByText("OpenAI")).toBeTruthy();
-    const anthropicRow = await screen.findByText("Anthropic");
-    expect(anthropicRow).toBeTruthy();
-    const anthropicMenuItem = anthropicRow.closest("[role='menuitem']") as HTMLElement;
+    expect(screen.queryByText("Claude Sonnet 4.6")).toBeNull();
 
-    fireEvent.pointerEnter(anthropicMenuItem, { pointerType: "mouse" });
-    fireEvent.pointerMove(anthropicMenuItem, { pointerType: "mouse" });
-    fireEvent.mouseMove(anthropicMenuItem);
+    const anthropicPublisherItem = anthropicPublisher.closest("[role='menuitem']") as HTMLElement;
+    fireEvent.pointerEnter(anthropicPublisherItem, { pointerType: "mouse" });
+    fireEvent.pointerMove(anthropicPublisherItem, { pointerType: "mouse" });
+    fireEvent.mouseMove(anthropicPublisherItem);
 
     const anthropicModel = await screen.findByText("Claude Sonnet 4.6");
     fireEvent.click(anthropicModel);
@@ -127,13 +207,20 @@ describe("ProviderModelMenu", () => {
     );
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Select model" }));
-    const openAIRow = await screen.findByText("OpenAI");
-    const openAIMenuItem = openAIRow.closest("[role='menuitem']") as HTMLElement;
-    fireEvent.pointerEnter(openAIMenuItem, { pointerType: "mouse" });
-    fireEvent.pointerMove(openAIMenuItem, { pointerType: "mouse" });
-    fireEvent.mouseMove(openAIMenuItem);
 
-    const openAIModel = await screen.findByText("GPT-5 mini");
+    const openAIPublisher = await screen.findByText("OpenAI");
+    const openAIPublisherItem = openAIPublisher.closest("[role='menuitem']") as HTMLElement;
+    fireEvent.pointerEnter(openAIPublisherItem, { pointerType: "mouse" });
+    fireEvent.pointerMove(openAIPublisherItem, { pointerType: "mouse" });
+    fireEvent.mouseMove(openAIPublisherItem);
+
+    let openAIModel: HTMLElement | undefined;
+    await waitFor(() => {
+      openAIModel = screen
+        .getAllByText("GPT-5 mini")
+        .find((element) => element.closest("[role='menuitem']")) as HTMLElement | undefined;
+      expect(openAIModel).toBeTruthy();
+    });
     const openAIModelItem = openAIModel.closest("[role='menuitem']") as HTMLElement;
     fireEvent.pointerEnter(openAIModelItem, { pointerType: "mouse" });
     fireEvent.pointerMove(openAIModelItem, { pointerType: "mouse" });
@@ -147,6 +234,118 @@ describe("ProviderModelMenu", () => {
         { provider: "openai", model: "gpt-5-mini" },
         { reasoningEffort: "high" },
       );
+    });
+  });
+
+  it("opens reasoning directly for a single deployment-backed model", async () => {
+    const onModelChange = vi.fn();
+    const deploymentRef = {
+      deployment_id: "11111111-1111-4111-8111-111111111111",
+      expected_revision: 2,
+    };
+    const deploymentCatalog: LLMModelCatalogResponse = {
+      providers: catalog.providers.map((provider) =>
+        provider.id === "openai"
+          ? {
+              ...provider,
+              models: provider.models.map((model) => ({
+                ...model,
+                deploymentRef,
+                runnable: true,
+              })),
+            }
+          : provider,
+      ),
+    };
+
+    render(
+      <ProviderModelMenu
+        catalog={deploymentCatalog}
+        selectedSelection={{ provider: "openai", model: "gpt-5-mini", deploymentRef }}
+        selectedReasoningEffort="medium"
+        onModelChange={onModelChange}
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Select model" }));
+
+    const openAIPublisher = await screen.findByText("OpenAI");
+    const openAIPublisherItem = openAIPublisher.closest("[role='menuitem']") as HTMLElement;
+    fireEvent.pointerEnter(openAIPublisherItem, { pointerType: "mouse" });
+    fireEvent.pointerMove(openAIPublisherItem, { pointerType: "mouse" });
+    fireEvent.mouseMove(openAIPublisherItem);
+
+    let openAIModelItem: HTMLElement | undefined;
+    await waitFor(() => {
+      openAIModelItem = screen
+        .getAllByText("GPT-5 mini")
+        .map((element) => element.closest("[role='menuitem']"))
+        .find((element): element is HTMLElement => element instanceof HTMLElement);
+      expect(openAIModelItem).toBeTruthy();
+    });
+    fireEvent.pointerEnter(openAIModelItem, { pointerType: "mouse" });
+    fireEvent.pointerMove(openAIModelItem, { pointerType: "mouse" });
+    fireEvent.mouseMove(openAIModelItem);
+
+    fireEvent.click(await screen.findByText("high"));
+
+    await waitFor(() => {
+      expect(onModelChange).toHaveBeenCalledWith(
+        { provider: "openai", model: "gpt-5-mini", deploymentRef },
+        { reasoningEffort: "high" },
+      );
+    });
+  });
+
+  it("selects a single deployment-backed model with no reasoning directly", async () => {
+    const onModelChange = vi.fn();
+    const deploymentRef = {
+      deployment_id: "22222222-2222-4222-8222-222222222222",
+      expected_revision: 3,
+    };
+    const deploymentCatalog: LLMModelCatalogResponse = {
+      providers: catalog.providers.map((provider) =>
+        provider.id === "anthropic"
+          ? {
+              ...provider,
+              defaultModel: "claude-haiku-4-5-20251001",
+              models: provider.models.map((model) => ({
+                ...model,
+                id: "claude-haiku-4-5-20251001",
+                label: "Claude Haiku 4.5",
+                deploymentRef,
+                runnable: true,
+              })),
+            }
+          : provider,
+      ),
+    };
+
+    render(
+      <ProviderModelMenu
+        catalog={deploymentCatalog}
+        selectedSelection={{ provider: "openai", model: "gpt-5-mini" }}
+        selectedReasoningEffort="medium"
+        onModelChange={onModelChange}
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Select model" }));
+
+    const anthropicPublisher = await screen.findByText("Anthropic");
+    const anthropicPublisherItem = anthropicPublisher.closest("[role='menuitem']") as HTMLElement;
+    fireEvent.pointerEnter(anthropicPublisherItem, { pointerType: "mouse" });
+    fireEvent.pointerMove(anthropicPublisherItem, { pointerType: "mouse" });
+    fireEvent.mouseMove(anthropicPublisherItem);
+
+    fireEvent.click(await screen.findByText("Claude Haiku 4.5"));
+
+    await waitFor(() => {
+      expect(onModelChange).toHaveBeenCalledWith({
+        provider: "anthropic",
+        model: "claude-haiku-4-5-20251001",
+        deploymentRef,
+      });
     });
   });
 
@@ -174,19 +373,310 @@ describe("ProviderModelMenu", () => {
 
     fireEvent.pointerDown(screen.getByRole("button", { name: "Select model" }));
 
-    const anthropicRow = await screen.findByText("Anthropic");
+    const anthropicPublisher = await screen.findByText("Anthropic");
+    const anthropicPublisherItem = anthropicPublisher.closest("[role='menuitem']") as HTMLElement;
+    fireEvent.pointerEnter(anthropicPublisherItem, { pointerType: "mouse" });
+    fireEvent.pointerMove(anthropicPublisherItem, { pointerType: "mouse" });
+    fireEvent.mouseMove(anthropicPublisherItem);
+
+    const anthropicRow = await screen.findByText("Claude Sonnet 4.6");
     expect(await screen.findByText("Unavailable")).toBeTruthy();
-    const anthropicMenuItem = anthropicRow.closest("[role='menuitem']") as HTMLElement;
-
-    fireEvent.pointerEnter(anthropicMenuItem, { pointerType: "mouse" });
-    fireEvent.pointerMove(anthropicMenuItem, { pointerType: "mouse" });
-    fireEvent.mouseMove(anthropicMenuItem);
-
-    const anthropicModel = await screen.findByText("Claude Sonnet 4.6");
-    fireEvent.click(anthropicModel);
+    fireEvent.click(anthropicRow);
 
     await waitFor(() => {
       expect(onModelChange).not.toHaveBeenCalled();
     });
+  });
+
+  it("requires enabled credentials for legacy model selection", async () => {
+    const onModelChange = vi.fn();
+    const credentialMissingCatalog: LLMModelCatalogResponse = {
+      providers: catalog.providers.map((provider) =>
+        provider.id === "openai"
+          ? {
+              ...provider,
+              credential: {
+                ...provider.credential,
+                enabled: false,
+                has_api_key: false,
+                masked_api_key: null,
+              },
+            }
+          : provider,
+      ),
+    };
+
+    render(
+      <ProviderModelMenu
+        catalog={credentialMissingCatalog}
+        selectedSelection={{ provider: "anthropic", model: "claude-sonnet-4-6" }}
+        selectedReasoningEffort="medium"
+        onModelChange={onModelChange}
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Select model" }));
+
+    const openAIPublisher = await screen.findByText("OpenAI");
+    const openAIPublisherItem = openAIPublisher.closest("[role='menuitem']") as HTMLElement;
+    fireEvent.pointerEnter(openAIPublisherItem, { pointerType: "mouse" });
+    fireEvent.pointerMove(openAIPublisherItem, { pointerType: "mouse" });
+    fireEvent.mouseMove(openAIPublisherItem);
+
+    const openAIModel = await screen.findByText("GPT-5 mini");
+    expect(await screen.findByText("Configure credentials")).toBeTruthy();
+    fireEvent.click(openAIModel);
+
+    await waitFor(() => {
+      expect(onModelChange).not.toHaveBeenCalled();
+    });
+  });
+
+  it("groups GPT-OSS once and selects an explicit deployment ref", async () => {
+    const onModelChange = vi.fn();
+    const hfDeploymentRef = {
+      deployment_id: "11111111-1111-4111-8111-111111111111",
+      expected_revision: 2,
+    };
+    const nimDeploymentRef = {
+      deployment_id: "22222222-2222-4222-8222-222222222222",
+      expected_revision: 3,
+    };
+    const gptOssCatalog: LLMModelCatalogResponse = {
+      providers: [
+        {
+          id: "huggingface_openai_compatible_chat",
+          label: "Hugging Face",
+          capabilities: [],
+          available: true,
+          selectable: true,
+          credential: {
+            user_id: 1,
+            provider: "huggingface_openai_compatible_chat",
+            enabled: true,
+            has_api_key: true,
+          },
+          defaultModel: "openai/gpt-oss-20b:fireworks-ai",
+          models: [
+            {
+              id: "openai/gpt-oss-20b:fireworks-ai",
+              canonicalModelId: "openai/gpt-oss-20b",
+              exactWireModelId: "openai/gpt-oss-20b:fireworks-ai",
+              label: "GPT-OSS 20B via Hugging Face",
+              apiSurface: "chat_completions",
+              capabilities: ["chat"],
+              contextWindowTokens: 128000,
+              maxOutputTokens: 8192,
+              reasoningEfforts: [],
+              visibleReasoningEfforts: [],
+              defaultReasoningEffort: null,
+              defaultVisibleReasoningEffort: null,
+              toolChoiceModes: ["auto"],
+              structuredOutputStrategies: [],
+              pricingStatus: "unavailable",
+              deploymentRef: hfDeploymentRef,
+              runnable: true,
+              connection: {
+                presetId: "huggingface_openai_compatible_chat",
+                displayName: "Hugging Face Router",
+                enabled: true,
+                authMode: "bearer_api_key",
+                userConfigFields: ["api_key"],
+                configFields: [],
+                lifecycleState: "enabled",
+                connectionRef: null,
+                deploymentRef: hfDeploymentRef,
+                verification: null,
+                runnability: { status: "runnable", selectable: true, runnable: true },
+              },
+            },
+          ],
+        },
+        {
+          id: "nvidia_nim_openai_compatible_chat",
+          label: "NVIDIA NIM",
+          capabilities: [],
+          available: true,
+          selectable: true,
+          credential: {
+            user_id: 1,
+            provider: "nvidia_nim_openai_compatible_chat",
+            enabled: true,
+            has_api_key: true,
+          },
+          defaultModel: "openai/gpt-oss-20b",
+          models: [
+            {
+              id: "openai/gpt-oss-20b",
+              canonicalModelId: "openai/gpt-oss-20b",
+              exactWireModelId: "openai/gpt-oss-20b",
+              label: "GPT-OSS 20B via NVIDIA NIM",
+              apiSurface: "chat_completions",
+              capabilities: ["chat"],
+              contextWindowTokens: 128000,
+              maxOutputTokens: 8192,
+              reasoningEfforts: [],
+              visibleReasoningEfforts: [],
+              defaultReasoningEffort: null,
+              defaultVisibleReasoningEffort: null,
+              toolChoiceModes: ["auto"],
+              structuredOutputStrategies: [],
+              pricingStatus: "unavailable",
+              deploymentRef: nimDeploymentRef,
+              runnable: true,
+              connection: {
+                presetId: "nvidia_nim_openai_compatible_chat",
+                displayName: "NVIDIA NIM Endpoint",
+                enabled: true,
+                authMode: "bearer_api_key",
+                userConfigFields: ["api_key"],
+                configFields: [],
+                lifecycleState: "enabled",
+                connectionRef: null,
+                deploymentRef: nimDeploymentRef,
+                verification: null,
+                runnability: { status: "runnable", selectable: true, runnable: true },
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    render(
+      <ProviderModelMenu
+        catalog={gptOssCatalog}
+        selectedSelection={{
+          provider: "openai",
+          model: "gpt-oss-20b",
+          deploymentRef: hfDeploymentRef,
+        }}
+        selectedReasoningEffort="medium"
+        onModelChange={onModelChange}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Select model" }).textContent).toContain(
+      "GPT-OSS 20B / Hugging Face",
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Select model" }));
+
+    const openAIPublisher = await screen.findByText("Open models");
+    expect(screen.queryByText("Hugging Face")).toBeNull();
+    expect(screen.queryByText("NVIDIA NIM")).toBeNull();
+
+    const openAIPublisherItem = openAIPublisher.closest("[role='menuitem']") as HTMLElement;
+    fireEvent.pointerEnter(openAIPublisherItem, { pointerType: "mouse" });
+    fireEvent.pointerMove(openAIPublisherItem, { pointerType: "mouse" });
+    fireEvent.mouseMove(openAIPublisherItem);
+
+    const gptOssRows = await screen.findAllByText("GPT-OSS 20B");
+    expect(gptOssRows).toHaveLength(1);
+    expect(screen.queryByText("Hugging Face")).toBeNull();
+    expect(screen.queryByText("NVIDIA NIM")).toBeNull();
+
+    const modelItem = gptOssRows[0].closest("[role='menuitem']") as HTMLElement;
+    fireEvent.pointerEnter(modelItem, { pointerType: "mouse" });
+    fireEvent.pointerMove(modelItem, { pointerType: "mouse" });
+    fireEvent.mouseMove(modelItem);
+
+    fireEvent.click(await screen.findByText("NVIDIA"));
+
+    await waitFor(() => {
+      expect(onModelChange).toHaveBeenCalledWith({
+        provider: "nvidia_nim_openai_compatible_chat",
+        model: "openai/gpt-oss-20b",
+        deploymentRef: nimDeploymentRef,
+      });
+    });
+  });
+
+  it("hides connection setup placeholders with no explicit deployment ref", async () => {
+    const onModelChange = vi.fn();
+    const placeholderCatalog: LLMModelCatalogResponse = {
+      providers: [
+        ...catalog.providers,
+        ...[
+          ["custom_openai_compatible_chat", "Custom OpenAI-compatible", "Custom OpenAI-compatible HTTPS endpoint"],
+          ["huggingface_openai_compatible_chat", "Hugging Face", "Hugging Face Router"],
+          ["nvidia_nim_openai_compatible_chat", "NVIDIA NIM", "NVIDIA NIM hosted endpoint"],
+          ["ollama_openai_compatible_chat", "Ollama", "Ollama endpoint"],
+          ["vllm_openai_compatible_chat", "vLLM", "vLLM endpoint"],
+        ].map(([id, providerLabel, modelLabel]) => ({
+          id,
+          label: providerLabel,
+          capabilities: [],
+          available: true,
+          selectable: true,
+          credential: {
+            user_id: 1,
+            provider: id,
+            enabled: false,
+            has_api_key: false,
+          },
+          defaultModel: id,
+          models: [
+            {
+              id,
+              label: modelLabel,
+              apiSurface: "chat_completions",
+              capabilities: ["chat"],
+              contextWindowTokens: 128000,
+              maxOutputTokens: 8192,
+              reasoningEfforts: [],
+              visibleReasoningEfforts: [],
+              defaultReasoningEffort: null,
+              defaultVisibleReasoningEffort: null,
+              toolChoiceModes: ["auto"],
+              structuredOutputStrategies: [],
+              pricingStatus: "unavailable",
+              deploymentRef: null,
+              runnable: false,
+              connection: {
+                presetId: id,
+                displayName: modelLabel,
+                enabled: true,
+                authMode: "bearer_api_key",
+                userConfigFields: ["api_key"],
+                configFields: [],
+                lifecycleState: "not_created",
+                connectionRef: null,
+                deploymentRef: null,
+                verification: null,
+                runnability: {
+                  status: "not_created",
+                  selectable: true,
+                  runnable: false,
+                  reason: "Connection configuration is required.",
+                },
+              },
+            },
+          ],
+        })),
+      ],
+    };
+
+    render(
+      <ProviderModelMenu
+        catalog={placeholderCatalog}
+        selectedSelection={{ provider: "openai", model: "gpt-5-mini" }}
+        selectedReasoningEffort="medium"
+        onModelChange={onModelChange}
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Select model" }));
+
+    expect((await screen.findAllByText("GPT-5 mini")).length).toBeGreaterThan(0);
+    for (const clutter of [
+      "Custom OpenAI-compatible HTTPS endpoint",
+      "Hugging Face Router",
+      "NVIDIA NIM hosted endpoint",
+      "Ollama endpoint",
+      "vLLM endpoint",
+    ]) {
+      expect(screen.queryByText(clutter)).toBeNull();
+    }
   });
 });

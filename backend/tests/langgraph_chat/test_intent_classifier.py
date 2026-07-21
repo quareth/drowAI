@@ -12,6 +12,7 @@ from agent.graph.context.builder import (
     METADATA_CONTEXT_BUNDLE_KEY,
     build_conversation_context_bundle,
 )
+from agent.providers.llm.core.exceptions import LLMConfigurationError
 from backend.services.langgraph_chat.intent.classifier import (
     ANTHROPIC_INTENT_CLASSIFIER_MAX_TOKENS,
     IntentClassifier,
@@ -981,6 +982,41 @@ async def test_intent_classifier_structured_failure_follows_skip_path() -> None:
     assert result is None
     assert config.metadata["intent_classifier_skipped"] == "llm_error"
     assert config.metadata["intent_target_continuity"]["status"] == "disallow"
+    assert config.execution_mode == ExecutionMode.NORMAL_CHAT
+
+
+@pytest.mark.asyncio
+async def test_intent_classifier_configuration_failure_does_not_become_chat() -> None:
+    """A required agent contract failure is surfaced instead of changing routes."""
+
+    class _MisconfiguredClient:
+        async def chat_with_usage(self, *args: Any, **kwargs: Any) -> Any:
+            del args, kwargs
+            raise LLMConfigurationError(
+                "structured output is unavailable",
+                provider="OpenAI-compatible",
+            )
+
+    config = _runtime_config(
+        {
+            "eligible_routes": ["normal_chat", "simple_tool_execution"],
+            "intent_hints": {
+                "tool_hints": ["network_scan"],
+                "targets": ["127.0.0.1"],
+            },
+            "risk_flags": [],
+        },
+        message="Scan 127.0.0.1 with nmap",
+    )
+
+    classifier = IntentClassifier(
+        client_factory=lambda call_settings: _MisconfiguredClient()
+    )
+
+    with pytest.raises(LLMConfigurationError, match="structured output"):
+        await classifier.enrich_runtime_config(config)
+
+    assert config.metadata["intent_classifier_skipped"] == "llm_error"
     assert config.execution_mode == ExecutionMode.NORMAL_CHAT
 
 

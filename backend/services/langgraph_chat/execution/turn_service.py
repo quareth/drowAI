@@ -59,7 +59,11 @@ from backend.services.langgraph_chat.checkpoint.turn_workflow_service import (
 from backend.services.langgraph_chat.streaming.publisher import TurnStreamPublisher
 from backend.services.langgraph_chat.runtime.usage_middleware import record_usage_list_best_effort
 from backend.services.llm_provider.runtime_config_service import LLMRuntimeConfigService
-from backend.services.llm_provider.types import LLMRuntimeSelection
+from backend.services.llm_provider.types import (
+    LLMRuntimeSelection,
+    LLMRuntimeSelectionV2,
+    parse_llm_runtime_selection,
+)
 
 _COMPRESSION_REQUIRED_FAILED = "compression_required_failed"
 _COMPRESSION_PERSIST_FAILED = "compression_persist_failed"
@@ -69,6 +73,18 @@ _RETRYABLE_POST_TOOL_ERROR_MESSAGE = (
 _GENERATION_FAILED_ERROR_MESSAGE = "[Error] Failed to generate response."
 _RESUME_FAILED_ERROR_MESSAGE = "[Error] Failed to complete tool execution."
 _CHECKPOINT_RETRY_FAILED_ERROR_MESSAGE = "[Error] Failed to continue from the latest checkpoint."
+
+
+def _selection_provider(selection: LLMRuntimeSelection | LLMRuntimeSelectionV2) -> str | None:
+    """Return the compatibility provider exposed to existing turn contracts."""
+
+    return getattr(selection, "provider", None) or getattr(selection, "legacy_provider", None)
+
+
+def _selection_model(selection: LLMRuntimeSelection | LLMRuntimeSelectionV2) -> str | None:
+    """Return the compatibility model exposed to existing turn contracts."""
+
+    return getattr(selection, "model", None) or getattr(selection, "legacy_model", None)
 
 
 class TurnExecutionService:
@@ -195,6 +211,7 @@ class TurnExecutionService:
         completion_source: str,
         context_window_metadata: Optional[Dict[str, Any]],
         model: Optional[str] = None,
+        runtime_selection: Optional[Mapping[str, Any]] = None,
         emit_token_metrics: bool = False,
         base_metadata: Optional[Dict[str, Any]] = None,
     ) -> None:
@@ -236,6 +253,12 @@ class TurnExecutionService:
             except Exception:
                 pass
 
+        usage_runtime_selection = runtime_selection
+        if not isinstance(usage_runtime_selection, Mapping):
+            metadata_selection = result_metadata.get("llm_runtime_selection")
+            usage_runtime_selection = (
+                metadata_selection if isinstance(metadata_selection, Mapping) else None
+            )
         record_usage_list_best_effort(
             task_id=task_id,
             user_id=user_id,
@@ -243,6 +266,7 @@ class TurnExecutionService:
             source="langgraph",
             conversation_id=resolved_conversation_id,
             model=model,
+            runtime_selection=usage_runtime_selection,
         )
         workflow_completed_fn = mark_turn_workflow_completed or mark_turn_workflow_completed_best_effort
         completed_metadata: Dict[str, Any] = {"completion_source": completion_source}
@@ -300,11 +324,9 @@ class TurnExecutionService:
         try:
             runtime_config_service = LLMRuntimeConfigService(runtime_db)
             if runtime_selection is not None:
-                runtime_selection_value = LLMRuntimeSelection.from_mapping(
-                    dict(runtime_selection)
-                )
+                runtime_selection_value = parse_llm_runtime_selection(runtime_selection)
             else:
-                runtime_selection_value = runtime_config_service.build_runtime_selection(
+                runtime_selection_value = runtime_config_service.build_conversation_runtime_selection(
                     user_id=user_id,
                     provider=provider,
                     model=model,
@@ -313,8 +335,8 @@ class TurnExecutionService:
                 )
             runtime_selection_payload = runtime_selection_value.to_dict()
             runtime_services = runtime_config_service.build_runtime_services()
-            resolved_provider = runtime_selection_value.provider
-            resolved_model = runtime_selection_value.model
+            resolved_provider = _selection_provider(runtime_selection_value)
+            resolved_model = _selection_model(runtime_selection_value)
             # Deprecated compatibility parameter: raw secrets must not enter
             # graph/runtime state. Provider-neutral credentials are the
             # runtime authority after Execution Plane migration.

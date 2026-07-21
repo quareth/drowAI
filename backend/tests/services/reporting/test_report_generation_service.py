@@ -25,7 +25,12 @@ from backend.repositories.reporting.base import ReportingRepositoryBase
 from backend.services.llm_provider.reporting_selection_service import (
     ReportingLLMSelectionMissingError,
 )
-from backend.services.llm_provider.types import LLMCredentialRef, LLMRuntimeSelection
+from backend.services.llm_provider.types import (
+    DeploymentRef,
+    LLMCredentialRef,
+    LLMRuntimeSelection,
+    LLMRuntimeSelectionV2,
+)
 from backend.services.reporting.contracts import (
     GENERATION_METADATA_SOURCE_WATERMARK_HASH_KEY,
     REPORT_GENERATION_ERROR_DUPLICATE_SELECTED_TASK_MEMO_IDS,
@@ -101,6 +106,24 @@ class _FakeReportingSelectionService:
             reasoning_effort=self.reasoning_effort,
         )
 
+
+class _DeploymentReportingSelectionService:
+    def __init__(self, *, deployment_id: str, expected_revision: int = 4) -> None:
+        self.deployment_id = deployment_id
+        self.expected_revision = expected_revision
+        self.calls: list[int] = []
+
+    def build_runtime_selection(self, *, user_id: int) -> LLMRuntimeSelectionV2:
+        self.calls.append(user_id)
+        return LLMRuntimeSelectionV2(
+            deployment_ref=DeploymentRef(
+                deployment_id=self.deployment_id,
+                expected_revision=self.expected_revision,
+            ),
+            reasoning_effort="high",
+            legacy_provider="openai",
+            legacy_model="gpt-5-mini",
+        )
 
 def _runtime_selection_payload(
     *,
@@ -461,6 +484,59 @@ def test_generation_request_creates_queued_job_with_source_metadata() -> None:
     assert job.llm_runtime_selection == _runtime_selection_payload(user_id=user.id)
     assert job.source_watermark["llm_runtime_selection"] == job.llm_runtime_selection
     assert job.total_sections > 0
+
+
+def test_generation_request_preserves_deployment_runtime_selection() -> None:
+    db = _build_session()
+    tenant, user, engagement, task = _seed_scope(db, label="deployment-report-job")
+    stored_watermark = SourceWatermarkService(db).compute_for_task(
+        tenant_id=tenant.id,
+        user_id=user.id,
+        engagement_id=engagement.id,
+        task_id=task.id,
+    )
+    memo = _add_current_ready_memo(
+        db,
+        task=task,
+        user_id=user.id,
+        engagement_id=engagement.id,
+        source_watermark=stored_watermark,
+    )
+    db.commit()
+    deployment_id = str(uuid.uuid4())
+    reporting_selection = _DeploymentReportingSelectionService(
+        deployment_id=deployment_id,
+        expected_revision=7,
+    )
+
+    _report_generation_service(
+        db,
+        reporting_selection_service=reporting_selection,  # type: ignore[arg-type]
+    ).request_generation(
+        tenant_id=tenant.id,
+        user_id=user.id,
+        requested_by_user_id=user.id,
+        engagement_id=engagement.id,
+        report_type="pentest",
+        selected_task_memo_ids=[memo.id],
+        engagement_is_owned=True,
+    )
+
+    job = db.query(EngagementReportJob).one()
+    assert reporting_selection.calls == [user.id]
+    assert job.llm_runtime_selection == {
+        "schema_version": 2,
+        "deployment_ref": {
+            "deployment_id": deployment_id,
+            "expected_revision": 7,
+        },
+        "preferred_route_id": None,
+        "reasoning_effort": "high",
+        "legacy_provider": "openai",
+        "legacy_model": "gpt-5-mini",
+    }
+    assert deployment_id in job.idempotency_key
+    assert job.source_watermark["llm_runtime_selection"] == job.llm_runtime_selection
 
 
 def test_generation_request_rejects_missing_reporting_model() -> None:

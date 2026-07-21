@@ -1,6 +1,5 @@
 import type { UseMutationResult } from "@tanstack/react-query";
 
-import type { RuntimeModelSwitchPayload } from "@/features/llm-provider/types";
 import type { SendMessageFn } from "./types";
 
 export type SendMessagePayload = string | { message: string; client_message_id?: string };
@@ -15,12 +14,6 @@ export interface SSEConnectionController {
 export interface ModeOrchestrationContract {
   readonly mode: "interactive";
   readonly sendMessageMutation?: UseMutationResult<unknown, Error, SendMessagePayload, unknown>;
-  readonly switchTaskModelMutation?: UseMutationResult<
-    unknown,
-    Error,
-    RuntimeModelSwitchPayload,
-    unknown
-  >;
   readonly sseConnection: SSEConnectionController;
 
   setStrategy(strategy: ModeStrategy): void;
@@ -42,12 +35,6 @@ export interface BaseOrchestrationCallbacks {
 
 export interface InteractiveOrchestrationOptions extends BaseOrchestrationCallbacks {
   sendMessageMutation?: UseMutationResult<unknown, Error, SendMessagePayload, unknown>;
-  switchTaskModelMutation?: UseMutationResult<
-    unknown,
-    Error,
-    RuntimeModelSwitchPayload,
-    unknown
-  >;
   sendMessage?: SendMessageFn;
   sseConnection: SSEConnectionController;
 }
@@ -56,12 +43,6 @@ abstract class BaseModeOrchestration implements ModeOrchestrationContract {
   public abstract readonly mode: "interactive";
 
   public readonly sendMessageMutation?: UseMutationResult<unknown, Error, SendMessagePayload, unknown>;
-  public readonly switchTaskModelMutation?: UseMutationResult<
-    unknown,
-    Error,
-    RuntimeModelSwitchPayload,
-    unknown
-  >;
 
   public readonly sseConnection: SSEConnectionController;
 
@@ -71,18 +52,11 @@ abstract class BaseModeOrchestration implements ModeOrchestrationContract {
   protected constructor(
     base: {
       sendMessageMutation?: UseMutationResult<unknown, Error, SendMessagePayload, unknown>;
-      switchTaskModelMutation?: UseMutationResult<
-        unknown,
-        Error,
-        RuntimeModelSwitchPayload,
-        unknown
-      >;
       sseConnection: SSEConnectionController;
       callbacks?: BaseOrchestrationCallbacks;
     },
   ) {
     this.sendMessageMutation = base.sendMessageMutation;
-    this.switchTaskModelMutation = base.switchTaskModelMutation;
     this.sseConnection = base.sseConnection;
     this.callbacks = base.callbacks ?? {};
   }
@@ -150,7 +124,6 @@ export class InteractiveModeOrchestration extends BaseModeOrchestration {
   constructor(options: InteractiveOrchestrationOptions) {
     super({
       sendMessageMutation: options.sendMessageMutation,
-      switchTaskModelMutation: options.switchTaskModelMutation,
       sseConnection: options.sseConnection,
       callbacks: options,
     });
@@ -212,17 +185,6 @@ export class InteractiveModeOrchestration extends BaseModeOrchestration {
       }
       throw normalizedError;
     }
-  }
-
-  public override async handleSSEReconnect(mode: "interactive"): Promise<void> {
-    if (mode !== this.mode) return;
-
-    if (this.switchTaskModelMutation?.isPending) {
-      this.callbacks.logger?.("info", "Delaying SSE reconnect until model switch completes");
-      return;
-    }
-
-    await super.handleSSEReconnect(mode);
   }
 
   public override validateModeTransition(from: "interactive", to: "interactive"): boolean {

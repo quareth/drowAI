@@ -3,7 +3,7 @@
  * Verifies provider-neutral LLM credential settings flows.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -12,11 +12,16 @@ import ProviderSettingsSection from "../ProviderSettingsSection";
 import type { LLMCatalogProvider, LLMModelCatalogResponse } from "../types";
 
 const mocked = vi.hoisted(() => ({
+  createLLMManagedConnection: vi.fn(),
   deleteLLMProviderCredential: vi.fn(),
+  enableLLMManagedConnection: vi.fn(),
   fetchLLMModelCatalog: vi.fn(),
+  fetchLLMSelection: vi.fn(),
   fetchReportingLLMSelection: vi.fn(),
+  refreshLLMManagedConnectionInventory: vi.fn(),
   saveLLMProviderCredential: vi.fn(),
   saveReportingLLMSelection: vi.fn(),
+  testLLMManagedConnection: vi.fn(),
   testLLMProviderCredential: vi.fn(),
 }));
 
@@ -106,11 +111,17 @@ function renderWithQueryClient(component: ReactNode) {
 }
 
 beforeEach(() => {
+  mocked.fetchLLMSelection.mockResolvedValue({
+    provider: "openai",
+    model: "gpt-5.2",
+    deploymentRef: null,
+    selectionStatus: { status: "selectable", selectable: true, runnable: true },
+  });
   mocked.fetchReportingLLMSelection.mockResolvedValue({
-    provider: null,
-    model: null,
-    reasoningEffort: null,
-    selectionStatus: { runnable: false, reason: "No reporting model selected." },
+    provider: "openai",
+    model: "gpt-5.2",
+    reasoningEffort: "medium",
+    selectionStatus: { runnable: true, reason: null },
   });
 });
 
@@ -136,7 +147,7 @@ describe("ProviderSettingsSection", () => {
     expect(screen.queryByText("No providers available")).toBeNull();
   });
 
-  it("renders provider credential cards from the catalog without model selection controls", async () => {
+  it("renders reporting selection above provider credentials without internal controls", async () => {
     mocked.fetchLLMModelCatalog.mockResolvedValue(catalog);
 
     renderWithQueryClient(
@@ -147,16 +158,74 @@ describe("ProviderSettingsSection", () => {
       />,
     );
 
+    expect(await screen.findByRole("heading", { name: "Reporting model" })).toBeTruthy();
+    const sectionHeadings = screen.getAllByRole("heading", { level: 3 });
+    expect(sectionHeadings[0].textContent).toBe("Reporting model");
+    expect(sectionHeadings[1].textContent).toBe("AI providers");
+    expect(screen.getByRole("button", { name: "Select model" })).toBeTruthy();
     expect(await screen.findByText("OpenAI")).toBeTruthy();
     expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Anthropic").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Workload deployment")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Advanced model preferences" })).toBeNull();
+    expect(screen.queryByText(/capability evidence|lifecycle|runnability/i)).toBeNull();
     expect(screen.queryByRole("combobox", { name: /selected provider/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /save model selection/i })).toBeNull();
+  });
+
+  it("persists a reporting model selected from the top control", async () => {
+    mocked.fetchLLMModelCatalog.mockResolvedValue({
+      providers: catalog.providers.map((provider) =>
+        provider.id === "anthropic"
+          ? {
+              ...provider,
+              credential: {
+                ...provider.credential,
+                enabled: true,
+                has_api_key: true,
+              },
+            }
+          : provider,
+      ),
+    });
+    mocked.saveReportingLLMSelection.mockResolvedValue({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      reasoningEffort: null,
+      selectionStatus: { runnable: true, reason: null },
+    });
+
+    renderWithQueryClient(
+      <ProviderSettingsSection
+        queryEnabled
+        onSuccess={() => undefined}
+        onError={() => undefined}
+      />,
+    );
+
+    fireEvent.pointerDown(await screen.findByRole("button", { name: "Select model" }));
+    const anthropicMenuItem = screen
+      .getAllByText("Anthropic")
+      .find((element) => element.closest("[role='menuitem']"))
+      ?.closest("[role='menuitem']") as HTMLElement;
+    expect(anthropicMenuItem).toBeTruthy();
+    fireEvent.pointerEnter(anthropicMenuItem, { pointerType: "mouse" });
+    fireEvent.pointerMove(anthropicMenuItem, { pointerType: "mouse" });
+    fireEvent.mouseMove(anthropicMenuItem);
+    fireEvent.click(await screen.findByText("Claude Sonnet 4.6"));
+
+    await waitFor(() => {
+      expect(mocked.saveReportingLLMSelection).toHaveBeenCalledWith({
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        reasoning_effort: null,
+      });
+    });
   });
 });
 
 describe("ProviderCredentialCard", () => {
-  it("saves, tests, and deletes provider credentials without using legacy OpenAI settings", async () => {
+  it("connects, verifies, and disconnects provider credentials without using legacy OpenAI settings", async () => {
     mocked.saveLLMProviderCredential.mockResolvedValue(openAIProvider.credential);
     mocked.testLLMProviderCredential.mockResolvedValue({
       provider: "openai",
@@ -174,24 +243,27 @@ describe("ProviderCredentialCard", () => {
       />,
     );
 
+    const providerCard = screen.getByRole("group", { name: "OpenAI provider settings" });
+    expect(within(providerCard).getByLabelText("OpenAI status: Connected")).toBeTruthy();
+    expect(within(providerCard).getByText("Stored key:").textContent).toContain("sk-...1234");
+    expect(within(providerCard).getByRole("button", { name: "Show API key" })).toBeTruthy();
+
     fireEvent.change(screen.getByLabelText("API Key"), {
       target: { value: "sk-test-value" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /update openai/i }));
 
     await waitFor(() => {
       expect(mocked.saveLLMProviderCredential).toHaveBeenCalledWith("openai", {
         api_key: "sk-test-value",
         enabled: true,
       });
+      expect(mocked.testLLMProviderCredential).toHaveBeenCalledWith("openai", {
+        api_key: "sk-test-value",
+      });
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /^test$/i }));
-    await waitFor(() => {
-      expect(mocked.testLLMProviderCredential).toHaveBeenCalledWith("openai", {});
-    });
-
-    fireEvent.click(screen.getByRole("button", { name: /^delete$/i }));
+    fireEvent.click(screen.getByRole("button", { name: /disconnect openai/i }));
     await waitFor(() => {
       expect(mocked.deleteLLMProviderCredential).toHaveBeenCalledWith("openai");
     });

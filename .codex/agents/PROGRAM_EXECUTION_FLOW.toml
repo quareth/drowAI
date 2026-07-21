@@ -21,6 +21,7 @@ creating_guide = "guide creator"
 reviewing_guide = "implementation-guide-review-loop"
 implementing = "feature-implementation-workflow"
 reviewing_implementation = "implementation-review-loop final"
+reviewing_quality = "implementation-quality-review-loop final"
 advance_queue = "last_completed_index++ then creating_guide or program_complete"
 
 [advance_queue]

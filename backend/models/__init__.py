@@ -56,7 +56,12 @@ from backend.models.reporting import EngagementReport, EngagementReportJob, Task
 from backend.models.platform_installation import PlatformInstallation
 from backend.models.streaming import StreamEvent, SystemLog
 from backend.models.llm import (
+    LLMCapabilityObservation,
+    LLMConnectionCredential,
     LLMConversation,
+    LLMDeploymentRoute,
+    LLMInferenceConnection,
+    LLMModelDeployment,
     LLMUsageRecord,
     UserEmbeddingSelection,
     UserLLMProviderCredential,
@@ -139,6 +144,11 @@ __all__ = [
     "PlatformInstallation",
     "SystemLog",
     "StreamEvent",
+    "LLMInferenceConnection",
+    "LLMConnectionCredential",
+    "LLMModelDeployment",
+    "LLMDeploymentRoute",
+    "LLMCapabilityObservation",
     "UserEmbeddingSelection",
     "UserLLMProviderCredential",
     "UserLLMSelection",

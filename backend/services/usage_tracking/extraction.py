@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from .models import UsageData
+from .models import UsageAttributionContext, UsageData
 
 
 @dataclass(frozen=True, slots=True)
@@ -20,12 +20,15 @@ class UsageExtractionTarget:
     provider: str
     model: str
     api_surface: str
+    parser_provider: str | None = None
+    attribution: UsageAttributionContext | None = None
 
     @property
     def key(self) -> tuple[str, str]:
         """Return the normalized extractor registry key."""
+        parser_provider = self.parser_provider or self.provider
         return (
-            str(self.provider or "").strip().lower(),
+            str(parser_provider or "").strip().lower(),
             str(self.api_surface or "").strip().lower(),
         )
 
@@ -67,9 +70,39 @@ def extract_usage(response: Any, target: UsageExtractionTarget) -> UsageData:
     return extractor.extract(response, target)
 
 
+def response_usage_attribution(
+    response: Any,
+    target: UsageExtractionTarget,
+    *,
+    usage_completeness: str,
+) -> UsageAttributionContext:
+    """Merge target attribution with provider response identifiers."""
+
+    attribution = target.attribution or UsageAttributionContext(
+        requested_model_id=target.model,
+        api_surface=target.api_surface,
+    )
+    return attribution.with_updates(
+        requested_model_id=attribution.requested_model_id or target.model,
+        api_surface=attribution.api_surface or target.api_surface,
+        provider_request_id=_response_text(response, "id"),
+        reported_model_id=_response_text(response, "model"),
+        usage_completeness=usage_completeness,
+    )
+
+
+def _response_text(response: Any, attr: str) -> str | None:
+    if isinstance(response, dict):
+        value = response.get(attr)
+    else:
+        value = getattr(response, attr, None)
+    return value if isinstance(value, str) and value.strip() else None
+
+
 __all__ = [
     "UnsupportedUsageExtractorError",
     "UsageExtractionTarget",
     "UsageExtractor",
     "extract_usage",
+    "response_usage_attribution",
 ]
