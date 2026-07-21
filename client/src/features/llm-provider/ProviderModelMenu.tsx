@@ -280,9 +280,7 @@ function deploymentChoiceLabel(
     vllm_openai_compatible_chat: "vLLM",
   };
   const providerLabel = productProviderLabels[provider.id] ?? provider.label;
-  return model.canonicalModelId?.trim().toLowerCase() === "openai/gpt-oss-20b"
-    ? `Run with ${providerLabel}`
-    : providerLabel;
+  return providerLabel;
 }
 
 function selectedModelDisplayLabel(

@@ -475,6 +475,10 @@ describe("ProviderModelMenu", () => {
       />,
     );
 
+    expect(screen.getByRole("button", { name: "Select model" }).textContent).toContain(
+      "GPT-OSS 20B / Hugging Face",
+    );
+
     fireEvent.pointerDown(screen.getByRole("button", { name: "Select model" }));
 
     const openAIPublisher = await screen.findByText("Open models");
@@ -496,7 +500,7 @@ describe("ProviderModelMenu", () => {
     fireEvent.pointerMove(modelItem, { pointerType: "mouse" });
     fireEvent.mouseMove(modelItem);
 
-    fireEvent.click(await screen.findByText("Run with NVIDIA"));
+    fireEvent.click(await screen.findByText("NVIDIA"));
 
     await waitFor(() => {
       expect(onModelChange).toHaveBeenCalledWith({
