@@ -33,7 +33,7 @@ approach.
 AI-assisted development to build it, read
 [the story behind DrowAI on Medium](https://medium.com/@alcangunes/i-used-ai-assisted-development-to-build-agentic-red-team-platform-drowai-9eadad2a5a55).
 
-
+**Development approach:** DrowAI was developed privately for approximately one year before being released as an open-source project, entirely through AI-assisted—or “vibe-coded”—development. During that period, I experimented with several models, although the project was developed primarily with OpenAI models. In recent 4-5 months, I have used Codex exclusively, and since making the repository public, all development work has been completed with GPT-5.6 Sol.
 
 ## What Is In The Repo
 
