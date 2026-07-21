@@ -17,7 +17,7 @@ change while the architecture is stabilized.
 - [Website](https://www.drowai.com)
 - [User Guide](https://www.drowai.com/user-guide)
 - [Demos](https://www.drowai.com/videos)
-- [The story behind DrowAI on Medium](https://medium.com/@alcangunes)
+
 
 ## Why This Exists
 
@@ -28,6 +28,9 @@ direction and review of a cybersecurity engineer with ten years of professional
 experience but no formal software-development background. The project is both a
 working platform and an ongoing examination of the strengths and limits of this
 approach.
+**Project story:** For a personal account of how DrowAI began and how I used
+AI-assisted development to build it, you may read
+- [The story behind DrowAI on Medium]([https://medium.com/@alcangunes](https://medium.com/@alcangunes/i-used-ai-assisted-development-to-build-agentic-red-team-platform-drowai-9eadad2a5a55?sharedUserId=alcangunes))
 
 Development updates currently live in the [changelog](CHANGELOG.md) and the
 [GitHub issue tracker](https://github.com/quareth/drowAI/issues).
