@@ -42,6 +42,9 @@ The format is based on
 
 ### Fixed
 
+- Task cards now refresh automatically while lifecycle operations are in
+  progress instead of remaining stuck on transitional statuses such as
+  Starting after the runtime is ready.
 - Reporting and chat model preferences now preserve deployment identity across
   native, hosted open-model, and self-hosted routes instead of misreading a
   serving connection as a canonical model provider.

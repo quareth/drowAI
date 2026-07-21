@@ -33,6 +33,7 @@ import {
   deleteTaskThroughUi,
   expectTaskStatusAfterRefresh,
   runTaskActionThroughUi,
+  waitForTaskStatus,
 } from "../fixtures/task-lifecycle";
 
 const CANARY_TIMEOUT_MS = 240_000;
@@ -118,7 +119,8 @@ test("certifies the real local-Docker UI lifecycle", { tag: "@runtime-local" }, 
     await runTaskActionThroughUi(page, api, owner, engagement, secondTask, "Stop", "stopped");
     await expectRuntimeRemoved(api, owner, secondTask.id);
     await expectNoTerminalSessions(api, owner);
-    await expect(page.getByTestId("terminal-panel").getByText("No terminals", { exact: true })).toBeVisible();
+    const terminalPanel = await ensureTerminalPanelVisible(page);
+    await expect(terminalPanel.getByText("No terminals", { exact: true })).toBeVisible();
     await expectTerminalStorageCleared(page, [firstTask.id, secondTask.id]);
 
     await deleteTaskThroughUi(page, api, owner, engagement, firstTask);
@@ -135,6 +137,10 @@ async function awaitRuntimeReady(
   engagement: EngagementRecord,
   task: TaskRecord,
 ): Promise<void> {
+  await waitForTaskStatus(api, owner, task.id, "running", {
+    maxDelays: 60,
+    delayMs: 1_000,
+  });
   await expectTaskStatusAfterRefresh(page, api, owner, engagement, task, "running");
   await expect
     .poll(async () => {
@@ -238,6 +244,15 @@ async function expectNoTerminalSessions(api: APIRequestContext, owner: E2EActor)
     .toBe(0);
 }
 
+async function ensureTerminalPanelVisible(page: Page) {
+  const terminalPanel = page.getByTestId("terminal-panel");
+  if (!(await terminalPanel.isVisible())) {
+    await page.getByText("Container Shell", { exact: true }).click();
+  }
+  await expect(terminalPanel).toBeVisible();
+  return terminalPanel;
+}
+
 async function expectTerminalStorageCleared(page: Page, taskIds: number[]): Promise<void> {
   const stored = await page.evaluate((ids) => ids.map((taskId) => ({
     buffer: sessionStorage.getItem(`termbuf:${taskId}`),
@@ -273,6 +288,9 @@ async function cleanupRuntimeCanary(options: {
     }
   }
   if (failures.length > 0) {
-    throw new AggregateError(failures, "Runtime-local canary cleanup failed");
+    const details = failures
+      .map((error) => (error instanceof Error ? error.message : String(error)))
+      .join("; ");
+    throw new AggregateError(failures, `Runtime-local canary cleanup failed: ${details}`);
   }
 }
