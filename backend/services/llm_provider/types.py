@@ -9,6 +9,7 @@ service compatibility.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from math import isfinite
@@ -133,6 +134,21 @@ class LLMRuntimeSelection:
                 else None
             ),
         )
+
+
+def parse_llm_runtime_selection(
+    value: LLMRuntimeSelection | LLMRuntimeSelectionV2 | Mapping[str, Any],
+) -> LLMRuntimeSelection | LLMRuntimeSelectionV2:
+    """Parse one legacy or deployment-aware runtime selection contract."""
+
+    if isinstance(value, (LLMRuntimeSelection, LLMRuntimeSelectionV2)):
+        return value
+    if not isinstance(value, Mapping):
+        raise TypeError("Runtime selection requires a mapping or selection object")
+    payload = dict(value)
+    if payload.get("schema_version") == 2 or "deployment_ref" in payload:
+        return LLMRuntimeSelectionV2.from_mapping(payload)
+    return LLMRuntimeSelection.from_mapping(payload)
 
 
 @dataclass(frozen=True, slots=True)
@@ -508,6 +524,7 @@ __all__ = [
     "LLMRuntimeAccessContext",
     "LLMRuntimeSelectionV2",
     "LLMSelectionStatus",
+    "parse_llm_runtime_selection",
     "ProviderConfigurationError",
     "ProviderHealthCheckResult",
     "ProviderSecret",

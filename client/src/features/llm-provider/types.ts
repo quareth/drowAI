@@ -163,41 +163,6 @@ export interface LLMDeploymentSelection {
   deployment_ref: LLMDeploymentRef;
 }
 
-export interface LLMDeploymentStatusOverride {
-  deploymentRef: LLMDeploymentRef;
-  lifecycleState?: string | null;
-  runnable?: boolean | null;
-  status?: string | null;
-  reason?: string | null;
-}
-
-export interface LLMDeploymentCandidate {
-  providerId: ProviderId;
-  providerLabel: string;
-  deploymentLabel: string;
-  modelId: ModelId;
-  modelLabel: string;
-  canonicalModelId?: string;
-  exactWireModelId?: string | null;
-  apiSurface: string;
-  capabilities: string[];
-  contextWindowTokens: number;
-  maxOutputTokens: number;
-  pricingStatus?: string | null;
-  deploymentRef: LLMDeploymentRef;
-  lifecycleState: string;
-  runnable: boolean;
-  status: string;
-  reason?: string | null;
-}
-
-export interface LLMDeploymentCandidateGroup {
-  key: string;
-  modelLabel: string;
-  canonicalModelId?: string;
-  candidates: LLMDeploymentCandidate[];
-}
-
 export interface ReportingLLMSelectionApiResponse {
   provider: ProviderId | null;
   model: ModelId | null;
@@ -234,22 +199,6 @@ export interface LLMProviderCredentialTestResponse {
 
 export interface LLMProviderCredentialDeleteResponse {
   success: boolean;
-}
-
-export interface LLMProvingConnectionCreateRequest {
-  display_label?: string | null;
-  api_key?: string | null;
-}
-
-export interface LLMProvingConnectionTestRequest {
-  api_key?: string | null;
-  connection_ref?: LLMConnectionRef | null;
-  deployment_ref?: LLMDeploymentRef | null;
-}
-
-export interface LLMProvingConnectionEnableRequest {
-  connection_ref: LLMConnectionRef;
-  deployment_ref: LLMDeploymentRef;
 }
 
 export interface LLMManagedConnectionCreateRequest {

@@ -364,13 +364,6 @@ class ReportGenerationService:
 
     def _resolve_reporting_runtime_selection(self, *, user_id: int) -> dict[str, object]:
         try:
-            current_builder = getattr(
-                self._reporting_selection_service,
-                "build_current_runtime_selection",
-                None,
-            )
-            if callable(current_builder):
-                return current_builder(user_id=user_id).to_dict()
             return self._reporting_selection_service.build_runtime_selection(
                 user_id=user_id
             ).to_dict()

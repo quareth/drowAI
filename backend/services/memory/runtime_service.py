@@ -27,6 +27,7 @@ from backend.services.llm_provider.types import (
     LLMProviderServiceError,
     LLMRuntimeSelection,
     LLMRuntimeSelectionV2,
+    parse_llm_runtime_selection,
 )
 from core.memory.retrieval_summary import render_memory_summary, split_retrieval_limits
 
@@ -73,7 +74,7 @@ class MemoryRuntimeService:
     ) -> str:
         """Retrieve a bounded semantic-memory summary using authorized runtime creds."""
 
-        runtime_selection = _parse_runtime_selection(selection)
+        runtime_selection = parse_llm_runtime_selection(selection)
         if not _runtime_selection_authorized_for_user(
             runtime_selection,
             user_id=user_id,
@@ -195,7 +196,7 @@ class MemoryRuntimeService:
     ) -> None:
         """Run best-effort memory extraction from a completed turn snapshot."""
 
-        runtime_selection = _parse_runtime_selection(selection)
+        runtime_selection = parse_llm_runtime_selection(selection)
         if not _runtime_selection_authorized_for_user(
             runtime_selection,
             user_id=user_id,
@@ -350,17 +351,6 @@ class MemoryRuntimeService:
             env_getter=self._env_getter,
             db=db,
         )
-
-
-def _parse_runtime_selection(
-    selection: Mapping[str, Any],
-) -> LLMRuntimeSelection | LLMRuntimeSelectionV2:
-    """Parse legacy or deployment-aware chat runtime selection snapshots."""
-
-    payload = dict(selection)
-    if payload.get("schema_version") == 2 or "deployment_ref" in payload:
-        return LLMRuntimeSelectionV2.from_mapping(payload)
-    return LLMRuntimeSelection.from_mapping(payload)
 
 
 def _runtime_selection_authorized_for_user(

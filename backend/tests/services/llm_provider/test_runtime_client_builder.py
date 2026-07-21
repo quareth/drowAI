@@ -8,13 +8,11 @@ adaptation, secret failure timing, and budget wrapping through
 from __future__ import annotations
 
 from pathlib import Path
-from types import SimpleNamespace
-from typing import Any, AsyncIterator
+from typing import Any
 from uuid import uuid4
 
 import pytest
 
-from agent.providers.llm.core.base import ChatMessage, LLMClient, LLMResponse, ToolCallResult
 from agent.providers.llm.core.budget_enforcing_client import BudgetEnforcingLLMClient
 from agent.providers.llm.core.exceptions import (
     LLMCapabilityNotSupportedError,
@@ -28,83 +26,18 @@ from backend.services.llm_provider.types import (
     DeploymentRef,
     LLMAuthMode,
     LLMCallTarget,
-    LLMConnectionOperation,
     LLMCredentialRef,
     LLMRuntimeSelection,
     LLMRuntimeSelectionV2,
     ProviderSecret,
-    RegisteredLLMOperationTarget,
     ResolvedAuth,
     ResolvedConnectionTarget,
     ResolvedLLMTarget,
 )
-
-
-class _MinimalClient(LLMClient):
-    """Concrete fake client returned by the factory boundary."""
-
-    model = "factory-model"
-
-    async def chat(self, system_prompt: str, user_prompt: str, **kwargs: Any) -> str:
-        return "chat"
-
-    async def chat_messages(self, messages: list[ChatMessage], **kwargs: Any) -> str:
-        return "chat_messages"
-
-    async def stream_chat_messages(
-        self,
-        messages: list[ChatMessage],
-        **kwargs: Any,
-    ) -> AsyncIterator[str]:
-        yield "stream"
-
-    async def chat_with_usage(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        **kwargs: Any,
-    ) -> LLMResponse:
-        return LLMResponse(content="usage")
-
-    async def chat_messages_with_usage(
-        self,
-        messages: list[ChatMessage],
-        **kwargs: Any,
-    ) -> LLMResponse:
-        return LLMResponse(content="messages_usage")
-
-    async def chat_with_tools(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        tools: list[Any],
-        tool_choice: Any = "auto",
-        **kwargs: Any,
-    ) -> ToolCallResult:
-        return ToolCallResult(content="tools", tool_calls=None, raw=None)
-
-    async def chat_with_tools_with_usage(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        tools: list[Any],
-        tool_choice: Any = "auto",
-        **kwargs: Any,
-    ) -> ToolCallResult:
-        return ToolCallResult(content="tools_usage", tool_calls=None, raw=None)
-
-
-def _operation_target(provider: str = "openai") -> RegisteredLLMOperationTarget:
-    return RegisteredLLMOperationTarget(
-        operation=LLMConnectionOperation.INFERENCE,
-        provider=provider,
-        method="POST",
-        url=f"https://{provider}.example.test/v1/chat/completions",
-        client_base_url=f"https://{provider}.example.test/v1",
-        expected_host=f"{provider}.example.test",
-        allowed_ports=frozenset({443}),
-        allowed_path_prefixes=("/v1",),
-    )
+from backend.tests.services.llm_provider.runtime_client_test_support import (
+    MinimalRuntimeClient as _MinimalClient,
+    operation_target as _operation_target,
+)
 
 
 def _resolved_target(

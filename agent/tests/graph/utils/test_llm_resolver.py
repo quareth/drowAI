@@ -17,10 +17,7 @@ import pytest
 
 from agent.graph.utils import llm_resolver as _resolver
 from agent.providers.llm.core.base import LLMClient
-from agent.providers.llm.core.exceptions import (
-    LLMConfigurationError,
-    LLMProviderNotFoundError,
-)
+from agent.providers.llm.core.exceptions import LLMConfigurationError
 
 resolve_llm_client = _resolver.resolve_llm_client
 supports_usage_aware_streaming = _resolver.supports_usage_aware_streaming

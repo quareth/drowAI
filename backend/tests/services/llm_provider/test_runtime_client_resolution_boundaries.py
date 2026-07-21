@@ -26,7 +26,6 @@ from backend.models import (
     User,
 )
 from backend.services.llm_provider.connection_service import LLMConnectionService
-from backend.services.llm_provider.deployment_service import LLMDeploymentService
 from backend.services.llm_provider.effective_profile_service import NativeRouteContract
 from backend.services.llm_provider.migration_service import (
     deterministic_legacy_connection_id,

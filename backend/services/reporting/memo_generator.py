@@ -15,7 +15,11 @@ from backend.services.llm_provider import LLMRuntimeConfigService
 from backend.services.llm_provider.reporting_selection_service import (
     ReportingLLMSelectionService,
 )
-from backend.services.llm_provider.types import LLMRuntimeSelection, LLMRuntimeSelectionV2
+from backend.services.llm_provider.types import (
+    LLMRuntimeSelection,
+    LLMRuntimeSelectionV2,
+    parse_llm_runtime_selection,
+)
 from backend.services.reporting.contracts import (
     GENERATION_METADATA_DURATION_MS_KEY,
     GENERATION_METADATA_MEMO_SCHEMA_VERSION_KEY,
@@ -107,11 +111,10 @@ class TaskClosureMemoGenerator:
 
         try:
             runtime_selection_value = (
-                _parse_runtime_selection(runtime_selection)
+                parse_llm_runtime_selection(runtime_selection)
                 if runtime_selection is not None
-                else _build_current_reporting_selection(
-                    self._reporting_selection_service,
-                    user_id=user_id,
+                else self._reporting_selection_service.build_runtime_selection(
+                    user_id=user_id
                 )
             )
             runtime_services = self._runtime_config_service.build_runtime_services()
@@ -202,19 +205,6 @@ def _structured_payload(response: LLMResponse) -> Mapping[str, Any] | None:
     return payload if isinstance(payload, Mapping) else None
 
 
-def _parse_runtime_selection(
-    value: LLMRuntimeSelection | LLMRuntimeSelectionV2 | Mapping[str, Any],
-) -> LLMRuntimeSelection | LLMRuntimeSelectionV2:
-    """Parse legacy or deployment-aware reporting runtime selection."""
-
-    if isinstance(value, (LLMRuntimeSelection, LLMRuntimeSelectionV2)):
-        return value
-    payload = dict(value)
-    if payload.get("schema_version") == 2 or "deployment_ref" in payload:
-        return LLMRuntimeSelectionV2.from_mapping(payload)
-    return LLMRuntimeSelection.from_mapping(payload)
-
-
 def _selection_provider(
     selection: LLMRuntimeSelection | LLMRuntimeSelectionV2,
 ) -> str:
@@ -235,17 +225,6 @@ def _selection_model(selection: LLMRuntimeSelection | LLMRuntimeSelectionV2) -> 
         or getattr(selection, "legacy_model", None)
         or "unknown"
     )
-
-
-def _build_current_reporting_selection(
-    service: ReportingLLMSelectionService,
-    *,
-    user_id: int,
-) -> LLMRuntimeSelection | LLMRuntimeSelectionV2:
-    current_builder = getattr(service, "build_current_runtime_selection", None)
-    if callable(current_builder):
-        return current_builder(user_id=user_id)
-    return service.build_runtime_selection(user_id=user_id)
 
 
 def _metadata_with_duration(

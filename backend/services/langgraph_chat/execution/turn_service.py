@@ -59,7 +59,11 @@ from backend.services.langgraph_chat.checkpoint.turn_workflow_service import (
 from backend.services.langgraph_chat.streaming.publisher import TurnStreamPublisher
 from backend.services.langgraph_chat.runtime.usage_middleware import record_usage_list_best_effort
 from backend.services.llm_provider.runtime_config_service import LLMRuntimeConfigService
-from backend.services.llm_provider.types import LLMRuntimeSelection, LLMRuntimeSelectionV2
+from backend.services.llm_provider.types import (
+    LLMRuntimeSelection,
+    LLMRuntimeSelectionV2,
+    parse_llm_runtime_selection,
+)
 
 _COMPRESSION_REQUIRED_FAILED = "compression_required_failed"
 _COMPRESSION_PERSIST_FAILED = "compression_persist_failed"
@@ -69,17 +73,6 @@ _RETRYABLE_POST_TOOL_ERROR_MESSAGE = (
 _GENERATION_FAILED_ERROR_MESSAGE = "[Error] Failed to generate response."
 _RESUME_FAILED_ERROR_MESSAGE = "[Error] Failed to complete tool execution."
 _CHECKPOINT_RETRY_FAILED_ERROR_MESSAGE = "[Error] Failed to continue from the latest checkpoint."
-
-
-def _parse_runtime_selection(
-    value: Mapping[str, Any],
-) -> LLMRuntimeSelection | LLMRuntimeSelectionV2:
-    """Parse legacy or deployment-aware runtime selection payloads."""
-
-    payload = dict(value)
-    if payload.get("schema_version") == 2 or "deployment_ref" in payload:
-        return LLMRuntimeSelectionV2.from_mapping(payload)
-    return LLMRuntimeSelection.from_mapping(payload)
 
 
 def _selection_provider(selection: LLMRuntimeSelection | LLMRuntimeSelectionV2) -> str | None:
@@ -331,7 +324,7 @@ class TurnExecutionService:
         try:
             runtime_config_service = LLMRuntimeConfigService(runtime_db)
             if runtime_selection is not None:
-                runtime_selection_value = _parse_runtime_selection(runtime_selection)
+                runtime_selection_value = parse_llm_runtime_selection(runtime_selection)
             else:
                 runtime_selection_value = runtime_config_service.build_conversation_runtime_selection(
                     user_id=user_id,

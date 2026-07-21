@@ -19,7 +19,6 @@ const mocked = vi.hoisted(() => ({
   fetchLLMSelection: vi.fn(),
   fetchReportingLLMSelection: vi.fn(),
   refreshLLMManagedConnectionInventory: vi.fn(),
-  saveLLMDeploymentSelection: vi.fn(),
   saveLLMProviderCredential: vi.fn(),
   saveReportingLLMSelection: vi.fn(),
   testLLMManagedConnection: vi.fn(),

@@ -7,14 +7,11 @@ effects, and sanitized response contracts.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from dataclasses import dataclass
 import json
 from typing import Any
 from uuid import UUID, uuid4
 
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session as SQLAlchemySession
 
 from agent.providers.llm.core.capabilities import LLMCapability
@@ -23,10 +20,12 @@ from backend.models import (
     LLMCapabilityObservation,
     LLMInferenceConnection,
     LLMModelDeployment,
-    User,
     UserLLMProviderCredential,
 )
-from backend.routers import llm as llm_routes
+from backend.tests.routers.llm_route_test_support import (
+    create_client as _client,
+    create_user as _user,
+)
 from backend.services.llm_provider import (
     managed_connection_lifecycle_service as managed_lifecycle_module,
 )
@@ -122,38 +121,6 @@ def _during_request(counter: TxCounter, fn):
         return fn()
     finally:
         counter.stop()
-
-
-def _user(prefix: str) -> User:
-    db = SessionLocal()
-    try:
-        user = User(username=f"{prefix}-{uuid4().hex}", password="hashed")
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-        db.expunge(user)
-        return user
-    finally:
-        db.close()
-
-
-def _client(user: User) -> tuple[TestClient, FastAPI]:
-    app = FastAPI()
-    app.include_router(llm_routes.router)
-
-    def current_user() -> User:
-        return user
-
-    def db_dependency() -> Iterator:
-        db = SessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    app.dependency_overrides[llm_routes.get_current_user] = current_user
-    app.dependency_overrides[llm_routes.get_db] = db_dependency
-    return TestClient(app), app
 
 
 def _connection_ref(connection) -> dict[str, Any]:

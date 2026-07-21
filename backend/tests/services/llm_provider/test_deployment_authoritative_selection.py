@@ -212,7 +212,7 @@ def test_legacy_reporting_row_is_readable_but_unrunnable(
     assert read.status.runnable is False
     assert read.status.status == "deployment_unmapped"
     with pytest.raises(ProviderConfigurationError, match="deployment binding"):
-        service.build_current_runtime_selection(user_id=owner.id)
+        service.build_runtime_selection(user_id=owner.id)
 
 
 def test_memory_llm_runtime_requires_deployment_refs_for_active_text_selection(

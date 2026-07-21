@@ -213,15 +213,6 @@ class ReportingLLMSelectionService:
             )
         return self.build_deployment_runtime_selection(user_id=user_id)
 
-    def build_current_runtime_selection(
-        self,
-        *,
-        user_id: int,
-    ) -> LLMRuntimeSelection | LLMRuntimeSelectionV2:
-        """Return the saved reporting runtime identity, preferring deployments."""
-
-        return self.build_runtime_selection(user_id=user_id)
-
     def build_deployment_runtime_selection(
         self,
         *,

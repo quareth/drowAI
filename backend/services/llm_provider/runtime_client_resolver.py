@@ -38,6 +38,7 @@ from .types import (
     LLMRuntimeSelectionV2,
     ProviderSecret,
     ResolvedLLMTarget,
+    parse_llm_runtime_selection,
 )
 
 _UNSET = object()
@@ -94,7 +95,7 @@ class LLMRuntimeClientResolver:
     ) -> LLMClient:
         """Create an LLMClient for the selected credential context."""
 
-        parsed_selection = _parse_runtime_selection(selection)
+        parsed_selection = parse_llm_runtime_selection(selection)
         legacy_call_ref = (
             resolve_call_target(parsed_selection, target)
             if isinstance(parsed_selection, LLMRuntimeSelection)
@@ -150,7 +151,7 @@ class LLMRuntimeClientResolver:
 
         if not isinstance(access_context, LLMRuntimeAccessContext):
             raise TypeError("access_context must be LLMRuntimeAccessContext")
-        parsed = _parse_runtime_selection(selection)
+        parsed = parse_llm_runtime_selection(selection)
         if isinstance(parsed, LLMRuntimeSelectionV2):
             return self._live_resolver.resolve_target(
                 parsed,
@@ -226,18 +227,6 @@ class LLMRuntimeClientResolver:
         """Return an enabled credential ref for explicit non-chat dependencies."""
 
         return self._credential_service.get_credential_ref(user_id, provider)
-
-
-def _parse_runtime_selection(
-    value: LLMRuntimeSelection | LLMRuntimeSelectionV2 | dict[str, Any],
-) -> LLMRuntimeSelection | LLMRuntimeSelectionV2:
-    if isinstance(value, (LLMRuntimeSelection, LLMRuntimeSelectionV2)):
-        return value
-    if not isinstance(value, dict):
-        raise TypeError("Runtime selection requires a mapping or selection object")
-    if value.get("schema_version") == 2 or "deployment_ref" in value:
-        return LLMRuntimeSelectionV2.from_mapping(value)
-    return LLMRuntimeSelection.from_mapping(value)
 
 
 def _selection_reasoning_effort(

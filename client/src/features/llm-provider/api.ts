@@ -14,10 +14,7 @@ import type {
   LLMManagedConnectionEnableRequest,
   LLMManagedConnectionRefreshRequest,
   LLMManagedConnectionTestRequest,
-  LLMProvingConnectionCreateRequest,
-  LLMProvingConnectionEnableRequest,
   LLMProvingConnectionStatus,
-  LLMProvingConnectionTestRequest,
   LLMProvingVerification,
   LLMProviderCredentialDeleteResponse,
   LLMProviderCredentialStatus,
@@ -121,51 +118,6 @@ export async function testLLMProviderCredential(
       method: "POST",
       body: JSON.stringify(request),
     },
-  );
-}
-
-export async function createLLMProvingConnection(
-  presetId: string,
-  request: LLMProvingConnectionCreateRequest = {},
-): Promise<LLMProvingConnectionStatus> {
-  return mapProvingConnectionStatus(
-    await apiCall<Record<string, unknown>>(
-      `/api/llm/proving-presets/${encodeURIComponent(presetId)}/connection`,
-      {
-        method: "POST",
-        body: JSON.stringify(request),
-      },
-    ),
-  );
-}
-
-export async function testLLMProvingConnection(
-  presetId: string,
-  request: LLMProvingConnectionTestRequest,
-): Promise<LLMProvingVerification> {
-  return mapProvingVerification(
-    await apiCall<Record<string, unknown>>(
-      `/api/llm/proving-presets/${encodeURIComponent(presetId)}/connection/test`,
-      {
-        method: "POST",
-        body: JSON.stringify(request),
-      },
-    ),
-  );
-}
-
-export async function enableLLMProvingConnection(
-  presetId: string,
-  request: LLMProvingConnectionEnableRequest,
-): Promise<LLMProvingConnectionStatus> {
-  return mapProvingConnectionStatus(
-    await apiCall<Record<string, unknown>>(
-      `/api/llm/proving-presets/${encodeURIComponent(presetId)}/connection/enable`,
-      {
-        method: "POST",
-        body: JSON.stringify(request),
-      },
-    ),
   );
 }
 

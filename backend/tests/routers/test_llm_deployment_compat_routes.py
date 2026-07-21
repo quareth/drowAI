@@ -2,22 +2,20 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
 from uuid import UUID, uuid4
-
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 from agent.providers.llm.core.capabilities import LLMCapability
 from backend.database import SessionLocal
 from backend.models import (
     LLMCapabilityObservation,
     LLMModelDeployment,
-    User,
     UserLLMProviderCredential,
     UserLLMSelection,
 )
-from backend.routers import llm as llm_routes
+from backend.tests.routers.llm_route_test_support import (
+    create_client as _client,
+    create_user as _user,
+)
 from backend.services.llm_provider import (
     managed_connection_lifecycle_service as managed_lifecycle_module,
 )
@@ -39,42 +37,11 @@ from backend.services.llm_provider.types import (
 from backend.services.llm_provider.credential_service import encrypt_api_key
 from backend.services.llm_provider.operation_registry import (
     CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+    HUGGINGFACE_BASE_URL_ENV,
     HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
     NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
     OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
 )
-
-
-def _user(prefix: str) -> User:
-    db = SessionLocal()
-    try:
-        user = User(username=f"{prefix}-{uuid4().hex}", password="hashed")
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-        db.expunge(user)
-        return user
-    finally:
-        db.close()
-
-
-def _client(user: User) -> tuple[TestClient, FastAPI]:
-    app = FastAPI()
-    app.include_router(llm_routes.router)
-
-    def current_user() -> User:
-        return user
-
-    def db_dependency() -> Iterator:
-        db = SessionLocal()
-        try:
-            yield db
-        finally:
-            db.close()
-
-    app.dependency_overrides[llm_routes.get_current_user] = current_user
-    app.dependency_overrides[llm_routes.get_db] = db_dependency
-    return TestClient(app), app
 
 
 def _deployment(*, user_id: int, model: str):
@@ -315,6 +282,7 @@ def test_managed_connection_test_authorizes_and_uses_guarded_transport(
 ) -> None:
     """Managed preset health checks authorize before guarded egress."""
 
+    monkeypatch.delenv(HUGGINGFACE_BASE_URL_ENV, raising=False)
     user = _user("llm-managed-preset-guard")
     db = SessionLocal()
     try:

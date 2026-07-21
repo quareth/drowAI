@@ -113,7 +113,7 @@ class _DeploymentReportingSelectionService:
         self.expected_revision = expected_revision
         self.calls: list[int] = []
 
-    def build_current_runtime_selection(self, *, user_id: int) -> LLMRuntimeSelectionV2:
+    def build_runtime_selection(self, *, user_id: int) -> LLMRuntimeSelectionV2:
         self.calls.append(user_id)
         return LLMRuntimeSelectionV2(
             deployment_ref=DeploymentRef(
@@ -124,10 +124,6 @@ class _DeploymentReportingSelectionService:
             legacy_provider="openai",
             legacy_model="gpt-5-mini",
         )
-
-    def build_runtime_selection(self, *, user_id: int) -> LLMRuntimeSelection:
-        raise AssertionError("legacy reporting runtime selection was used")
-
 
 def _runtime_selection_payload(
     *,

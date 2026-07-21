@@ -12,20 +12,16 @@ import type { LLMDeploymentRef, LLMModelCatalogResponse } from "../types";
 
 const mocked = vi.hoisted(() => ({
   createLLMManagedConnection: vi.fn(),
-  createLLMProvingConnection: vi.fn(),
   deleteLLMProviderCredential: vi.fn(),
   enableLLMManagedConnection: vi.fn(),
-  enableLLMProvingConnection: vi.fn(),
   fetchLLMModelCatalog: vi.fn(),
   fetchLLMSelection: vi.fn(),
   fetchReportingLLMSelection: vi.fn(),
   refreshLLMManagedConnectionInventory: vi.fn(),
   saveLLMProviderCredential: vi.fn(),
-  saveLLMDeploymentSelection: vi.fn(),
   saveReportingLLMSelection: vi.fn(),
   testLLMManagedConnection: vi.fn(),
   testLLMProviderCredential: vi.fn(),
-  testLLMProvingConnection: vi.fn(),
 }));
 
 vi.mock("../api", () => mocked);
@@ -156,8 +152,5 @@ describe("GPT-OSS proving UI", () => {
     expect(screen.queryByText("Pricing: unavailable")).toBeNull();
     expect(screen.queryByText(/capability evidence|lifecycle|runnability/i)).toBeNull();
     expect(screen.queryByRole("button", { name: /advanced model preferences/i })).toBeNull();
-    expect(mocked.createLLMProvingConnection).not.toHaveBeenCalled();
-    expect(mocked.testLLMProvingConnection).not.toHaveBeenCalled();
-    expect(mocked.enableLLMProvingConnection).not.toHaveBeenCalled();
   });
 });

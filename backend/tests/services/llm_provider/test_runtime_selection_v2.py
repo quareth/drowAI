@@ -15,10 +15,72 @@ from backend.services.llm_provider.runtime_config_service import (
 )
 from backend.services.llm_provider.types import (
     DeploymentRef,
+    LLMCredentialRef,
     LLMDeploymentNotFoundError,
     LLMRuntimeAccessContext,
+    LLMRuntimeSelection,
     LLMRuntimeSelectionV2,
+    parse_llm_runtime_selection,
 )
+
+
+def test_runtime_selection_parser_preserves_typed_contracts() -> None:
+    """Typed legacy and V2 selections pass through the shared parser unchanged."""
+
+    legacy = LLMRuntimeSelection(
+        provider="openai",
+        model="gpt-5.2",
+        credential_ref=LLMCredentialRef(user_id=7, provider="openai"),
+    )
+    deployment = LLMRuntimeSelectionV2(
+        deployment_ref=DeploymentRef(str(uuid4()), 3),
+    )
+
+    assert parse_llm_runtime_selection(legacy) is legacy
+    assert parse_llm_runtime_selection(deployment) is deployment
+
+
+def test_runtime_selection_parser_distinguishes_legacy_and_v2_mappings() -> None:
+    """One parser owns legacy and deployment-aware mapping discrimination."""
+
+    legacy = parse_llm_runtime_selection(
+        {
+            "provider": "openai",
+            "model": "gpt-5.2",
+            "credential_ref": {"user_id": 7, "provider": "openai"},
+        }
+    )
+    deployment_id = str(uuid4())
+    versioned = parse_llm_runtime_selection(
+        {
+            "schema_version": 2,
+            "deployment_ref": {
+                "deployment_id": deployment_id,
+                "expected_revision": 4,
+            },
+        }
+    )
+    assert isinstance(legacy, LLMRuntimeSelection)
+    assert isinstance(versioned, LLMRuntimeSelectionV2)
+    with pytest.raises(ValueError, match="schema_version must be 2"):
+        parse_llm_runtime_selection(
+            {
+                "deployment_ref": {
+                    "deployment_id": deployment_id,
+                    "expected_revision": 4,
+                },
+            }
+        )
+
+
+def test_runtime_selection_parser_rejects_non_mapping_input() -> None:
+    """Invalid runtime-selection inputs fail at the shared contract boundary."""
+
+    with pytest.raises(
+        TypeError,
+        match="Runtime selection requires a mapping or selection object",
+    ):
+        parse_llm_runtime_selection(object())  # type: ignore[arg-type]
 
 
 def test_v2_selection_round_trip_contains_only_checkpoint_safe_identity() -> None:

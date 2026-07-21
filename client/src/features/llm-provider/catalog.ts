@@ -8,10 +8,7 @@
 import type {
   LLMCatalogModel,
   LLMCatalogProvider,
-  LLMDeploymentCandidate,
-  LLMDeploymentCandidateGroup,
   LLMDeploymentRef,
-  LLMDeploymentStatusOverride,
   LLMSelection,
   LLMSelectionStatus,
   LLMModelCatalogResponse,
@@ -130,147 +127,9 @@ export function getBlockingSelectionStatus(
     : null;
 }
 
-export function getDeploymentCandidates(
-  catalog: LLMModelCatalogResponse | null | undefined,
-  statusOverrides: LLMDeploymentStatusOverride[] = [],
-): LLMDeploymentCandidate[] {
-  if (!catalog) {
-    return [];
-  }
-
-  return catalog.providers.flatMap((provider) =>
-    provider.models.flatMap((model) => {
-      const connection = model.connection ?? model.proving ?? null;
-      const deploymentRef = model.deploymentRef ?? connection?.deploymentRef ?? null;
-      if (!deploymentRef) {
-        return [];
-      }
-      const override = statusOverrides.find((candidateOverride) =>
-        sameDeploymentRef(candidateOverride.deploymentRef, deploymentRef),
-      );
-      const runnability = connection?.runnability ?? null;
-      const runnable = override?.runnable ?? runnability?.runnable ?? model.runnable ?? false;
-      const lifecycleState =
-        override?.lifecycleState
-        ?? connection?.lifecycleState
-        ?? (runnable ? "enabled" : "unknown");
-
-      return [{
-        providerId: provider.id,
-        providerLabel: provider.label,
-        deploymentLabel: deploymentCandidateLabel(connection?.displayName, provider.label),
-        modelId: model.id,
-        modelLabel: model.label,
-        canonicalModelId: model.canonicalModelId,
-        exactWireModelId: model.exactWireModelId,
-        apiSurface: model.apiSurface,
-        capabilities: model.capabilities,
-        contextWindowTokens: model.contextWindowTokens,
-        maxOutputTokens: model.maxOutputTokens,
-        pricingStatus: model.pricingStatus,
-        deploymentRef,
-        lifecycleState,
-        runnable,
-        status: override?.status ?? runnability?.status ?? (runnable ? "runnable" : "unknown"),
-        reason: override?.reason ?? runnability?.reason ?? null,
-      }];
-    }),
-  );
-}
-
-export function getDeploymentCandidateGroups(
-  catalog: LLMModelCatalogResponse | null | undefined,
-  statusOverrides: LLMDeploymentStatusOverride[] = [],
-): LLMDeploymentCandidateGroup[] {
-  const candidates = getDeploymentCandidates(catalog, statusOverrides);
-  const groups = new Map<string, LLMDeploymentCandidateGroup>();
-  for (const candidate of candidates) {
-    const key = deploymentCandidateGroupKey(candidate);
-    const existing = groups.get(key);
-    if (existing) {
-      existing.candidates.push(candidate);
-      continue;
-    }
-    groups.set(key, {
-      key,
-      modelLabel: getCanonicalModelDisplayLabel(
-        catalog,
-        candidate.canonicalModelId,
-        candidate.modelLabel,
-      ),
-      canonicalModelId: candidate.canonicalModelId,
-      candidates: [candidate],
-    });
-  }
-  return Array.from(groups.values());
-}
-
-function deploymentCandidateGroupKey(candidate: LLMDeploymentCandidate): string {
-  const canonical = candidate.canonicalModelId?.trim();
-  return canonical || `${candidate.providerId}:${candidate.modelId}`;
-}
-
-function deploymentCandidateLabel(
-  connectionDisplayName: string | null | undefined,
-  fallbackProviderLabel: string,
-): string {
-  const displayName = connectionDisplayName?.trim();
-  return displayName || fallbackProviderLabel;
-}
-
-function getCanonicalModelDisplayLabel(
-  catalog: LLMModelCatalogResponse | null | undefined,
-  canonicalModelId: string | null | undefined,
-  fallback: string,
-): string {
-  const canonical = canonicalModelId?.trim();
-  if (!catalog || !canonical) {
-    return fallback;
-  }
-
-  const matchingLabels = catalog.providers.flatMap((provider) =>
-    provider.models
-      .filter((model) => model.canonicalModelId === canonical)
-      .map((model) => model.label.trim())
-      .filter(Boolean),
-  );
-  if (matchingLabels.length === 0) {
-    return fallback;
-  }
-  return stripDeploymentQualifier(
-    matchingLabels.sort((left, right) => left.length - right.length)[0],
-  );
-}
-
-function stripDeploymentQualifier(label: string): string {
-  const canonicalLabel = label.replace(/\s+via\s+.+$/i, "").trim();
-  return canonicalLabel || label;
-}
-
 export function sameDeploymentRef(
   left: LLMDeploymentRef | null | undefined,
   right: LLMDeploymentRef | null | undefined,
 ): boolean {
   return Boolean(left && right && left.deployment_id === right.deployment_id);
-}
-
-export function isDeploymentCandidateSelectable(
-  candidate: LLMDeploymentCandidate,
-): boolean {
-  return candidate.runnable === true && candidate.lifecycleState === "enabled";
-}
-
-export function getSingleEligibleDeployment(
-  candidates: LLMDeploymentCandidate[],
-): LLMDeploymentCandidate | null {
-  const eligible = candidates.filter(isDeploymentCandidateSelectable);
-  return eligible.length === 1 ? eligible[0] : null;
-}
-
-export function formatPricingStatus(status: string | null | undefined): string {
-  const normalized = status?.trim().toLowerCase();
-  if (!normalized || normalized === "unknown" || normalized === "unavailable") {
-    return "unavailable";
-  }
-  return status as string;
 }
