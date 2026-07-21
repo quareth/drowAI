@@ -6,7 +6,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ProviderModelMenu } from "../ProviderModelMenu";
-import type { LLMModelCatalogResponse } from "../types";
+import type { LLMCatalogProvider, LLMModelCatalogResponse } from "../types";
 
 const catalog: LLMModelCatalogResponse = {
   providers: [
@@ -78,10 +78,90 @@ const catalog: LLMModelCatalogResponse = {
 };
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   cleanup();
 });
 
 describe("ProviderModelMenu", () => {
+  it("hides runnable self-hosted deployments unless the temporary gate is enabled", () => {
+    const localDeploymentRef = {
+      deployment_id: "33333333-3333-4333-8333-333333333333",
+      expected_revision: 1,
+    };
+    const localProvider: LLMCatalogProvider = {
+      ...catalog.providers[0],
+      id: "ollama_openai_compatible_chat",
+      label: "Ollama",
+      credential: {
+        ...catalog.providers[0].credential,
+        provider: "ollama_openai_compatible_chat",
+      },
+      defaultModel: "gpt-oss:20b",
+      models: [{
+        ...catalog.providers[0].models[0],
+        id: "gpt-oss:20b",
+        canonicalModelId: "openai/gpt-oss-20b",
+        label: "GPT-OSS 20B via Ollama",
+        deploymentRef: localDeploymentRef,
+        runnable: true,
+        connection: {
+          presetId: "ollama_openai_compatible_chat",
+          displayName: "Ollama",
+          enabled: true,
+          authMode: "bearer_api_key",
+          userConfigFields: ["base_url", "api_key"],
+          configFields: [],
+          lifecycleState: "enabled",
+          connectionRef: null,
+          deploymentRef: localDeploymentRef,
+          verification: null,
+          runnability: {
+            status: "runnable",
+            selectable: true,
+            runnable: true,
+            reason: null,
+          },
+        },
+      }],
+    };
+    const localCatalog: LLMModelCatalogResponse = {
+      providers: [...catalog.providers, localProvider],
+    };
+
+    const { unmount } = render(
+      <ProviderModelMenu
+        catalog={localCatalog}
+        selectedSelection={{
+          provider: localProvider.id,
+          model: "gpt-oss:20b",
+          deploymentRef: localDeploymentRef,
+        }}
+        selectedReasoningEffort="medium"
+        onModelChange={() => undefined}
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Select model" }));
+    expect(screen.queryByText("Ollama")).toBeNull();
+    unmount();
+
+    vi.stubEnv("VITE_ENABLE_INCOMPLETE_SELF_HOSTED_LLM_SETTINGS", "true");
+    render(
+      <ProviderModelMenu
+        catalog={localCatalog}
+        selectedSelection={{
+          provider: localProvider.id,
+          model: "gpt-oss:20b",
+          deploymentRef: localDeploymentRef,
+        }}
+        selectedReasoningEffort="medium"
+        onModelChange={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Select model" }).textContent).toContain("GPT-OSS 20B");
+  });
+
   it("opens with publisher groups and selects an Anthropic model from catalog data", async () => {
     const onModelChange = vi.fn();
     render(

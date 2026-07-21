@@ -34,6 +34,8 @@ Target version: `0.1.0`.
 
 ### Changed
 
+- Ollama and vLLM self-hosted settings and model choices are hidden by default
+  until operator-controlled private-network registration is available.
 - Agent-turn roles now consistently use the user-selected deployment across
   OpenAI, Anthropic, and compatible models; lightweight internal calls use a
   shared low-effort policy instead of silently switching models.

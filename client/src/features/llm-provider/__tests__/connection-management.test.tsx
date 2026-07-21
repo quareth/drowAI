@@ -206,6 +206,7 @@ function renderWithQueryClient(component: ReactNode) {
 }
 
 beforeEach(() => {
+  vi.stubEnv("VITE_ENABLE_INCOMPLETE_SELF_HOSTED_LLM_SETTINGS", "true");
   window.history.replaceState(null, "", "/settings");
   mocked.fetchLLMModelCatalog.mockResolvedValue(catalog);
   mocked.fetchLLMSelection.mockResolvedValue({
@@ -223,12 +224,33 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   window.history.replaceState(null, "", "/");
   cleanup();
   vi.clearAllMocks();
 });
 
 describe("Connection management", () => {
+  it("hides unfinished self-hosted connection settings when the gate is unset", async () => {
+    vi.unstubAllEnvs();
+    mocked.fetchLLMModelCatalog.mockResolvedValue(managedCatalog);
+
+    renderWithQueryClient(
+      <ProviderSettingsSection
+        queryEnabled
+        onSuccess={() => undefined}
+        onError={() => undefined}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mocked.fetchLLMModelCatalog).toHaveBeenCalled();
+    });
+    expect(screen.queryByRole("button", { name: "Local & self-hosted" })).toBeNull();
+    expect(screen.queryByText("Ollama")).toBeNull();
+    expect(screen.queryByLabelText("Base URL")).toBeNull();
+  });
+
   it("shows one supported NVIDIA card while ignoring legacy inventory rows", async () => {
     const nimConnectionRef = {
       connection_id: "44444444-4444-4444-8444-444444444444",

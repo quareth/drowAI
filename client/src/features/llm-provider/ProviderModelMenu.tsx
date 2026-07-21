@@ -16,6 +16,7 @@ import {
   getVisibleReasoningEffortOptions,
   modelSupportsReasoningEffort,
 } from "@/features/llm-provider/capability-controls";
+import { isIncompleteSelfHostedProviderVisible } from "@/features/llm-provider/self-hosted-visibility";
 import type {
   LLMCatalogModel,
   LLMCatalogProvider,
@@ -105,11 +106,14 @@ function ModelRowContent({
 
 function buildPublisherGroups(providers: LLMCatalogProvider[]): PublisherGroup[] {
   const publisherGroups = new Map<string, PublisherGroup>();
+  const visibleProviders = providers.filter((provider) =>
+    isIncompleteSelfHostedProviderVisible(provider.id),
+  );
   const providerLabels = new Map(
-    providers.map((provider) => [provider.id.toLowerCase(), provider.label]),
+    visibleProviders.map((provider) => [provider.id.toLowerCase(), provider.label]),
   );
 
-  for (const provider of providers) {
+  for (const provider of visibleProviders) {
     const providerSelectable = isModelSelectable(provider);
     for (const model of provider.models) {
       const deploymentRef = getModelDeploymentRef(model);

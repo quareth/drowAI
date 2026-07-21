@@ -1,3 +1,11 @@
+/**
+ * Frontend feature-flag and environment-gate configuration.
+ *
+ * General rollout flags may accept browser-local overrides. Sensitive
+ * incomplete-feature gates must read only their explicit build environment
+ * variable so users cannot expose unfinished UI through local storage.
+ */
+
 export interface FeatureFlags {
   enableOptimisticUpdates: boolean;
   enableThinkingExpansion: boolean;
@@ -121,6 +129,15 @@ export const featureFlags: FeatureFlags = {
 
 export function isFeatureEnabled<K extends keyof FeatureFlags>(flag: K): FeatureFlags[K] {
   return featureFlags[flag];
+}
+
+/**
+ * Gate unfinished Ollama and vLLM UI behind an explicit internal build flag.
+ * Keep this env-only and default-off until operator-controlled self-hosted
+ * model registration supports approved loopback and private-network targets.
+ */
+export function isIncompleteSelfHostedLLMSettingsEnabled(): boolean {
+  return readEnvFlag('VITE_ENABLE_INCOMPLETE_SELF_HOSTED_LLM_SETTINGS') === true;
 }
 
 export function isTaskInPercentageRollout(taskId: number | null | undefined, percent: number): boolean {

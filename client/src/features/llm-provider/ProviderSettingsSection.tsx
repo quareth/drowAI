@@ -21,6 +21,7 @@ import {
 import ConnectionSettingsPanel from "@/features/llm-provider/ConnectionSettingsPanel";
 import ProviderCredentialCard from "@/features/llm-provider/ProviderCredentialCard";
 import ProviderModelMenu from "@/features/llm-provider/ProviderModelMenu";
+import { isIncompleteSelfHostedProviderVisible } from "@/features/llm-provider/self-hosted-visibility";
 import type {
   LLMCatalogModel,
   LLMCatalogProvider,
@@ -97,7 +98,9 @@ export function ProviderSettingsSection({
     },
   });
   const providers = catalog?.providers ?? [];
-  const connectionModels = getConnectionSettingsEntries(providers);
+  const connectionModels = getConnectionSettingsEntries(providers).filter(
+    ({ connection }) => isIncompleteSelfHostedProviderVisible(connection.presetId),
+  );
   const hostedConnectionModels = connectionModels.filter(({ connection }) =>
     isHostedConnection(connection),
   );
