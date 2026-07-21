@@ -28,12 +28,12 @@ direction and review of a cybersecurity engineer with ten years of professional
 experience but no formal software-development background. The project is both a
 working platform and an ongoing examination of the strengths and limits of this
 approach.
-**Project story:** For a personal account of how DrowAI began and how I used
-AI-assisted development to build it, you may read
-- [The story behind DrowAI on Medium]([https://medium.com/@alcangunes](https://medium.com/@alcangunes/i-used-ai-assisted-development-to-build-agentic-red-team-platform-drowai-9eadad2a5a55?sharedUserId=alcangunes))
 
-Development updates currently live in the [changelog](CHANGELOG.md) and the
-[GitHub issue tracker](https://github.com/quareth/drowAI/issues).
+**Project story:** For a personal account of how DrowAI began and how I used
+AI-assisted development to build it, read
+[the story behind DrowAI on Medium](https://medium.com/@alcangunes/i-used-ai-assisted-development-to-build-agentic-red-team-platform-drowai-9eadad2a5a55).
+
+
 
 ## What Is In The Repo
 
@@ -50,6 +50,9 @@ Development updates currently live in the [changelog](CHANGELOG.md) and the
 - **Kali executor:** in-container execution support under `kali_executor/`.
 - **Deployment assets:** local parity launcher plus standalone and distributed
   Docker Compose profiles under `deploy/`.
+
+Development updates currently live in the [changelog](CHANGELOG.md) and the
+[GitHub issue tracker](https://github.com/quareth/drowAI/issues).
 
 ## Tooling Surface
 
