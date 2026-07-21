@@ -36,7 +36,8 @@ Owned by the model layer:
 - Provider and model identity contracts.
 - Provider/model capability profiles.
 - Public catalog metadata and selectable-model validation.
-- Encrypted per-user provider credentials.
+- Encrypted per-user provider credentials and per-connection managed endpoint
+  credentials.
 - Saved per-user conversation and reporting LLM selections.
 - User-owned inference connections, deployments, routes, and capability
   observations for text-LLM resolution.
@@ -63,8 +64,8 @@ Not owned by the model layer:
     switch routes.
   - Validates model selectability and credential presence before runtime use.
 - Data plane:
-  - Stores encrypted provider credentials, saved selections, conversation
-    metadata, and usage records.
+  - Stores encrypted direct-provider and connection-owned credentials, saved
+    selections, conversation metadata, and usage records.
   - Stores only non-secret credential references in runtime/checkpoint-facing
     metadata.
 - Execution plane:
@@ -84,7 +85,8 @@ Backend management and runtime wiring:
 - `backend/services/llm_provider/catalog_service.py`
   - Lists provider/model profiles and validates selectable models.
 - `backend/services/llm_provider/credential_service.py`
-  - Stores encrypted credentials and resolves short-lived provider secrets.
+  - Stores encrypted direct-provider or connection-owned credentials and
+    resolves short-lived provider secrets only after live authorization.
 - `backend/services/llm_provider/selection_service.py`
   - Persists the user's default conversation deployment reference and
     provider/model compatibility snapshot.
@@ -171,7 +173,10 @@ selection is additionally constrained to the Responses API public model family.
 Durable state is split deliberately:
 
 - `UserLLMProviderCredential`
-  - Encrypted provider credential row.
+  - Encrypted direct-provider credential row keyed by user and provider.
+- `LLMConnectionCredential`
+  - Encrypted managed-endpoint credential keyed one-to-one by inference
+    connection. The connection remains the authority for owner and preset.
 - `LLMCredentialRef`
   - Non-secret `{user_id, provider}` pointer used in runtime payloads.
 - `LLMInferenceConnection`, `LLMModelDeployment`, `LLMDeploymentRoute`, and
@@ -202,8 +207,10 @@ Durable state is split deliberately:
   - Live invocation-only service bag containing the runtime client resolver.
 
 Decrypted provider API keys are not stored in graph metadata, checkpoint state,
-stream packets, or task workspace files. Provider calls resolve them through
-`LLMRuntimeClientResolver` when constructing a concrete client. A separate
+stream packets, or task workspace files. Managed text-LLM calls resolve the
+credential owned by the authorized connection; direct provider calls resolve
+the user/provider row. Both paths enter through `LLMRuntimeClientResolver` when
+constructing a concrete client. A separate
 OpenAI-only local-Docker compatibility path resolves the selected credential
 through `LLMProviderEnvironmentService` and injects `OPENAI_API_KEY` into the
 task container environment during provisioning. The credential service always

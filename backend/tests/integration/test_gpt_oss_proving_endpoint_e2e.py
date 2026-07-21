@@ -14,12 +14,12 @@ from backend.auth import create_access_token
 from backend.database import SessionLocal
 from backend.main import app
 from backend.models import (
+    LLMConnectionCredential,
     LLMInferenceConnection,
     Task,
     Tenant,
     TenantMembership,
     User,
-    UserLLMProviderCredential,
     UserSettings,
 )
 from backend.services.llm_provider import (
@@ -231,10 +231,9 @@ def test_gpt_oss_proving_route_flow_is_owner_scoped_and_secret_safe(
             assert connection.user_id == user.id
             assert connection.legacy_default_provider is None
             credential = (
-                db.query(UserLLMProviderCredential)
+                db.query(LLMConnectionCredential)
                 .filter(
-                    UserLLMProviderCredential.user_id == user.id,
-                    UserLLMProviderCredential.provider == GPT_OSS_20B_PROVING_PRESET_ID,
+                    LLMConnectionCredential.connection_id == connection.id,
                 )
                 .one()
             )

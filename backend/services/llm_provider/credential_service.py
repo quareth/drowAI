@@ -1,4 +1,4 @@
-"""Credential storage and resolution for provider-neutral LLM settings.
+"""Credential storage and resolution for provider and connection LLM auth.
 
 This service centralizes encryption, masking, provider compatibility, and
 runtime credential authorization. Decrypted provider secrets are returned only
@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from agent.providers.llm.core.identity import OPENAI_PROVIDER_ID, normalize_provider_id
 
 from backend.models import (
+    LLMConnectionCredential,
     LLMInferenceConnection,
     Task,
     UserLLMProviderCredential,
@@ -226,14 +227,10 @@ class LLMCredentialService:
             runtime_user_id=user_id,
             task_id=None,
         )
-        normalized_provider = self._normalize_connection_provider(provider)
-        if (
-            self._normalize_connection_provider(connection.connection_preset_id)
-            != normalized_provider
-        ):
-            raise CredentialAuthorizationError(
-                "Connection credential binding is invalid"
-            )
+        normalized_provider = self._require_reviewed_connection_provider(
+            connection,
+            provider,
+        )
         plaintext = (api_key or "").strip()
         if not plaintext:
             raise CredentialNotFoundError(
@@ -241,15 +238,10 @@ class LLMCredentialService:
             )
 
         encrypted_key = encrypt_api_key(plaintext)
-        credential = self._get_credential(
-            user_id=user_id,
-            provider=normalized_provider,
-            migrate=False,
-        )
+        credential = self._get_connection_credential(connection.id)
         if credential is None:
-            credential = UserLLMProviderCredential(
-                user_id=user_id,
-                provider=normalized_provider,
+            credential = LLMConnectionCredential(
+                connection_id=connection.id,
                 encrypted_api_key=encrypted_key,
                 enabled=True,
             )
@@ -258,12 +250,13 @@ class LLMCredentialService:
             credential.encrypted_api_key = encrypted_key
             credential.enabled = True
 
-        if not self._is_reviewed_connection_preset(connection.connection_preset_id):
-            connection.legacy_default_provider = normalized_provider
         connection.revision += 1
-        self._invalidate_decrypted_compat_cache(user_id)
         self._db.flush()
-        return self._status_from_credential(credential, connection=connection)
+        return self._status_from_connection_credential(
+            credential,
+            connection=connection,
+            provider=normalized_provider,
+        )
 
     def connection_credential_fingerprint(
         self,
@@ -279,19 +272,11 @@ class LLMCredentialService:
             runtime_user_id=user_id,
             task_id=None,
         )
-        normalized_provider = self._normalize_connection_provider(provider)
-        if (
-            self._normalize_connection_provider(connection.connection_preset_id)
-            != normalized_provider
-        ):
-            raise CredentialAuthorizationError(
-                "Connection credential binding is invalid"
-            )
-        credential = self._get_credential(
-            user_id=user_id,
-            provider=normalized_provider,
-            migrate=False,
+        normalized_provider = self._require_reviewed_connection_provider(
+            connection,
+            provider,
         )
+        credential = self._get_connection_credential(connection.id)
         if credential is None or not credential.enabled or not credential.encrypted_api_key:
             raise CredentialNotFoundError(
                 f"{normalized_provider} credential is not configured"
@@ -421,11 +406,14 @@ class LLMCredentialService:
             raise CredentialAuthorizationError(
                 "Connection credential binding is invalid"
             )
-        credential = self._get_credential(
-            user_id=runtime_user_id,
-            provider=normalized_provider,
-            migrate=False,
-        )
+        if self._is_reviewed_connection_preset(normalized_provider):
+            credential = self._get_connection_credential(connection.id)
+        else:
+            credential = self._get_credential(
+                user_id=runtime_user_id,
+                provider=normalized_provider,
+                migrate=False,
+            )
         if credential is None or not credential.enabled or not credential.has_api_key:
             raise CredentialNotFoundError(
                 f"{normalized_provider} credential is not configured"
@@ -536,6 +524,18 @@ class LLMCredentialService:
             if credential.enabled and credential.has_api_key:
                 return credential
         return credentials[0]
+
+    def _get_connection_credential(
+        self,
+        connection_id: UUID,
+    ) -> LLMConnectionCredential | None:
+        """Return credential material bound to one authorized connection."""
+
+        return self._db.execute(
+            select(LLMConnectionCredential)
+            .where(LLMConnectionCredential.connection_id == connection_id)
+            .execution_options(populate_existing=True)
+        ).scalar_one_or_none()
 
     def _ensure_legacy_default_connection(
         self,
@@ -660,6 +660,26 @@ class LLMCredentialService:
             return preset_id
         return connection.legacy_default_provider
 
+    def _require_reviewed_connection_provider(
+        self,
+        connection: LLMInferenceConnection,
+        provider: str,
+    ) -> str:
+        """Validate the code-owned preset for connection credential writes."""
+
+        normalized_provider = self._normalize_connection_provider(provider)
+        connection_provider = self._normalize_connection_provider(
+            connection.connection_preset_id
+        )
+        if (
+            connection_provider != normalized_provider
+            or not self._is_reviewed_connection_preset(normalized_provider)
+        ):
+            raise CredentialAuthorizationError(
+                "Connection credential binding is invalid"
+            )
+        return normalized_provider
+
     @staticmethod
     def _status_from_credential(
         credential: UserLLMProviderCredential,
@@ -674,6 +694,25 @@ class LLMCredentialService:
             masked_api_key="***" if credential.has_api_key else None,
             connection_id=str(connection.id) if connection is not None else None,
             auth_mode=(LLMAuthMode.API_KEY if connection is not None else None),
+        )
+
+    @staticmethod
+    def _status_from_connection_credential(
+        credential: LLMConnectionCredential,
+        *,
+        connection: LLMInferenceConnection,
+        provider: str,
+    ) -> CredentialStatus:
+        """Return masked status for one connection-owned credential."""
+
+        return CredentialStatus(
+            user_id=int(connection.user_id),
+            provider=provider,
+            enabled=bool(credential.enabled),
+            has_api_key=credential.has_api_key,
+            masked_api_key="***" if credential.has_api_key else None,
+            connection_id=str(connection.id),
+            auth_mode=LLMAuthMode.API_KEY,
         )
 
     @staticmethod

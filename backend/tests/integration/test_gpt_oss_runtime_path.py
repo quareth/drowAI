@@ -21,6 +21,7 @@ from agent.providers.llm.factory.client_factory import LLMClientFactory
 from backend.database import Base
 from backend.models import (
     LLMCapabilityObservation,
+    LLMConnectionCredential,
     LLMConversation,
     LLMDeploymentRoute,
     LLMInferenceConnection,
@@ -85,6 +86,7 @@ def llm_identity_db() -> Iterator[Session]:
             UserMemoryLLMSelection.__table__,
             LLMConversation.__table__,
             LLMInferenceConnection.__table__,
+            LLMConnectionCredential.__table__,
             LLMModelDeployment.__table__,
             LLMDeploymentRoute.__table__,
             LLMCapabilityObservation.__table__,

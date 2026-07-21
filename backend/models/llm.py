@@ -3,7 +3,7 @@
 Scope:
 - Declares user-owned inference connections, deployments, routes, and observed
   capabilities for deployment-aware text LLM resolution.
-- Declares provider-neutral user LLM credential and model-selection rows.
+- Declares provider- and connection-owned credential rows plus model selections.
 - Declares durable conversation continuity rows (`LLMConversation`) and token
   usage accounting rows (`LLMUsageRecord`) for provider/model interactions.
 - Registers all LLM ORM models on the shared `Base` from `backend.database`.
@@ -112,6 +112,37 @@ class LLMInferenceConnection(Base):
             "state",
         ),
     )
+
+
+class LLMConnectionCredential(Base):
+    """Encrypted API-key material owned by exactly one LLM connection."""
+
+    __tablename__ = "llm_connection_credentials"
+
+    connection_id = Column(
+        GUID(),
+        ForeignKey("llm_inference_connections.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    encrypted_api_key = Column(Text, nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True)
+    created_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+        onupdate=func.now(),
+    )
+
+    @property
+    def has_api_key(self) -> bool:
+        """Return whether encrypted material is present without exposing it."""
+
+        return bool((self.encrypted_api_key or "").strip())
 
 
 class LLMModelDeployment(Base):

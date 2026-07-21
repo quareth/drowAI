@@ -58,6 +58,8 @@ Target version: `0.1.0`.
 
 ### Fixed
 
+- Managed LLM endpoints using the same connection preset now retain isolated
+  credentials, preventing one endpoint from receiving another endpoint's key.
 - Reporting and chat model preferences now preserve deployment identity across
   native, hosted open-model, and self-hosted routes instead of misreading a
   serving connection as a canonical model provider.

@@ -14,6 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.models import LLMInferenceConnection, LLMModelDeployment, User
+from backend.services.llm_provider import credential_service as credential_module
 from backend.services.llm_provider.application_contracts import (
     ConnectionStatusOutcome,
     VerificationOutcome,
@@ -43,6 +44,8 @@ from backend.services.llm_provider.types import (
     LLMConnectionState,
     LLMProviderServiceError,
     ProviderConfigurationError,
+    ProviderSecret,
+    RegisteredLLMOperationTarget,
 )
 
 _SECRET = "managed-direct-secret-must-not-appear"
@@ -73,9 +76,11 @@ class _RecordingTransport:
         self._events = events
         self._body = body
         self._failure = failure
+        self.calls: list[dict[str, object]] = []
 
     def execute(self, operation, **kwargs):
         self._events.append(("transport", operation))
+        self.calls.append({"operation": operation, **kwargs})
         if self._failure is not None:
             raise self._failure
         return GuardedHTTPResponse(
@@ -330,6 +335,58 @@ def test_connection_health_and_product_probe_preserve_order_and_outcomes(
         LLMConnectionOperation.CAPABILITY_PROBE,
     )
     assert _SECRET not in f"{health!r}\n{probe!r}\n{caplog.text}"
+
+
+def test_same_preset_health_checks_keep_endpoint_and_secret_bound(
+    monkeypatch: pytest.MonkeyPatch,
+    llm_identity_db: Session,
+    identity_users: tuple[User, User],
+) -> None:
+    """Stored auth and target URL originate from the same connection."""
+
+    monkeypatch.setattr(
+        credential_module,
+        "encrypt_api_key",
+        lambda value: f"encrypted:{value}",
+    )
+    monkeypatch.setattr(
+        credential_module,
+        "decrypt_api_key",
+        lambda value: value.removeprefix("encrypted:"),
+    )
+    owner, _ = identity_users
+    service, _ = _service(llm_identity_db)
+    connection_a = service.create_connection(
+        user_id=owner.id,
+        preset_id=CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+        api_key="key-a-placeholder",
+        display_label="Endpoint A",
+        base_url="https://a.example.test",
+    )
+    service.create_connection(
+        user_id=owner.id,
+        preset_id=CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+        api_key="key-b-placeholder",
+        display_label="Endpoint B",
+        base_url="https://b.example.test",
+    )
+
+    service.test_connection(
+        user_id=owner.id,
+        preset_id=CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+        connection_id=connection_a.connection_ref.connection_id,
+        expected_connection_revision=connection_a.connection_ref.expected_revision,
+    )
+
+    transport = service._transport
+    assert isinstance(transport, _RecordingTransport)
+    call = transport.calls[-1]
+    secret = call["secret"]
+    target = call["operation_target"]
+    assert isinstance(secret, ProviderSecret)
+    assert isinstance(target, RegisteredLLMOperationTarget)
+    assert secret.value == "key-a-placeholder"
+    assert target.url == "https://a.example.test/v1/models"
 
 
 @pytest.mark.parametrize("workflow", ("test", "refresh", "enable"))

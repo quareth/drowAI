@@ -15,9 +15,9 @@ from sqlalchemy.orm import Session
 
 from backend.models import (
     LLMCapabilityObservation,
+    LLMConnectionCredential,
     LLMInferenceConnection,
     User,
-    UserLLMProviderCredential,
 )
 from backend.services.llm_provider.application_contracts import (
     ConnectionStatusOutcome,
@@ -265,9 +265,8 @@ def test_create_connection_preserves_order_status_and_secret_confinement(
         outcome.connection_ref.connection_id,
     )
     credential = llm_identity_db.execute(
-        select(UserLLMProviderCredential).where(
-            UserLLMProviderCredential.user_id == owner.id,
-            UserLLMProviderCredential.provider == GPT_OSS_20B_PROVING_PRESET_ID,
+        select(LLMConnectionCredential).where(
+            LLMConnectionCredential.connection_id == connection.id,
         )
     ).scalar_one()
     assert connection is not None

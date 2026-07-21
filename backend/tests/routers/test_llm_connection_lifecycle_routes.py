@@ -18,9 +18,9 @@ from agent.providers.llm.core.capabilities import LLMCapability
 from backend.database import SessionLocal
 from backend.models import (
     LLMCapabilityObservation,
+    LLMConnectionCredential,
     LLMInferenceConnection,
     LLMModelDeployment,
-    UserLLMProviderCredential,
 )
 from backend.tests.routers.llm_route_test_support import (
     create_client as _client,
@@ -722,10 +722,9 @@ def test_managed_create_success_and_missing_secret_failure(monkeypatch, caplog) 
                 UUID(payload["deployment_ref"]["deployment_id"]),
             )
             credential = (
-                db.query(UserLLMProviderCredential)
+                db.query(LLMConnectionCredential)
                 .filter(
-                    UserLLMProviderCredential.user_id == user.id,
-                    UserLLMProviderCredential.provider == CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+                    LLMConnectionCredential.connection_id == connection.id,
                 )
                 .one()
             )

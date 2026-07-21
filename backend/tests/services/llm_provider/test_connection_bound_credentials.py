@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.models import (
+    LLMConnectionCredential,
     LLMInferenceConnection,
     User,
     UserLLMProviderCredential,
@@ -18,6 +19,10 @@ from backend.services.llm_provider.connection_service import LLMConnectionServic
 from backend.services.llm_provider.credential_service import LLMCredentialService
 from backend.services.llm_provider.migration_service import (
     deterministic_legacy_connection_id,
+)
+from backend.services.llm_provider.operation_registry import (
+    CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+    ConnectionOperationRegistry,
 )
 from backend.services.llm_provider.types import (
     CredentialAuthorizationError,
@@ -74,6 +79,11 @@ def test_none_auth_resolves_without_dummy_credential(
     assert llm_identity_db.execute(
         select(UserLLMProviderCredential).where(
             UserLLMProviderCredential.user_id == owner.id
+        )
+    ).scalar_one_or_none() is None
+    assert llm_identity_db.execute(
+        select(LLMConnectionCredential).where(
+            LLMConnectionCredential.connection_id == connection.id
         )
     ).scalar_one_or_none() is None
 
@@ -239,3 +249,89 @@ def test_connection_auth_rejects_foreign_owner_and_stale_revision(
             purpose="stale",
             auth_mode=LLMAuthMode.NONE,
         )
+
+
+def test_same_preset_connections_resolve_only_their_own_credentials(
+    llm_identity_db: Session,
+    identity_users: tuple[User, User],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Distinct endpoints using one preset never share stored credentials."""
+
+    _use_test_cipher(monkeypatch)
+    owner, _ = identity_users
+    connections = LLMConnectionService(llm_identity_db)
+    credentials = LLMCredentialService(llm_identity_db)
+    preset = ConnectionOperationRegistry().get_connection_preset(
+        CUSTOM_OPENAI_COMPATIBLE_PRESET_ID
+    )
+
+    def create_connection(
+        label: str,
+        endpoint: str,
+        secret: str,
+    ) -> LLMInferenceConnection:
+        connection = connections.create_draft(
+            user_id=owner.id,
+            display_name=label,
+            connection_preset_id=preset.id,
+            runtime_family_id=preset.runtime_family_id,
+            serving_operator_id=preset.serving_operator_id,
+            non_secret_config={
+                "auth_mode": "bearer",
+                "base_url": endpoint,
+            },
+        )
+        credentials.upsert_connection_api_key(
+            user_id=owner.id,
+            connection_ref=LLMConnectionCredentialRef(
+                connection_id=str(connection.id),
+                expected_revision=int(connection.revision),
+            ),
+            provider=CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+            api_key=secret,
+        )
+        return connection
+
+    connection_a = create_connection(
+        "Endpoint A",
+        "https://a.example.test",
+        "key-a-placeholder",
+    )
+    connection_b = create_connection(
+        "Endpoint B",
+        "https://b.example.test",
+        "key-b-placeholder",
+    )
+
+    stored_credentials = llm_identity_db.execute(
+        select(LLMConnectionCredential).order_by(
+            LLMConnectionCredential.connection_id
+        )
+    ).scalars().all()
+    assert {credential.connection_id for credential in stored_credentials} == {
+        connection_a.id,
+        connection_b.id,
+    }
+    assert llm_identity_db.execute(
+        select(UserLLMProviderCredential).where(
+            UserLLMProviderCredential.user_id == owner.id,
+            UserLLMProviderCredential.provider == preset.id,
+        )
+    ).scalar_one_or_none() is None
+
+    def resolved_secret(connection: LLMInferenceConnection) -> str:
+        resolved = credentials.resolve_connection_auth(
+            LLMConnectionCredentialRef(
+                connection_id=str(connection.id),
+                expected_revision=int(connection.revision),
+            ),
+            runtime_user_id=owner.id,
+            purpose="same-preset-isolation",
+            auth_mode=LLMAuthMode.BEARER,
+        )
+        assert resolved.secret is not None
+        return resolved.secret.value
+
+    assert resolved_secret(connection_a) == "key-a-placeholder"
+    assert resolved_secret(connection_b) == "key-b-placeholder"
