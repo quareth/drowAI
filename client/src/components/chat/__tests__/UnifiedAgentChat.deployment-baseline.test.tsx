@@ -25,7 +25,6 @@ const mocked = vi.hoisted(() => {
   return {
     initialDeploymentRef,
     alternateDeploymentRef,
-    saveLLMDeploymentSelection: vi.fn(),
     saveLLMSelection: vi.fn(),
     fetchLLMModelCatalog: vi.fn(),
     fetchLLMSelection: vi.fn(),
@@ -37,7 +36,6 @@ const mocked = vi.hoisted(() => {
 vi.mock("@/features/llm-provider/api", () => ({
   fetchLLMModelCatalog: mocked.fetchLLMModelCatalog,
   fetchLLMSelection: mocked.fetchLLMSelection,
-  saveLLMDeploymentSelection: mocked.saveLLMDeploymentSelection,
   saveLLMSelection: mocked.saveLLMSelection,
 }));
 
@@ -186,7 +184,6 @@ const source = readFileSync(
 
 afterEach(() => {
   cleanup();
-  mocked.saveLLMDeploymentSelection.mockReset();
   mocked.saveLLMSelection.mockReset();
   mocked.fetchLLMModelCatalog.mockReset();
   mocked.fetchLLMSelection.mockReset();
@@ -225,7 +222,7 @@ function renderChatWithDeploymentSelection() {
   queryClient.setQueryData(["/api/llm/selection"], selection);
   mocked.fetchLLMModelCatalog.mockResolvedValue(catalog);
   mocked.fetchLLMSelection.mockResolvedValue(selection);
-  mocked.saveLLMDeploymentSelection.mockResolvedValue({
+  mocked.saveLLMSelection.mockResolvedValue({
     provider: "gpt-oss",
     model: "gpt-oss-20b",
     deploymentRef: mocked.alternateDeploymentRef,
@@ -268,11 +265,12 @@ describe("UnifiedAgentChat deployment baseline", () => {
     fireEvent.click(screen.getByRole("button", { name: "Choose alternate deployment" }));
 
     await waitFor(() => {
-      expect(mocked.saveLLMDeploymentSelection).toHaveBeenCalledWith({
-        deployment_ref: mocked.alternateDeploymentRef,
+      expect(mocked.saveLLMSelection).toHaveBeenCalledWith({
+        provider: "gpt-oss",
+        model: "gpt-oss-20b",
+        deploymentRef: mocked.alternateDeploymentRef,
       });
     });
-    expect(mocked.saveLLMSelection).not.toHaveBeenCalled();
   });
 
   it("sends the selected deployment ref with the next chat turn", async () => {

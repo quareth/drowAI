@@ -174,7 +174,20 @@ describe("ProviderSettingsSection", () => {
   });
 
   it("persists a reporting model selected from the top control", async () => {
-    mocked.fetchLLMModelCatalog.mockResolvedValue(catalog);
+    mocked.fetchLLMModelCatalog.mockResolvedValue({
+      providers: catalog.providers.map((provider) =>
+        provider.id === "anthropic"
+          ? {
+              ...provider,
+              credential: {
+                ...provider.credential,
+                enabled: true,
+                has_api_key: true,
+              },
+            }
+          : provider,
+      ),
+    });
     mocked.saveReportingLLMSelection.mockResolvedValue({
       provider: "anthropic",
       model: "claude-sonnet-4-6",

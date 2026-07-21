@@ -9,7 +9,6 @@ import {
   fetchLLMProviderCredential,
   fetchLLMSelection,
   fetchReportingLLMSelection,
-  saveLLMDeploymentSelection,
   saveLLMProviderCredential,
   saveLLMSelection,
   saveReportingLLMSelection,
@@ -194,4 +193,60 @@ describe("deployment baseline LLM API helpers", () => {
       },
     );
   });
+
+  it("writes deployment-backed selections through opaque deployment identity", async () => {
+    const deploymentRef = {
+      deployment_id: "22222222-2222-4222-8222-222222222222",
+      expected_revision: 3,
+    };
+    mocked.apiCall
+      .mockResolvedValueOnce({
+        provider: "openai",
+        model: "gpt-oss-20b",
+        deployment_ref: deploymentRef,
+        selection_status: { status: "selectable", selectable: true, runnable: true },
+      })
+      .mockResolvedValueOnce({
+        provider: "openai",
+        model: "gpt-oss-20b",
+        deployment_ref: deploymentRef,
+        reasoning_effort: null,
+        selection_status: { status: "selectable", selectable: true, runnable: true },
+      });
+    const selection = {
+      provider: "nvidia_nim_openai_compatible_chat",
+      model: "openai/gpt-oss-20b",
+      deploymentRef,
+    };
+
+    await expect(saveLLMSelection(selection)).resolves.toMatchObject({
+      provider: "openai",
+      model: "gpt-oss-20b",
+      deploymentRef,
+    });
+    await expect(
+      saveReportingLLMSelection({ ...selection, reasoning_effort: null }),
+    ).resolves.toMatchObject({
+      provider: "openai",
+      model: "gpt-oss-20b",
+      deploymentRef,
+    });
+
+    expect(mocked.apiCall).toHaveBeenNthCalledWith(1, "/api/llm/selection", {
+      method: "PUT",
+      body: JSON.stringify({ deployment_ref: deploymentRef }),
+    });
+    expect(mocked.apiCall).toHaveBeenNthCalledWith(
+      2,
+      "/api/llm/reporting-selection",
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          deployment_ref: deploymentRef,
+          reasoning_effort: null,
+        }),
+      },
+    );
+  });
+
 });

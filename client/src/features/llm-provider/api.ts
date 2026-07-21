@@ -40,16 +40,12 @@ export async function fetchLLMSelection(): Promise<LLMSelection> {
 
 export async function saveLLMSelection(
   selection: SelectedLLMModel,
-): Promise<SelectedLLMModel> {
-  const { provider, model } = selection;
-  return apiCall<SelectedLLMModel>("/api/llm/selection", {
-    method: "PUT",
-    body: JSON.stringify({ provider, model }),
-  });
+): Promise<LLMSelection> {
+  return writeLLMSelection(selectionIdentityPayload(selection));
 }
 
-export async function saveLLMDeploymentSelection(
-  selection: LLMDeploymentSelection,
+async function writeLLMSelection(
+  selection: LLMDeploymentSelection | Pick<SelectedLLMModel, "provider" | "model">,
 ): Promise<LLMSelection> {
   const response = await apiCall<LLMSelectionApiResponse>("/api/llm/selection", {
     method: "PUT",
@@ -68,14 +64,30 @@ export async function fetchReportingLLMSelection(): Promise<ReportingLLMSelectio
 export async function saveReportingLLMSelection(
   selection: ReportingLLMSelectionUpsert,
 ): Promise<ReportingLLMSelection> {
+  const identity = selectionIdentityPayload(selection);
+  const payload = {
+    ...identity,
+    ...(selection.reasoning_effort !== undefined
+      ? { reasoning_effort: selection.reasoning_effort }
+      : {}),
+  };
   const response = await apiCall<ReportingLLMSelectionApiResponse>(
     "/api/llm/reporting-selection",
     {
       method: "PUT",
-      body: JSON.stringify(selection),
+      body: JSON.stringify(payload),
     },
   );
   return mapReportingLLMSelectionResponse(response);
+}
+
+function selectionIdentityPayload(
+  selection: SelectedLLMModel,
+): LLMDeploymentSelection | Pick<SelectedLLMModel, "provider" | "model"> {
+  if (selection.deploymentRef) {
+    return { deployment_ref: selection.deploymentRef };
+  }
+  return { provider: selection.provider, model: selection.model };
 }
 
 export async function fetchLLMProviderCredential(
@@ -185,8 +197,10 @@ export function mapLLMSelectionResponse(response: LLMSelectionApiResponse): LLMS
   const selection: LLMSelection = {
     provider: response.provider,
     model: response.model,
-    selectionStatus: response.selection_status,
   };
+  if (response.selection_status) {
+    selection.selectionStatus = response.selection_status;
+  }
   if (response.deployment_ref) {
     selection.deploymentRef = response.deployment_ref;
   }
@@ -196,12 +210,16 @@ export function mapLLMSelectionResponse(response: LLMSelectionApiResponse): LLMS
 export function mapReportingLLMSelectionResponse(
   response: ReportingLLMSelectionApiResponse,
 ): ReportingLLMSelection {
-  return {
+  const selection: ReportingLLMSelection = {
     provider: response.provider,
     model: response.model,
     reasoningEffort: response.reasoning_effort,
     selectionStatus: response.selection_status,
   };
+  if (response.deployment_ref) {
+    selection.deploymentRef = response.deployment_ref;
+  }
+  return selection;
 }
 
 function mapProvingConnectionStatus(

@@ -112,6 +112,7 @@ export function ProviderSettingsSection({
       ? {
           provider: reportingSelection.provider,
           model: reportingSelection.model,
+          deploymentRef: reportingSelection.deploymentRef ?? null,
         }
       : null;
   const selectedReportingEntry = findSelectedCatalogEntry(catalog, selectedReportingModel);
@@ -130,8 +131,7 @@ export function ProviderSettingsSection({
       options?.reasoningEffort ?? reportingReasoningEffort,
     );
     saveReportingSelection.mutate({
-      provider: selection.provider,
-      model: selection.model,
+      ...selection,
       reasoning_effort: reasoningEffort ?? null,
     });
   };

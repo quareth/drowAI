@@ -114,6 +114,36 @@ describe("LLM provider catalog helpers", () => {
     expect(entry?.model.label).toBe("Claude Sonnet 4.6");
   });
 
+  it("treats deployment identity as authoritative over compatibility fields", () => {
+    const deploymentRef = {
+      deployment_id: "11111111-1111-4111-8111-111111111111",
+      expected_revision: 2,
+    };
+    const deploymentCatalog: LLMModelCatalogResponse = {
+      providers: [{
+        ...catalog.providers[0],
+        models: [{ ...catalog.providers[0].models[0], deploymentRef }],
+      }],
+    };
+
+    const entry = findSelectedCatalogEntry(deploymentCatalog, {
+      provider: "nvidia_nim_openai_compatible_chat",
+      model: "openai/gpt-oss-20b",
+      deploymentRef,
+    });
+
+    expect(entry?.provider.id).toBe("openai");
+    expect(entry?.model.id).toBe("gpt-5.2");
+    expect(findSelectedCatalogEntry(deploymentCatalog, {
+      provider: "openai",
+      model: "gpt-5.2",
+      deploymentRef: {
+        deployment_id: "22222222-2222-4222-8222-222222222222",
+        expected_revision: 1,
+      },
+    })).toBeNull();
+  });
+
   it("derives labels and backend-owned defaults from catalog metadata", () => {
     expect(getSelectedModelDisplayLabel(catalog, { provider: "openai", model: "gpt-5.2" })).toBe("GPT-5.2");
     expect(getSelectedModelDisplayLabel(

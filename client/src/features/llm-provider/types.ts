@@ -168,6 +168,7 @@ export interface ReportingLLMSelectionApiResponse {
   model: ModelId | null;
   reasoning_effort?: LLMReasoningEffort | null;
   selection_status: LLMSelectionStatus;
+  deployment_ref?: LLMDeploymentRef | null;
 }
 
 export interface ReportingLLMSelection {
@@ -175,6 +176,7 @@ export interface ReportingLLMSelection {
   model: ModelId | null;
   reasoningEffort?: LLMReasoningEffort | null;
   selectionStatus: LLMSelectionStatus;
+  deploymentRef?: LLMDeploymentRef | null;
 }
 
 export interface ReportingLLMSelectionUpsert extends SelectedLLMModel {

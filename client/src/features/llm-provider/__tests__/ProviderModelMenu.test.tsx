@@ -467,8 +467,9 @@ describe("ProviderModelMenu", () => {
       <ProviderModelMenu
         catalog={gptOssCatalog}
         selectedSelection={{
-          provider: "huggingface_openai_compatible_chat",
-          model: "openai/gpt-oss-20b:fireworks-ai",
+          provider: "openai",
+          model: "gpt-oss-20b",
+          deploymentRef: hfDeploymentRef,
         }}
         selectedReasoningEffort="medium"
         onModelChange={onModelChange}

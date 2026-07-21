@@ -56,6 +56,9 @@ Target version: `0.1.0`.
 
 ### Fixed
 
+- Reporting and chat model preferences now preserve deployment identity across
+  native, hosted open-model, and self-hosted routes instead of misreading a
+  serving connection as a canonical model provider.
 - Deployment-backed models with a single route now open reasoning choices
   directly instead of showing a redundant provider submenu.
 - Runtime-selected OpenAI-compatible models now keep graph reasoning and HITL

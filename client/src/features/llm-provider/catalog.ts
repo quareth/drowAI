@@ -44,12 +44,35 @@ export function findSelectedCatalogEntry(
   catalog: LLMModelCatalogResponse | null | undefined,
   selection: SelectedLLMModel | null | undefined,
 ): SelectedCatalogEntry | null {
-  if (!selection) {
+  if (!catalog || !selection) {
+    return null;
+  }
+  if (selection.deploymentRef) {
+    for (const provider of catalog.providers) {
+      const model = provider.models.find((candidate) =>
+        sameDeploymentRef(
+          getModelDeploymentRef(candidate),
+          selection.deploymentRef,
+        ),
+      );
+      if (model) {
+        return { provider, model };
+      }
+    }
     return null;
   }
   const provider = findProvider(catalog, selection.provider);
   const model = findModel(provider, selection.model);
   return provider && model ? { provider, model } : null;
+}
+
+export function getModelDeploymentRef(
+  model: LLMCatalogModel,
+): LLMDeploymentRef | null {
+  return model.deploymentRef
+    ?? model.connection?.deploymentRef
+    ?? model.proving?.deploymentRef
+    ?? null;
 }
 
 export function getSelectedModelDisplayLabel(

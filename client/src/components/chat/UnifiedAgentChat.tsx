@@ -23,7 +23,6 @@ import { apiRequest } from "@/lib/queryClient";
 import {
   fetchLLMModelCatalog,
   fetchLLMSelection,
-  saveLLMDeploymentSelection,
   saveLLMSelection,
 } from "@/features/llm-provider/api";
 import {
@@ -460,12 +459,7 @@ export function UnifiedAgentChat({
   );
 
   const updateSelection = useMutation({
-    mutationFn: (selection: SelectedLLMModel) => {
-      if (selection.deploymentRef) {
-        return saveLLMDeploymentSelection({ deployment_ref: selection.deploymentRef });
-      }
-      return saveLLMSelection(selection);
-    },
+    mutationFn: saveLLMSelection,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/llm/selection"] });
       toast({

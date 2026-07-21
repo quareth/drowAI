@@ -7,7 +7,11 @@
 import { useMemo } from "react";
 import { Check, ChevronDown } from "lucide-react";
 
-import { findSelectedCatalogEntry } from "@/features/llm-provider/catalog";
+import {
+  findSelectedCatalogEntry,
+  getModelDeploymentRef,
+  sameDeploymentRef,
+} from "@/features/llm-provider/catalog";
 import {
   getVisibleReasoningEffortOptions,
   modelSupportsReasoningEffort,
@@ -67,14 +71,10 @@ function isSameSelection(
   left: SelectedLLMModel | null | undefined,
   right: SelectedLLMModel,
 ): boolean {
-  const sameLegacy = left?.provider === right.provider && left?.model === right.model;
-  if (!sameLegacy) {
-    return false;
-  }
   if (left?.deploymentRef || right.deploymentRef) {
-    return left?.deploymentRef?.deployment_id === right.deploymentRef?.deployment_id;
+    return sameDeploymentRef(left?.deploymentRef, right.deploymentRef);
   }
-  return true;
+  return left?.provider === right.provider && left?.model === right.model;
 }
 
 function isModelSelectable(provider: LLMCatalogProvider): boolean {
@@ -112,11 +112,7 @@ function buildPublisherGroups(providers: LLMCatalogProvider[]): PublisherGroup[]
   for (const provider of providers) {
     const providerSelectable = isModelSelectable(provider);
     for (const model of provider.models) {
-      const deploymentRef =
-        model.deploymentRef ??
-        model.connection?.deploymentRef ??
-        model.proving?.deploymentRef ??
-        null;
+      const deploymentRef = getModelDeploymentRef(model);
       if (model.connection && !deploymentRef) {
         continue;
       }
