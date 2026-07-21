@@ -8,19 +8,8 @@ The format is based on
 
 ## [Unreleased]
 
-Target version: `0.1.0`.
-
 ### Added
 
-- FastAPI control plane for authentication, tenants, task lifecycle, chat,
-  reporting, knowledge and evidence, settings, and realtime WebSocket and SSE
-  channels.
-- React and TypeScript interface for setup, task operation, streaming chat,
-  artifacts, terminals, knowledge, reports, usage, profiles, and settings.
-- LangGraph-based agent orchestration with managed prompts, tool policy,
-  structured tool results, and task-scoped execution state.
-- Provider-neutral task execution through local Docker or managed runners,
-  including per-task Kali runtimes and isolated workspaces.
 - GPT-OSS 20B appears in the curated LLM catalog with reviewed routes for
   NVIDIA, Hugging Face, Ollama, and vLLM, plus deployment-aware runtime routing.
 - Deployment-aware LLM management now uses reviewed catalog and connection
@@ -29,8 +18,6 @@ Target version: `0.1.0`.
   attribution, and explicit deployment selection contracts.
 - GPT-OSS 20B deployment choices now appear under one canonical model entry
   while preserving explicit provider-specific deployment selection.
-- Local development and deployment workflows, architecture documentation,
-  contribution guidance, and private vulnerability reporting.
 
 ### Changed
 
@@ -45,21 +32,14 @@ Target version: `0.1.0`.
   hidden agent roles to another provider's model.
 - Native and hosted model routes accept provider-scoped operator base URLs for
   gateways or local development without changing other connection endpoints.
-- Dependency security updates refresh the frontend and backend toolchains,
-  replace python-jose with PyJWT, and require Node.js 20.19 or newer.
 - The chat model selector now groups GPT-OSS 20B under Open models and shows
   each ready serving route as an explicit Run with choice.
 - Provider settings place the reporting model preference first, followed by
   direct credentials and intentionally supported GPT-OSS 20B routes;
   deployment, capability, lifecycle, and proving internals are no longer shown.
-- The canonical local launcher is now `scripts/local_dev.py`; startup can
-  interactively provision its PostgreSQL login role, database, and pgvector
-  extension before running migrations.
 
 ### Fixed
 
-- Managed LLM endpoints using the same connection preset now retain isolated
-  credentials, preventing one endpoint from receiving another endpoint's key.
 - Reporting and chat model preferences now preserve deployment identity across
   native, hosted open-model, and self-hosted routes instead of misreading a
   serving connection as a canonical model provider.
@@ -89,3 +69,32 @@ Target version: `0.1.0`.
   model route cannot report token usage during streaming.
 - Chat model selection now prevents unbound provider models from being chosen
   until the required API credential is configured.
+
+### Security
+
+- Managed LLM endpoints using the same connection preset now retain isolated
+  credentials, preventing one endpoint from receiving another endpoint's key.
+
+## [0.1.0] - 2026-07-16
+
+### Added
+
+- FastAPI control plane for authentication, tenants, task lifecycle, chat,
+  reporting, knowledge and evidence, settings, and realtime WebSocket and SSE
+  channels.
+- React and TypeScript interface for setup, task operation, streaming chat,
+  artifacts, terminals, knowledge, reports, usage, profiles, and settings.
+- LangGraph-based agent orchestration with managed prompts, tool policy,
+  structured tool results, and task-scoped execution state.
+- Provider-neutral task execution through local Docker or managed runners,
+  including per-task Kali runtimes and isolated workspaces.
+- Local development and deployment workflows, architecture documentation,
+  contribution guidance, and private vulnerability reporting.
+
+### Changed
+
+- Dependency security updates refresh the frontend and backend toolchains,
+  replace python-jose with PyJWT, and require Node.js 20.19 or newer.
+- The canonical local launcher is now `scripts/local_dev.py`; startup can
+  interactively provision its PostgreSQL login role, database, and pgvector
+  extension before running migrations.
