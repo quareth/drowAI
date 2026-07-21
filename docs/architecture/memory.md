@@ -296,8 +296,8 @@ bundle plus explicitly rendered working/phase memory.
 
 1. Final graph branches route through `finalize_turn`.
 2. `finalize_turn` calls `enqueue_memory_extraction` with user message, final
-   assistant response, task/conversation identifiers, and a non-secret runtime
-   selection snapshot.
+   assistant response, task/conversation identifiers, `turn_id=None`, and a
+   non-secret runtime selection snapshot.
 3. The trigger runs in a background executor when semantic memory runtime is
    enabled.
 4. `MemoryRuntimeService.run_extraction` resolves:
@@ -314,7 +314,9 @@ bundle plus explicitly rendered working/phase memory.
    content, runs semantic dedupe on Postgres, then persists the final vector.
 
 Extraction is best-effort: enqueue and worker errors are logged/metriced but do
-not fail the graph turn.
+not fail the graph turn. Current finalizer-triggered extraction does not
+populate `semantic_memories.source_turn_id`; the column and service contracts
+accept a turn id, but the wired finalizer path passes `None`.
 
 ## Working Memory Contract
 

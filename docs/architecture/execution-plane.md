@@ -68,10 +68,27 @@ Not owned by the execution plane:
 
 ## Wired Entrypoints
 
+- `backend/routers/tasks/router_bundle.py`
+  - Composes task CRUD, runtime, interrupt, inbox, file, scope, log, metric,
+    container, and VPN routes for the `/api/tasks` surface.
+- `backend/routers/tasks/crud.py`
+  - Task creation route; delegates bootstrap orchestration to
+    `TaskLifecycleService`.
+- `backend/routers/tasks/interrupts.py` and
+  `backend/routers/tasks/interrupt_inbox.py`
+  - Human-in-the-loop interrupt inspection, resume, retry, and inbox routes.
 - `backend/services/langgraph_chat/facade.py`
   - Chat turn orchestration and branch selection.
 - `backend/services/langgraph_chat/execution/graph_executor.py`
   - LangGraph execution and stream adaptation.
+- `backend/services/task/lifecycle_service.py`
+  - Task creation, admission, workspace materialization, queueing, provider
+    provisioning, and startup finalization.
+- `backend/services/task/admission_service.py`
+  - User/tenant quota gates and runner-capacity admission for task creation.
+- `backend/services/task/interrupt_service.py` and
+  `backend/services/task/graph_retry_service.py`
+  - Authoritative interrupt ticket resume and checkpoint retry orchestration.
 - `backend/services/runtime_provider/registry.py`
   - Placement-to-provider resolution.
 - `backend/services/runtime_provider/product_policy.py`
@@ -113,6 +130,54 @@ Provider requests include:
 
 Unsupported placement modes fail closed in the registry.
 
+## Task Creation And Admission Flow
+
+Task creation enters through the task CRUD router and immediately crosses into
+`TaskLifecycleService`; the router owns HTTP authorization and response
+mapping, not runtime bootstrap decisions.
+
+```mermaid
+flowchart TD
+    Route[POST /api/tasks]
+    Lifecycle[TaskLifecycleService.create_task]
+    Policy[Product runtime placement policy]
+    Admission[AdmissionControlService]
+    TaskRow[Task row + runner/workspace identity]
+    Workspace[materialize_runtime_workspace]
+    Queue[TaskStateService: created -> queued -> starting]
+    Provider[RuntimeOperationService -> runtime provider]
+
+    Route --> Lifecycle
+    Lifecycle --> Policy
+    Lifecycle --> Admission
+    Admission --> TaskRow
+    Lifecycle --> Workspace
+    Lifecycle --> Queue
+    Queue --> Provider
+```
+
+The lifecycle service resolves engagement and product runtime placement before
+admission. `AdmissionControlService` owns Gate A user/tenant quota checks and
+Gate B physical capacity: runner placement selects an eligible runner and
+execution site, while explicit local placement may apply a deployment-wide
+active-task ceiling. Admission wraps the first counted task write in the same
+transaction boundary as the capacity checks.
+
+After admission succeeds, the task row carries durable tenant/user identity,
+`runtime_placement_mode`, optional `runner_id` and `execution_site_id`, and a
+stable `workspace_id` defaulting to `task-<id>`. Workspace materialization is
+provider-owned. For runner placement it is a management-plane no-op carrying
+workspace identity; for explicit local placement it prepares the host workspace
+layout. The service then queues the task, starts background initialization,
+moves the task to `starting`, and dispatches `provision_task_runtime` through
+`RuntimeOperationService` so provider requests include the canonical task,
+tenant, actor, workspace, runner, and execution-site envelope.
+
+Runner placement provisioning is asynchronous. An accepted runner operation
+leaves the task in `starting` until the authenticated runner publishes a
+lifecycle runtime event. Explicit local placement can complete startup
+synchronously and move the task to `running` after provider success.
+
 ## Explicit Local Docker Runtime
 
 Local runtime work is delegated through `LocalDockerRuntimeProvider` to the
@@ -135,6 +200,8 @@ flowchart LR
     Docker --> Container
     HostWorkspace --> Container
     Container --> Daemon
+    Provider -->|cancellations.jsonl| HostWorkspace
+    Daemon -->|ack consumed cancellations| HostWorkspace
 ```
 
 Key boundaries:
@@ -142,7 +209,15 @@ Key boundaries:
 - Host task workspace is mounted as `/workspace`.
 - Host control material is mounted read-only as `/run/drowai/control`; VPN and
   runtime input are not workspace-visible artifacts.
-- Command transport uses `commands.jsonl` and `results.jsonl`.
+- Command transport uses lock-protected `commands.jsonl`, `results.jsonl`, and
+  `cancellations.jsonl`.
+- `LocalDockerRuntimeProvider.cancel_tool_command` owns local cancellation
+  dispatch by appending cancellation rows for file-comm command ids; unsupported
+  command transports are reported as not kill-supported.
+- The executor daemon polls cancellation rows while each prepared subprocess is
+  active, terminates the subprocess process group with SIGTERM then SIGKILL if
+  needed, records `user_cancelled` result metadata, and acknowledges consumed
+  cancellations by removing their rows.
 - The executor daemon runs prepared command envelopes under `/workspace`.
 - Docker implementation details live under `backend/services/docker/*`.
 - Runtime images must report workspace layout `2.0`; mismatches stop startup.
@@ -160,13 +235,15 @@ sequenceDiagram
     participant Messages as RunnerControlMessage
     participant Runner as Connected runner
     participant Events as RuntimeEventService
+    participant State as TaskStateService
 
     Provider->>Jobs: create/assign runtime job
     Provider->>Messages: persist outbound command
+    Provider-->>Provider: return accepted/pending operation
     Runner->>Messages: receive/ack command
-    Runner->>Events: publish result event
+    Runner->>Events: publish lifecycle/result event
     Events->>Jobs: transition runtime job
-    Provider-->>Provider: wait/project result
+    Events->>State: apply task state for lifecycle event
 ```
 
 Key boundaries:
@@ -174,6 +251,13 @@ Key boundaries:
 - Runner placement requires managed runner control to be enabled.
 - Durable rows store runtime job and message state.
 - Runner connections and leases are tenant-bound.
+- Provider lifecycle calls such as start, pause, resume, stop, and retire create
+  runtime jobs and outbound messages, then normally return an accepted pending
+  result.
+- `RuntimeEventService` is the backend authority that maps `runtime.started`,
+  `runtime.paused`, `runtime.resumed`, `runtime.stopped`, `runtime.retired`,
+  and lifecycle `runtime.failed` events onto task state through
+  `TaskStateService`.
 - Raw reusable-secret command durability is intentionally limited; durable
   control rows are masked.
 - Standalone Compose starts Management and Runner together from
@@ -183,6 +267,32 @@ Key boundaries:
 - Runner Site removal only removes idle execution capacity. Live execution blocks
   removal, and the final connected authorized Runner cannot be removed through
   the normal operation. Runner removal never owns or changes parent task state.
+
+## Interrupt, Resume, And Retry Flow
+
+Human-in-the-loop state is task-bound and ticket-authoritative. The interrupt
+inbox route lists pending `InterruptTicket` rows scoped to the active tenant and
+current task owner. The per-task interrupt lookup route authorizes the task,
+loads the latest pending ticket, and hydrates checkpoint state only when the
+stored ticket identity matches the live interrupt snapshot.
+
+Resume posts claim the canonical pending ticket through
+`InterruptTicketService.claim_for_resume`; a missing or no-longer-pending ticket
+returns a typed HTTP error instead of reusing stale client state. After claim,
+`TaskInterruptService` reconciles checkpoint identity from the live interrupt
+snapshot, begins the durable resume workflow through `TurnWorkflowService`, and
+enqueues `run_resume_generation` with the resolved graph thread, tenant,
+workspace, runtime placement, runner identity, checkpoint, resume key, and
+interrupt id. If enqueueing fails, the service performs the only allowed
+requeue path by returning the workflow and ticket to a pending human-waiting
+state.
+
+Checkpoint retry is separate from interrupt resume. The retry route delegates to
+`TaskGraphRetryService`, which validates task ownership, asks
+`TurnWorkflowService` to atomically claim the failed turn for checkpoint retry,
+returns idempotent identity for an already-running retry, and enqueues
+`run_checkpoint_retry_generation` with sanitized prior-failure metadata and the
+canonical retry identity.
 
 ## LangGraph Runtime
 

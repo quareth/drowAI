@@ -31,6 +31,10 @@ Owned by artifact provenance:
 - Upload-complete readiness transitions.
 - Task-scoped provenance read/query APIs.
 - Sanitized artifact references for graph memory and prompts.
+- Artifact payload retention execution for archived object-backed
+  `ExecutionArtifact` payloads.
+- Artifact provenance retention evaluation, which reports old terminal-task
+  provenance rows as protected in the current MVP contract.
 
 Not owned by artifact provenance:
 
@@ -102,6 +106,24 @@ Readers:
   - Object-backed bounded text reads.
 - `backend/services/data_plane/artifact_file_browser_service.py`
   - Virtual file browser over execution artifact rows.
+
+Retention:
+
+- `backend/routers/retention.py`
+  - Tenant-admin dry-run/apply API that authorizes the active tenant and
+    delegates retention runs to `RetentionOrchestrator`.
+- `backend/services/retention/orchestrator.py`
+  - Registers `artifact.retention` and `artifact_provenance.retention` in the
+    central executor registry.
+- `backend/services/retention/scheduling.py`
+  - Orders artifact payload and artifact provenance retention adjacent to each
+    other in the bounded per-tenant retention plan.
+- `backend/services/artifact/retention_service.py`
+  - Owns artifact payload and provenance retention executors for the artifact
+    provenance component.
+- `backend/services/data_plane/retention_service.py`
+  - Applies the object-key deletion mechanics that the artifact payload
+    executor delegates to after artifact policy decisions are built.
 
 ## Data Model
 
@@ -297,6 +319,31 @@ Content read order is:
 
 Reads return availability state instead of leaking internal object keys or host
 paths.
+
+## Retention Flow
+
+Tenant-admin retention runs enter through `POST /api/retention/dry-run` or
+`POST /api/retention/apply`. The router enforces tenant settings authorization,
+builds a tenant-scoped `RetentionRunRequest`, and calls
+`RetentionOrchestrator`. The orchestrator resolves the tenant policy, schedules
+bounded executors, and dispatches the artifact-owned retention executors in the
+configured order.
+
+`ArtifactRetentionExecutor` owns artifact payload retention for object-backed
+`ExecutionArtifact` rows. It builds a tenant/task-scoped plan from durable
+knowledge evidence archives, active finding references, and replay-protected
+knowledge ingestion runs. It then delegates object-key cleanup mechanics to
+`DataPlaneRetentionService.run_artifact_object_retention`. Dry-run mode reports
+candidate/protected/skipped decisions; apply mode deletes eligible object-store
+payloads, clears deleted `object_key` values, and writes retention metadata back
+to the artifact row.
+
+`ArtifactProvenanceRetentionExecutor` owns provenance retention evaluation for
+`ToolExecution` and `ExecutionArtifact` rows on terminal tasks older than the
+tenant metadata-retention cutoff. In the current MVP contract it does not delete
+those rows. It returns protected retention decisions with
+`execution_provenance_preserved_mvp` so the retention run reports explicit
+preservation instead of silently ignoring provenance metadata.
 
 ## Artifact References In Graph State
 

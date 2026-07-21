@@ -459,6 +459,8 @@ source changes.
 |---|---|
 | `dist/`, `build/` | Generated build output |
 | `agent/workspaces/`, root `workspace/` | Local task runtime workspaces |
+| `agent/object_store/` | Local data-plane object-store content |
+| `backend/log/` | Generated backend process logs |
 | `artifacts/`, `wordlists/`, `output/` | Local tool/runtime output |
 | `.drowai-local/` | Local generated configuration and secrets |
 | `.drowai-runner/`, `.drowai-runner-cloud/` | Local runner jobs, credentials, logs, and task state |

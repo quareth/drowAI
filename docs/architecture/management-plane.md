@@ -31,6 +31,13 @@ Owned by the management plane:
 - Tenant membership and role-derived permissions.
 - Task creation, lifecycle state transitions, admission control, product
   runtime policy resolution, and runtime provider dispatch.
+- Task-scoped artifact provenance read APIs for execution, timeline, artifact
+  metadata/catalog, bounded artifact reads, and raw-output lookup; Management
+  authorizes the task boundary and delegates provenance lookup to artifact
+  services.
+- Engagement lifecycle writes and engagement-scoped knowledge reads; Management
+  enforces tenant action policy, user-owned engagement scope, response shaping,
+  and storage-path redaction before returning knowledge projections.
 - Runner-control registry, credentials, runtime jobs, channel presence, and
   durable control messages.
 - Setup, settings, LLM provider selection, reporting jobs, usage reads, CVE
@@ -64,6 +71,22 @@ Not owned by the management plane:
 - `backend/routers/chat/submit.py`
   - Chat submission, provider/model validation, chat row reservation, and
     background LangGraph dispatch.
+- `backend/routers/artifact_provenance.py`
+  - Read-only `/api/artifact-provenance/tasks/{task_id}/...` endpoints for
+    executions, timelines, conversation executions, artifact metadata/catalog,
+    bounded artifact reads, and raw-output batches. Every path enforces
+    `ACTION_ARTIFACT_READ` and `get_tenant_task_or_404` before delegating to
+    `ArtifactProvenanceQueryService` or `ArtifactMemoryService`.
+- `backend/routers/engagements_crud.py`
+  - Authenticated engagement create, archive, and restore write endpoints.
+    Writes require `ACTION_KNOWLEDGE_WRITE`; archive/restore delegate lifecycle
+    rules to `EngagementManagementService`.
+- `backend/routers/engagement_knowledge.py`
+  - Engagement list/detail and engagement-scoped knowledge read endpoints for
+    summary, findings, assets, services, web surface, evidence reads, and
+    relationship graph. Reads require `ACTION_KNOWLEDGE_READ`, use
+    owned-engagement checks, delegate to knowledge query/evidence services, and
+    sanitize storage-path fields from responses.
 - `backend/routers/runner_control.py`
   - Execution sites, install tokens, runner registration, runtime jobs, and
     runner channel, including post-commit scheduling of VPN materialization
@@ -86,6 +109,12 @@ Not owned by the management plane:
 - **Tenant permissions:** `backend/services/tenant/authorization.py`
 - **Task lifecycle:** `backend/services/task/lifecycle_service.py`
 - **Task runtime:** `backend/services/task/runtime_service.py`
+- **Artifact provenance reads:** `backend/services/artifact/provenance_query_service.py`
+  and `backend/services/artifact/memory_service.py`
+- **Engagement access and lifecycle:** `backend/services/engagement/access_service.py`
+  and `backend/services/engagement/management_service.py`
+- **Engagement knowledge reads:** `backend/services/knowledge/query_service.py`
+  and `backend/services/knowledge/evidence_read_service.py`
 - **Product runtime policy:** `backend/services/runtime_provider/product_policy.py`
 - **Runtime provider registry:** `backend/services/runtime_provider/registry.py`
 - **Runner control:** `backend/services/runner_control/*`
@@ -157,6 +186,15 @@ Authenticated user request flow:
 - Task, chat, file, and product WebSocket actions whose handlers resolve a
   specific task through ownership-aware helpers require a user-owned task
   inside the active tenant.
+- Artifact provenance read endpoints are task-scoped management APIs: actors
+  need `artifact.read`, and the router resolves the task through
+  `get_tenant_task_or_404` before any provenance service query.
+- Engagement knowledge reads need `knowledge.read` and an owned engagement in
+  the active tenant. Engagement create/archive/restore writes need
+  `knowledge.write`; archive/restore also require owned engagement scope.
+- Engagement knowledge responses redact internal path/object-reference fields
+  such as workspace, container, source, fallback, host, local, and object-key
+  values before leaving Management.
 - `GET /api/tasks/containers/list` is a tenant-wide task runtime-status
   inventory exception: actors with `task.read` can inspect runtime status for
   every task in the active tenant without a `task.user_id` ownership match.

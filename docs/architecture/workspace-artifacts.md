@@ -22,6 +22,9 @@ Owned by workspace/artifact architecture:
 - Task workspace directory layout.
 - Workspace creation, cleanup, and archive helpers.
 - Workspace-safe local file browsing.
+- Workspace-scoped filesystem tool implementations and compatibility behavior.
+- Filesystem tool catalog exposure and route-policy classification.
+- Filesystem command preparation for local and runner container transports.
 - Runtime-provider read/write/query operations for runner workspaces.
 - Object-backed artifact file browsing for runner-uploaded artifacts.
 - Bounded file preview/download/ZIP behavior.
@@ -65,6 +68,35 @@ Not owned by workspace/artifact architecture:
   - Runner workspace read/write/query/promote provider operations.
 - `backend/services/runtime_provider/local_docker_provider.py`
   - Local workspace file read/write provider operations.
+- `agent/tools/tool_registry.py`
+  - Dynamic discovery of executable `BaseTool` subclasses, including
+    `agent/tools/filesystem/*`.
+- `agent/tools/catalog_visibility.py`
+  - LLM-facing catalog policy for visible `filesystem.*` tool IDs.
+- `agent/tool_runtime/backend_tool_policy.py`
+  - Execution-lane policy; filesystem tools default to container scope.
+- `agent/graph/subgraphs/tool_execution_runtime/lane_dispatch.py`
+  - Per-call graph dispatch authority selection for local versus runner
+    container transports.
+- `agent/graph/subgraphs/tool_execution_runtime/runner_command_orchestration.py`
+  - Runner command preparation and runtime-provider `send_tool_command`
+    dispatch for graph tool calls.
+- `agent/tool_runtime/transport_router.py`
+  - Local executor route sequencing for PTY, local file-comm, and direct
+    fallback lanes.
+- `agent/tool_runtime/command_preparation.py`
+  - Canonical command preparation and runtime context binding for container
+    transports.
+- `agent/tool_runtime/pty_transport.py`
+  - PTY command synthesis and execution orchestration for `filesystem.*`.
+- `backend/services/runtime_provider/cloud_runner/tool_commands/dispatcher.py`
+  - Cloud-runner provider validation, runtime-job dispatch, and result waiting
+    for `send_tool_command`.
+- `agent/tools/filesystem/_helpers.py`
+  - Shared host-workspace and container-command path helpers.
+- `agent/tools/filesystem/*.py`
+  - Direct Python compatibility implementations for filesystem read, write,
+    search, stat, move, copy, delete, directory creation, and line editing.
 
 ## Workspace Layout
 
@@ -159,6 +191,50 @@ workspace command queue. Runner tool commands serialize equivalent declarations
 into runner-control payloads so the runner can materialize them in its own
 workspace before command execution.
 
+## Filesystem Tool Execution Path
+
+The active filesystem tool surface lives under `agent/tools/filesystem/` and is
+exposed through canonical `filesystem.*` IDs. `tool_registry` discovers
+executable `BaseTool` subclasses without importing helper modules into the
+available-tool list. `catalog_visibility` then filters the registry to the
+filesystem tools that can be shown to LLM planning and selection prompts.
+
+At graph dispatch time, `backend_tool_policy` classifies filesystem tools as
+container-scoped runtime tools. `lane_dispatch` resolves the authority from the
+tool lane and runtime placement: local placement uses the local executor path,
+while runner placement selects `container_runner_transport`. The graph adapter
+then calls runner command orchestration for runner placement, or the local
+executor path for non-runner authorities.
+
+`transport_router` owns local executor route sequencing only. For local
+container-scoped filesystem tools it may try PTY first, then the local
+file-comm queue, and it fails closed instead of falling back to direct backend
+execution when no allowed container transport is available. Direct execution is
+reserved for backend-scoped and artifact-scoped lanes.
+
+Runner filesystem commands do not go through `transport_router` for provider
+dispatch. `runner_command_orchestration` prepares the container command and
+workspace declarations, builds a `RuntimeOperationRequest` with operation
+`send_tool_command`, and calls the selected runtime provider. The cloud-runner
+provider's tool-command dispatcher validates runner placement and command
+payloads, creates or reuses runner-control runtime jobs, enqueues
+`tool.command` messages, waits for acknowledgement/result when requested, and
+returns the provider result to the graph adapter.
+
+`command_preparation` builds one canonical command payload for container
+transports, binds task/tenant/workspace runtime context, and carries any
+pre-execution workspace declarations to the local or runner runtime before the
+command runs. Filesystem commands use the explicit filesystem command builder
+rather than each direct Python implementation's host-path resolver.
+
+The Python `agent/tools/filesystem/*.py` implementations remain the direct
+compatibility path and the source of argument/result contracts. They resolve
+paths inside the host task workspace and reject absolute or escaping paths.
+Container command execution uses `resolve_filesystem_command_path` instead:
+relative paths resolve under `/workspace`, while absolute POSIX paths such as
+`/`, `/opt`, `/tmp`, and `/workspace` are preserved as paths inside the active
+runtime container.
+
 ## Artifact Storage Modes
 
 Workspace artifacts can exist in several forms:
@@ -180,8 +256,15 @@ Callers should choose the correct surface:
 
 ## Security / Isolation Notes
 
-- Local path validation rejects absolute paths and traversal outside the task
-  workspace.
+- Host/direct workspace validation rejects absolute paths and traversal outside
+  the task workspace.
+- Container-executed filesystem commands preserve absolute POSIX paths as
+  in-container paths and reject null bytes. Relative paths still resolve from
+  `/workspace`.
+- Container paths do not grant arbitrary host filesystem access: local
+  containers see only their mounted task workspace plus the container
+  filesystem, and runner containers access runner-owned workspace/control roots
+  through runtime placement.
 - Backend and runner host operations use `WorkspaceFilesystem`, which traverses
   from directory descriptors with no-follow opens and accepts only regular
   files/directories. Symlinks and special files fail closed.

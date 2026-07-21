@@ -253,6 +253,7 @@ flowchart LR
     ReadModels["Assets, services, findings, relationships, web paths"]
     API["/api/knowledge and /api/engagements"]
     Client["Knowledge workspace tabs"]
+    LocalTrigger["Local async ingestion trigger"]
     Notify["knowledge_delta notification"]
 
     Runtime --> Artifacts
@@ -264,7 +265,8 @@ flowchart LR
     Projection --> ReadModels
     ReadModels --> API
     API --> Client
-    Projection --> Notify
+    Ingestion --> LocalTrigger
+    LocalTrigger --> Notify
     Notify --> Client
 ```
 
@@ -283,8 +285,14 @@ flowchart LR
    rows through focused projectors.
 6. The query service reads the projected models and shapes tab payloads for the
    frontend.
-7. Projection notifications with category `knowledge_delta` invalidate global
-   knowledge caches and the relevant engagement cache in the client.
+7. Local queued ingestion calls
+   `schedule_projection_notification_from_result` after the ingestion commit;
+   when the result inserted assets or findings, it publishes a task-scoped
+   notification with category `knowledge_delta`. Runner promotion ingestion and
+   upload-complete reconciliation also ingest and project records, but they do
+   not currently publish `knowledge_delta`.
+8. Received `knowledge_delta` notifications invalidate global knowledge caches
+   and the relevant engagement cache in the client.
 
 ## Frontend Runtime Flow
 
