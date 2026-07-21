@@ -8,7 +8,7 @@ The format is based on
 
 ## [Unreleased]
 
-Target version: `0.1.0`.
+## [0.1.0] - 2026-07-16
 
 ### Added
 
