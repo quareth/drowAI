@@ -157,6 +157,118 @@ describe("ProviderModelMenu", () => {
     });
   });
 
+  it("opens reasoning directly for a single deployment-backed model", async () => {
+    const onModelChange = vi.fn();
+    const deploymentRef = {
+      deployment_id: "11111111-1111-4111-8111-111111111111",
+      expected_revision: 2,
+    };
+    const deploymentCatalog: LLMModelCatalogResponse = {
+      providers: catalog.providers.map((provider) =>
+        provider.id === "openai"
+          ? {
+              ...provider,
+              models: provider.models.map((model) => ({
+                ...model,
+                deploymentRef,
+                runnable: true,
+              })),
+            }
+          : provider,
+      ),
+    };
+
+    render(
+      <ProviderModelMenu
+        catalog={deploymentCatalog}
+        selectedSelection={{ provider: "openai", model: "gpt-5-mini", deploymentRef }}
+        selectedReasoningEffort="medium"
+        onModelChange={onModelChange}
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Select model" }));
+
+    const openAIPublisher = await screen.findByText("OpenAI");
+    const openAIPublisherItem = openAIPublisher.closest("[role='menuitem']") as HTMLElement;
+    fireEvent.pointerEnter(openAIPublisherItem, { pointerType: "mouse" });
+    fireEvent.pointerMove(openAIPublisherItem, { pointerType: "mouse" });
+    fireEvent.mouseMove(openAIPublisherItem);
+
+    let openAIModelItem: HTMLElement | undefined;
+    await waitFor(() => {
+      openAIModelItem = screen
+        .getAllByText("GPT-5 mini")
+        .map((element) => element.closest("[role='menuitem']"))
+        .find((element): element is HTMLElement => element instanceof HTMLElement);
+      expect(openAIModelItem).toBeTruthy();
+    });
+    fireEvent.pointerEnter(openAIModelItem, { pointerType: "mouse" });
+    fireEvent.pointerMove(openAIModelItem, { pointerType: "mouse" });
+    fireEvent.mouseMove(openAIModelItem);
+
+    fireEvent.click(await screen.findByText("high"));
+
+    await waitFor(() => {
+      expect(onModelChange).toHaveBeenCalledWith(
+        { provider: "openai", model: "gpt-5-mini", deploymentRef },
+        { reasoningEffort: "high" },
+      );
+    });
+  });
+
+  it("selects a single deployment-backed model with no reasoning directly", async () => {
+    const onModelChange = vi.fn();
+    const deploymentRef = {
+      deployment_id: "22222222-2222-4222-8222-222222222222",
+      expected_revision: 3,
+    };
+    const deploymentCatalog: LLMModelCatalogResponse = {
+      providers: catalog.providers.map((provider) =>
+        provider.id === "anthropic"
+          ? {
+              ...provider,
+              defaultModel: "claude-haiku-4-5-20251001",
+              models: provider.models.map((model) => ({
+                ...model,
+                id: "claude-haiku-4-5-20251001",
+                label: "Claude Haiku 4.5",
+                deploymentRef,
+                runnable: true,
+              })),
+            }
+          : provider,
+      ),
+    };
+
+    render(
+      <ProviderModelMenu
+        catalog={deploymentCatalog}
+        selectedSelection={{ provider: "openai", model: "gpt-5-mini" }}
+        selectedReasoningEffort="medium"
+        onModelChange={onModelChange}
+      />,
+    );
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: "Select model" }));
+
+    const anthropicPublisher = await screen.findByText("Anthropic");
+    const anthropicPublisherItem = anthropicPublisher.closest("[role='menuitem']") as HTMLElement;
+    fireEvent.pointerEnter(anthropicPublisherItem, { pointerType: "mouse" });
+    fireEvent.pointerMove(anthropicPublisherItem, { pointerType: "mouse" });
+    fireEvent.mouseMove(anthropicPublisherItem);
+
+    fireEvent.click(await screen.findByText("Claude Haiku 4.5"));
+
+    await waitFor(() => {
+      expect(onModelChange).toHaveBeenCalledWith({
+        provider: "anthropic",
+        model: "claude-haiku-4-5-20251001",
+        deploymentRef,
+      });
+    });
+  });
+
   it("shows unavailable providers without allowing model selection", async () => {
     const onModelChange = vi.fn();
     const disabledCatalog: LLMModelCatalogResponse = {

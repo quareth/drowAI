@@ -313,10 +313,7 @@ function renderModelGroup(
   selectedReasoningEffort: VisibleLLMReasoningEffort,
   onModelChange: ProviderModelMenuProps["onModelChange"],
 ) {
-  const deploymentBacked = group.choices.some((choice) =>
-    Boolean(choice.selection.deploymentRef),
-  );
-  if (group.choices.length === 1 && !deploymentBacked) {
+  if (group.choices.length === 1) {
     return renderChoice(
       { ...group.choices[0], label: group.label },
       selectedSelection,

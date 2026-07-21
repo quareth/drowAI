@@ -56,6 +56,8 @@ Target version: `0.1.0`.
 
 ### Fixed
 
+- Deployment-backed models with a single route now open reasoning choices
+  directly instead of showing a redundant provider submenu.
 - Runtime-selected OpenAI-compatible models now keep graph reasoning and HITL
   resume events live while providers are working, stream response chunks
   incrementally, and reliably clear completed response indicators.
