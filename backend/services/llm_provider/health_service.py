@@ -152,7 +152,7 @@ class LLMProviderHealthService:
                 model_count=model_count,
             )
         except GuardedTransportError as exc:
-            raise _health_error("OpenAI", exc) from None
+            raise map_guarded_provider_error("OpenAI", exc) from None
         except (TypeError, ValueError, UnicodeDecodeError):
             raise ProviderConfigurationError(
                 "OpenAI API error: invalid provider response"
@@ -176,7 +176,7 @@ class LLMProviderHealthService:
                 model_count=model_count,
             )
         except GuardedTransportError as exc:
-            raise _health_error("Anthropic", exc) from None
+            raise map_guarded_provider_error("Anthropic", exc) from None
         except (TypeError, ValueError, UnicodeDecodeError):
             raise ProviderConfigurationError(
                 "Anthropic API error: invalid provider response"
@@ -192,11 +192,11 @@ def _model_count(body: bytes) -> int:
     return len(payload["data"])
 
 
-def _health_error(
+def map_guarded_provider_error(
     provider_label: str,
     exc: GuardedTransportError,
 ) -> ProviderConfigurationError:
-    """Map safe guarded status metadata to stable provider health errors."""
+    """Map safe guarded status metadata to stable provider-facing errors."""
 
     if exc.status_code == 401:
         return ProviderConfigurationError(f"Invalid {provider_label} API key")
@@ -211,4 +211,4 @@ def _health_error(
     return ProviderConfigurationError(f"{provider_label} API error: {exc}")
 
 
-__all__ = ["LLMProviderHealthService"]
+__all__ = ["LLMProviderHealthService", "map_guarded_provider_error"]

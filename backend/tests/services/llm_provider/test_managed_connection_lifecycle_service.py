@@ -534,6 +534,41 @@ def test_refresh_transport_failure_rolls_back_and_preserves_sanitized_error(
     assert _SECRET not in f"{caught.value!s}\n{caught.value!r}\n{caplog.text}"
 
 
+def test_invalid_key_transport_failure_reuses_provider_health_error(
+    monkeypatch: pytest.MonkeyPatch,
+    llm_identity_db: Session,
+    identity_users: tuple[User, User],
+) -> None:
+    """Managed connection checks expose the same clean invalid-key error as providers."""
+
+    owner, _ = identity_users
+    connection, _ = _seed_connection(
+        llm_identity_db,
+        user_id=owner.id,
+        preset_id=HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+    )
+    failure = GuardedTransportError(
+        "Guarded upstream response rejected",
+        audit_id="managed-invalid-key",
+        status_code=401,
+    )
+    transactions = _track_transactions(monkeypatch, llm_identity_db)
+    service, _ = _service(llm_identity_db, transport_failure=failure)
+
+    with pytest.raises(
+        ProviderConfigurationError,
+        match="^Invalid Hugging Face API key$",
+    ):
+        service.test_connection(
+            user_id=owner.id,
+            preset_id=HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+            connection_id=str(connection.id),
+            expected_connection_revision=int(connection.revision),
+        )
+
+    assert transactions == ["rollback"]
+
+
 def test_enable_connection_transitions_and_validates_deployment_before_mutation(
     monkeypatch: pytest.MonkeyPatch,
     llm_identity_db: Session,

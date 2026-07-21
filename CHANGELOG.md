@@ -69,6 +69,8 @@ Target version: `0.1.0`.
   switching to a user's newer default model.
 - Provider settings now use one consistent card, connection status, and API-key
   control layout across native, hosted open-model, and self-hosted routes.
+- Provider settings now show concise invalid-key and permission errors for
+  hosted open-model connections instead of raw API response payloads.
 - OpenAI-compatible models that return requested function calls as JSON message
   content are now safely normalized against the requested tool contracts,
   avoiding spurious structured-validation failures.

@@ -16,7 +16,8 @@ from .connection_service import LLMConnectionService
 from .connection_status_service import LLMConnectionStatusService
 from .credential_service import LLMCredentialService
 from .deployment_service import LLMDeploymentService
-from .guarded_transport import GuardedTransport
+from .guarded_transport import GuardedTransport, GuardedTransportError
+from .health_service import map_guarded_provider_error
 from .inventory_service import LLMInventoryService
 from .operation_registry import (
     GPT_OSS_20B_PROVING_PRESET_ID,
@@ -207,6 +208,11 @@ class LLMManagedConnectionLifecycleService:
             )
             self._db.commit()
             return outcome
+        except GuardedTransportError as exc:
+            self._db.rollback()
+            if exc.status_code in {401, 403, 429}:
+                raise map_guarded_provider_error(preset.display_name, exc) from None
+            raise
         except Exception:
             self._db.rollback()
             raise
@@ -264,6 +270,11 @@ class LLMManagedConnectionLifecycleService:
             )
             self._db.commit()
             return outcome
+        except GuardedTransportError as exc:
+            self._db.rollback()
+            if exc.status_code in {401, 403, 429}:
+                raise map_guarded_provider_error(preset.display_name, exc) from None
+            raise
         except Exception:
             self._db.rollback()
             raise
