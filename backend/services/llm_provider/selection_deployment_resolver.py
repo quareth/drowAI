@@ -20,7 +20,7 @@ from backend.models import LLMDeploymentRoute, LLMInferenceConnection, LLMModelD
 from .deployment_service import LLMDeploymentService
 from .effective_profile_service import EffectiveProfileService
 from .operation_registry import (
-    PUBLIC_GPT_OSS_20B_PRESET_IDS,
+    PUBLIC_REVIEWED_MODEL_PRESET_IDS,
     ConnectionOperationRegistry,
 )
 from .types import (
@@ -189,7 +189,7 @@ class LLMSelectionDeploymentResolver:
             )
         if (
             is_connection_preset
-            and connection.connection_preset_id not in PUBLIC_GPT_OSS_20B_PRESET_IDS
+            and connection.connection_preset_id not in PUBLIC_REVIEWED_MODEL_PRESET_IDS
         ):
             decision = EffectiveProfileService(self._db).classify_runnability(
                 deployment=target.deployment,

@@ -152,7 +152,8 @@ python3 scripts/local_dev.py up
 The launcher generates local configuration and secrets under `.drowai-local`.
 A root `.env` file is read only for development overrides. After first-run
 setup and sign-in, model-provider credentials are configured under
-**Settings → API**.
+**Settings → API**. Reviewed affordable choices include OpenAI
+`gpt-5.4-mini` and Mistral Small 4 (`mistral-small-latest`).
 
 `requirements-dev.txt` includes `requirements.txt` plus contributor and test
 dependencies. Production images install only `requirements.txt`.

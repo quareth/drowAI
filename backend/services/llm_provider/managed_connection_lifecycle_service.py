@@ -21,7 +21,7 @@ from .health_service import map_guarded_provider_error
 from .inventory_service import LLMInventoryService
 from .operation_registry import (
     GPT_OSS_20B_PROVING_PRESET_ID,
-    PUBLIC_GPT_OSS_20B_PRESET_IDS,
+    PUBLIC_REVIEWED_MODEL_PRESET_IDS,
     ConnectionOperationRegistry,
 )
 from .types import (
@@ -390,7 +390,7 @@ class LLMManagedConnectionLifecycleService:
         return resolved.secret.value if resolved.secret is not None else ""
 
     def _product_connection_deployment(self, *, user_id: int, connection, preset):
-        if preset.id not in PUBLIC_GPT_OSS_20B_PRESET_IDS:
+        if preset.id not in PUBLIC_REVIEWED_MODEL_PRESET_IDS:
             return None
         deployments = self._deployments.list_deployments(
             user_id=user_id,

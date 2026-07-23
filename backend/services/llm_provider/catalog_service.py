@@ -210,7 +210,7 @@ class LLMProviderCatalogService:
 
 
 _REASONING_EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
-_VISIBLE_REASONING_EFFORT_ORDER = ("low", "medium", "high", "xhigh", "max")
+_VISIBLE_REASONING_EFFORT_ORDER = ("none", "low", "medium", "high", "xhigh", "max")
 _TOOL_CHOICE_MODE_ORDER = ("auto", "none", "required", "specific")
 
 

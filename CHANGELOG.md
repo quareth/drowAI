@@ -10,6 +10,9 @@ The format is based on
 
 ### Added
 
+- Mistral Small 4 is available as a reviewed compatible deployment with
+  encrypted UI-managed credentials, guarded inference, tool use, adjustable
+  reasoning, usage pricing, and the normal deployment selection lifecycle.
 - GPT-OSS 20B appears in the curated LLM catalog with reviewed routes for
   NVIDIA, Hugging Face, Ollama, and vLLM, plus deployment-aware runtime routing.
 - Deployment-aware LLM management now uses reviewed catalog and connection
@@ -42,6 +45,9 @@ The format is based on
 
 ### Fixed
 
+- Explicit deployment routes now select their registered adapter independently
+  of model vendor, and non-native model output ceilings are no longer converted
+  into oversized implicit request budgets.
 - Task cards now refresh automatically while lifecycle operations are in
   progress instead of remaining stuck on transitional statuses such as
   Starting after the runtime is ready.

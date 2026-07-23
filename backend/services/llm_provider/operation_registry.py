@@ -33,11 +33,14 @@ from backend.services.llm_provider._connection_preset_catalog import (
     GPT_OSS_20B_PROVING_PRESET_ID,
     HUGGINGFACE_BASE_URL_ENV,
     HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+    MISTRAL_BASE_URL_ENV,
+    MISTRAL_OPENAI_COMPATIBLE_PRESET_ID,
     NVIDIA_NIM_BASE_URL_ENV,
     NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
     OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
     OPENAI_BASE_URL_ENV,
     PUBLIC_GPT_OSS_20B_PRESET_IDS,
+    PUBLIC_REVIEWED_MODEL_PRESET_IDS,
     ProvingConnectionPreset,
     USER_HTTPS_BASE_URL_ENDPOINT_POLICY_ID,
     VLLM_OPENAI_COMPATIBLE_PRESET_ID,
@@ -171,6 +174,15 @@ class ConnectionOperationRegistry:
         return tuple(
             preset_id
             for preset_id in PUBLIC_GPT_OSS_20B_PRESET_IDS
+            if preset_id in _CONNECTION_PRESETS
+        )
+
+    def list_public_reviewed_model_preset_ids(self) -> tuple[str, ...]:
+        """Return intentionally product-supported reviewed model presets."""
+
+        return tuple(
+            preset_id
+            for preset_id in PUBLIC_REVIEWED_MODEL_PRESET_IDS
             if preset_id in _CONNECTION_PRESETS
         )
 
@@ -311,12 +323,15 @@ __all__ = [
     "GPT_OSS_20B_PROVING_PRESET_ID",
     "HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID",
     "HUGGINGFACE_BASE_URL_ENV",
+    "MISTRAL_BASE_URL_ENV",
+    "MISTRAL_OPENAI_COMPATIBLE_PRESET_ID",
     "NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID",
     "NVIDIA_NIM_BASE_URL_ENV",
     "OPENAI_BASE_URL_ENV",
     "OLLAMA_OPENAI_COMPATIBLE_PRESET_ID",
     "OperationRegistryError",
     "ProvingConnectionPreset",
+    "PUBLIC_REVIEWED_MODEL_PRESET_IDS",
     "USER_HTTPS_BASE_URL_ENDPOINT_POLICY_ID",
     "VLLM_OPENAI_COMPATIBLE_PRESET_ID",
 ]

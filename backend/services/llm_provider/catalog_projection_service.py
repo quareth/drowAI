@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 from sqlalchemy.orm import Session
 
 from backend.models import LLMInferenceConnection, LLMModelDeployment
+from backend.services.usage_tracking.pricing_registry import get_pricing_quote
 
 from .application_contracts import (
     CatalogModelOutcome,
@@ -24,13 +25,23 @@ from .application_contracts import (
     RunnabilityOutcome,
     VerificationOutcome,
 )
-from .catalog_service import CatalogModelSummary, CatalogProviderSummary
+from .catalog_service import (
+    CatalogModelSummary,
+    CatalogProviderSummary,
+    _REASONING_EFFORT_ORDER,
+    _TOOL_CHOICE_MODE_ORDER,
+    _default_visible_reasoning_effort,
+    _ordered_values,
+    _visible_reasoning_efforts,
+)
 from .connection_service import LLMConnectionService
 from .connection_status_service import LLMConnectionStatusService
 from .deployment_service import LLMDeploymentService
+from .effective_profile_service import compose_reviewed_compatible_profile
 from .operation_registry import (
     GPT_OSS_20B_PROVING_PRESET_ID,
     PUBLIC_GPT_OSS_20B_PRESET_IDS,
+    PUBLIC_REVIEWED_MODEL_PRESET_IDS,
     ConnectionOperationRegistry,
     OperationRegistryError,
     ProvingConnectionPreset,
@@ -227,7 +238,7 @@ class LLMCatalogProjectionService:
             by_preset.setdefault(connection.connection_preset_id, []).append(connection)
 
         rows: list[CatalogProviderOutcome] = []
-        for preset_id in self._registry.list_public_gpt_oss_20b_preset_ids():
+        for preset_id in self._registry.list_public_reviewed_model_preset_ids():
             try:
                 preset = self._registry.get_connection_preset(preset_id)
             except OperationRegistryError:
@@ -271,7 +282,7 @@ class LLMCatalogProjectionService:
                         deployment=None,
                     )
                 )
-            if preset.id in PUBLIC_GPT_OSS_20B_PRESET_IDS:
+            if preset.id in PUBLIC_REVIEWED_MODEL_PRESET_IDS:
                 models = [max(models, key=self._product_catalog_model_score)]
             model_outcomes = tuple(models)
             rows.append(
@@ -324,7 +335,7 @@ class LLMCatalogProjectionService:
         preset: ProvingConnectionPreset,
         deployment: LLMModelDeployment,
     ) -> bool:
-        if preset.id not in PUBLIC_GPT_OSS_20B_PRESET_IDS:
+        if preset.id not in PUBLIC_REVIEWED_MODEL_PRESET_IDS:
             return False
         if preset.exact_wire_model_id:
             return deployment.wire_model_id == preset.exact_wire_model_id
@@ -374,6 +385,21 @@ class LLMCatalogProjectionService:
             if deployment is not None
             else None
         )
+        profile = compose_reviewed_compatible_profile(
+            preset,
+            display_name=(
+                deployment.display_name
+                if deployment is not None
+                else preset.display_name
+            ),
+            canonical_model_id=(
+                (deployment.canonical_model_id if deployment is not None else None)
+                or preset.canonical_model_id
+            ),
+            lifecycle=(
+                deployment.lifecycle_state if deployment is not None else "active"
+            ),
+        )
         return CatalogModelOutcome(
             id=model_id,
             canonical_model_id=(
@@ -385,17 +411,28 @@ class LLMCatalogProjectionService:
             label=label,
             api_surface=preset.api_surface,
             capabilities=tuple(
-                sorted(capability.value for capability in preset.capability_ceiling)
+                sorted(capability.value for capability in profile.capabilities)
             ),
-            context_window_tokens=128000,
-            max_output_tokens=10000,
-            reasoning_efforts=(),
-            visible_reasoning_efforts=(),
-            default_reasoning_effort=None,
-            default_visible_reasoning_effort=None,
-            tool_choice_modes=("auto",),
-            structured_output_strategies=(),
-            pricing_status="unavailable",
+            context_window_tokens=profile.context_window_tokens,
+            max_output_tokens=profile.max_output_tokens,
+            reasoning_efforts=_ordered_values(
+                profile.reasoning_efforts,
+                _REASONING_EFFORT_ORDER,
+            ),
+            visible_reasoning_efforts=_visible_reasoning_efforts(profile),
+            default_reasoning_effort=profile.default_reasoning_effort,
+            default_visible_reasoning_effort=_default_visible_reasoning_effort(profile),
+            tool_choice_modes=_ordered_values(
+                profile.tool_choice_modes,
+                _TOOL_CHOICE_MODE_ORDER,
+            ),
+            structured_output_strategies=tuple(
+                sorted(profile.structured_output_strategies)
+            ),
+            pricing_status=get_pricing_quote(
+                profile.ref,
+                api_surface=profile.api_surface,
+            ).status,
             deployment_ref=deployment_ref,
             runnable=runnability.runnable,
             connection=self._connection_metadata(

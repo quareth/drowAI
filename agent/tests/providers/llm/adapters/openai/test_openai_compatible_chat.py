@@ -15,10 +15,18 @@ from agent.providers.llm.adapters.openai.compatible_chat import (
     CompatibleChatAuth,
     OpenAICompatibleChatClient,
 )
+from agent.providers.llm.adapters.openai.compatible_dialects import (
+    MISTRAL_OPENAI_COMPATIBLE_DIALECT,
+)
+from agent.providers.llm.adapters.openai.compatible_request_policies import (
+    MISTRAL_SMALL_REQUEST_POLICY_ID,
+)
 from agent.providers.llm.core.base import StructuredOutputSpec
 from agent.providers.llm.contracts.compat import LLMDialectPolicy
 from agent.providers.llm.core.exceptions import LLMConfigurationError
 from agent.providers.llm.factory.client_factory import LLMClientFactory
+from agent.providers.llm.core.identity import ProviderModelRef
+from agent.providers.llm.profiles.registry import require_model_profile
 
 
 class _InferenceTransport:
@@ -70,6 +78,9 @@ def _client(
     auth: CompatibleChatAuth | None = None,
     inference_transport: _InferenceTransport | None = None,
     dialect_policy: LLMDialectPolicy | None = None,
+    request_policy_id: str | None = None,
+    reasoning_effort: str | None = None,
+    model_profile: Any | None = None,
 ) -> tuple[OpenAICompatibleChatClient, MagicMock, MagicMock]:
     """Create the compatible adapter with a mocked SDK constructor."""
 
@@ -89,6 +100,12 @@ def _client(
         }
         if dialect_policy is not None:
             client_kwargs["dialect_policy"] = dialect_policy
+        if request_policy_id is not None:
+            client_kwargs["request_policy_id"] = request_policy_id
+        if reasoning_effort is not None:
+            client_kwargs["reasoning_effort"] = reasoning_effort
+        if model_profile is not None:
+            client_kwargs["model_profile"] = model_profile
         client = OpenAICompatibleChatClient(
             **client_kwargs,
         )
@@ -274,6 +291,44 @@ async def test_agent_dialect_sends_and_normalizes_usage_tracked_tool_calls() -> 
     assert result.usage is not None
     assert result.usage.total_tokens == 15
     assert sdk.chat.completions.create.await_args.kwargs["tool_choice"] == "required"
+
+
+@pytest.mark.asyncio
+async def test_mistral_policy_translates_validated_reasoning_and_tool_choice() -> None:
+    """Mistral wire differences are applied after neutral option validation."""
+
+    profile = require_model_profile(
+        ProviderModelRef("mistral", "mistral-small-2603")
+    )
+    client, sdk, _constructor = _client(
+        wire_model_id="mistral-small-latest",
+        dialect_policy=MISTRAL_OPENAI_COMPATIBLE_DIALECT,
+        request_policy_id=MISTRAL_SMALL_REQUEST_POLICY_ID,
+        reasoning_effort="high",
+        model_profile=profile,
+    )
+
+    await client.chat_with_tools_with_usage(
+        "system",
+        "user",
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "tool__net_nmap",
+                    "description": "Run nmap",
+                    "parameters": {"type": "object"},
+                },
+            }
+        ],
+        tool_choice="required",
+        max_tokens=128,
+    )
+
+    request = sdk.chat.completions.create.await_args.kwargs
+    assert request["model"] == "mistral-small-latest"
+    assert request["tool_choice"] == "any"
+    assert request["reasoning_effort"] == "high"
 
 
 @pytest.mark.asyncio

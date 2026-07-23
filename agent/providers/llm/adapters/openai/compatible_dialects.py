@@ -20,15 +20,18 @@ _ADAPTER_CAPABILITY_CEILING = frozenset(
         LLMCapability.CHAT,
         LLMCapability.STREAMING,
         LLMCapability.TOOLS,
+        LLMCapability.PARALLEL_TOOLS,
         LLMCapability.STRUCTURED_OUTPUT_NATIVE,
         LLMCapability.USAGE_REPORTING,
         LLMCapability.STREAMING_USAGE_REPORTING,
+        LLMCapability.REASONING_EFFORT,
         LLMCapability.CONTEXT_WINDOW,
         LLMCapability.MAX_OUTPUT_TOKENS,
     }
 )
 _ADAPTER_TOOL_CHOICE_MODES = frozenset({"auto", "required"})
 _ADAPTER_STRUCTURED_OUTPUT_STRATEGIES = frozenset({"native_schema"})
+_ADAPTER_REASONING_EFFORTS = frozenset({"none", "high"})
 
 CONSERVATIVE_OPENAI_COMPATIBLE_DIALECT = LLMDialectPolicy(
     policy_id="openai_compatible_chat.conservative_v1",
@@ -65,11 +68,23 @@ AGENT_OPENAI_COMPATIBLE_DIALECT = LLMDialectPolicy(
     max_retry_attempts=2,
 )
 
+MISTRAL_OPENAI_COMPATIBLE_DIALECT = LLMDialectPolicy(
+    policy_id="openai_compatible_chat.mistral_v1",
+    adapter_id=OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
+    api_surface="chat_completions",
+    capabilities=_ADAPTER_CAPABILITY_CEILING,
+    tool_choice_modes=_ADAPTER_TOOL_CHOICE_MODES,
+    structured_output_strategies=_ADAPTER_STRUCTURED_OUTPUT_STRATEGIES,
+    reasoning_efforts=_ADAPTER_REASONING_EFFORTS,
+    max_retry_attempts=2,
+)
+
 _DIALECTS_BY_ID = {
     policy.policy_id: policy
     for policy in (
         CONSERVATIVE_OPENAI_COMPATIBLE_DIALECT,
         AGENT_OPENAI_COMPATIBLE_DIALECT,
+        MISTRAL_OPENAI_COMPATIBLE_DIALECT,
     )
 }
 
@@ -95,7 +110,7 @@ def validate_openai_compatible_dialect(policy: LLMDialectPolicy) -> None:
         allowed_capabilities=_ADAPTER_CAPABILITY_CEILING,
         allowed_tool_choice_modes=_ADAPTER_TOOL_CHOICE_MODES,
         allowed_structured_output_strategies=_ADAPTER_STRUCTURED_OUTPUT_STRATEGIES,
-        allowed_reasoning_efforts=(),
+        allowed_reasoning_efforts=_ADAPTER_REASONING_EFFORTS,
         max_retry_attempts=2,
     )
 
@@ -105,6 +120,7 @@ __all__ = [
     "CONSERVATIVE_OPENAI_COMPATIBLE_DIALECT",
     "OPENAI_COMPATIBLE_CHAT_ADAPTER_ID",
     "OPENAI_COMPATIBLE_CHAT_ADAPTER_VERSION",
+    "MISTRAL_OPENAI_COMPATIBLE_DIALECT",
     "resolve_openai_compatible_dialect",
     "validate_openai_compatible_dialect",
 ]

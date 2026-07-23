@@ -150,7 +150,10 @@ class LLMDeploymentService:
             api_surface=preset.api_surface,
             dialect_policy_id=preset.dialect_policy_id,
             billing_provider_id=None,
-            route_config={"preset_id": preset.id},
+            route_config={
+                "preset_id": preset.id,
+                "request_policy_id": preset.request_policy_id,
+            },
             enabled=True,
         )
         self._db.add(route)
@@ -219,6 +222,7 @@ class LLMDeploymentService:
             route_config={
                 "preset_id": preset.id,
                 "discovery_strategy": preset.discovery_strategy,
+                "request_policy_id": preset.request_policy_id,
             },
             enabled=True,
         )

@@ -18,7 +18,13 @@ export type LLMReasoningEffort =
   | "max"
   | (string & {});
 
-export type VisibleLLMReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
+export type VisibleLLMReasoningEffort =
+  | "none"
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
 
 export interface SelectedLLMModel {
   provider: ProviderId;

@@ -19,8 +19,11 @@ from agent.providers.llm.adapters.openai.compatible_chat import (
 from agent.providers.llm.adapters.openai.compatible_dialects import (
     resolve_openai_compatible_dialect,
 )
+from agent.providers.llm.adapters.openai.compatible_request_policies import (
+    DEFAULT_COMPATIBLE_REQUEST_POLICY_ID,
+)
 from agent.providers.llm.core.capabilities import CapabilityInput, LLMCapability, freeze_capabilities
-from agent.providers.llm.core.identity import OPENAI_PROVIDER_ID, ProviderModelRef
+from agent.providers.llm.core.identity import ProviderModelRef
 from agent.providers.llm.profiles.registry import ModelProfile, require_model_profile
 from backend.models import (
     LLMCapabilityObservation,
@@ -29,7 +32,11 @@ from backend.models import (
     LLMModelDeployment,
 )
 
-from .operation_registry import GPT_OSS_20B_PROVING_PRESET_ID, ConnectionOperationRegistry
+from .operation_registry import (
+    GPT_OSS_20B_PROVING_PRESET_ID,
+    ConnectionOperationRegistry,
+    ProvingConnectionPreset,
+)
 from .types import LLMDeploymentValidationError
 
 
@@ -208,23 +215,70 @@ def _compatible_profile(
         raise LLMDeploymentValidationError(
             "Deployment route does not match its registered adapter profile"
         )
-    dialect = resolve_openai_compatible_dialect(route.dialect_policy_id)
-    return ModelProfile(
-        ref=ProviderModelRef(OPENAI_PROVIDER_ID, "gpt-oss-20b"),
+    route_config = route.route_config if isinstance(route.route_config, dict) else {}
+    route_request_policy = str(
+        route_config.get(
+            "request_policy_id",
+            DEFAULT_COMPATIBLE_REQUEST_POLICY_ID,
+        )
+    )
+    if route_request_policy != preset.request_policy_id:
+        raise LLMDeploymentValidationError(
+            "Deployment route does not match its registered request policy"
+        )
+    return compose_reviewed_compatible_profile(
+        preset,
         display_name=deployment.display_name,
-        api_surface=preset.api_surface,
-        capabilities=preset.capability_ceiling,
-        context_window_tokens=128_000,
-        max_output_tokens=10_000,
-        listable=False,
-        canonical_model_id=deployment.canonical_model_id or deployment.wire_model_id,
+        canonical_model_id=deployment.canonical_model_id or preset.canonical_model_id,
         lifecycle=deployment.lifecycle_state,
+    )
+
+
+def compose_reviewed_compatible_profile(
+    preset: ProvingConnectionPreset,
+    *,
+    display_name: str,
+    canonical_model_id: str,
+    lifecycle: str,
+) -> ModelProfile:
+    """Intersect a curated model profile with one reviewed route preset."""
+
+    canonical_profile = require_model_profile(preset.canonical_ref)
+    dialect = resolve_openai_compatible_dialect(preset.dialect_policy_id)
+    capabilities = (
+        canonical_profile.capabilities
+        & preset.capability_ceiling
+        & dialect.capabilities
+    )
+    reasoning_efforts = (
+        canonical_profile.reasoning_efforts & dialect.reasoning_efforts
+    )
+    return ModelProfile(
+        ref=canonical_profile.ref,
+        display_name=display_name,
+        api_surface=preset.api_surface,
+        capabilities=capabilities,
+        context_window_tokens=canonical_profile.context_window_tokens,
+        max_output_tokens=canonical_profile.max_output_tokens,
+        listable=False,
+        canonical_model_id=canonical_model_id,
+        lifecycle=lifecycle,
         support_tier="deployment",
-        tool_choice_modes=dialect.tool_choice_modes,
-        structured_output_strategies=dialect.structured_output_strategies,
-        reasoning_efforts=dialect.reasoning_efforts,
-        pricing_schedule_ref=None,
-        pricing_provenance=None,
+        tool_choice_modes=(
+            canonical_profile.tool_choice_modes & dialect.tool_choice_modes
+        ),
+        structured_output_strategies=(
+            canonical_profile.structured_output_strategies
+            & dialect.structured_output_strategies
+        ),
+        reasoning_efforts=reasoning_efforts,
+        default_reasoning_effort=(
+            canonical_profile.default_reasoning_effort
+            if canonical_profile.default_reasoning_effort in reasoning_efforts
+            else None
+        ),
+        pricing_schedule_ref=canonical_profile.pricing_schedule_ref,
+        pricing_provenance=canonical_profile.pricing_provenance,
     )
 
 

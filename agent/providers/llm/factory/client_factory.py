@@ -397,6 +397,12 @@ class LLMClientFactory:
             )
             dialect_policy_id = kwargs.pop("dialect_policy_id", None)
             dialect_policy = kwargs.pop("dialect_policy", None)
+            request_policy_id = kwargs.pop("request_policy_id", None)
+            if kwargs.pop("request_policy", None) is not None:
+                raise LLMConfigurationError(
+                    "OpenAI-compatible adapter requires a registered request_policy_id",
+                    provider=lookup_ref.provider,
+                )
             if dialect_policy is None:
                 dialect_policy = _resolve_openai_compatible_dialect(dialect_policy_id)
             kwargs.pop("resolution_role", None)
@@ -411,10 +417,14 @@ class LLMClientFactory:
                 auth=_openai_compatible_bearer_auth(api_key),
                 wire_model_id=wire_model_id,
                 dialect_policy=dialect_policy,
+                request_policy_id=request_policy_id,
+                model_profile=profile,
                 **kwargs,
             )
         kwargs.pop("wire_model_id", None)
         kwargs.pop("dialect_policy_id", None)
+        kwargs.pop("request_policy_id", None)
+        kwargs.pop("request_policy", None)
         kwargs.pop("inference_transport", None)
         return provider_class(
             api_key=api_key,

@@ -54,6 +54,7 @@ def _resolved_target(
     adapter_id: str | None = None,
     api_surface: str = "responses",
     dialect_policy_id: str = "openai_responses.native_v1",
+    request_policy_id: str | None = None,
 ) -> ResolvedLLMTarget:
     resolved_auth = (
         ResolvedAuth.none()
@@ -91,6 +92,7 @@ def _resolved_target(
             if effective_model is not None
             else None
         ),
+        request_policy_id=request_policy_id,
     )
 
 
@@ -149,11 +151,14 @@ def test_builder_forwards_explicit_compatible_adapter_identity(
 
     monkeypatch.setattr(builder_module.LLMClientFactory, "get_client", fake_get_client)
     resolved_target = _resolved_target(
-        effective_model="gpt-oss-20b",
-        exact_wire_model_id="openai/gpt-oss-20b",
+        provider="mistral",
+        connection_preset_id="mistral_openai_compatible_chat",
+        effective_model="mistral-small-2603",
+        exact_wire_model_id="mistral-small-latest",
         adapter_id=OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
         api_surface="chat_completions",
-        dialect_policy_id="openai_compatible_chat.agent_v1",
+        dialect_policy_id="openai_compatible_chat.mistral_v1",
+        request_policy_id="mistral_small_v1",
     )
 
     builder.build(
@@ -164,12 +169,17 @@ def test_builder_forwards_explicit_compatible_adapter_identity(
         target=None,
         legacy_call_ref=None,
         legacy_reasoning_effort=None,
-        reasoning_effort=None,
+        reasoning_effort="none",
         reasoning_effort_was_explicit=False,
         client_kwargs={},
     )
 
     assert calls[0]["kwargs"]["adapter_id"] == OPENAI_COMPATIBLE_CHAT_ADAPTER_ID
+    assert calls[0]["provider_model"] == ProviderModelRef(
+        "mistral",
+        "mistral-small-latest",
+    )
+    assert calls[0]["kwargs"]["request_policy_id"] == "mistral_small_v1"
 
 
 def test_builder_factory_arguments_and_budget_wrapper_are_field_for_field(
