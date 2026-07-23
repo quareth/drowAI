@@ -198,10 +198,9 @@ class BudgetEnforcingLLMClient(LLMClient):
             return adjusted
         return kwargs
 
-    def _default_max_tokens(self) -> int:
+    def _default_max_tokens(self) -> int | None:
         return _LEGACY_RUNTIME_DEFAULT_MAX_TOKENS_BY_SURFACE.get(
             (self._provider_model.provider, self._model_profile.api_surface),
-            self._model_profile.max_output_tokens,
         )
 
     def _estimate_context_tokens(

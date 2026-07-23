@@ -362,7 +362,6 @@ def test_live_target_resolver_matches_facade_success_fields_and_event_order(
         "profiles.resolve",
         "authorizer.authorize",
         "credentials.resolve_connection_auth",
-        "profiles.contract",
     ]
     assert live_credentials.connection_auth_calls == facade_credentials.connection_auth_calls
     assert live_credentials.connection_auth_calls == [

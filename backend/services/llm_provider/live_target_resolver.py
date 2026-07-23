@@ -151,7 +151,11 @@ class LiveLLMTargetResolver:
             purpose=purpose,
             auth_mode=auth_mode,
         )
-        contract = self._profiles.native_route_contract(profile)
+        contract = (
+            self._profiles.native_route_contract(profile)
+            if route is None
+            else None
+        )
         return ResolvedLLMTarget(
             connection=ResolvedConnectionTarget(
                 connection_id=authorized.connection_id,

@@ -7,6 +7,7 @@ canonical agent LLM core boundary.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any, AsyncIterator
 
@@ -240,6 +241,36 @@ async def test_default_and_clamped_openai_output_budgets(
             "args": ("system", "user"),
             "kwargs": {"max_tokens": 32_000},
         },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_omitted_nonlegacy_output_budget_remains_omitted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A model capability ceiling is not an implicit per-call output request."""
+
+    _stub_token_estimators(monkeypatch, history_tokens=3_916)
+    wrapped = _RecordingClient()
+    provider_model = ProviderModelRef("openai", "gpt-5.2")
+    client = BudgetEnforcingLLMClient(
+        wrapped,
+        provider_model=provider_model,
+        role="conversation_main",
+        model_profile=replace(
+            require_model_profile(provider_model),
+            api_surface="compatible_chat",
+        ),
+    )
+
+    await client.chat_with_usage("system", "user")
+
+    assert wrapped.calls == [
+        {
+            "method": "chat_with_usage",
+            "args": ("system", "user"),
+            "kwargs": {},
+        }
     ]
 
 

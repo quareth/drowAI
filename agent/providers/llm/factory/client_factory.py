@@ -13,6 +13,9 @@ import logging
 import threading
 from typing import Any, Callable, Dict, Type
 
+from ..adapters.openai.compatible_dialects import (
+    OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
+)
 from ..core.base import LLMClient
 from ..core.exceptions import (
     LLMConfigurationError,
@@ -206,6 +209,7 @@ class LLMClientFactory:
         provider: str | None = None,
         provider_model: ProviderModelRef | None = None,
         model_profile: ModelProfile | None = None,
+        adapter_id: str | None = None,
         **kwargs: Any,
     ) -> LLMClient:
         """Create a client for the requested provider/model.
@@ -250,6 +254,7 @@ class LLMClientFactory:
                 resolution=resolution,
                 api_key=api_key,
                 model_profile=model_profile,
+                adapter_id=adapter_id,
                 **kwargs,
             )
 
@@ -350,18 +355,27 @@ class LLMClientFactory:
         resolution: ProviderModelResolution,
         api_key: str,
         model_profile: ModelProfile | None = None,
+        adapter_id: str | None = None,
         **kwargs: Any,
     ) -> LLMClient:
         """Instantiate the provider adapter for a resolved provider/model."""
         lookup_ref = resolution.lookup_ref.normalized()
-        registration = cls._get_provider_registration(lookup_ref.provider)
+        registration = (
+            None
+            if adapter_id is not None
+            else cls._get_provider_registration(lookup_ref.provider)
+        )
         profile = model_profile or require_model_profile(lookup_ref)
         if profile.ref.provider != lookup_ref.provider:
             raise LLMConfigurationError(
                 "model_profile provider must match the requested provider",
                 provider=lookup_ref.provider,
             )
-        provider_class = registration.resolver(profile)
+        if adapter_id is None:
+            assert registration is not None
+            provider_class = registration.resolver(profile)
+        else:
+            provider_class = cls._resolve_route_adapter(adapter_id)
         if not isinstance(provider_class, type) or not issubclass(provider_class, LLMClient):
             raise LLMConfigurationError(
                 "Provider adapter resolver must return an LLMClient subclass",
@@ -406,6 +420,18 @@ class LLMClientFactory:
             api_key=api_key,
             model=resolution.provider_request_model,
             **kwargs,
+        )
+
+    @staticmethod
+    def _resolve_route_adapter(adapter_id: str) -> Type[LLMClient]:
+        """Resolve a code-owned deployment adapter independently of model vendor."""
+
+        normalized = str(adapter_id).strip().lower()
+        if normalized == OPENAI_COMPATIBLE_CHAT_ADAPTER_ID:
+            return _openai_compatible_chat_client_class()
+        raise LLMConfigurationError(
+            f"No route adapter registered for adapter '{adapter_id}'",
+            provider=None,
         )
 
     @classmethod

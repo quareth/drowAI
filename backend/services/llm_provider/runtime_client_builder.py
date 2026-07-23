@@ -11,6 +11,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from agent.providers.llm.adapters.openai.compatible_dialects import (
+    OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
+)
 from agent.providers.llm.core.base import LLMClient
 from agent.providers.llm.core.budget_enforcing_client import BudgetEnforcingLLMClient
 from agent.providers.llm.core.capabilities import LLMCapability
@@ -129,6 +132,8 @@ class LLMRuntimeClientBuilder:
         )
         factory_kwargs["wire_model_id"] = resolved_target.exact_wire_model_id
         factory_kwargs["dialect_policy_id"] = resolved_target.dialect_policy_id
+        if resolved_target.adapter_id == OPENAI_COMPATIBLE_CHAT_ADAPTER_ID:
+            factory_kwargs["adapter_id"] = resolved_target.adapter_id
         factory_kwargs["inference_transport"] = guarded_inference_transport(
             operation_target=resolved_target.connection.operation_target,
             secret=secret,

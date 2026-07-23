@@ -17,6 +17,9 @@ from agent.providers.llm.adapters.openai.chat import OpenAIChatClient
 from agent.providers.llm.adapters.openai.compatible_chat import (
     OpenAICompatibleChatClient,
 )
+from agent.providers.llm.adapters.openai.compatible_dialects import (
+    OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
+)
 from agent.providers.llm.adapters.openai.responses.client import OpenAIResponsesClient
 from agent.providers.llm.profiles import OPENAI_GPT_OSS_20B_MODEL_ID
 
@@ -172,6 +175,24 @@ def test_compatible_factory_uses_the_same_explicit_base_url_contract() -> None:
     assert isinstance(client, OpenAICompatibleChatClient)
     assert client.model == "openai/gpt-oss-20b"
     mock_openai.assert_not_called()
+
+
+def test_explicit_route_adapter_overrides_native_provider_adapter() -> None:
+    """A reviewed deployment route selects its adapter independently of model vendor."""
+
+    _register_default_openai()
+    client = LLMClientFactory.get_client(
+        provider_model=ProviderModelRef(OPENAI_PROVIDER_ID, "gpt-5.2"),
+        adapter_id=OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
+        api_key="key",
+        base_url="https://compatible.example.test/v1",
+        wire_model_id="provider-wire-model",
+        dialect_policy_id="openai_compatible_chat.agent_v1",
+        inference_transport=MagicMock(),
+    )
+
+    assert isinstance(client, OpenAICompatibleChatClient)
+    assert client.model == "provider-wire-model"
 
 
 def test_explicit_provider_path_bypasses_legacy_prefix_matching() -> None:
