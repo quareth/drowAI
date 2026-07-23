@@ -10,6 +10,10 @@ The format is based on
 
 ### Added
 
+- A provider-neutral live agent compatibility harness now exercises DrowAI's
+  production intent schema, Nmap tool contract, local argument validation, and
+  post-tool response lifecycle without executing the security tool. OpenAI
+  GPT-5.4 Mini and Mistral Small 4 form the reviewed compatibility matrix.
 - Mistral Small 4 is available as a reviewed compatible deployment with
   encrypted UI-managed credentials, guarded inference, tool use, adjustable
   reasoning, usage pricing, and the normal deployment selection lifecycle.

@@ -50,6 +50,10 @@
     "e2e/tests/runtime-local-canary.spec.ts": {
       "trust_status": "environment-dependent",
       "notes": "Runtime prerequisite, cleanup, Docker, selector, and final-status polling contracts pass. The first scheduled Linux run built the image but exposed a final-read polling defect; that defect was fixed by PR #2 and has regression coverage. A successful clean Linux Docker run is still pending."
+    },
+    "backend/tests/services/llm_provider/test_live_agent_compatibility_harness.py": {
+      "trust_status": "environment-dependent",
+      "notes": "Opt-in provider compatibility evidence requires an explicit live-test flag and provider API keys. The harness submits production classifier and tool schemas but never executes the security tool."
     }
   }
 }
