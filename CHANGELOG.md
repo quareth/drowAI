@@ -8,6 +8,14 @@ The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- API settings now render every hosted catalog provider through the shared
+  provider card and connection status, including reviewed compatible models.
+- Pull-request and post-merge browser journeys now verify that hosted catalog
+  providers appear exactly once in API settings with consistent connection
+  status.
+
 ## [0.2.0] - 2026-07-24
 
 ### Added

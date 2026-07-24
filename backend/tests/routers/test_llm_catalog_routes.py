@@ -32,6 +32,7 @@ from backend.services.llm_provider.credential_service import encrypt_api_key
 from backend.services.llm_provider.operation_registry import (
     CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
     HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+    MISTRAL_OPENAI_COMPATIBLE_PRESET_ID,
     NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
     OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
     VLLM_OPENAI_COMPATIBLE_PRESET_ID,
@@ -125,6 +126,7 @@ def test_catalog_static_provider_model_order_defaults_and_proving_metadata(
         assert [provider["id"] for provider in body["providers"]] == [
             "openai",
             "anthropic",
+            MISTRAL_OPENAI_COMPATIBLE_PRESET_ID,
             NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
             HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
             OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
@@ -182,6 +184,11 @@ def test_catalog_static_provider_model_order_defaults_and_proving_metadata(
             "claude-haiku-4-5-20251001",
             "claude-opus-4-7",
         ]
+        mistral = _provider(body, MISTRAL_OPENAI_COMPATIBLE_PRESET_ID)
+        assert mistral["label"] == "Mistral"
+        assert mistral["credential"]["has_api_key"] is False
+        assert mistral["models"][0]["connection"]["displayName"] == "Mistral"
+        assert mistral["models"][0]["connection"]["userConfigFields"] == ["api_key"]
         assert application_calls == [user.id]
     finally:
         app.dependency_overrides.clear()
@@ -293,6 +300,7 @@ def test_catalog_reviewed_preset_order_filters_product_and_hides_custom_rows() -
         assert response.status_code == 200, response.text
         body = response.json()
         assert [provider["id"] for provider in body["providers"][2:]] == [
+            MISTRAL_OPENAI_COMPATIBLE_PRESET_ID,
             NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
             HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
             OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,

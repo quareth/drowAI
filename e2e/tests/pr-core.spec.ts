@@ -1,5 +1,5 @@
 /**
- * Deterministic PR-core coverage for auth, task, chat, and isolation workflows.
+ * Deterministic PR-core coverage for auth, settings, task, chat, and isolation.
  */
 
 import { expect, request, test, type APIRequestContext } from "@playwright/test";
@@ -32,6 +32,18 @@ const STACK_STARTUP_TIMEOUT_MS = 90_000;
 test.setTimeout(STACK_STARTUP_TIMEOUT_MS);
 
 let backendHandle: DeterministicBackendHandle | null = null;
+
+interface ProviderSettingsCatalog {
+  providers: Array<{
+    label: string;
+    models: Array<{
+      connection?: {
+        enabled: boolean;
+        configFields?: Array<{ name: string }>;
+      } | null;
+    }>;
+  }>;
+}
 
 test.beforeAll(async () => {
   test.setTimeout(STACK_STARTUP_TIMEOUT_MS);
@@ -66,6 +78,47 @@ test("authenticates and loads the app shell", {
 
     await expect(page.getByText("Operations").first()).toBeVisible({ timeout: 30_000 });
     await expect(page.getByTestId("chat-message-list")).toBeVisible({ timeout: 30_000 });
+  } finally {
+    await api.dispose();
+  }
+});
+
+test("renders every hosted catalog provider with shared connection status", {
+  tag: ["@pr-core", "@journey"],
+}, async ({ page }) => {
+  const api = await newApiContext();
+  try {
+    await ensureSetupReady(api);
+    const { token } = await authenticate(api);
+    await installAuthToken(page, token);
+
+    const catalogResponse = await api.get("/api/llm/models", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(catalogResponse.ok()).toBe(true);
+    const catalog = await catalogResponse.json() as ProviderSettingsCatalog;
+    const providerLabels = hostedProviderLabels(catalog);
+    expect(providerLabels.length).toBeGreaterThan(0);
+
+    await page.goto(`${frontendBaseUrl}/settings`, { waitUntil: "domcontentloaded" });
+    await page.getByRole("tab", { name: "API", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "AI providers" })).toBeVisible({
+      timeout: 30_000,
+    });
+
+    for (const providerLabel of providerLabels) {
+      const providerCard = page.getByRole("group", {
+        name: `${providerLabel} provider settings`,
+      });
+      await expect(providerCard).toHaveCount(1);
+      await expect(providerCard).toBeVisible();
+      await expect(
+        providerCard.getByLabel(
+          new RegExp(`^${escapeRegExp(providerLabel)} status: (Connected|Not connected)$`),
+        ),
+      ).toBeVisible();
+    }
+    await expect(page.getByText("Ready", { exact: true })).toHaveCount(0);
   } finally {
     await api.dispose();
   }
@@ -150,4 +203,23 @@ test("blocks another user from the task", {
 });
 async function newApiContext(): Promise<APIRequestContext> {
   return request.newContext({ baseURL: apiBaseUrl });
+}
+
+function hostedProviderLabels(catalog: ProviderSettingsCatalog): string[] {
+  return catalog.providers.flatMap((provider) => {
+    const connections = provider.models
+      .map((model) => model.connection)
+      .filter((connection) => connection?.enabled);
+    if (connections.length === 0) {
+      return [provider.label];
+    }
+    const hasHostedConnection = connections.some(
+      (connection) => !connection?.configFields?.some((field) => field.name === "base_url"),
+    );
+    return hasHostedConnection ? [provider.label] : [];
+  });
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

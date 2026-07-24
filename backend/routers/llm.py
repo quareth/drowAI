@@ -19,6 +19,7 @@ from ..models import User, LLMConversation, LLMConversationResponse
 from ..schemas.llm import (
     LLMModelCatalogResponse,
     LLMManagedConnectionSaveRequest,
+    LLMManagedConnectionDeleteRequest,
     LLMManagedConnectionEnableRequest,
     LLMManagedConnectionRefreshRequest,
     LLMManagedConnectionStatusResponse,
@@ -597,6 +598,35 @@ async def save_managed_connection(
             from_attributes=True,
             by_name=True,
         )
+    except OperationRegistryError as exc:
+        raise _provider_configuration_exception(
+            ProviderConfigurationError(str(exc))
+        ) from exc
+    except LLMProviderServiceError as exc:
+        raise _provider_configuration_exception(exc) from exc
+
+
+@router.delete(
+    "/connection-presets/{preset_id}/connection",
+    response_model=LLMProviderCredentialDeleteResponse,
+)
+async def delete_managed_connection(
+    preset_id: str,
+    body: LLMManagedConnectionDeleteRequest,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Disconnect the user's singleton reviewed connector."""
+
+    try:
+        connection_ref = body.connection_ref
+        LLMManagedConnectionLifecycleService(db).disconnect_connection(
+            user_id=current_user.id,
+            preset_id=preset_id,
+            connection_id=connection_ref.connection_id,
+            expected_connection_revision=connection_ref.expected_revision,
+        )
+        return {"success": True}
     except OperationRegistryError as exc:
         raise _provider_configuration_exception(
             ProviderConfigurationError(str(exc))

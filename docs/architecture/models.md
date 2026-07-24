@@ -104,7 +104,8 @@ Backend management and runtime wiring:
     resolves short-lived provider secrets only after live authorization.
 - `backend/services/llm_provider/managed_connection_lifecycle_service.py`
   - Owns reviewed non-proving connection create, health or capability test,
-    inventory refresh, enablement, and transaction boundaries.
+    inventory refresh, enablement, credential disconnect, and transaction
+    boundaries.
 - `backend/services/llm_provider/proving_connection_lifecycle_service.py`
   - Owns the GPT-OSS proving create, bounded test, evidence rebinding,
     enablement, and transaction boundaries.
@@ -248,6 +249,8 @@ Durable state is split deliberately:
   - Each user has at most one inference connection per connection preset.
     Saving connector settings updates that connection and its credential;
     deployments and saved selections remain attached to the same identity.
+    Disconnecting revokes the credential and disables an enabled connection
+    without deleting that identity or its deployments.
 - `UserLLMSelection`
   - User's default conversation deployment reference plus provider/model
     compatibility snapshot.

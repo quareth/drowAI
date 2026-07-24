@@ -13,7 +13,12 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.models import LLMInferenceConnection, LLMModelDeployment, User
+from backend.models import (
+    LLMConnectionCredential,
+    LLMInferenceConnection,
+    LLMModelDeployment,
+    User,
+)
 from backend.services.llm_provider import credential_service as credential_module
 from backend.services.llm_provider.application_contracts import (
     ConnectionStatusOutcome,
@@ -306,6 +311,53 @@ def test_save_connection_reuses_the_user_preset_singleton(
     )
     assert resolved.secret is not None
     assert resolved.secret.value == "replacement-placeholder-key"
+
+
+def test_disconnect_connection_revokes_credential_and_preserves_connector(
+    monkeypatch: pytest.MonkeyPatch,
+    llm_identity_db: Session,
+    identity_users: tuple[User, User],
+) -> None:
+    """Disconnect removes the secret while preserving reusable deployment identity."""
+
+    owner, _ = identity_users
+    connection, deployment = _seed_connection(
+        llm_identity_db,
+        user_id=owner.id,
+        with_product_deployment=True,
+    )
+    assert deployment is not None
+    connection_id = connection.id
+    deployment_id = deployment.id
+    connection = LLMConnectionService(llm_identity_db).transition_state(
+        user_id=owner.id,
+        connection_id=connection.id,
+        expected_revision=int(connection.revision),
+        target_state=LLMConnectionState.DISABLED,
+    )
+    connection = LLMConnectionService(llm_identity_db).transition_state(
+        user_id=owner.id,
+        connection_id=connection.id,
+        expected_revision=int(connection.revision),
+        target_state=LLMConnectionState.ENABLED,
+    )
+    llm_identity_db.commit()
+    transactions = _track_transactions(monkeypatch, llm_identity_db)
+    service, _ = _service(llm_identity_db)
+
+    service.disconnect_connection(
+        user_id=owner.id,
+        preset_id=HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+        connection_id=str(connection.id),
+        expected_connection_revision=int(connection.revision),
+    )
+
+    assert transactions == ["commit"]
+    preserved_connection = llm_identity_db.get(LLMInferenceConnection, connection_id)
+    assert preserved_connection is not None
+    assert preserved_connection.state == LLMConnectionState.DISABLED.value
+    assert llm_identity_db.get(LLMModelDeployment, deployment_id) is not None
+    assert llm_identity_db.get(LLMConnectionCredential, connection_id) is None
 
 
 def test_save_connection_rolls_back_missing_secret_and_partial_failure(
