@@ -9,7 +9,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import {
-  deleteLLMManagedConnection,
+  disconnectLLMManagedConnection,
   enableLLMManagedConnection,
   refreshLLMManagedConnectionInventory,
   saveLLMManagedConnection,
@@ -25,13 +25,14 @@ import type {
 } from "@/features/llm-provider/types";
 
 interface UseConnectionSettingsControllerOptions {
-  providerLabel: string;
   model: LLMCatalogModel;
   connection: LLMConnectionMetadata;
   fieldValues: Readonly<Record<string, string>>;
   hasStoredCredential: boolean;
-  onSuccess: (title: string, description: string) => void;
-  onError: (title: string, error: Error) => void;
+  onConnected: (ready: boolean) => void;
+  onConnectionError: (error: Error) => void;
+  onDisconnected: () => void;
+  onDisconnectError: (error: Error) => void;
 }
 
 interface ConnectionSettingsController {
@@ -46,13 +47,14 @@ interface ConnectionSettingsController {
 const catalogQueryKey = ["/api/llm/models"] as const;
 
 export function useConnectionSettingsController({
-  providerLabel,
   model,
   connection,
   fieldValues,
   hasStoredCredential,
-  onSuccess,
-  onError,
+  onConnected,
+  onConnectionError,
+  onDisconnected,
+  onDisconnectError,
 }: UseConnectionSettingsControllerOptions): ConnectionSettingsController {
   const queryClient = useQueryClient();
   const [connectionRef, setConnectionRef] = useState<LLMConnectionRef | null>(
@@ -125,15 +127,9 @@ export function useConnectionSettingsController({
     onSuccess: async (status) => {
       applyConnectionStatus(status);
       await invalidateCatalog();
-      onSuccess(
-        `${providerLabel} connected`,
-        runnable || status.runnability?.runnable
-          ? "The provider connection is ready."
-          : "The connection was saved, but it is not ready yet.",
-      );
+      onConnected(Boolean(runnable || status.runnability?.runnable));
     },
-    onError: (error) => onError(
-      `${providerLabel} connection failed`,
+    onError: (error) => onConnectionError(
       error instanceof Error ? error : new Error(String(error)),
     ),
   });
@@ -143,7 +139,7 @@ export function useConnectionSettingsController({
       if (!connectionRef) {
         throw new Error("Connection reference is unavailable.");
       }
-      return deleteLLMManagedConnection(connection.presetId, {
+      return disconnectLLMManagedConnection(connection.presetId, {
         connection_ref: connectionRef,
       });
     },
@@ -152,13 +148,9 @@ export function useConnectionSettingsController({
       setRunnable(false);
       setConnected(false);
       await invalidateCatalog();
-      onSuccess(
-        `${providerLabel} disconnected`,
-        "The provider credential has been removed.",
-      );
+      onDisconnected();
     },
-    onError: (error) => onError(
-      `${providerLabel} disconnect failed`,
+    onError: (error) => onDisconnectError(
       error instanceof Error ? error : new Error(String(error)),
     ),
   });

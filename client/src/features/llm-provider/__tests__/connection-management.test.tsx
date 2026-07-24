@@ -13,7 +13,7 @@ import type { LLMDeploymentRef, LLMModelCatalogResponse } from "../types";
 
 const mocked = vi.hoisted(() => ({
   saveLLMManagedConnection: vi.fn(),
-  deleteLLMManagedConnection: vi.fn(),
+  disconnectLLMManagedConnection: vi.fn(),
   deleteLLMProviderCredential: vi.fn(),
   enableLLMManagedConnection: vi.fn(),
   fetchLLMModelCatalog: vi.fn(),
@@ -1163,6 +1163,35 @@ describe("Connection management", () => {
     expect(action.disabled).toBe(true);
     fireEvent.click(action);
     expect(mocked.saveLLMManagedConnection).not.toHaveBeenCalled();
+  });
+
+  it("reports managed disconnect copy from the settings panel", async () => {
+    const onSuccess = vi.fn();
+    mocked.disconnectLLMManagedConnection.mockResolvedValue({ success: true });
+
+    renderWithQueryClient(
+      <ConnectionSettingsPanel
+        providerLabel={managedCatalog.providers[0].label}
+        model={managedCatalog.providers[0].models[0]}
+        connection={managedCatalog.providers[0].models[0].connection!}
+        hasStoredCredential
+        onSuccess={onSuccess}
+        onError={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /disconnect ollama/i }));
+
+    await waitFor(() => {
+      expect(mocked.disconnectLLMManagedConnection).toHaveBeenCalledWith(
+        "ollama_openai_compatible_chat",
+        { connection_ref: managedConnectionRef },
+      );
+      expect(onSuccess).toHaveBeenCalledWith(
+        "Ollama disconnected",
+        "The provider credential has been removed.",
+      );
+    });
   });
 
 
