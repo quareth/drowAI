@@ -181,7 +181,7 @@ class LLMManagedConnectionEnableRequest(BaseModel):
     deployment_ref: Optional[LLMDeploymentRef] = None
 
 
-class LLMManagedConnectionDeleteRequest(BaseModel):
+class LLMManagedConnectionDisconnectRequest(BaseModel):
     """Request body for disconnecting one reviewed connection preset."""
 
     connection_ref: LLMConnectionRefResponse

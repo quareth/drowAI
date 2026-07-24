@@ -11,7 +11,7 @@ import type {
   LLMModelCatalogResponse,
   LLMDeploymentSelection,
   LLMManagedConnectionSaveRequest,
-  LLMManagedConnectionDeleteRequest,
+  LLMManagedConnectionDisconnectRequest,
   LLMManagedConnectionEnableRequest,
   LLMManagedConnectionRefreshRequest,
   LLMManagedConnectionTestRequest,
@@ -149,9 +149,9 @@ export async function saveLLMManagedConnection(
   );
 }
 
-export async function deleteLLMManagedConnection(
+export async function disconnectLLMManagedConnection(
   presetId: string,
-  request: LLMManagedConnectionDeleteRequest,
+  request: LLMManagedConnectionDisconnectRequest,
 ): Promise<LLMProviderCredentialDeleteResponse> {
   return apiCall<LLMProviderCredentialDeleteResponse>(
     `/api/llm/connection-presets/${encodeURIComponent(presetId)}/connection`,

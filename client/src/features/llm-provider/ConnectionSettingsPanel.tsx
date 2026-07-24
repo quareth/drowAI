@@ -67,13 +67,28 @@ export function ConnectionSettingsPanel({
     connect,
     disconnect,
   } = useConnectionSettingsController({
-    providerLabel,
     model,
     connection,
     fieldValues,
     hasStoredCredential,
-    onSuccess,
-    onError,
+    onConnected: (ready) => onSuccess(
+      `${providerLabel} connected`,
+      ready
+        ? "The provider connection is ready."
+        : "The connection was saved, but it is not ready yet.",
+    ),
+    onConnectionError: (error) => onError(
+      `${providerLabel} connection failed`,
+      error,
+    ),
+    onDisconnected: () => onSuccess(
+      `${providerLabel} disconnected`,
+      "The provider credential has been removed.",
+    ),
+    onDisconnectError: (error) => onError(
+      `${providerLabel} disconnect failed`,
+      error,
+    ),
   });
 
   return (

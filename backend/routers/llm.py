@@ -19,7 +19,7 @@ from ..models import User, LLMConversation, LLMConversationResponse
 from ..schemas.llm import (
     LLMModelCatalogResponse,
     LLMManagedConnectionSaveRequest,
-    LLMManagedConnectionDeleteRequest,
+    LLMManagedConnectionDisconnectRequest,
     LLMManagedConnectionEnableRequest,
     LLMManagedConnectionRefreshRequest,
     LLMManagedConnectionStatusResponse,
@@ -610,9 +610,9 @@ async def save_managed_connection(
     "/connection-presets/{preset_id}/connection",
     response_model=LLMProviderCredentialDeleteResponse,
 )
-async def delete_managed_connection(
+async def disconnect_managed_connection(
     preset_id: str,
-    body: LLMManagedConnectionDeleteRequest,
+    body: LLMManagedConnectionDisconnectRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
