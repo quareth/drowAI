@@ -304,6 +304,7 @@ class ResolvedLLMTarget:
     canonical_model_id: str | None
     exact_wire_model_id: str
     effective_profile: ModelProfile | None = field(repr=False)
+    request_policy_id: str | None = None
 
 
 def _positive_id(value: Any, field_name: str) -> int:

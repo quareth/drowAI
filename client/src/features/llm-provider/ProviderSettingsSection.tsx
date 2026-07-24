@@ -1,8 +1,8 @@
 /**
  * Provider-neutral LLM settings section.
  *
- * Keeps direct provider credentials separate from the intentionally supported
- * GPT-OSS 20B hosted and self-hosted routes.
+ * Keeps direct provider credentials separate from reviewed hosted and
+ * self-hosted compatible routes.
  */
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -271,7 +271,7 @@ export function ProviderSettingsSection({
 function coerceVisibleReasoningEffort(
   value: unknown,
 ): VisibleLLMReasoningEffort | null {
-  return value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max"
+  return value === "none" || value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max"
     ? value
     : null;
 }

@@ -7,6 +7,7 @@ remain outside the dialect contract and guarded by the backend runtime.
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from types import SimpleNamespace
@@ -17,6 +18,10 @@ import openai
 
 from ...contracts.compat import LLMDialectPolicy
 from ...contracts.inference_transport import AsyncLLMInferenceTransport
+from ...contracts.structured_output_strategy import (
+    normalize_structured_output_strategy,
+)
+from ...contracts.tool_contracts import normalize_tool_choice_mode
 from ...core.base import (
     LLMCallOptions,
     LLMResponse,
@@ -31,6 +36,7 @@ from ...core.exceptions import (
     LLMCapabilityNotSupportedError,
     LLMConfigurationError,
 )
+from ...profiles.registry import ModelProfile
 from .chat import OpenAIChatClient
 from .client_options import openai_sdk_client_options
 from .compatible_dialects import (
@@ -39,6 +45,11 @@ from .compatible_dialects import (
     OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
     OPENAI_COMPATIBLE_CHAT_ADAPTER_VERSION,
     validate_openai_compatible_dialect,
+)
+from .compatible_request_policies import (
+    CompatibleRequestOptions,
+    CompatibleRequestPolicy,
+    resolve_compatible_request_policy,
 )
 from .structured_output import (
     StructuredOutputSchemaError,
@@ -91,6 +102,48 @@ _TOOL_CALL_OPTIONS = frozenset(
 )
 _HTTP_SCHEME = "http"
 _HTTPS_SCHEME = "https"
+_REQUEST_OPTIONS: ContextVar[CompatibleRequestOptions] = ContextVar(
+    "compatible_request_options",
+    default=CompatibleRequestOptions(),
+)
+
+
+class _PolicyBoundCompatibleChatCompletions:
+    """Apply a validated route policy immediately before provider I/O."""
+
+    def __init__(self, completions: Any, policy: CompatibleRequestPolicy) -> None:
+        self._completions = completions
+        self._policy = policy
+
+    async def create(self, **kwargs: Any) -> Any:
+        request_kwargs = self._policy.translate(kwargs, _REQUEST_OPTIONS.get())
+        return await self._completions.create(**request_kwargs)
+
+
+class _PolicyBoundCompatibleChat:
+    """Expose a policy-bound ``chat.completions`` namespace."""
+
+    def __init__(self, chat: Any, policy: CompatibleRequestPolicy) -> None:
+        self.completions = _PolicyBoundCompatibleChatCompletions(
+            chat.completions,
+            policy,
+        )
+
+
+class _PolicyBoundCompatibleSDKClient:
+    """SDK-compatible proxy that owns final route-policy translation."""
+
+    def __init__(self, sdk_client: Any, policy: CompatibleRequestPolicy) -> None:
+        self._sdk_client = sdk_client
+        self.chat = _PolicyBoundCompatibleChat(sdk_client.chat, policy)
+
+    async def close(self) -> None:
+        close = getattr(self._sdk_client, "close", None)
+        if close is None:
+            return
+        result = close()
+        if hasattr(result, "__await__"):
+            await result
 class _GuardedCompatibleChatCompletions:
     """SDK-shaped Chat Completions facade backed by guarded transport."""
 
@@ -134,6 +187,9 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
         auth: CompatibleChatAuth,
         wire_model_id: str,
         dialect_policy: LLMDialectPolicy = CONSERVATIVE_OPENAI_COMPATIBLE_DIALECT,
+        request_policy_id: str | None = None,
+        reasoning_effort: str | None = None,
+        model_profile: ModelProfile | None = None,
         inference_transport: AsyncLLMInferenceTransport | None = None,
     ) -> None:
         validated_base_url = _validate_base_url(
@@ -152,6 +208,11 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
                 provider="OpenAI-compatible",
             )
         validate_openai_compatible_dialect(dialect_policy)
+        default_reasoning_effort = _validate_default_reasoning_effort(
+            reasoning_effort,
+            dialect_policy=dialect_policy,
+        )
+        request_policy = resolve_compatible_request_policy(request_policy_id)
 
         if inference_transport is not None:
             sdk_client = _GuardedCompatibleSDKClient(inference_transport)
@@ -163,6 +224,7 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
                     enforce_credentials=auth.mode is not CompatibleChatAuthMode.NONE,
                 )
             )
+        sdk_client = _PolicyBoundCompatibleSDKClient(sdk_client, request_policy)
 
         self._initialize_client_state(
             api_key=auth.credential,
@@ -172,6 +234,8 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
         self._base_url = validated_base_url
         self._auth_mode = auth.mode
         self._dialect_policy = dialect_policy
+        self._default_reasoning_effort = default_reasoning_effort
+        self._model_profile = model_profile
 
     async def chat(
         self,
@@ -185,7 +249,13 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
             allowed_legacy=_PLAIN_CALL_OPTIONS,
             required_capabilities=(LLMCapability.CHAT,),
         )
-        return await super().chat(system_prompt, user_prompt, **call_kwargs)
+        return await super().chat_messages(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            **call_kwargs,
+        )
 
     async def chat_messages(
         self,
@@ -215,7 +285,9 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
             ),
             allow_retries=False,
         )
-        async for chunk in super().stream_chat_messages(messages, **call_kwargs):
+        request_options = _REQUEST_OPTIONS.get()
+        stream = super().stream_chat_messages(messages, **call_kwargs)
+        async for chunk in _with_request_options(stream, request_options):
             yield chunk
 
     async def chat_with_usage(
@@ -233,9 +305,11 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
                 LLMCapability.USAGE_REPORTING,
             ),
         )
-        return await super().chat_with_usage(
-            system_prompt,
-            user_prompt,
+        return await super().chat_messages_with_usage(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
             **call_kwargs,
         )
 
@@ -275,7 +349,15 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
             )
         except LLMCapabilityNotSupportedError as exc:
             raise _dialect_policy_required("streaming usage") from exc
-        return await super().stream_chat_messages_with_usage(messages, **call_kwargs)
+        request_options = _REQUEST_OPTIONS.get()
+        response = await super().stream_chat_messages_with_usage(messages, **call_kwargs)
+        return LLMStreamingResponse(
+            content_iterator=_with_request_options(
+                response.content_iterator,
+                request_options,
+            ),
+            get_final_usage=response.get_final_usage,
+        )
 
     async def chat_with_tools(
         self,
@@ -409,6 +491,10 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
                 parallel_tool_calls=remaining.get("parallel_tool_calls"),
             )
 
+        options = _options_with_default_reasoning(
+            options,
+            self._default_reasoning_effort,
+        )
         if not allow_retries and options.retry_attempts is not None:
             raise LLMConfigurationError(
                 "streaming calls do not support retry_attempts",
@@ -418,12 +504,20 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
             options,
             required_capabilities=required_capabilities,
         )
+        _validate_effective_call_options(
+            options,
+            model_profile=self._model_profile,
+            required_capabilities=required_capabilities,
+        )
         native_kwargs = _native_call_kwargs(options)
         structured_output = remaining.get("structured_output")
         if structured_output is not None:
             native_kwargs["structured_output"] = structured_output
         if options.parallel_tool_calls is not None:
             native_kwargs["parallel_tool_calls"] = options.parallel_tool_calls
+        _REQUEST_OPTIONS.set(
+            CompatibleRequestOptions(reasoning_effort=options.reasoning_effort)
+        )
         return native_kwargs
 
     def _attach_structured_response_format(
@@ -502,6 +596,84 @@ def _validate_wire_model_id(wire_model_id: str) -> str:
     return wire_model_id
 
 
+def _validate_default_reasoning_effort(
+    reasoning_effort: str | None,
+    *,
+    dialect_policy: LLMDialectPolicy,
+) -> str | None:
+    """Validate the construction-time default reasoning effort."""
+
+    if reasoning_effort is None:
+        return None
+    options = LLMCallOptions(reasoning_effort=reasoning_effort)
+    dialect_policy.validate_call_options(
+        options,
+        required_capabilities=(LLMCapability.REASONING_EFFORT,),
+    )
+    return options.reasoning_effort
+
+
+def _options_with_default_reasoning(
+    options: LLMCallOptions,
+    default_reasoning_effort: str | None,
+) -> LLMCallOptions:
+    """Apply the client default when a call does not choose an effort."""
+
+    if default_reasoning_effort is None or options.reasoning_effort is not None:
+        return options
+    return replace(options, reasoning_effort=default_reasoning_effort)
+
+
+def _validate_effective_call_options(
+    options: LLMCallOptions,
+    *,
+    model_profile: ModelProfile | None,
+    required_capabilities: tuple[CapabilityInput, ...],
+) -> None:
+    """Reject controls excluded by the route-effective profile before I/O."""
+
+    if model_profile is None:
+        return
+    for capability in required_capabilities:
+        model_profile.require_capability(capability)
+    if options.tool_choice_mode is not None:
+        mode = normalize_tool_choice_mode(options.tool_choice_mode)
+        if mode not in model_profile.tool_choice_modes:
+            raise LLMCapabilityNotSupportedError(
+                f"Selected route does not support tool_choice '{mode}'",
+                provider="OpenAI-compatible",
+                capability=f"tool_choice:{mode}",
+            )
+    if options.parallel_tool_calls is not None:
+        model_profile.require_capability(LLMCapability.PARALLEL_TOOLS)
+    if options.structured_output_strategy is not None:
+        strategy = normalize_structured_output_strategy(
+            options.structured_output_strategy
+        )
+        if strategy not in model_profile.structured_output_strategies:
+            raise LLMCapabilityNotSupportedError(
+                f"Selected route does not support structured strategy '{strategy}'",
+                provider="OpenAI-compatible",
+                capability=f"structured_output:{strategy}",
+            )
+    if options.include_stream_usage:
+        model_profile.require_capability(LLMCapability.STREAMING_USAGE_REPORTING)
+    if options.reasoning_effort is not None:
+        model_profile.require_capability(LLMCapability.REASONING_EFFORT)
+        if (
+            model_profile.reasoning_efforts
+            and options.reasoning_effort not in model_profile.reasoning_efforts
+        ):
+            raise LLMCapabilityNotSupportedError(
+                (
+                    "Selected route does not support reasoning_effort "
+                    f"'{options.reasoning_effort}'"
+                ),
+                provider="OpenAI-compatible",
+                capability=f"reasoning_effort:{options.reasoning_effort}",
+            )
+
+
 def _reject_unsupported_options(
     options: dict[str, Any],
     *,
@@ -575,6 +747,24 @@ async def _guarded_stream(events: AsyncIterator[Any]) -> AsyncIterator[Any]:
 
     async for event in events:
         yield _object_payload(event)
+
+
+async def _with_request_options(
+    stream: AsyncIterator[str],
+    options: CompatibleRequestOptions,
+) -> AsyncIterator[str]:
+    """Run delayed streaming request creation with its validated options."""
+
+    iterator = stream.__aiter__()
+    while True:
+        token = _REQUEST_OPTIONS.set(options)
+        try:
+            chunk = await iterator.__anext__()
+        except StopAsyncIteration:
+            return
+        finally:
+            _REQUEST_OPTIONS.reset(token)
+        yield chunk
 
 
 __all__ = [

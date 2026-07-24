@@ -46,6 +46,11 @@ class UserLLMProviderCredential(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     __table_args__ = (
+        UniqueConstraint(
+            "user_id",
+            "provider",
+            name="uq_user_llm_provider_credentials_user_provider",
+        ),
         Index("ix_user_llm_provider_credentials_provider", "provider"),
     )
 
@@ -105,6 +110,11 @@ class LLMInferenceConnection(Base):
             "user_id",
             "legacy_default_provider",
             name="uq_llm_inference_connections_legacy_default",
+        ),
+        UniqueConstraint(
+            "user_id",
+            "connection_preset_id",
+            name="uq_llm_inference_connections_user_preset",
         ),
         Index(
             "ix_llm_inference_connections_user_state",

@@ -21,7 +21,7 @@ from .health_service import map_guarded_provider_error
 from .inventory_service import LLMInventoryService
 from .operation_registry import (
     GPT_OSS_20B_PROVING_PRESET_ID,
-    PUBLIC_GPT_OSS_20B_PRESET_IDS,
+    PUBLIC_REVIEWED_MODEL_PRESET_IDS,
     ConnectionOperationRegistry,
 )
 from .types import (
@@ -67,19 +67,21 @@ class LLMManagedConnectionLifecycleService:
         )
         self._status = status_service or LLMConnectionStatusService(db)
 
-    def create_connection(
+    def save_connection(
         self,
         *,
         user_id: int,
         preset_id: str,
         api_key: str | None,
+        connection_id: str | None = None,
+        expected_connection_revision: int | None = None,
         display_label: str | None = None,
         base_url: str | None = None,
         wire_model_id: str | None = None,
         model_label: str | None = None,
         canonical_model_id: str | None = None,
     ) -> ConnectionStatusOutcome:
-        """Create a reviewed draft, optional deployment, and committed status."""
+        """Create or update the user's singleton connector and credential."""
 
         try:
             preset = self._managed_preset(preset_id)
@@ -91,14 +93,39 @@ class LLMManagedConnectionLifecycleService:
             non_secret_config = {"auth_mode": "bearer"}
             if preset.endpoint_config_field is not None:
                 non_secret_config[preset.endpoint_config_field] = base_url
-            connection = self._connections.create_draft(
-                user_id=user_id,
-                display_name=display_label or preset.display_name,
-                connection_preset_id=preset.id,
-                runtime_family_id=preset.runtime_family_id,
-                serving_operator_id=preset.serving_operator_id,
-                non_secret_config=non_secret_config,
-            )
+            if (connection_id is None) != (expected_connection_revision is None):
+                raise ProviderConfigurationError(
+                    "Connection reference is incomplete"
+                )
+            if connection_id is not None:
+                connection = self._owned_preset_connection(
+                    user_id=user_id,
+                    preset_id=preset.id,
+                    connection_id=connection_id,
+                    expected_connection_revision=expected_connection_revision,
+                )
+            else:
+                connection = self._connections.get_owned_for_preset(
+                    user_id=user_id,
+                    connection_preset_id=preset.id,
+                )
+            if connection is None:
+                connection = self._connections.create_draft(
+                    user_id=user_id,
+                    display_name=display_label or preset.display_name,
+                    connection_preset_id=preset.id,
+                    runtime_family_id=preset.runtime_family_id,
+                    serving_operator_id=preset.serving_operator_id,
+                    non_secret_config=non_secret_config,
+                )
+            else:
+                connection = self._connections.update_configuration(
+                    user_id=user_id,
+                    connection_id=connection.id,
+                    expected_revision=int(connection.revision),
+                    display_name=display_label or connection.display_name,
+                    non_secret_config=non_secret_config,
+                )
             self._credentials.upsert_connection_api_key(
                 user_id=user_id,
                 connection_ref=LLMConnectionCredentialRef(
@@ -116,17 +143,23 @@ class LLMManagedConnectionLifecycleService:
                 or preset.canonical_model_id
             )
             if selected_wire_model:
-                deployment, _ = self._inventory.register_custom_model(
+                deployment = self._connection_deployment(
                     user_id=user_id,
-                    connection_id=connection.id,
-                    expected_connection_revision=int(connection.revision),
+                    connection=connection,
                     wire_model_id=selected_wire_model,
-                    display_name=model_label or selected_wire_model,
-                    canonical_model_id=(
-                        canonical_model_id or preset.canonical_model_id or None
-                    ),
-                    requested_capabilities=(),
                 )
+                if deployment is None:
+                    deployment, _ = self._inventory.register_custom_model(
+                        user_id=user_id,
+                        connection_id=connection.id,
+                        expected_connection_revision=int(connection.revision),
+                        wire_model_id=selected_wire_model,
+                        display_name=model_label or selected_wire_model,
+                        canonical_model_id=(
+                            canonical_model_id or preset.canonical_model_id or None
+                        ),
+                        requested_capabilities=(),
+                    )
             outcome = self._status.managed_status(
                 user_id=user_id,
                 connection=connection,
@@ -390,7 +423,7 @@ class LLMManagedConnectionLifecycleService:
         return resolved.secret.value if resolved.secret is not None else ""
 
     def _product_connection_deployment(self, *, user_id: int, connection, preset):
-        if preset.id not in PUBLIC_GPT_OSS_20B_PRESET_IDS:
+        if preset.id not in PUBLIC_REVIEWED_MODEL_PRESET_IDS:
             return None
         deployments = self._deployments.list_deployments(
             user_id=user_id,
@@ -405,6 +438,27 @@ class LLMManagedConnectionLifecycleService:
             if model_id == preset.canonical_model_id:
                 return deployment
         return None
+
+    def _connection_deployment(
+        self,
+        *,
+        user_id: int,
+        connection,
+        wire_model_id: str,
+    ):
+        """Return an existing exact deployment for one connector."""
+
+        return next(
+            (
+                deployment
+                for deployment in self._deployments.list_deployments(
+                    user_id=user_id,
+                    connection_id=connection.id,
+                )
+                if deployment.wire_model_id == wire_model_id
+            ),
+            None,
+        )
 
 
 __all__ = ["LLMManagedConnectionLifecycleService"]

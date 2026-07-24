@@ -19,8 +19,13 @@ from agent.providers.llm.adapters.openai.compatible_dialects import (
     OPENAI_COMPATIBLE_CHAT_ADAPTER_VERSION,
     resolve_openai_compatible_dialect,
 )
+from agent.providers.llm.adapters.openai.compatible_request_policies import (
+    DEFAULT_COMPATIBLE_REQUEST_POLICY_ID,
+    list_compatible_request_policy_ids,
+)
 from agent.providers.llm.core.capabilities import LLMCapability, freeze_capabilities
 from agent.providers.llm.core.exceptions import LLMConfigurationError
+from agent.providers.llm.core.identity import ProviderModelRef
 
 from backend.services.llm_provider._connection_operation_contracts import (
     OperationRegistryError,
@@ -30,6 +35,7 @@ from backend.services.llm_provider._connection_operation_contracts import (
 GPT_OSS_20B_PROVING_PRESET_ID = "gpt_oss_20b_openai_compatible_proving"
 HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID = "huggingface_openai_compatible_chat"
 NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID = "nvidia_nim_openai_compatible_chat"
+MISTRAL_OPENAI_COMPATIBLE_PRESET_ID = "mistral_openai_compatible_chat"
 OLLAMA_OPENAI_COMPATIBLE_PRESET_ID = "ollama_openai_compatible_chat"
 VLLM_OPENAI_COMPATIBLE_PRESET_ID = "vllm_openai_compatible_chat"
 CUSTOM_OPENAI_COMPATIBLE_PRESET_ID = "custom_openai_compatible_chat"
@@ -39,6 +45,10 @@ PUBLIC_GPT_OSS_20B_PRESET_IDS = (
     OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
     VLLM_OPENAI_COMPATIBLE_PRESET_ID,
 )
+PUBLIC_REVIEWED_MODEL_PRESET_IDS = (
+    MISTRAL_OPENAI_COMPATIBLE_PRESET_ID,
+    *PUBLIC_GPT_OSS_20B_PRESET_IDS,
+)
 GPT_OSS_20B_PROVING_E2E_ENV = "DROWAI_GPT_OSS_20B_PROVING_E2E"
 GPT_OSS_20B_PROVING_BASE_URL_ENV = "DROWAI_GPT_OSS_20B_PROVING_BASE_URL"
 GPT_OSS_20B_PROVING_API_KEY_ENV = "DROWAI_GPT_OSS_20B_PROVING_API_KEY"
@@ -46,6 +56,7 @@ OPENAI_BASE_URL_ENV = "OPENAI_BASE_URL"
 ANTHROPIC_BASE_URL_ENV = "ANTHROPIC_BASE_URL"
 HUGGINGFACE_BASE_URL_ENV = "DROWAI_HUGGINGFACE_BASE_URL"
 NVIDIA_NIM_BASE_URL_ENV = "DROWAI_NVIDIA_NIM_BASE_URL"
+MISTRAL_BASE_URL_ENV = "DROWAI_MISTRAL_BASE_URL"
 FIXED_PROVIDER_ENDPOINT_POLICY_ID = "fixed_provider_v1"
 USER_HTTPS_BASE_URL_ENDPOINT_POLICY_ID = "user_https_base_url_v1"
 DEFAULT_CONNECTION_PRESET_MANIFEST_PATH = Path(__file__).with_name(
@@ -57,6 +68,7 @@ _ALLOWED_PRESET_DISCOVERY_STRATEGIES = frozenset({"openai_models_endpoint"})
 _ALLOWED_PRESET_ENDPOINT_POLICIES = frozenset(
     {FIXED_PROVIDER_ENDPOINT_POLICY_ID, USER_HTTPS_BASE_URL_ENDPOINT_POLICY_ID}
 )
+_ALLOWED_REQUEST_POLICIES = list_compatible_request_policy_ids()
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +103,7 @@ class ProvingConnectionPreset:
     adapter_version: str
     api_surface: str
     dialect_policy_id: str
+    request_policy_id: str
     capability_ceiling: frozenset[LLMCapability]
     endpoint_policy_id: str
     discovery_strategy: str
@@ -116,6 +129,26 @@ class ProvingConnectionPreset:
                 "secret_fields": self.secret_fields,
             }
         )
+
+    @property
+    def canonical_ref(self) -> ProviderModelRef:
+        """Return the reviewed provider/model identity for this preset."""
+
+        provider, separator, model = self.canonical_model_id.partition("/")
+        if not separator or not provider or not model:
+            raise OperationRegistryError(
+                "Connection preset canonical model id must use provider/model"
+            )
+        return ProviderModelRef(provider, model).normalized()
+
+    def route_config(self, *, include_discovery_strategy: bool) -> dict[str, str]:
+        """Return the preset-derived metadata persisted on a deployment route."""
+
+        config = {"preset_id": self.id}
+        if include_discovery_strategy:
+            config["discovery_strategy"] = self.discovery_strategy
+        config["request_policy_id"] = self.request_policy_id
+        return config
 
 
 def _load_connection_presets_manifest(path: Path) -> _ConnectionPresetManifest:
@@ -171,6 +204,7 @@ def _load_connection_presets_manifest(path: Path) -> _ConnectionPresetManifest:
         GPT_OSS_20B_PROVING_PRESET_ID,
         HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
         NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+        MISTRAL_OPENAI_COMPATIBLE_PRESET_ID,
         OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
         VLLM_OPENAI_COMPATIBLE_PRESET_ID,
         CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
@@ -220,6 +254,12 @@ def _connection_preset_from_payload(payload: Any) -> ProvingConnectionPreset:
         ) from exc
     if api_surface != dialect_policy.api_surface:
         raise OperationRegistryError("Connection preset API surface is not supported")
+    request_policy_id = (
+        _manifest_optional_text(payload, "request_policy_id")
+        or DEFAULT_COMPATIBLE_REQUEST_POLICY_ID
+    )
+    if request_policy_id not in _ALLOWED_REQUEST_POLICIES:
+        raise OperationRegistryError("Connection preset request policy is not supported")
 
     capabilities = freeze_capabilities(_manifest_text_tuple(payload, "capability_ceiling"))
     if not capabilities.issubset(dialect_policy.capabilities):
@@ -262,6 +302,7 @@ def _connection_preset_from_payload(payload: Any) -> ProvingConnectionPreset:
         adapter_version=adapter_version,
         api_surface=api_surface,
         dialect_policy_id=dialect_policy_id,
+        request_policy_id=request_policy_id,
         capability_ceiling=capabilities,
         endpoint_policy_id=endpoint_policy_id,
         discovery_strategy=discovery_strategy,

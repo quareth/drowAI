@@ -234,7 +234,8 @@ connection/deployment state rather than from the static model manifest.
 Durable state is split deliberately:
 
 - `UserLLMProviderCredential`
-  - Encrypted direct-provider credential row keyed by user and provider.
+  - Encrypted direct-provider credential row uniquely keyed by user and
+    provider.
 - `LLMConnectionCredential`
   - Encrypted managed-endpoint credential keyed one-to-one by inference
     connection. The connection remains the authority for owner and preset.
@@ -244,6 +245,9 @@ Durable state is split deliberately:
   `LLMCapabilityObservation`
   - User-owned text-LLM endpoint identity, exact wire model, route metadata,
     and capability evidence.
+  - Each user has at most one inference connection per connection preset.
+    Saving connector settings updates that connection and its credential;
+    deployments and saved selections remain attached to the same identity.
 - `UserLLMSelection`
   - User's default conversation deployment reference plus provider/model
     compatibility snapshot.
@@ -420,14 +424,22 @@ reasoning-effort or parallel-tool controls. Connection presets supply the normal
 provider endpoint and exact wire model identifier; graph nodes do not construct
 endpoints or clients.
 
+Mistral Small 4 uses the same compatible-client, deployment resolver, guarded
+transport, and local validation path. Its reviewed route preserves
+`mistral-small-latest` on the wire while resolving capabilities and pricing
+through the canonical `mistral/mistral-small-2603` profile. The code-owned
+request policy maps DrowAI's neutral `required` tool choice to Mistral's
+equivalent `any` value and forwards validated reasoning effort. Thinking chunks
+are excluded from user-visible answer text.
+
 Arbitrary custom compatible endpoints retain the conservative dialect. They do
 not become agent-capable merely because they implement an endpoint named
 `/v1/chat/completions`; unsupported calls fail before outbound inference.
 
 Reporting and semantic-memory generation retain their independent user
-selections. When either selection points at a reviewed GPT-OSS deployment, the
-shared effective-profile and runtime-client path supplies the same structured
-output dialect instead of a reporting- or memory-specific adapter.
+selections. When either selection points at a reviewed compatible deployment,
+the shared effective-profile and runtime-client path supplies the same
+structured-output dialect instead of a reporting- or memory-specific adapter.
 
 Deployment selections snapshot the deterministic enabled route when one is
 available. Turn finalization forwards that authoritative selection into usage
@@ -437,7 +449,8 @@ role-owned calls in the turn.
 Endpoint resolution is connection-scoped and declarative. Native OpenAI and
 Anthropic routes use `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL`; hosted NVIDIA
 and Hugging Face routes use `DROWAI_NVIDIA_NIM_BASE_URL` and
-`DROWAI_HUGGINGFACE_BASE_URL`. An override changes only its named provider.
+`DROWAI_HUGGINGFACE_BASE_URL`; Mistral uses `DROWAI_MISTRAL_BASE_URL`. An
+override changes only its named provider.
 User-configured custom, Ollama, and vLLM connections retain their saved base
 URL. The registry resolves one SDK client base URL and one guarded operation
 URL, and the runtime passes the client base URL explicitly through the shared

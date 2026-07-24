@@ -12,7 +12,7 @@ import ProviderSettingsSection from "../ProviderSettingsSection";
 import type { LLMDeploymentRef, LLMModelCatalogResponse } from "../types";
 
 const mocked = vi.hoisted(() => ({
-  createLLMManagedConnection: vi.fn(),
+  saveLLMManagedConnection: vi.fn(),
   deleteLLMProviderCredential: vi.fn(),
   enableLLMManagedConnection: vi.fn(),
   fetchLLMModelCatalog: vi.fn(),
@@ -429,7 +429,7 @@ describe("Connection management", () => {
       ],
     };
     mocked.fetchLLMModelCatalog.mockResolvedValue(duplicateCatalog);
-    mocked.createLLMManagedConnection.mockResolvedValue({
+    mocked.saveLLMManagedConnection.mockResolvedValue({
       lifecycleState: "draft",
       connectionRef: null,
       deploymentRef: null,
@@ -499,9 +499,10 @@ describe("Connection management", () => {
     fireEvent.click(screen.getByRole("button", { name: /update nvidia/i }));
 
     await waitFor(() => {
-      expect(mocked.createLLMManagedConnection).toHaveBeenCalledWith(
+      expect(mocked.saveLLMManagedConnection).toHaveBeenCalledWith(
         "nvidia_nim_openai_compatible_chat",
         expect.objectContaining({
+          connection_ref: nimConnectionRef,
           wire_model_id: "openai/gpt-oss-20b",
           canonical_model_id: "openai/gpt-oss-20b",
         }),
@@ -875,7 +876,7 @@ describe("Connection management", () => {
       message: "Connection verified.",
       model_count: 1,
     });
-    mocked.createLLMManagedConnection.mockResolvedValue({
+    mocked.saveLLMManagedConnection.mockResolvedValue({
       lifecycleState: "draft",
       connectionRef: managedConnectionRef,
       deploymentRef,
@@ -954,10 +955,11 @@ describe("Connection management", () => {
     fireEvent.click(screen.getByRole("button", { name: /connect hugging face/i }));
 
     await waitFor(() => {
-      expect(mocked.createLLMManagedConnection).toHaveBeenCalledWith(
+      expect(mocked.saveLLMManagedConnection).toHaveBeenCalledWith(
         "huggingface_openai_compatible_chat",
         {
           api_key: "sk-hf",
+          connection_ref: null,
           display_label: null,
           base_url: null,
           wire_model_id: "openai/gpt-oss-20b:fireworks-ai",
@@ -986,7 +988,7 @@ describe("Connection management", () => {
       );
     });
     expect(
-      mocked.createLLMManagedConnection.mock.invocationCallOrder[0],
+      mocked.saveLLMManagedConnection.mock.invocationCallOrder[0],
     ).toBeLessThan(mocked.testLLMManagedConnection.mock.invocationCallOrder[0]);
     expect(
       mocked.testLLMManagedConnection.mock.invocationCallOrder[0],
@@ -1062,7 +1064,7 @@ describe("Connection management", () => {
     }) as HTMLButtonElement;
     expect(action.disabled).toBe(true);
     fireEvent.click(action);
-    expect(mocked.createLLMManagedConnection).not.toHaveBeenCalled();
+    expect(mocked.saveLLMManagedConnection).not.toHaveBeenCalled();
 
     fireEvent.change(screen.getByLabelText("Base URL"), {
       target: { value: "https://llm.example.test/team" },
@@ -1073,13 +1075,13 @@ describe("Connection management", () => {
 
     expect(action.disabled).toBe(true);
     fireEvent.click(action);
-    expect(mocked.createLLMManagedConnection).not.toHaveBeenCalled();
+    expect(mocked.saveLLMManagedConnection).not.toHaveBeenCalled();
   });
 
 
   it("submits the GPT-OSS identity with a self-hosted serving model name", async () => {
     mocked.fetchLLMModelCatalog.mockResolvedValue(managedCatalog);
-    mocked.createLLMManagedConnection.mockResolvedValue({
+    mocked.saveLLMManagedConnection.mockResolvedValue({
       lifecycleState: "draft",
       connectionRef: managedConnectionRef,
       deploymentRef: null,
@@ -1133,9 +1135,10 @@ describe("Connection management", () => {
     fireEvent.click(screen.getByRole("button", { name: /update ollama/i }));
 
     await waitFor(() => {
-      expect(mocked.createLLMManagedConnection).toHaveBeenCalledWith(
+      expect(mocked.saveLLMManagedConnection).toHaveBeenCalledWith(
         "ollama_openai_compatible_chat",
         expect.objectContaining({
+          connection_ref: managedConnectionRef,
           canonical_model_id: "openai/gpt-oss-20b",
           wire_model_id: "team/model",
         }),

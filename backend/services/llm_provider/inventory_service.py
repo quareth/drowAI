@@ -36,7 +36,7 @@ from .effective_profile_service import EffectiveProfileService
 from .guarded_transport import GuardedTransport, GuardedTransportError
 from .operation_registry import (
     GPT_OSS_20B_PROVING_PRESET_ID,
-    PUBLIC_GPT_OSS_20B_PRESET_IDS,
+    PUBLIC_REVIEWED_MODEL_PRESET_IDS,
     ConnectionOperationRegistry,
     OperationRegistryError,
 )
@@ -567,10 +567,7 @@ class LLMInventoryService:
             api_surface=preset.api_surface,
             dialect_policy_id=preset.dialect_policy_id,
             billing_provider_id=preset.billing_provider_id,
-            route_config={
-                "preset_id": preset.id,
-                "discovery_strategy": preset.discovery_strategy,
-            },
+            route_config=preset.route_config(include_discovery_strategy=True),
             enabled=True,
         )
         self._db.add(route)
@@ -651,7 +648,7 @@ def _product_inventory_model_ids(
 ) -> tuple[str, ...]:
     """Keep provider discovery bounded to intentionally shipped open models."""
 
-    if connection_preset_id not in PUBLIC_GPT_OSS_20B_PRESET_IDS:
+    if connection_preset_id not in PUBLIC_REVIEWED_MODEL_PRESET_IDS:
         return discovered_model_ids
     preset = registry.get_connection_preset(connection_preset_id)
     if not preset.exact_wire_model_id:

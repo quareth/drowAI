@@ -35,10 +35,12 @@ from backend.services.llm_provider.operation_registry import (
     GPT_OSS_20B_PROVING_PRESET_ID,
     HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
     NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+    OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
     ConnectionOperationRegistry,
 )
 from backend.services.llm_provider.types import (
     GuardedHTTPResponse,
+    LLMAuthMode,
     LLMConnectionCredentialRef,
     LLMConnectionOperation,
     LLMConnectionState,
@@ -189,27 +191,27 @@ def _assert_authorized_immediately_before_egress(
     ), events
 
 
-def test_create_connection_commits_typed_status_after_complete_success(
+def test_save_connection_commits_typed_status_after_complete_success(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     llm_identity_db: Session,
     identity_users: tuple[User, User],
 ) -> None:
-    """Create stores configuration, credential, deployment, then commits status once."""
+    """Save stores configuration, credential, deployment, then commits status once."""
 
     owner, _ = identity_users
     transactions = _track_transactions(monkeypatch, llm_identity_db)
     service, _ = _service(llm_identity_db)
 
-    outcome = service.create_connection(
+    outcome = service.save_connection(
         user_id=owner.id,
-        preset_id=CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+        preset_id=OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
         api_key=_SECRET,
         display_label="Team endpoint",
         base_url="https://llm.example.test/team",
         wire_model_id="team/chat-model",
         model_label="Team Chat",
-        canonical_model_id=CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+        canonical_model_id="openai/gpt-oss-20b",
     )
 
     assert isinstance(outcome, ConnectionStatusOutcome)
@@ -237,12 +239,81 @@ def test_create_connection_commits_typed_status_after_complete_success(
     assert _SECRET not in f"{outcome!r}\n{caplog.text}"
 
 
-def test_create_connection_rolls_back_missing_secret_and_partial_failure(
+def test_save_connection_reuses_the_user_preset_singleton(
     monkeypatch: pytest.MonkeyPatch,
     llm_identity_db: Session,
     identity_users: tuple[User, User],
 ) -> None:
-    """Create rolls back validation and post-credential failures without partial rows."""
+    """Repeated connector saves rotate the credential without creating identity rows."""
+
+    monkeypatch.setattr(
+        credential_module,
+        "encrypt_api_key",
+        lambda value: f"encrypted:{value}",
+    )
+    monkeypatch.setattr(
+        credential_module,
+        "decrypt_api_key",
+        lambda value: value.removeprefix("encrypted:"),
+    )
+    owner, _ = identity_users
+    service, _ = _service(llm_identity_db)
+
+    created = service.save_connection(
+        user_id=owner.id,
+        preset_id=NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+        api_key="first-placeholder-key",
+        wire_model_id="openai/gpt-oss-20b",
+        model_label="GPT-OSS 20B",
+        canonical_model_id="openai/gpt-oss-20b",
+    )
+    updated = service.save_connection(
+        user_id=owner.id,
+        preset_id=NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+        api_key="replacement-placeholder-key",
+        wire_model_id="openai/gpt-oss-20b",
+        model_label="GPT-OSS 20B",
+        canonical_model_id="openai/gpt-oss-20b",
+    )
+
+    assert updated.connection_ref.connection_id == created.connection_ref.connection_id
+    assert updated.deployment_ref == created.deployment_ref
+    assert len(
+        llm_identity_db.execute(
+            select(LLMInferenceConnection).where(
+                LLMInferenceConnection.user_id == owner.id,
+                LLMInferenceConnection.connection_preset_id
+                == NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+            )
+        ).scalars().all()
+    ) == 1
+    assert len(
+        llm_identity_db.execute(
+            select(LLMModelDeployment).where(
+                LLMModelDeployment.connection_id
+                == updated.connection_ref.connection_id,
+            )
+        ).scalars().all()
+    ) == 1
+    resolved = service._credentials.resolve_connection_auth(
+        LLMConnectionCredentialRef(
+            connection_id=updated.connection_ref.connection_id,
+            expected_revision=updated.connection_ref.expected_revision,
+        ),
+        runtime_user_id=owner.id,
+        purpose="test-connector-update",
+        auth_mode=LLMAuthMode.BEARER,
+    )
+    assert resolved.secret is not None
+    assert resolved.secret.value == "replacement-placeholder-key"
+
+
+def test_save_connection_rolls_back_missing_secret_and_partial_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    llm_identity_db: Session,
+    identity_users: tuple[User, User],
+) -> None:
+    """Save rolls back validation and post-credential failures without partial rows."""
 
     owner, _ = identity_users
     transactions = _track_transactions(monkeypatch, llm_identity_db)
@@ -251,7 +322,7 @@ def test_create_connection_rolls_back_missing_secret_and_partial_failure(
         ProviderConfigurationError,
         match="Connection API key is required",
     ):
-        service.create_connection(
+        service.save_connection(
             user_id=owner.id,
             preset_id=CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
             api_key=None,
@@ -268,7 +339,7 @@ def test_create_connection_rolls_back_missing_secret_and_partial_failure(
         ),
     )
     with pytest.raises(LLMProviderServiceError, match="deployment route failed"):
-        service.create_connection(
+        service.save_connection(
             user_id=owner.id,
             preset_id=CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
             api_key=_SECRET,
@@ -337,12 +408,12 @@ def test_connection_health_and_product_probe_preserve_order_and_outcomes(
     assert _SECRET not in f"{health!r}\n{probe!r}\n{caplog.text}"
 
 
-def test_same_preset_health_checks_keep_endpoint_and_secret_bound(
+def test_connector_update_keeps_endpoint_and_secret_bound_to_one_identity(
     monkeypatch: pytest.MonkeyPatch,
     llm_identity_db: Session,
     identity_users: tuple[User, User],
 ) -> None:
-    """Stored auth and target URL originate from the same connection."""
+    """Updating a connector replaces its endpoint and secret without a duplicate."""
 
     monkeypatch.setattr(
         credential_module,
@@ -356,14 +427,14 @@ def test_same_preset_health_checks_keep_endpoint_and_secret_bound(
     )
     owner, _ = identity_users
     service, _ = _service(llm_identity_db)
-    connection_a = service.create_connection(
+    connection_a = service.save_connection(
         user_id=owner.id,
         preset_id=CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
         api_key="key-a-placeholder",
         display_label="Endpoint A",
         base_url="https://a.example.test",
     )
-    service.create_connection(
+    connection_b = service.save_connection(
         user_id=owner.id,
         preset_id=CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
         api_key="key-b-placeholder",
@@ -374,10 +445,14 @@ def test_same_preset_health_checks_keep_endpoint_and_secret_bound(
     service.test_connection(
         user_id=owner.id,
         preset_id=CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
-        connection_id=connection_a.connection_ref.connection_id,
-        expected_connection_revision=connection_a.connection_ref.expected_revision,
+        connection_id=connection_b.connection_ref.connection_id,
+        expected_connection_revision=connection_b.connection_ref.expected_revision,
     )
 
+    assert (
+        connection_b.connection_ref.connection_id
+        == connection_a.connection_ref.connection_id
+    )
     transport = service._transport
     assert isinstance(transport, _RecordingTransport)
     call = transport.calls[-1]
@@ -385,8 +460,8 @@ def test_same_preset_health_checks_keep_endpoint_and_secret_bound(
     target = call["operation_target"]
     assert isinstance(secret, ProviderSecret)
     assert isinstance(target, RegisteredLLMOperationTarget)
-    assert secret.value == "key-a-placeholder"
-    assert target.url == "https://a.example.test/v1/models"
+    assert secret.value == "key-b-placeholder"
+    assert target.url == "https://b.example.test/v1/models"
 
 
 @pytest.mark.parametrize("workflow", ("test", "refresh", "enable"))
@@ -689,7 +764,7 @@ def test_enable_connection_transitions_and_validates_deployment_before_mutation(
 
 @pytest.mark.parametrize(
     "method",
-    ("create_connection", "test_connection", "refresh_inventory", "enable_connection"),
+    ("save_connection", "test_connection", "refresh_inventory", "enable_connection"),
 )
 def test_managed_workflows_reject_proving_preset_and_roll_back(
     method: str,
@@ -706,7 +781,7 @@ def test_managed_workflows_reject_proving_preset_and_roll_back(
         "user_id": owner.id,
         "preset_id": GPT_OSS_20B_PROVING_PRESET_ID,
     }
-    if method == "create_connection":
+    if method == "save_connection":
         kwargs["api_key"] = _SECRET
     else:
         kwargs.update(

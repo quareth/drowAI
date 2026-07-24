@@ -10,7 +10,7 @@ import { apiCall } from "@/lib/api-config";
 import type {
   LLMModelCatalogResponse,
   LLMDeploymentSelection,
-  LLMManagedConnectionCreateRequest,
+  LLMManagedConnectionSaveRequest,
   LLMManagedConnectionEnableRequest,
   LLMManagedConnectionRefreshRequest,
   LLMManagedConnectionTestRequest,
@@ -133,15 +133,15 @@ export async function testLLMProviderCredential(
   );
 }
 
-export async function createLLMManagedConnection(
+export async function saveLLMManagedConnection(
   presetId: string,
-  request: LLMManagedConnectionCreateRequest = {},
+  request: LLMManagedConnectionSaveRequest = {},
 ): Promise<LLMProvingConnectionStatus> {
   return mapProvingConnectionStatus(
     await apiCall<Record<string, unknown>>(
       `/api/llm/connection-presets/${encodeURIComponent(presetId)}/connection`,
       {
-        method: "POST",
+        method: "PUT",
         body: JSON.stringify(request),
       },
     ),

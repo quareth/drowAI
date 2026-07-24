@@ -10,6 +10,13 @@ The format is based on
 
 ### Added
 
+- A provider-neutral live agent compatibility harness now exercises DrowAI's
+  production intent schema, Nmap tool contract, local argument validation, and
+  post-tool response lifecycle without executing the security tool. OpenAI
+  GPT-5.4 Mini and Mistral Small 4 form the reviewed compatibility matrix.
+- Mistral Small 4 is available as a reviewed compatible deployment with
+  encrypted UI-managed credentials, guarded inference, tool use, adjustable
+  reasoning, usage pricing, and the normal deployment selection lifecycle.
 - GPT-OSS 20B appears in the curated LLM catalog with reviewed routes for
   NVIDIA, Hugging Face, Ollama, and vLLM, plus deployment-aware runtime routing.
 - Deployment-aware LLM management now uses reviewed catalog and connection
@@ -42,6 +49,12 @@ The format is based on
 
 ### Fixed
 
+- Updating an LLM connector now replaces its existing credential and
+  configuration without creating duplicate connections or changing saved
+  deployment selections.
+- Explicit deployment routes now select their registered adapter independently
+  of model vendor, and non-native model output ceilings are no longer converted
+  into oversized implicit request budgets.
 - Task cards now refresh automatically while lifecycle operations are in
   progress instead of remaining stuck on transitional statuses such as
   Starting after the runtime is ready.

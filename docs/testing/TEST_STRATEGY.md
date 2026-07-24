@@ -7,10 +7,10 @@ This document defines how DrowAI turns a large historical test surface into unde
 ## Current Test-Suite Maturity
 
 > **Important:** DrowAI contains a large historical test surface that is still
-> being audited. The generated inventory currently records 1,173 test files;
-> 1,125 are `untriaged`, 31 contain trusted CI selections, ten are useful slow
+> being audited. The generated inventory currently records 1,188 test files;
+> 1,139 are `untriaged`, 31 contain trusted CI selections, ten are useful slow
 > journeys, one is candidate E2E coverage, five are curated manual coverage,
-> and one is environment-dependent.
+> and two are environment-dependent.
 > Only the documented curated gates currently represent release evidence. The
 > repository does not claim that every historical test passes as one aggregate
 > suite.
@@ -85,6 +85,33 @@ Failure artifacts are owned by each workflow and uploaded only after failure. Th
 `test:release:e2e` is a maintained manual aggregate. It runs the `main`
 release contracts and the isolated `test:e2e:pr` Chromium core; it does not
 replace the multi-browser journey or Linux Docker certification tiers.
+
+## Live Agent Compatibility Harness
+
+The provider-neutral harness verifies whether a reviewed deployment can
+complete DrowAI's actual agent contracts. It sends the production intent
+classifier schema and production Nmap tool schema, validates the returned tool
+arguments locally, and supplies a synthetic result for post-tool reasoning.
+It never executes Nmap or another security tool.
+
+Run the deterministic contract coverage without API keys:
+
+```bash
+.venv/bin/python -m pytest -q \
+  backend/tests/services/llm_provider/test_agent_compatibility_harness.py
+```
+
+Run the reviewed live matrix with test-process credentials:
+
+```bash
+DROWAI_LIVE_AGENT_COMPATIBILITY=true \
+  .venv/bin/python -m pytest -q -rs \
+  backend/tests/services/llm_provider/test_live_agent_compatibility_harness.py
+```
+
+The live cases read `OPENAI_API_KEY` and `MISTRAL_API_KEY` from the process
+environment. They do not read encrypted credentials saved through DrowAI's UI;
+a case is skipped when its corresponding environment variable is absent.
 
 ## Stability Evidence And Promotion Policy
 

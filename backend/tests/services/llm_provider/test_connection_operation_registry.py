@@ -33,6 +33,8 @@ from backend.services.llm_provider.operation_registry import (
     GPT_OSS_20B_PROVING_PRESET_ID,
     HUGGINGFACE_BASE_URL_ENV,
     HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+    MISTRAL_BASE_URL_ENV,
+    MISTRAL_OPENAI_COMPATIBLE_PRESET_ID,
     NVIDIA_NIM_BASE_URL_ENV,
     NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
     OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
@@ -40,6 +42,7 @@ from backend.services.llm_provider.operation_registry import (
     OperationRegistryError,
     ProvingConnectionPreset,
     PUBLIC_GPT_OSS_20B_PRESET_IDS,
+    PUBLIC_REVIEWED_MODEL_PRESET_IDS,
     USER_HTTPS_BASE_URL_ENDPOINT_POLICY_ID,
     VLLM_OPENAI_COMPATIBLE_PRESET_ID,
 )
@@ -60,12 +63,15 @@ EXPECTED_FACADE_ALL = [
     "GPT_OSS_20B_PROVING_PRESET_ID",
     "HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID",
     "HUGGINGFACE_BASE_URL_ENV",
+    "MISTRAL_BASE_URL_ENV",
+    "MISTRAL_OPENAI_COMPATIBLE_PRESET_ID",
     "NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID",
     "NVIDIA_NIM_BASE_URL_ENV",
     "OPENAI_BASE_URL_ENV",
     "OLLAMA_OPENAI_COMPATIBLE_PRESET_ID",
     "OperationRegistryError",
     "ProvingConnectionPreset",
+    "PUBLIC_REVIEWED_MODEL_PRESET_IDS",
     "USER_HTTPS_BASE_URL_ENDPOINT_POLICY_ID",
     "VLLM_OPENAI_COMPATIBLE_PRESET_ID",
 ]
@@ -80,11 +86,20 @@ EXPECTED_PUBLIC_CONSTANTS = {
     "GPT_OSS_20B_PROVING_PRESET_ID": "gpt_oss_20b_openai_compatible_proving",
     "HUGGINGFACE_BASE_URL_ENV": "DROWAI_HUGGINGFACE_BASE_URL",
     "HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID": "huggingface_openai_compatible_chat",
+    "MISTRAL_BASE_URL_ENV": "DROWAI_MISTRAL_BASE_URL",
+    "MISTRAL_OPENAI_COMPATIBLE_PRESET_ID": "mistral_openai_compatible_chat",
     "NVIDIA_NIM_BASE_URL_ENV": "DROWAI_NVIDIA_NIM_BASE_URL",
     "NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID": "nvidia_nim_openai_compatible_chat",
     "OLLAMA_OPENAI_COMPATIBLE_PRESET_ID": "ollama_openai_compatible_chat",
     "OPENAI_BASE_URL_ENV": "OPENAI_BASE_URL",
     "PUBLIC_GPT_OSS_20B_PRESET_IDS": (
+        "nvidia_nim_openai_compatible_chat",
+        "huggingface_openai_compatible_chat",
+        "ollama_openai_compatible_chat",
+        "vllm_openai_compatible_chat",
+    ),
+    "PUBLIC_REVIEWED_MODEL_PRESET_IDS": (
+        "mistral_openai_compatible_chat",
         "nvidia_nim_openai_compatible_chat",
         "huggingface_openai_compatible_chat",
         "ollama_openai_compatible_chat",
@@ -105,6 +120,7 @@ EXPECTED_PRESET_FIELDS = (
     "adapter_version",
     "api_surface",
     "dialect_policy_id",
+    "request_policy_id",
     "capability_ceiling",
     "endpoint_policy_id",
     "discovery_strategy",
@@ -131,6 +147,7 @@ OPENAI_COMPATIBLE_PRESET_IDS = (
     CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
     GPT_OSS_20B_PROVING_PRESET_ID,
     HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+    MISTRAL_OPENAI_COMPATIBLE_PRESET_ID,
     NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
     OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
     VLLM_OPENAI_COMPATIBLE_PRESET_ID,
@@ -199,6 +216,11 @@ def test_facade_public_constants_keep_current_values() -> None:
         HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID
         == EXPECTED_PUBLIC_CONSTANTS["HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID"]
     )
+    assert MISTRAL_BASE_URL_ENV == EXPECTED_PUBLIC_CONSTANTS["MISTRAL_BASE_URL_ENV"]
+    assert (
+        MISTRAL_OPENAI_COMPATIBLE_PRESET_ID
+        == EXPECTED_PUBLIC_CONSTANTS["MISTRAL_OPENAI_COMPATIBLE_PRESET_ID"]
+    )
     assert NVIDIA_NIM_BASE_URL_ENV == EXPECTED_PUBLIC_CONSTANTS["NVIDIA_NIM_BASE_URL_ENV"]
     assert (
         NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID
@@ -212,6 +234,10 @@ def test_facade_public_constants_keep_current_values() -> None:
     assert (
         PUBLIC_GPT_OSS_20B_PRESET_IDS
         == EXPECTED_PUBLIC_CONSTANTS["PUBLIC_GPT_OSS_20B_PRESET_IDS"]
+    )
+    assert (
+        PUBLIC_REVIEWED_MODEL_PRESET_IDS
+        == EXPECTED_PUBLIC_CONSTANTS["PUBLIC_REVIEWED_MODEL_PRESET_IDS"]
     )
     assert (
         USER_HTTPS_BASE_URL_ENDPOINT_POLICY_ID
@@ -243,6 +269,9 @@ def test_facade_public_method_signatures_are_stable() -> None:
     assert str(inspect.signature(registry_type.list_public_gpt_oss_20b_preset_ids)) == (
         "(self) -> 'tuple[str, ...]'"
     )
+    assert str(
+        inspect.signature(registry_type.list_public_reviewed_model_preset_ids)
+    ) == "(self) -> 'tuple[str, ...]'"
     assert str(inspect.signature(registry_type.get_connection_preset)) == (
         "(self, preset_id: 'str') -> 'ProvingConnectionPreset'"
     )
@@ -298,6 +327,10 @@ def test_operation_provider_and_preset_matrix_contract() -> None:
 
     assert registry.list_connection_preset_ids() == OPENAI_COMPATIBLE_PRESET_IDS
     assert registry.list_public_gpt_oss_20b_preset_ids() == PUBLIC_GPT_OSS_20B_PRESET_IDS
+    assert (
+        registry.list_public_reviewed_model_preset_ids()
+        == PUBLIC_REVIEWED_MODEL_PRESET_IDS
+    )
 
     providers = (
         "openai",
@@ -824,6 +857,10 @@ def _openai_compatible_preset_expected_results() -> dict[
         NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID: (
             "https://integrate.api.nvidia.com/v1",
             "integrate.api.nvidia.com",
+        ),
+        MISTRAL_OPENAI_COMPATIBLE_PRESET_ID: (
+            "https://api.mistral.ai/v1",
+            "api.mistral.ai",
         ),
     }
     configurable_preset_specs = {

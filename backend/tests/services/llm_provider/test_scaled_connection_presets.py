@@ -8,6 +8,9 @@ from sqlalchemy.orm import Session
 from agent.providers.llm.adapters.openai.compatible_chat import (
     OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
 )
+from agent.providers.llm.adapters.openai.compatible_request_policies import (
+    DEFAULT_COMPATIBLE_REQUEST_POLICY_ID,
+)
 from agent.providers.llm.core.capabilities import LLMCapability
 from backend.models import User
 from backend.services.llm_provider.connection_service import LLMConnectionService
@@ -430,6 +433,7 @@ def test_scaled_preset_deployments_reuse_existing_adapter_routes(
     assert route.route_config == {
         "preset_id": HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
         "discovery_strategy": "openai_models_endpoint",
+        "request_policy_id": DEFAULT_COMPATIBLE_REQUEST_POLICY_ID,
     }
 
 

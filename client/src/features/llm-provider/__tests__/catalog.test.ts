@@ -12,6 +12,7 @@ import {
   getSelectedModelDisplayLabel,
 } from "../catalog";
 import {
+  getDefaultVisibleReasoningEffort,
   getVisibleReasoningEffortOptions,
   getSupportedReasoningEffortForPayload,
   shouldOmitReasoningEffort,
@@ -104,6 +105,19 @@ const catalog: LLMModelCatalogResponse = {
 };
 
 describe("LLM provider catalog helpers", () => {
+  it("keeps a supported none default instead of promoting a costly option", () => {
+    const model: LLMCatalogModel = {
+      ...catalog.providers[0].models[0],
+      reasoningEfforts: ["none", "high"],
+      visibleReasoningEfforts: ["none", "high"],
+      defaultReasoningEffort: "none",
+      defaultVisibleReasoningEffort: "none",
+    };
+
+    expect(getVisibleReasoningEffortOptions(model)).toEqual(["none", "high"]);
+    expect(getDefaultVisibleReasoningEffort(model)).toBe("none");
+  });
+
   it("finds provider/model pairs without model-id inference", () => {
     const entry = findSelectedCatalogEntry(catalog, {
       provider: "anthropic",

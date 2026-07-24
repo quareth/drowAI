@@ -79,6 +79,32 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _final_text_content(content: Any) -> str | None:
+    """Return final answer text while excluding reasoning/thinking chunks."""
+
+    if content is None or isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return str(content)
+    text_parts: list[str] = []
+    for chunk in content:
+        chunk_type = (
+            chunk.get("type")
+            if isinstance(chunk, dict)
+            else getattr(chunk, "type", None)
+        )
+        if chunk_type != "text":
+            continue
+        text = (
+            chunk.get("text")
+            if isinstance(chunk, dict)
+            else getattr(chunk, "text", None)
+        )
+        if isinstance(text, str):
+            text_parts.append(text)
+    return "".join(text_parts) or None
+
+
 def _safe_inc(metric_name: str) -> None:
     """Increment metrics when backend metrics utilities are available."""
     try:
@@ -325,13 +351,14 @@ class OpenAIChatClient(LLMClient):
                     )
                 self._attach_structured_response_format(request_kwargs, structured_spec)
                 response = await self._client.chat.completions.create(**request_kwargs)
-                content = response.choices[0].message.content
+                raw_content = response.choices[0].message.content
                 raise_for_openai_chat_refusal(
                     response,
                     model=self._model,
                     usage=self._extract_usage_from_response(response),
-                    partial_content=content if isinstance(content, str) else None,
+                    partial_content=raw_content if isinstance(raw_content, str) else None,
                 )
+                content = _final_text_content(raw_content)
                 
                 if content is None or not str(content).strip():
                     raise LLMResponseError(
@@ -438,7 +465,9 @@ class OpenAIChatClient(LLMClient):
                     delta = getattr(choice, "delta", None)
                     
                     if delta is not None:
-                        content = getattr(delta, "content", None)
+                        content = _final_text_content(
+                            getattr(delta, "content", None)
+                        )
                         if content:
                             partial_chunks.append(str(content))
                             yield content
@@ -564,13 +593,14 @@ class OpenAIChatClient(LLMClient):
                 self._attach_structured_response_format(request_kwargs, structured_spec)
                 response = await self._client.chat.completions.create(**request_kwargs)
                 usage = self._extract_usage_from_response(response)
-                content = response.choices[0].message.content
+                raw_content = response.choices[0].message.content
                 raise_for_openai_chat_refusal(
                     response,
                     model=self._model,
                     usage=usage,
-                    partial_content=content if isinstance(content, str) else None,
+                    partial_content=raw_content if isinstance(raw_content, str) else None,
                 )
+                content = _final_text_content(raw_content)
                 
                 if content is None or not str(content).strip():
                     raise LLMResponseError(
@@ -703,7 +733,9 @@ class OpenAIChatClient(LLMClient):
                         if choice:
                             delta = getattr(choice, "delta", None)
                             if delta is not None:
-                                content = getattr(delta, "content", None)
+                                content = _final_text_content(
+                                    getattr(delta, "content", None)
+                                )
                                 if content:
                                     partial_chunks.append(str(content))
                                     yield content
@@ -797,13 +829,14 @@ class OpenAIChatClient(LLMClient):
                 
                 response = await self._client.chat.completions.create(**request_kwargs)
                 choice = response.choices[0]
-                content = choice.message.content
+                raw_content = choice.message.content
                 raise_for_openai_chat_refusal(
                     response,
                     model=self._model,
                     usage=self._extract_usage_from_response(response),
-                    partial_content=content if isinstance(content, str) else None,
+                    partial_content=raw_content if isinstance(raw_content, str) else None,
                 )
+                content = _final_text_content(raw_content)
                 
                 tool_calls, content_was_tool_call = self._extract_requested_tool_calls(
                     choice.message,
@@ -905,13 +938,14 @@ class OpenAIChatClient(LLMClient):
                 response = await self._client.chat.completions.create(**request_kwargs)
                 usage = self._extract_usage_from_response(response)
                 choice = response.choices[0]
-                content = choice.message.content
+                raw_content = choice.message.content
                 raise_for_openai_chat_refusal(
                     response,
                     model=self._model,
                     usage=usage,
-                    partial_content=content if isinstance(content, str) else None,
+                    partial_content=raw_content if isinstance(raw_content, str) else None,
                 )
+                content = _final_text_content(raw_content)
                 
                 tool_calls, content_was_tool_call = self._extract_requested_tool_calls(
                     choice.message,

@@ -112,7 +112,7 @@ def test_runtime_client_builder_delegates_adapter_construction_to_factory() -> N
     assert "LLMClientFactory.get_client" in builder_source
     assert "provider_model=call_ref" in builder_source
     assert "agent.providers.llm.adapters." not in resolver_module_source
-    assert "agent.providers.llm.adapters." not in builder_module_source
+    assert "OpenAICompatibleChatClient" not in builder_module_source
     assert "AsyncOpenAI" not in resolver_module_source
     assert "AsyncOpenAI" not in builder_module_source
     assert "AsyncAnthropic" not in resolver_module_source

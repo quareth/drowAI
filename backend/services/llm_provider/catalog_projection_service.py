@@ -24,13 +24,19 @@ from .application_contracts import (
     RunnabilityOutcome,
     VerificationOutcome,
 )
-from .catalog_service import CatalogModelSummary, CatalogProviderSummary
+from .catalog_service import (
+    CatalogModelSummary,
+    CatalogProviderSummary,
+    catalog_model_presentation,
+)
 from .connection_service import LLMConnectionService
 from .connection_status_service import LLMConnectionStatusService
 from .deployment_service import LLMDeploymentService
+from .effective_profile_service import compose_reviewed_compatible_profile
 from .operation_registry import (
     GPT_OSS_20B_PROVING_PRESET_ID,
     PUBLIC_GPT_OSS_20B_PRESET_IDS,
+    PUBLIC_REVIEWED_MODEL_PRESET_IDS,
     ConnectionOperationRegistry,
     OperationRegistryError,
     ProvingConnectionPreset,
@@ -227,7 +233,7 @@ class LLMCatalogProjectionService:
             by_preset.setdefault(connection.connection_preset_id, []).append(connection)
 
         rows: list[CatalogProviderOutcome] = []
-        for preset_id in self._registry.list_public_gpt_oss_20b_preset_ids():
+        for preset_id in self._registry.list_public_reviewed_model_preset_ids():
             try:
                 preset = self._registry.get_connection_preset(preset_id)
             except OperationRegistryError:
@@ -271,7 +277,7 @@ class LLMCatalogProjectionService:
                         deployment=None,
                     )
                 )
-            if preset.id in PUBLIC_GPT_OSS_20B_PRESET_IDS:
+            if preset.id in PUBLIC_REVIEWED_MODEL_PRESET_IDS:
                 models = [max(models, key=self._product_catalog_model_score)]
             model_outcomes = tuple(models)
             rows.append(
@@ -324,7 +330,7 @@ class LLMCatalogProjectionService:
         preset: ProvingConnectionPreset,
         deployment: LLMModelDeployment,
     ) -> bool:
-        if preset.id not in PUBLIC_GPT_OSS_20B_PRESET_IDS:
+        if preset.id not in PUBLIC_REVIEWED_MODEL_PRESET_IDS:
             return False
         if preset.exact_wire_model_id:
             return deployment.wire_model_id == preset.exact_wire_model_id
@@ -374,6 +380,22 @@ class LLMCatalogProjectionService:
             if deployment is not None
             else None
         )
+        profile = compose_reviewed_compatible_profile(
+            preset,
+            display_name=(
+                deployment.display_name
+                if deployment is not None
+                else preset.display_name
+            ),
+            canonical_model_id=(
+                (deployment.canonical_model_id if deployment is not None else None)
+                or preset.canonical_model_id
+            ),
+            lifecycle=(
+                deployment.lifecycle_state if deployment is not None else "active"
+            ),
+        )
+        presentation = catalog_model_presentation(profile)
         return CatalogModelOutcome(
             id=model_id,
             canonical_model_id=(
@@ -383,19 +405,21 @@ class LLMCatalogProjectionService:
             ),
             exact_wire_model_id=wire_model_id,
             label=label,
-            api_surface=preset.api_surface,
-            capabilities=tuple(
-                sorted(capability.value for capability in preset.capability_ceiling)
+            api_surface=presentation.api_surface,
+            capabilities=presentation.capabilities,
+            context_window_tokens=presentation.context_window_tokens,
+            max_output_tokens=presentation.max_output_tokens,
+            reasoning_efforts=presentation.reasoning_efforts,
+            visible_reasoning_efforts=presentation.visible_reasoning_efforts,
+            default_reasoning_effort=presentation.default_reasoning_effort,
+            default_visible_reasoning_effort=(
+                presentation.default_visible_reasoning_effort
             ),
-            context_window_tokens=128000,
-            max_output_tokens=10000,
-            reasoning_efforts=(),
-            visible_reasoning_efforts=(),
-            default_reasoning_effort=None,
-            default_visible_reasoning_effort=None,
-            tool_choice_modes=("auto",),
-            structured_output_strategies=(),
-            pricing_status="unavailable",
+            tool_choice_modes=presentation.tool_choice_modes,
+            structured_output_strategies=(
+                presentation.structured_output_strategies
+            ),
+            pricing_status=presentation.pricing_status,
             deployment_ref=deployment_ref,
             runnable=runnability.runnable,
             connection=self._connection_metadata(

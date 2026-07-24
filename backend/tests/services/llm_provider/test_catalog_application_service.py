@@ -4,14 +4,11 @@ from __future__ import annotations
 
 from dataclasses import replace
 from typing import Any
-from uuid import uuid4
-
 import pytest
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.models import (
-    LLMInferenceConnection,
     User,
     UserLLMProviderCredential,
     UserLLMSelection,
@@ -39,10 +36,10 @@ from backend.services.llm_provider.operation_registry import (
     CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
     GPT_OSS_20B_PROVING_PRESET_ID,
     HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
+    MISTRAL_OPENAI_COMPATIBLE_PRESET_ID,
     OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
 )
 from backend.services.llm_provider.types import (
-    LLMConnectionState,
     ProviderConfigurationError,
 )
 
@@ -259,20 +256,6 @@ def _seed_projection_rows(
         canonical_model_id="openai/gpt-oss-20b",
         display_name="GPT-OSS 20B via HF",
     )
-    db.add(
-        LLMInferenceConnection(
-            id=uuid4(),
-            user_id=owner.id,
-            display_name="Stale enabled HF connection",
-            connection_preset_id=HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
-            runtime_family_id="openai_compatible_chat",
-            serving_operator_id="huggingface",
-            transport_origin="backend",
-            endpoint_policy_id="fixed_provider_v1",
-            state=LLMConnectionState.ENABLED.value,
-            revision=1,
-        )
-    )
     custom_connection = connections.create_draft(
         user_id=owner.id,
         display_name="Hidden custom endpoint",
@@ -353,6 +336,7 @@ def test_catalog_projection_matches_active_router_order_and_fields(
     assert [provider["id"] for provider in payload["providers"]] == [
         "openai",
         "anthropic",
+        MISTRAL_OPENAI_COMPATIBLE_PRESET_ID,
         "nvidia_nim_openai_compatible_chat",
         HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
         OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
@@ -433,6 +417,7 @@ def test_catalog_projection_empty_state_has_no_workflow_side_effects(
     assert [provider["id"] for provider in payload["providers"]] == [
         "openai",
         "anthropic",
+        MISTRAL_OPENAI_COMPATIBLE_PRESET_ID,
         "nvidia_nim_openai_compatible_chat",
         HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
         OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,

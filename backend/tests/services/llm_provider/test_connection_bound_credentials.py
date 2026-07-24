@@ -29,6 +29,7 @@ from backend.services.llm_provider.types import (
     CredentialNotFoundError,
     LLMAuthMode,
     LLMConnectionCredentialRef,
+    LLMConnectionValidationError,
     ResolvedAuth,
 )
 
@@ -88,12 +89,12 @@ def test_none_auth_resolves_without_dummy_credential(
     ).scalar_one_or_none() is None
 
 
-def test_legacy_facade_targets_only_explicit_default_connection(
+def test_legacy_facade_targets_the_provider_singleton(
     llm_identity_db: Session,
     identity_users: tuple[User, User],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A second same-provider connection cannot inherit or replace legacy auth."""
+    """Legacy credentials resolve only through the user's provider singleton."""
 
     _use_test_cipher(monkeypatch)
     owner, _ = identity_users
@@ -108,21 +109,23 @@ def test_legacy_facade_targets_only_explicit_default_connection(
     assert status.auth_mode is LLMAuthMode.API_KEY
 
     connections = LLMConnectionService(llm_identity_db)
-    additional = connections.create_draft(
-        user_id=owner.id,
-        display_name="Additional OpenAI",
-        connection_preset_id="openai",
-        runtime_family_id="openai_native",
-    )
-    additional_ref = connections.authorize_credential_binding(
-        user_id=owner.id,
-        connection_id=additional.id,
-        expected_revision=1,
-    )
     default = llm_identity_db.get(LLMInferenceConnection, default_id)
     assert default is not None
     assert default.legacy_default_provider == "openai"
-    assert additional.legacy_default_provider is None
+    assert connections.get_owned_for_preset(
+        user_id=owner.id,
+        connection_preset_id="openai",
+    ) == default
+    with pytest.raises(
+        LLMConnectionValidationError,
+        match="only one connection per preset",
+    ):
+        connections.create_draft(
+            user_id=owner.id,
+            display_name="Additional OpenAI",
+            connection_preset_id="openai",
+            runtime_family_id="openai_native",
+        )
 
     default_ref = connections.authorize_credential_binding(
         user_id=owner.id,
@@ -148,14 +151,6 @@ def test_legacy_facade_targets_only_explicit_default_connection(
     assert bearer.secret is not None
     assert bearer.secret.value == "sk-owner-only"
 
-    with pytest.raises(CredentialAuthorizationError):
-        credentials.resolve_connection_auth(
-            additional_ref,
-            runtime_user_id=owner.id,
-            purpose="must_not_inherit",
-            auth_mode=LLMAuthMode.BEARER,
-        )
-
     safe_status = asdict(status)
     assert "sk-owner-only" not in repr(status)
     assert "sk-owner-only" not in repr(resolved)
@@ -164,12 +159,12 @@ def test_legacy_facade_targets_only_explicit_default_connection(
     assert "endpoint" not in safe_status
 
 
-def test_legacy_delete_leaves_designation_unconfigured_without_fallback(
+def test_legacy_delete_leaves_provider_singleton_unconfigured(
     llm_identity_db: Session,
     identity_users: tuple[User, User],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Deleting legacy auth never selects another same-provider connection."""
+    """Deleting legacy auth keeps the provider singleton without a credential."""
 
     _use_test_cipher(monkeypatch)
     owner, _ = identity_users
@@ -180,19 +175,11 @@ def test_legacy_delete_leaves_designation_unconfigured_without_fallback(
         api_key="sk-delete-me",
     )
     default_id = deterministic_legacy_connection_id(owner.id, "openai")
-    additional = LLMConnectionService(llm_identity_db).create_draft(
-        user_id=owner.id,
-        display_name="Never a fallback",
-        connection_preset_id="openai",
-        runtime_family_id="openai_native",
-    )
-
     credentials.delete(user_id=owner.id, provider="openai")
 
     default = llm_identity_db.get(LLMInferenceConnection, default_id)
     assert default is not None
     assert default.legacy_default_provider == "openai"
-    assert additional.legacy_default_provider is None
     assert credentials.get_masked_status(owner.id, "openai").connection_id == str(
         default_id
     )
@@ -251,15 +238,15 @@ def test_connection_auth_rejects_foreign_owner_and_stale_revision(
         )
 
 
-def test_same_preset_connections_resolve_only_their_own_credentials(
+def test_same_preset_connections_are_isolated_between_users(
     llm_identity_db: Session,
     identity_users: tuple[User, User],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Distinct endpoints using one preset never share stored credentials."""
+    """Each user owns one isolated connector and credential for a preset."""
 
     _use_test_cipher(monkeypatch)
-    owner, _ = identity_users
+    owner, other = identity_users
     connections = LLMConnectionService(llm_identity_db)
     credentials = LLMCredentialService(llm_identity_db)
     preset = ConnectionOperationRegistry().get_connection_preset(
@@ -267,12 +254,13 @@ def test_same_preset_connections_resolve_only_their_own_credentials(
     )
 
     def create_connection(
+        user_id: int,
         label: str,
         endpoint: str,
         secret: str,
     ) -> LLMInferenceConnection:
         connection = connections.create_draft(
-            user_id=owner.id,
+            user_id=user_id,
             display_name=label,
             connection_preset_id=preset.id,
             runtime_family_id=preset.runtime_family_id,
@@ -283,7 +271,7 @@ def test_same_preset_connections_resolve_only_their_own_credentials(
             },
         )
         credentials.upsert_connection_api_key(
-            user_id=owner.id,
+            user_id=user_id,
             connection_ref=LLMConnectionCredentialRef(
                 connection_id=str(connection.id),
                 expected_revision=int(connection.revision),
@@ -294,11 +282,13 @@ def test_same_preset_connections_resolve_only_their_own_credentials(
         return connection
 
     connection_a = create_connection(
+        owner.id,
         "Endpoint A",
         "https://a.example.test",
         "key-a-placeholder",
     )
     connection_b = create_connection(
+        other.id,
         "Endpoint B",
         "https://b.example.test",
         "key-b-placeholder",
@@ -315,23 +305,27 @@ def test_same_preset_connections_resolve_only_their_own_credentials(
     }
     assert llm_identity_db.execute(
         select(UserLLMProviderCredential).where(
-            UserLLMProviderCredential.user_id == owner.id,
             UserLLMProviderCredential.provider == preset.id,
         )
     ).scalar_one_or_none() is None
 
-    def resolved_secret(connection: LLMInferenceConnection) -> str:
+    def resolved_secret(
+        connection: LLMInferenceConnection,
+        user_id: int,
+    ) -> str:
         resolved = credentials.resolve_connection_auth(
             LLMConnectionCredentialRef(
                 connection_id=str(connection.id),
                 expected_revision=int(connection.revision),
             ),
-            runtime_user_id=owner.id,
+            runtime_user_id=user_id,
             purpose="same-preset-isolation",
             auth_mode=LLMAuthMode.BEARER,
         )
         assert resolved.secret is not None
         return resolved.secret.value
 
-    assert resolved_secret(connection_a) == "key-a-placeholder"
-    assert resolved_secret(connection_b) == "key-b-placeholder"
+    assert resolved_secret(connection_a, owner.id) == "key-a-placeholder"
+    assert resolved_secret(connection_b, other.id) == "key-b-placeholder"
+    with pytest.raises(CredentialAuthorizationError):
+        resolved_secret(connection_b, owner.id)

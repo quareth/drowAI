@@ -76,6 +76,16 @@ class LLMConnectionService:
 
         owner_id = _positive_int(user_id, "user_id")
         preset_id = _registered_preset(connection_preset_id)
+        existing = self._db.execute(
+            select(LLMInferenceConnection.id).where(
+                LLMInferenceConnection.user_id == owner_id,
+                LLMInferenceConnection.connection_preset_id == preset_id,
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            raise LLMConnectionValidationError(
+                "A user can configure only one connection per preset"
+            )
         endpoint_url, endpoint_policy_id, sanitized_config = _validate_connection_preset_contract(
             owner_id=owner_id,
             preset_id=preset_id,
@@ -160,6 +170,26 @@ class LLMConnectionService:
         ).scalars()
         return tuple(rows)
 
+    def get_owned_for_preset(
+        self,
+        *,
+        user_id: int,
+        connection_preset_id: str,
+    ) -> LLMInferenceConnection | None:
+        """Return the user's singleton connection for one registered preset."""
+
+        owner_id = _positive_int(user_id, "user_id")
+        preset_id = _registered_preset(connection_preset_id)
+        return self._db.execute(
+            select(LLMInferenceConnection)
+            .where(
+                LLMInferenceConnection.user_id == owner_id,
+                LLMInferenceConnection.connection_preset_id == preset_id,
+            )
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).scalar_one_or_none()
+
     def get_owned_at_revision(
         self,
         *,
@@ -195,6 +225,46 @@ class LLMConnectionService:
             raise LLMConnectionStateTransitionError(
                 "Only draft connections accept configuration updates"
             )
+        return self._update_configuration(
+            connection=connection,
+            user_id=user_id,
+            display_name=display_name,
+            non_secret_config=non_secret_config,
+        )
+
+    def update_configuration(
+        self,
+        *,
+        user_id: int,
+        connection_id: UUID | str,
+        expected_revision: int,
+        display_name: str,
+        non_secret_config: dict[str, Any] | None = None,
+    ) -> LLMInferenceConnection:
+        """Update one owned singleton connector without replacing its identity."""
+
+        connection = self._require_owned_revision(
+            user_id=user_id,
+            connection_id=connection_id,
+            expected_revision=expected_revision,
+        )
+        return self._update_configuration(
+            connection=connection,
+            user_id=user_id,
+            display_name=display_name,
+            non_secret_config=non_secret_config,
+        )
+
+    def _update_configuration(
+        self,
+        *,
+        connection: LLMInferenceConnection,
+        user_id: int,
+        display_name: str,
+        non_secret_config: dict[str, Any] | None,
+    ) -> LLMInferenceConnection:
+        """Validate and apply mutable non-secret connector configuration."""
+
         endpoint_url, endpoint_policy_id, sanitized_config = _validate_connection_preset_contract(
             owner_id=_positive_int(user_id, "user_id"),
             preset_id=connection.connection_preset_id,
@@ -204,7 +274,15 @@ class LLMConnectionService:
             db=self._db,
             enforce_cardinality=False,
         )
-        connection.display_name = _required_text(display_name, "display_name", 255)
+        validated_display_name = _required_text(display_name, "display_name", 255)
+        if (
+            connection.display_name == validated_display_name
+            and connection.endpoint_url == endpoint_url
+            and connection.endpoint_policy_id == endpoint_policy_id
+            and connection.non_secret_config == sanitized_config
+        ):
+            return connection
+        connection.display_name = validated_display_name
         connection.endpoint_url = endpoint_url
         connection.endpoint_policy_id = endpoint_policy_id
         connection.non_secret_config = sanitized_config

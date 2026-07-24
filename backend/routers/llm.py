@@ -18,7 +18,7 @@ from ..database import get_db
 from ..models import User, LLMConversation, LLMConversationResponse
 from ..schemas.llm import (
     LLMModelCatalogResponse,
-    LLMManagedConnectionCreateRequest,
+    LLMManagedConnectionSaveRequest,
     LLMManagedConnectionEnableRequest,
     LLMManagedConnectionRefreshRequest,
     LLMManagedConnectionStatusResponse,
@@ -557,23 +557,35 @@ async def test_provider_credential(
         raise _provider_configuration_exception(exc) from exc
 
 
-@router.post(
+@router.api_route(
     "/connection-presets/{preset_id}/connection",
+    methods=["POST", "PUT"],
     response_model=LLMManagedConnectionStatusResponse,
 )
-async def create_managed_connection(
+async def save_managed_connection(
     preset_id: str,
-    body: LLMManagedConnectionCreateRequest,
+    body: LLMManagedConnectionSaveRequest,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """Create a reviewed non-proving connection draft and optional deployment."""
+    """Create or update the user's singleton reviewed connector."""
 
     try:
-        outcome = LLMManagedConnectionLifecycleService(db).create_connection(
+        connection_ref = body.connection_ref
+        outcome = LLMManagedConnectionLifecycleService(db).save_connection(
             user_id=current_user.id,
             preset_id=preset_id,
             api_key=body.api_key,
+            connection_id=(
+                connection_ref.connection_id
+                if connection_ref is not None
+                else None
+            ),
+            expected_connection_revision=(
+                connection_ref.expected_revision
+                if connection_ref is not None
+                else None
+            ),
             display_label=body.display_label,
             base_url=body.base_url,
             wire_model_id=body.wire_model_id,

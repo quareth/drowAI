@@ -19,6 +19,9 @@ from agent.providers.llm.core.exceptions import (
     LLMConfigurationError,
 )
 from agent.providers.llm.core.identity import ProviderModelRef
+from agent.providers.llm.adapters.openai.compatible_dialects import (
+    OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
+)
 from agent.providers.llm.profiles.registry import require_model_profile
 from backend.services.llm_provider import runtime_client_builder as builder_module
 from backend.services.llm_provider.runtime_client_builder import LLMRuntimeClientBuilder
@@ -48,7 +51,10 @@ def _resolved_target(
     effective_model: str | None = "gpt-5.2",
     secret: ProviderSecret | None = None,
     auth_none: bool = False,
+    adapter_id: str | None = None,
+    api_surface: str = "responses",
     dialect_policy_id: str = "openai_responses.native_v1",
+    request_policy_id: str | None = None,
 ) -> ResolvedLLMTarget:
     resolved_auth = (
         ResolvedAuth.none()
@@ -75,9 +81,9 @@ def _resolved_target(
         deployment_id=str(uuid4()),
         deployment_revision=7,
         route_id=str(uuid4()),
-        adapter_id=f"{provider}_responses",
+        adapter_id=adapter_id or f"{provider}_responses",
         adapter_version="1",
-        api_surface="responses",
+        api_surface=api_surface,
         dialect_policy_id=dialect_policy_id,
         canonical_model_id=effective_model,
         exact_wire_model_id=exact_wire_model_id,
@@ -86,6 +92,7 @@ def _resolved_target(
             if effective_model is not None
             else None
         ),
+        request_policy_id=request_policy_id,
     )
 
 
@@ -117,6 +124,62 @@ def test_builder_reasoning_validation_matches_current_policy() -> None:
             ProviderModelRef("anthropic", "claude-haiku-4-5-20251001"),
             "medium",
         )
+
+
+def test_builder_forwards_explicit_compatible_adapter_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The resolved route adapter is forwarded to the provider-neutral factory."""
+
+    builder = LLMRuntimeClientBuilder()
+    calls: list[dict[str, Any]] = []
+
+    def fake_get_client(
+        *,
+        provider_model: ProviderModelRef,
+        api_key: str,
+        **kwargs: Any,
+    ) -> _MinimalClient:
+        calls.append(
+            {
+                "provider_model": provider_model,
+                "api_key": api_key,
+                "kwargs": dict(kwargs),
+            }
+        )
+        return _MinimalClient()
+
+    monkeypatch.setattr(builder_module.LLMClientFactory, "get_client", fake_get_client)
+    resolved_target = _resolved_target(
+        provider="mistral",
+        connection_preset_id="mistral_openai_compatible_chat",
+        effective_model="mistral-small-2603",
+        exact_wire_model_id="mistral-small-latest",
+        adapter_id=OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
+        api_surface="chat_completions",
+        dialect_policy_id="openai_compatible_chat.mistral_v1",
+        request_policy_id="mistral_small_v1",
+    )
+
+    builder.build(
+        selection=LLMRuntimeSelectionV2(
+            deployment_ref=DeploymentRef(str(uuid4()), 1)
+        ),
+        resolved_target=resolved_target,
+        target=None,
+        legacy_call_ref=None,
+        legacy_reasoning_effort=None,
+        reasoning_effort="none",
+        reasoning_effort_was_explicit=False,
+        client_kwargs={},
+    )
+
+    assert calls[0]["kwargs"]["adapter_id"] == OPENAI_COMPATIBLE_CHAT_ADAPTER_ID
+    assert calls[0]["provider_model"] == ProviderModelRef(
+        "mistral",
+        "mistral-small-latest",
+    )
+    assert calls[0]["kwargs"]["request_policy_id"] == "mistral_small_v1"
 
 
 def test_builder_factory_arguments_and_budget_wrapper_are_field_for_field(

@@ -39,6 +39,7 @@ ANTHROPIC_CACHE_READ_INPUT_TOKENS = "cache_read_input_tokens"
 OPENAI_PRICING_REVISION = "openai_text_pricing_v1"
 OPENAI_ESTIMATE_PRICING_REVISION = "openai_text_estimate_v1"
 ANTHROPIC_PRICING_REVISION = "anthropic_text_pricing_v1"
+MISTRAL_PRICING_REVISION = "mistral_text_pricing_v1"
 
 
 @dataclass(frozen=True, slots=True)
@@ -317,6 +318,14 @@ ANTHROPIC_PRICE_SCHEDULES: dict[str, ComponentPriceSchedule] = {
     ),
 }
 
+MISTRAL_PRICE_SCHEDULES: dict[str, ComponentPriceSchedule] = {
+    "mistral-small-2603": _schedule(
+        input_per_million="0.15",
+        cached_input_per_million="0.015",
+        output_per_million="0.60",
+    ),
+}
+
 
 def get_pricing_quote(
     ref: ProviderModelRef,
@@ -397,6 +406,27 @@ def get_pricing_quote(
             pricing_revision=None,
         )
 
+    if provider == "mistral":
+        schedule = MISTRAL_PRICE_SCHEDULES.get(model)
+        if schedule is not None:
+            return PricingQuote(
+                provider=provider,
+                model=model,
+                status=PRICING_AVAILABLE,
+                schedule=schedule,
+                api_surface=surface,
+                pricing_revision=MISTRAL_PRICING_REVISION,
+            )
+        return PricingQuote(
+            provider=provider,
+            model=model,
+            status=PRICING_UNAVAILABLE,
+            schedule=None,
+            api_surface=surface,
+            reason="mistral_model_pricing_not_registered",
+            pricing_revision=None,
+        )
+
     return PricingQuote(
         provider=provider,
         model=model,
@@ -414,7 +444,7 @@ def has_available_or_estimated_provider_pricing(provider: str) -> bool:
         normalized = normalize_provider_id(provider)
     except (TypeError, ValueError):
         return False
-    return normalized in {OPENAI_PROVIDER_ID, ANTHROPIC_PROVIDER_ID}
+    return normalized in {OPENAI_PROVIDER_ID, ANTHROPIC_PROVIDER_ID, "mistral"}
 
 
 def aggregate_pricing_statuses(statuses: Mapping[str, int] | list[str] | tuple[str, ...]) -> PricingStatus:
@@ -504,6 +534,8 @@ __all__ = [
     "ANTHROPIC_SONNET5_STANDARD_PRICE_START",
     "ComponentPriceSchedule",
     "INPUT_TOKENS",
+    "MISTRAL_PRICE_SCHEDULES",
+    "MISTRAL_PRICING_REVISION",
     "OPENAI_DEFAULT_ESTIMATE",
     "OPENAI_PRICE_SCHEDULES",
     "OPENAI_PRICING_REVISION",

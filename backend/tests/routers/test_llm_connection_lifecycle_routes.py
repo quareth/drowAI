@@ -52,6 +52,7 @@ from backend.services.llm_provider.operation_registry import (
     GPT_OSS_20B_PROVING_PRESET_ID,
     HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
     NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+    OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
 )
 from backend.services.llm_provider.types import (
     GuardedHTTPResponse,
@@ -402,8 +403,8 @@ def test_managed_routes_delegate_once_with_exact_request_adaptation(monkeypatch)
 
     monkeypatch.setattr(
         LLMManagedConnectionLifecycleService,
-        "create_connection",
-        record("create", status_outcome),
+        "save_connection",
+        record("save", status_outcome),
     )
     monkeypatch.setattr(
         LLMManagedConnectionLifecycleService,
@@ -423,7 +424,7 @@ def test_managed_routes_delegate_once_with_exact_request_adaptation(monkeypatch)
 
     client, app = _client(user)
     try:
-        created = client.post(
+        created = client.put(
             f"/api/llm/connection-presets/{CUSTOM_OPENAI_COMPATIBLE_PRESET_ID}/connection",
             json={
                 "api_key": _MANAGED_SECRET,
@@ -477,11 +478,13 @@ def test_managed_routes_delegate_once_with_exact_request_adaptation(monkeypatch)
     ]
     assert calls == [
         (
-            "create",
+            "save",
             {
                 "user_id": user.id,
                 "preset_id": CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
                 "api_key": _MANAGED_SECRET,
+                "connection_id": None,
+                "expected_connection_revision": None,
                 "display_label": "Team endpoint",
                 "base_url": "https://llm.example.test/team",
                 "wire_model_id": "team/chat-model",
@@ -688,15 +691,15 @@ def test_managed_create_success_and_missing_secret_failure(monkeypatch, caplog) 
     try:
         created = _during_request(
             counter,
-            lambda: client.post(
-                f"/api/llm/connection-presets/{CUSTOM_OPENAI_COMPATIBLE_PRESET_ID}/connection",
+            lambda: client.put(
+                f"/api/llm/connection-presets/{OLLAMA_OPENAI_COMPATIBLE_PRESET_ID}/connection",
                 json={
                     "api_key": _MANAGED_SECRET,
                     "display_label": "Team endpoint",
                     "base_url": "https://llm.example.test/team",
                     "wire_model_id": "team/chat-model",
                     "model_label": "Team Chat",
-                    "canonical_model_id": CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
+                    "canonical_model_id": "openai/gpt-oss-20b",
                 },
             ),
         )
@@ -739,10 +742,37 @@ def test_managed_create_success_and_missing_secret_failure(monkeypatch, caplog) 
         finally:
             db.close()
 
+        replacement_secret = f"{_MANAGED_SECRET}-replacement"
+        updated = _during_request(
+            counter,
+            lambda: client.put(
+                f"/api/llm/connection-presets/{OLLAMA_OPENAI_COMPATIBLE_PRESET_ID}/connection",
+                json={
+                    "api_key": replacement_secret,
+                    "connection_ref": payload["connection_ref"],
+                    "display_label": "Updated team endpoint",
+                    "base_url": "https://llm.example.test/team",
+                    "wire_model_id": "team/chat-model",
+                    "model_label": "Team Chat",
+                    "canonical_model_id": "openai/gpt-oss-20b",
+                },
+            ),
+        )
+        assert updated.status_code == 200, updated.text
+        assert counter.commits == 1
+        assert counter.rollbacks == 0
+        assert (
+            updated.json()["connection_ref"]["connection_id"]
+            == payload["connection_ref"]["connection_id"]
+        )
+        assert updated.json()["deployment_ref"] == payload["deployment_ref"]
+        assert _count_connections(user.id, OLLAMA_OPENAI_COMPATIBLE_PRESET_ID) == 1
+        _assert_secret_absent(replacement_secret, updated.text, caplog.text)
+
         missing = _during_request(
             counter,
-            lambda: client.post(
-                f"/api/llm/connection-presets/{CUSTOM_OPENAI_COMPATIBLE_PRESET_ID}/connection",
+            lambda: client.put(
+                f"/api/llm/connection-presets/{OLLAMA_OPENAI_COMPATIBLE_PRESET_ID}/connection",
                 json={"base_url": "https://llm.example.test/team"},
             ),
         )
@@ -750,7 +780,7 @@ def test_managed_create_success_and_missing_secret_failure(monkeypatch, caplog) 
         assert missing.json() == {"detail": "Connection API key is required"}
         assert counter.commits == 0
         assert counter.rollbacks == 1
-        assert _count_connections(user.id, CUSTOM_OPENAI_COMPATIBLE_PRESET_ID) == 1
+        assert _count_connections(user.id, OLLAMA_OPENAI_COMPATIBLE_PRESET_ID) == 1
     finally:
         app.dependency_overrides.clear()
 
@@ -1435,7 +1465,12 @@ def test_proving_ref_routes_reject_stale_and_mismatched_owned_refs_before_mutati
         db.commit()
     finally:
         db.close()
-    second_ref, second_deployment_ref, _route_id = _proving_connection(user_id=user.id)
+    second_ref, second_deployment_ref, _route_id = _managed_connection(
+        user_id=user.id,
+        preset_id=NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+        with_product_deployment=True,
+    )
+    assert second_deployment_ref is not None
     stale_deployment_ref = dict(first_deployment_ref)
     stale_deployment_ref["expected_revision"] += 100
     client, app = _client(user)

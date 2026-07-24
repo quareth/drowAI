@@ -26,11 +26,15 @@ import {
   saveLLMSelection,
 } from "@/features/llm-provider/api";
 import {
+  findSelectedCatalogEntry,
   getBlockingSelectionStatus,
   getFirstCatalogDefaultSelection,
   sameDeploymentRef,
 } from "@/features/llm-provider/catalog";
-import { getSupportedReasoningEffortForPayload } from "@/features/llm-provider/capability-controls";
+import {
+  getDefaultVisibleReasoningEffort,
+  getSupportedReasoningEffortForPayload,
+} from "@/features/llm-provider/capability-controls";
 import type {
   LLMModelCatalogResponse,
   LLMSelection,
@@ -906,8 +910,13 @@ export function UnifiedAgentChat({
       selection: SelectedLLMModel,
       options?: { reasoningEffort?: ReasoningEffort },
     ) => {
-      if (options?.reasoningEffort) {
-        setSelectedReasoningEffort(options.reasoningEffort);
+      const targetEffort =
+        options?.reasoningEffort ??
+        getDefaultVisibleReasoningEffort(
+          findSelectedCatalogEntry(llmCatalog, selection)?.model,
+        );
+      if (targetEffort) {
+        setSelectedReasoningEffort(targetEffort);
       }
       if (!selection.model || hasSameLLMSelectionIdentity(selection, selectedLLMModel)) {
         return;
@@ -915,7 +924,7 @@ export function UnifiedAgentChat({
       setSelectedLLMModel(selection);
       updateSelection.mutate(selection);
     },
-    [updateSelection, selectedLLMModel],
+    [llmCatalog, updateSelection, selectedLLMModel],
   );
 
   const handleDownloadTranscript = useCallback(async () => {

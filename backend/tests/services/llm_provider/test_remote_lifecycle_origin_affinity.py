@@ -5,6 +5,7 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.models import (
@@ -71,21 +72,30 @@ def _target(
     model: str,
     api_surface: str = "responses",
 ) -> tuple[LLMInferenceConnection, LLMModelDeployment, LLMDeploymentRoute]:
-    connection = LLMInferenceConnection(
-        id=uuid4(),
-        user_id=user.id,
-        display_name=f"Origin {model}",
-        connection_preset_id="openai",
-        runtime_family_id="openai_native",
-        serving_operator_id="openai",
-        transport_origin="backend",
-        endpoint_url=None,
-        endpoint_policy_id="fixed_provider_v1",
-        config_schema_version=1,
-        non_secret_config={"auth_mode": "api_key"},
-        state="enabled",
-        revision=1,
-    )
+    connection = db.execute(
+        select(LLMInferenceConnection).where(
+            LLMInferenceConnection.user_id == user.id,
+            LLMInferenceConnection.connection_preset_id == "openai",
+        )
+    ).scalar_one_or_none()
+    if connection is None:
+        connection = LLMInferenceConnection(
+            id=uuid4(),
+            user_id=user.id,
+            display_name="OpenAI origin",
+            connection_preset_id="openai",
+            runtime_family_id="openai_native",
+            serving_operator_id="openai",
+            transport_origin="backend",
+            endpoint_url=None,
+            endpoint_policy_id="fixed_provider_v1",
+            config_schema_version=1,
+            non_secret_config={"auth_mode": "api_key"},
+            state="enabled",
+            revision=1,
+        )
+        db.add(connection)
+        db.flush()
     deployment = LLMModelDeployment(
         id=uuid4(),
         connection_id=connection.id,
@@ -111,7 +121,7 @@ def _target(
         ),
         enabled=True,
     )
-    db.add_all([connection, deployment, route])
+    db.add_all([deployment, route])
     db.flush()
     return connection, deployment, route
 

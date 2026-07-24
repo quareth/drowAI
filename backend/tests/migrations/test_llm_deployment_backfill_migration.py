@@ -41,7 +41,7 @@ def test_backfill_revision_is_append_only_after_identity_schema() -> None:
 
     assert revision is not None
     assert revision.down_revision == "0006_llm_deployment_identity"
-    assert script.get_heads() == ["0011_connection_credentials"]
+    assert script.get_heads() == ["0012_llm_connector_singletons"]
 
 
 def test_migration_maps_exact_models_preserves_ciphertext_and_reruns(

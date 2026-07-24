@@ -151,7 +151,11 @@ class LiveLLMTargetResolver:
             purpose=purpose,
             auth_mode=auth_mode,
         )
-        contract = self._profiles.native_route_contract(profile)
+        contract = (
+            self._profiles.native_route_contract(profile)
+            if route is None
+            else None
+        )
         return ResolvedLLMTarget(
             connection=ResolvedConnectionTarget(
                 connection_id=authorized.connection_id,
@@ -181,6 +185,7 @@ class LiveLLMTargetResolver:
             canonical_model_id=deployment.canonical_model_id,
             exact_wire_model_id=deployment.wire_model_id,
             effective_profile=profile,
+            request_policy_id=_route_request_policy_id(route),
         )
 
     def _select_route(
@@ -247,6 +252,15 @@ def _connection_auth_mode(connection: LLMInferenceConnection) -> LLMAuthMode:
         if connection.legacy_default_provider is not None
         else LLMAuthMode.NONE
     )
+
+
+def _route_request_policy_id(route: LLMDeploymentRoute | None) -> str | None:
+    """Return the reviewed request-policy identity persisted on a route."""
+
+    if route is None or not isinstance(route.route_config, dict):
+        return None
+    policy_id = route.route_config.get("request_policy_id")
+    return str(policy_id) if policy_id is not None else None
 
 
 __all__ = ["LiveLLMTargetResolver"]

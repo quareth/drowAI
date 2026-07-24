@@ -7,6 +7,7 @@ from dataclasses import FrozenInstanceError
 import json
 from pathlib import Path
 from types import MappingProxyType
+from typing import Any
 
 import pytest
 
@@ -293,17 +294,29 @@ def test_unsupported_preset_contract_values_are_rejected(
             None,
         ),
         (
-            lambda manifest: _set(manifest["presets"][3], "fixed_base_url", "https://host"),
+            lambda manifest: _set(
+                _preset_by_id(manifest, catalog.OLLAMA_OPENAI_COMPATIBLE_PRESET_ID),
+                "fixed_base_url",
+                "https://host",
+            ),
             "User endpoint preset must declare base_url only",
             None,
         ),
         (
-            lambda manifest: _set(manifest["presets"][3], "base_url_env", "OLLAMA_BASE_URL"),
+            lambda manifest: _set(
+                _preset_by_id(manifest, catalog.OLLAMA_OPENAI_COMPATIBLE_PRESET_ID),
+                "base_url_env",
+                "OLLAMA_BASE_URL",
+            ),
             "User endpoint preset must declare base_url only",
             None,
         ),
         (
-            lambda manifest: _set(manifest["presets"][3], "endpoint_config_field", "url"),
+            lambda manifest: _set(
+                _preset_by_id(manifest, catalog.OLLAMA_OPENAI_COMPATIBLE_PRESET_ID),
+                "endpoint_config_field",
+                "url",
+            ),
             "User endpoint preset must declare base_url only",
             None,
         ),
@@ -336,6 +349,7 @@ _REQUIRED_PRESET_IDS = (
     catalog.GPT_OSS_20B_PROVING_PRESET_ID,
     catalog.HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID,
     catalog.NVIDIA_NIM_OPENAI_COMPATIBLE_PRESET_ID,
+    catalog.MISTRAL_OPENAI_COMPATIBLE_PRESET_ID,
     catalog.OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
     catalog.VLLM_OPENAI_COMPATIBLE_PRESET_ID,
     catalog.CUSTOM_OPENAI_COMPATIBLE_PRESET_ID,
@@ -379,6 +393,27 @@ def _valid_manifest() -> dict[str, object]:
                 endpoint_config_field=None,
                 user_config_fields=["display_label", "api_key"],
                 base_url_env=catalog.NVIDIA_NIM_BASE_URL_ENV,
+            ),
+            _preset(
+                catalog.MISTRAL_OPENAI_COMPATIBLE_PRESET_ID,
+                "Mistral",
+                fixed_base_url="https://api.mistral.ai",
+                endpoint_config_field=None,
+                user_config_fields=["display_label", "api_key"],
+                base_url_env=catalog.MISTRAL_BASE_URL_ENV,
+                dialect_policy_id="openai_compatible_chat.mistral_v1",
+                capability_ceiling=[
+                    "chat",
+                    "streaming",
+                    "tools",
+                    "parallel_tools",
+                    "structured_output_native",
+                    "usage_reporting",
+                    "streaming_usage_reporting",
+                    "reasoning_effort",
+                    "context_window",
+                    "max_output_tokens",
+                ],
             ),
             _preset(
                 catalog.OLLAMA_OPENAI_COMPATIBLE_PRESET_ID,
@@ -476,6 +511,10 @@ def _write_text(path: Path, content: str) -> Path:
 def _set(target: object, key: str, value: object) -> object:
     target[key] = value
     return target
+
+
+def _preset_by_id(manifest: dict[str, Any], preset_id: str) -> dict[str, Any]:
+    return next(preset for preset in manifest["presets"] if preset["id"] == preset_id)
 
 
 def _mutated_manifest(mutator: object) -> object:

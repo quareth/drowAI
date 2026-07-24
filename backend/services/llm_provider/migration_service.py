@@ -444,6 +444,16 @@ class LLMProviderMigrationService:
         ).scalar_one_or_none()
         if connection is not None:
             return connection, False
+        connection = self._db.execute(
+            select(LLMInferenceConnection).where(
+                LLMInferenceConnection.user_id == user_id,
+                LLMInferenceConnection.connection_preset_id == provider,
+            )
+        ).scalar_one_or_none()
+        if connection is not None:
+            connection.legacy_default_provider = provider
+            self._db.flush()
+            return connection, False
         usable = any(
             bool(credential.enabled and credential.has_api_key)
             for credential in credentials

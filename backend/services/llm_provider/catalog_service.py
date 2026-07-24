@@ -69,6 +69,23 @@ class CatalogProviderSummary:
     default_model: str
 
 
+@dataclass(frozen=True, slots=True)
+class CatalogModelPresentation:
+    """Stable catalog-facing values derived from one model profile."""
+
+    api_surface: str
+    capabilities: tuple[str, ...]
+    context_window_tokens: int
+    max_output_tokens: int
+    reasoning_efforts: tuple[str, ...]
+    visible_reasoning_efforts: tuple[str, ...]
+    default_reasoning_effort: str | None
+    default_visible_reasoning_effort: str | None
+    tool_choice_modes: tuple[str, ...]
+    structured_output_strategies: tuple[str, ...]
+    pricing_status: str
+
+
 PROVIDER_DISPLAY_ORDER: tuple[str, ...] = (
     OPENAI_PROVIDER_ID,
     ANTHROPIC_PROVIDER_ID,
@@ -187,31 +204,62 @@ class LLMProviderCatalogService:
     def _model_summary(profile: ModelProfile) -> CatalogModelSummary:
         """Build public catalog metadata for one model profile."""
 
+        presentation = catalog_model_presentation(profile)
         return CatalogModelSummary(
             id=profile.ref.model,
             canonical_model_id=profile.canonical_model_id or str(profile.ref),
             exact_wire_model_id=None,
             label=profile.display_name,
-            api_surface=profile.api_surface,
-            capabilities=_capability_values(profile.capabilities),
-            context_window_tokens=profile.context_window_tokens,
-            max_output_tokens=profile.max_output_tokens,
-            reasoning_efforts=_ordered_values(profile.reasoning_efforts, _REASONING_EFFORT_ORDER),
-            visible_reasoning_efforts=_visible_reasoning_efforts(profile),
-            default_reasoning_effort=profile.default_reasoning_effort,
-            default_visible_reasoning_effort=_default_visible_reasoning_effort(profile),
-            tool_choice_modes=_ordered_values(profile.tool_choice_modes, _TOOL_CHOICE_MODE_ORDER),
-            structured_output_strategies=tuple(sorted(profile.structured_output_strategies)),
-            pricing_status=get_pricing_quote(
-                profile.ref,
-                api_surface=profile.api_surface,
-            ).status,
+            api_surface=presentation.api_surface,
+            capabilities=presentation.capabilities,
+            context_window_tokens=presentation.context_window_tokens,
+            max_output_tokens=presentation.max_output_tokens,
+            reasoning_efforts=presentation.reasoning_efforts,
+            visible_reasoning_efforts=presentation.visible_reasoning_efforts,
+            default_reasoning_effort=presentation.default_reasoning_effort,
+            default_visible_reasoning_effort=(
+                presentation.default_visible_reasoning_effort
+            ),
+            tool_choice_modes=presentation.tool_choice_modes,
+            structured_output_strategies=(
+                presentation.structured_output_strategies
+            ),
+            pricing_status=presentation.pricing_status,
         )
 
 
 _REASONING_EFFORT_ORDER = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
-_VISIBLE_REASONING_EFFORT_ORDER = ("low", "medium", "high", "xhigh", "max")
+_VISIBLE_REASONING_EFFORT_ORDER = ("none", "low", "medium", "high", "xhigh", "max")
 _TOOL_CHOICE_MODE_ORDER = ("auto", "none", "required", "specific")
+
+
+def catalog_model_presentation(profile: ModelProfile) -> CatalogModelPresentation:
+    """Return the supported catalog presentation contract for a model profile."""
+
+    return CatalogModelPresentation(
+        api_surface=profile.api_surface,
+        capabilities=_capability_values(profile.capabilities),
+        context_window_tokens=profile.context_window_tokens,
+        max_output_tokens=profile.max_output_tokens,
+        reasoning_efforts=_ordered_values(
+            profile.reasoning_efforts,
+            _REASONING_EFFORT_ORDER,
+        ),
+        visible_reasoning_efforts=_visible_reasoning_efforts(profile),
+        default_reasoning_effort=profile.default_reasoning_effort,
+        default_visible_reasoning_effort=_default_visible_reasoning_effort(profile),
+        tool_choice_modes=_ordered_values(
+            profile.tool_choice_modes,
+            _TOOL_CHOICE_MODE_ORDER,
+        ),
+        structured_output_strategies=tuple(
+            sorted(profile.structured_output_strategies)
+        ),
+        pricing_status=get_pricing_quote(
+            profile.ref,
+            api_surface=profile.api_surface,
+        ).status,
+    )
 
 
 def _capability_values(capabilities) -> tuple[str, ...]:
@@ -259,7 +307,9 @@ def _default_visible_reasoning_effort(profile: ModelProfile) -> str | None:
 
 
 __all__ = [
+    "CatalogModelPresentation",
     "CatalogModelSummary",
     "CatalogProviderSummary",
     "LLMProviderCatalogService",
+    "catalog_model_presentation",
 ]
