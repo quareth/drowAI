@@ -234,9 +234,7 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
         self._base_url = validated_base_url
         self._auth_mode = auth.mode
         self._dialect_policy = dialect_policy
-        self._request_policy = request_policy
         self._default_reasoning_effort = default_reasoning_effort
-        self._reasoning_effort = default_reasoning_effort
         self._model_profile = model_profile
 
     async def chat(

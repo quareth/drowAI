@@ -234,7 +234,8 @@ connection/deployment state rather than from the static model manifest.
 Durable state is split deliberately:
 
 - `UserLLMProviderCredential`
-  - Encrypted direct-provider credential row keyed by user and provider.
+  - Encrypted direct-provider credential row uniquely keyed by user and
+    provider.
 - `LLMConnectionCredential`
   - Encrypted managed-endpoint credential keyed one-to-one by inference
     connection. The connection remains the authority for owner and preset.
@@ -244,6 +245,9 @@ Durable state is split deliberately:
   `LLMCapabilityObservation`
   - User-owned text-LLM endpoint identity, exact wire model, route metadata,
     and capability evidence.
+  - Each user has at most one inference connection per connection preset.
+    Saving connector settings updates that connection and its credential;
+    deployments and saved selections remain attached to the same identity.
 - `UserLLMSelection`
   - User's default conversation deployment reference plus provider/model
     compatibility snapshot.

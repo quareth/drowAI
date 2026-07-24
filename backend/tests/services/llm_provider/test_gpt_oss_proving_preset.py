@@ -10,6 +10,9 @@ from agent.providers.llm.adapters.openai.compatible_chat import (
     OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
     OPENAI_COMPATIBLE_CHAT_ADAPTER_VERSION,
 )
+from agent.providers.llm.adapters.openai.compatible_request_policies import (
+    DEFAULT_COMPATIBLE_REQUEST_POLICY_ID,
+)
 from backend.models import User
 from backend.services.llm_provider.connection_service import LLMConnectionService
 from backend.services.llm_provider.deployment_service import LLMDeploymentService
@@ -144,8 +147,12 @@ def test_gpt_oss_connection_draft_is_owner_scoped_and_singleton_per_user(
         expected_revision=1,
         target_state=LLMConnectionState.DISABLED,
     )
-    replacement = service.create_gpt_oss_20b_proving_draft(user_id=owner.id)
-    assert replacement.id != connection.id
+    with pytest.raises(LLMConnectionValidationError):
+        service.create_gpt_oss_20b_proving_draft(user_id=owner.id)
+    assert service.get_owned_for_preset(
+        user_id=owner.id,
+        connection_preset_id=GPT_OSS_20B_PROVING_PRESET_ID,
+    ).id == connection.id
 
 
 def test_generic_connection_creation_cannot_override_gpt_oss_preset_contract(
@@ -207,7 +214,10 @@ def test_gpt_oss_deployment_and_route_preserve_exact_code_owned_alias(
     assert route.api_surface == "chat_completions"
     assert route.dialect_policy_id == AGENT_OPENAI_COMPATIBLE_DIALECT.policy_id
     assert route.billing_provider_id is None
-    assert route.route_config == {"preset_id": GPT_OSS_20B_PROVING_PRESET_ID}
+    assert route.route_config == {
+        "preset_id": GPT_OSS_20B_PROVING_PRESET_ID,
+        "request_policy_id": DEFAULT_COMPATIBLE_REQUEST_POLICY_ID,
+    }
 
     with pytest.raises(LLMDeploymentNotFoundError):
         LLMDeploymentService(llm_identity_db).create_gpt_oss_20b_proving_deployment(

@@ -8,24 +8,31 @@ from typing import Any, Callable
 
 import pytest
 
-from agent.providers.llm.adapters.openai.compatible_dialects import (
-    OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
-)
-from agent.providers.llm.adapters.openai.compatible_request_policies import (
-    MISTRAL_SMALL_REQUEST_POLICY_ID,
-)
 from agent.providers.llm.adapters.openai.responses.client import (
     OpenAIResponsesClient,
 )
-from agent.providers.llm.core.identity import ProviderModelRef
 from agent.providers.llm.factory.client_factory import LLMClientFactory
 from agent.providers.llm.profiles.registry import require_model_profile
+from backend.services.llm_provider.operation_registry import (
+    MISTRAL_OPENAI_COMPATIBLE_PRESET_ID,
+    ConnectionOperationRegistry,
+)
+from backend.services.llm_provider.types import LLMConnectionOperation
 from backend.tests.services.llm_provider.agent_compatibility_harness import (
     run_agent_compatibility_harness,
 )
 
 
 LIVE_AGENT_COMPATIBILITY_ENV = "DROWAI_LIVE_AGENT_COMPATIBILITY"
+_MISTRAL_REGISTRY = ConnectionOperationRegistry(env_getter=lambda _name: None)
+_MISTRAL_PRESET = _MISTRAL_REGISTRY.get_connection_preset(
+    MISTRAL_OPENAI_COMPATIBLE_PRESET_ID
+)
+_MISTRAL_TARGET = _MISTRAL_REGISTRY.resolve(
+    LLMConnectionOperation.INFERENCE,
+    provider=_MISTRAL_PRESET.id,
+)
+_MISTRAL_PROFILE = require_model_profile(_MISTRAL_PRESET.canonical_ref)
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,19 +64,16 @@ def _openai_mini_client() -> OpenAIResponsesClient:
 def _mistral_small_client():
     """Build Mistral through the production route-adapter factory contract."""
 
-    profile = require_model_profile(
-        ProviderModelRef("mistral", "mistral-small-2603")
-    )
     return LLMClientFactory.get_client(
-        provider_model=profile.ref,
-        model_profile=profile,
-        adapter_id=OPENAI_COMPATIBLE_CHAT_ADAPTER_ID,
+        provider_model=_MISTRAL_PROFILE.ref,
+        model_profile=_MISTRAL_PROFILE,
+        adapter_id=_MISTRAL_PRESET.adapter_id,
         api_key=os.environ["MISTRAL_API_KEY"],
-        base_url="https://api.mistral.ai/v1",
-        wire_model_id="mistral-small-latest",
-        dialect_policy_id="openai_compatible_chat.mistral_v1",
-        request_policy_id=MISTRAL_SMALL_REQUEST_POLICY_ID,
-        reasoning_effort="none",
+        base_url=_MISTRAL_TARGET.client_base_url,
+        wire_model_id=_MISTRAL_PRESET.exact_wire_model_id,
+        dialect_policy_id=_MISTRAL_PRESET.dialect_policy_id,
+        request_policy_id=_MISTRAL_PRESET.request_policy_id,
+        reasoning_effort=_MISTRAL_PROFILE.default_reasoning_effort,
     )
 
 
@@ -84,11 +88,11 @@ LIVE_HARNESS_CASES = (
     ),
     LiveHarnessCase(
         evidence_id="mistral_small_4",
-        provider="mistral",
-        model="mistral-small-2603",
+        provider=_MISTRAL_PROFILE.ref.provider,
+        model=_MISTRAL_PROFILE.ref.model,
         api_key_env="MISTRAL_API_KEY",
         client_factory=_mistral_small_client,
-        reasoning_effort="none",
+        reasoning_effort=_MISTRAL_PROFILE.default_reasoning_effort,
     ),
 )
 

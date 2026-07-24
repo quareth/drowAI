@@ -679,7 +679,6 @@ def test_v2_success_preserves_call_order_and_resolved_target_fields(
         "deployment.route",
         "profiles.resolve",
         "authorizer.authorize",
-        "profiles.contract",
     ]
     assert deployments.get_calls == [
         {"user_id": owner.id, "deployment_id": str(deployment.id)}

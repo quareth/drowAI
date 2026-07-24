@@ -209,7 +209,8 @@ export interface LLMProviderCredentialDeleteResponse {
   success: boolean;
 }
 
-export interface LLMManagedConnectionCreateRequest {
+export interface LLMManagedConnectionSaveRequest {
+  connection_ref?: LLMConnectionRef | null;
   display_label?: string | null;
   api_key?: string | null;
   base_url?: string | null;

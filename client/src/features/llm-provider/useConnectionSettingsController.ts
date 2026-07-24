@@ -9,9 +9,9 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import {
-  createLLMManagedConnection,
   enableLLMManagedConnection,
   refreshLLMManagedConnectionInventory,
+  saveLLMManagedConnection,
   testLLMManagedConnection,
 } from "@/features/llm-provider/api";
 import type {
@@ -19,7 +19,7 @@ import type {
   LLMConnectionMetadata,
   LLMConnectionRef,
   LLMDeploymentRef,
-  LLMManagedConnectionCreateRequest,
+  LLMManagedConnectionSaveRequest,
   LLMProvingConnectionStatus,
 } from "@/features/llm-provider/types";
 
@@ -71,15 +71,16 @@ export function useConnectionSettingsController({
 
   const connectMutation = useMutation({
     mutationFn: async () => {
-      const createRequest: LLMManagedConnectionCreateRequest = {
+      const saveRequest: LLMManagedConnectionSaveRequest = {
         api_key: apiKey.trim() || null,
+        connection_ref: connectionRef,
         display_label: null,
         base_url: fieldValues.base_url?.trim() || null,
         wire_model_id: fieldValues.wire_model_id?.trim() || model.exactWireModelId || model.id,
         model_label: model.label,
         canonical_model_id: managedCanonicalModelId(model, connection),
       };
-      const created = await createLLMManagedConnection(connection.presetId, createRequest);
+      const created = await saveLLMManagedConnection(connection.presetId, saveRequest);
       let nextConnectionRef = created.connectionRef ?? connectionRef;
       let nextDeploymentRef = created.deploymentRef ?? deploymentRef;
       if (!nextConnectionRef) {

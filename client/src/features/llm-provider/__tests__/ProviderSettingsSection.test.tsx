@@ -12,7 +12,7 @@ import ProviderSettingsSection from "../ProviderSettingsSection";
 import type { LLMCatalogProvider, LLMModelCatalogResponse } from "../types";
 
 const mocked = vi.hoisted(() => ({
-  createLLMManagedConnection: vi.fn(),
+  saveLLMManagedConnection: vi.fn(),
   deleteLLMProviderCredential: vi.fn(),
   enableLLMManagedConnection: vi.fn(),
   fetchLLMModelCatalog: vi.fn(),

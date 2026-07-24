@@ -22,7 +22,7 @@ import type {
 } from "../types";
 
 const mocked = vi.hoisted(() => ({
-  createLLMManagedConnection: vi.fn(),
+  saveLLMManagedConnection: vi.fn(),
   enableLLMManagedConnection: vi.fn(),
   refreshLLMManagedConnectionInventory: vi.fn(),
   testLLMManagedConnection: vi.fn(),
@@ -133,7 +133,7 @@ describe("useConnectionSettingsController", () => {
   it("creates the exact request and enables without refresh when verification passes with effective refs", async () => {
     const onSuccess = vi.fn();
     const onError = vi.fn();
-    mocked.createLLMManagedConnection.mockResolvedValue(connectionStatus({
+    mocked.saveLLMManagedConnection.mockResolvedValue(connectionStatus({
       connectionRef,
       deploymentRef,
       runnable: false,
@@ -159,10 +159,11 @@ describe("useConnectionSettingsController", () => {
     act(() => { result.current.connect(); });
 
     await waitFor(() => {
-      expect(mocked.createLLMManagedConnection).toHaveBeenCalledWith(
+      expect(mocked.saveLLMManagedConnection).toHaveBeenCalledWith(
         "ollama_openai_compatible_chat",
         {
           api_key: "sk-controller-placeholder",
+          connection_ref: null,
           display_label: null,
           base_url: "https://llm.example.test/team",
           wire_model_id: "team/model",
@@ -195,14 +196,14 @@ describe("useConnectionSettingsController", () => {
     expect(invalidateQueries).toHaveBeenCalledTimes(1);
     expect(onError).not.toHaveBeenCalled();
     expectCallOrder(
-      mocked.createLLMManagedConnection,
+      mocked.saveLLMManagedConnection,
       mocked.testLLMManagedConnection,
       mocked.enableLLMManagedConnection,
     );
   });
 
   it("sends null canonical metadata when the canonical id has no distinct value", async () => {
-    mocked.createLLMManagedConnection.mockResolvedValue(connectionStatus({
+    mocked.saveLLMManagedConnection.mockResolvedValue(connectionStatus({
       connectionRef: null,
       deploymentRef: null,
       runnable: false,
@@ -225,10 +226,11 @@ describe("useConnectionSettingsController", () => {
     act(() => { result.current.connect(); });
 
     await waitFor(() => {
-      expect(mocked.createLLMManagedConnection).toHaveBeenCalledWith(
+      expect(mocked.saveLLMManagedConnection).toHaveBeenCalledWith(
         "ollama_openai_compatible_chat",
         {
           api_key: "sk-controller-placeholder",
+          connection_ref: null,
           display_label: null,
           base_url: "https://llm.example.test/team",
           wire_model_id: "team/wire-model",
@@ -241,7 +243,7 @@ describe("useConnectionSettingsController", () => {
   });
 
   it("falls back to model id when wire model input and exact wire model are absent", async () => {
-    mocked.createLLMManagedConnection.mockResolvedValue(connectionStatus({
+    mocked.saveLLMManagedConnection.mockResolvedValue(connectionStatus({
       connectionRef: null,
       deploymentRef: null,
       runnable: false,
@@ -265,10 +267,11 @@ describe("useConnectionSettingsController", () => {
     act(() => { result.current.connect(); });
 
     await waitFor(() => {
-      expect(mocked.createLLMManagedConnection).toHaveBeenCalledWith(
+      expect(mocked.saveLLMManagedConnection).toHaveBeenCalledWith(
         "ollama_openai_compatible_chat",
         {
           api_key: "sk-controller-placeholder",
+          connection_ref: null,
           display_label: null,
           base_url: "https://llm.example.test/team",
           wire_model_id: "team/model-id-fallback",
@@ -282,7 +285,7 @@ describe("useConnectionSettingsController", () => {
 
   it("fulfills early when creation yields no effective connection reference", async () => {
     const onSuccess = vi.fn();
-    mocked.createLLMManagedConnection.mockResolvedValue(connectionStatus({
+    mocked.saveLLMManagedConnection.mockResolvedValue(connectionStatus({
       connectionRef: null,
       deploymentRef: null,
       runnable: false,
@@ -315,7 +318,7 @@ describe("useConnectionSettingsController", () => {
       deployment_id: "66666666-6666-4666-8666-666666666666",
       expected_revision: 7,
     };
-    mocked.createLLMManagedConnection.mockResolvedValue(connectionStatus({
+    mocked.saveLLMManagedConnection.mockResolvedValue(connectionStatus({
       connectionRef: null,
       deploymentRef: null,
       runnable: false,
@@ -346,6 +349,12 @@ describe("useConnectionSettingsController", () => {
     act(() => { result.current.connect(); });
 
     await waitFor(() => {
+      expect(mocked.saveLLMManagedConnection).toHaveBeenCalledWith(
+        "ollama_openai_compatible_chat",
+        expect.objectContaining({
+          connection_ref: priorConnectionRef,
+        }),
+      );
       expect(mocked.testLLMManagedConnection).toHaveBeenCalledWith(
         "ollama_openai_compatible_chat",
         {
@@ -367,7 +376,7 @@ describe("useConnectionSettingsController", () => {
 
   it("does not refresh or enable when verification fails with an effective deployment", async () => {
     const onSuccess = vi.fn();
-    mocked.createLLMManagedConnection.mockResolvedValue(connectionStatus({
+    mocked.saveLLMManagedConnection.mockResolvedValue(connectionStatus({
       connectionRef,
       deploymentRef,
       runnable: false,
@@ -390,14 +399,14 @@ describe("useConnectionSettingsController", () => {
     expect(mocked.enableLLMManagedConnection).not.toHaveBeenCalled();
     expect(invalidateQueries).toHaveBeenCalledTimes(1);
     expectCallOrder(
-      mocked.createLLMManagedConnection,
+      mocked.saveLLMManagedConnection,
       mocked.testLLMManagedConnection,
     );
   });
 
   it("refreshes and enables when passed verification fills a missing deployment", async () => {
     const onSuccess = vi.fn();
-    mocked.createLLMManagedConnection.mockResolvedValue(connectionStatus({
+    mocked.saveLLMManagedConnection.mockResolvedValue(connectionStatus({
       connectionRef,
       deploymentRef: null,
       runnable: false,
@@ -441,7 +450,7 @@ describe("useConnectionSettingsController", () => {
     expect(result.current.connectionRef).toEqual(refreshedConnectionRef);
     expect(result.current.runnable).toBe(true);
     expectCallOrder(
-      mocked.createLLMManagedConnection,
+      mocked.saveLLMManagedConnection,
       mocked.testLLMManagedConnection,
       mocked.refreshLLMManagedConnectionInventory,
       mocked.enableLLMManagedConnection,
@@ -450,7 +459,7 @@ describe("useConnectionSettingsController", () => {
 
   it("refreshes but does not enable when verification fails and deployment is absent", async () => {
     const onSuccess = vi.fn();
-    mocked.createLLMManagedConnection.mockResolvedValue(connectionStatus({
+    mocked.saveLLMManagedConnection.mockResolvedValue(connectionStatus({
       connectionRef,
       deploymentRef: null,
       runnable: false,
@@ -477,7 +486,7 @@ describe("useConnectionSettingsController", () => {
     expect(result.current.runnable).toBe(false);
     expect(invalidateQueries).toHaveBeenCalledTimes(1);
     expectCallOrder(
-      mocked.createLLMManagedConnection,
+      mocked.saveLLMManagedConnection,
       mocked.testLLMManagedConnection,
       mocked.refreshLLMManagedConnectionInventory,
     );
@@ -485,7 +494,7 @@ describe("useConnectionSettingsController", () => {
 
   it("does not enable when refresh still yields no deployment", async () => {
     const onSuccess = vi.fn();
-    mocked.createLLMManagedConnection.mockResolvedValue(connectionStatus({
+    mocked.saveLLMManagedConnection.mockResolvedValue(connectionStatus({
       connectionRef,
       deploymentRef: null,
       runnable: false,
@@ -523,7 +532,7 @@ describe("useConnectionSettingsController", () => {
   it("applies status before awaiting invalidation and publishes success after invalidation", async () => {
     const onSuccess = vi.fn();
     const invalidateDeferred = deferred<void>();
-    mocked.createLLMManagedConnection.mockResolvedValue(connectionStatus({
+    mocked.saveLLMManagedConnection.mockResolvedValue(connectionStatus({
       connectionRef,
       deploymentRef,
       runnable: false,
@@ -570,7 +579,7 @@ describe("useConnectionSettingsController", () => {
   ] as const)("short-circuits rejected %s helper without invalidation or success", async (stage) => {
     const onSuccess = vi.fn();
     const onError = vi.fn();
-    mocked.createLLMManagedConnection.mockResolvedValue(connectionStatus({
+    mocked.saveLLMManagedConnection.mockResolvedValue(connectionStatus({
       connectionRef,
       deploymentRef: stage === "refresh" ? null : deploymentRef,
       runnable: false,
@@ -708,7 +717,7 @@ function expectCallOrder(...calls: Array<{ mock: { invocationCallOrder: number[]
 
 function rejectStage(stage: "create" | "enable" | "refresh" | "test") {
   if (stage === "create") {
-    mocked.createLLMManagedConnection.mockRejectedValue("create failed");
+    mocked.saveLLMManagedConnection.mockRejectedValue("create failed");
   }
   if (stage === "test") {
     mocked.testLLMManagedConnection.mockRejectedValue("test failed");

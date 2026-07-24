@@ -27,28 +27,33 @@ from backend.services.llm_provider.types import (
 
 def _reporting_deployment(db: Session, *, user_id: int, model: str):
     connections = LLMConnectionService(db)
-    connection = connections.create_draft(
+    connection = connections.get_owned_for_preset(
         user_id=user_id,
-        display_name="Reporting endpoint",
         connection_preset_id="openai",
-        runtime_family_id="openai_native",
     )
-    connection = connections.transition_state(
-        user_id=user_id,
-        connection_id=connection.id,
-        expected_revision=1,
-        target_state=LLMConnectionState.DISABLED,
-    )
-    connections.transition_state(
-        user_id=user_id,
-        connection_id=connection.id,
-        expected_revision=connection.revision,
-        target_state=LLMConnectionState.ENABLED,
-    )
+    if connection is None:
+        connection = connections.create_draft(
+            user_id=user_id,
+            display_name="Reporting endpoint",
+            connection_preset_id="openai",
+            runtime_family_id="openai_native",
+        )
+        connection = connections.transition_state(
+            user_id=user_id,
+            connection_id=connection.id,
+            expected_revision=1,
+            target_state=LLMConnectionState.DISABLED,
+        )
+        connection = connections.transition_state(
+            user_id=user_id,
+            connection_id=connection.id,
+            expected_revision=connection.revision,
+            target_state=LLMConnectionState.ENABLED,
+        )
     return LLMDeploymentService(db).create_deployment(
         user_id=user_id,
         connection_id=connection.id,
-        expected_connection_revision=3,
+        expected_connection_revision=int(connection.revision),
         wire_model_id=model,
         canonical_model_id=model,
         display_name=model,

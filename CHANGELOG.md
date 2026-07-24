@@ -49,6 +49,9 @@ The format is based on
 
 ### Fixed
 
+- Updating an LLM connector now replaces its existing credential and
+  configuration without creating duplicate connections or changing saved
+  deployment selections.
 - Explicit deployment routes now select their registered adapter independently
   of model vendor, and non-native model output ceilings are no longer converted
   into oversized implicit request budgets.

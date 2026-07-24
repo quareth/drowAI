@@ -12,7 +12,6 @@ from collections.abc import Mapping, Sequence
 from sqlalchemy.orm import Session
 
 from backend.models import LLMInferenceConnection, LLMModelDeployment
-from backend.services.usage_tracking.pricing_registry import get_pricing_quote
 
 from .application_contracts import (
     CatalogModelOutcome,
@@ -28,11 +27,7 @@ from .application_contracts import (
 from .catalog_service import (
     CatalogModelSummary,
     CatalogProviderSummary,
-    _REASONING_EFFORT_ORDER,
-    _TOOL_CHOICE_MODE_ORDER,
-    _default_visible_reasoning_effort,
-    _ordered_values,
-    _visible_reasoning_efforts,
+    catalog_model_presentation,
 )
 from .connection_service import LLMConnectionService
 from .connection_status_service import LLMConnectionStatusService
@@ -400,6 +395,7 @@ class LLMCatalogProjectionService:
                 deployment.lifecycle_state if deployment is not None else "active"
             ),
         )
+        presentation = catalog_model_presentation(profile)
         return CatalogModelOutcome(
             id=model_id,
             canonical_model_id=(
@@ -409,30 +405,21 @@ class LLMCatalogProjectionService:
             ),
             exact_wire_model_id=wire_model_id,
             label=label,
-            api_surface=preset.api_surface,
-            capabilities=tuple(
-                sorted(capability.value for capability in profile.capabilities)
+            api_surface=presentation.api_surface,
+            capabilities=presentation.capabilities,
+            context_window_tokens=presentation.context_window_tokens,
+            max_output_tokens=presentation.max_output_tokens,
+            reasoning_efforts=presentation.reasoning_efforts,
+            visible_reasoning_efforts=presentation.visible_reasoning_efforts,
+            default_reasoning_effort=presentation.default_reasoning_effort,
+            default_visible_reasoning_effort=(
+                presentation.default_visible_reasoning_effort
             ),
-            context_window_tokens=profile.context_window_tokens,
-            max_output_tokens=profile.max_output_tokens,
-            reasoning_efforts=_ordered_values(
-                profile.reasoning_efforts,
-                _REASONING_EFFORT_ORDER,
+            tool_choice_modes=presentation.tool_choice_modes,
+            structured_output_strategies=(
+                presentation.structured_output_strategies
             ),
-            visible_reasoning_efforts=_visible_reasoning_efforts(profile),
-            default_reasoning_effort=profile.default_reasoning_effort,
-            default_visible_reasoning_effort=_default_visible_reasoning_effort(profile),
-            tool_choice_modes=_ordered_values(
-                profile.tool_choice_modes,
-                _TOOL_CHOICE_MODE_ORDER,
-            ),
-            structured_output_strategies=tuple(
-                sorted(profile.structured_output_strategies)
-            ),
-            pricing_status=get_pricing_quote(
-                profile.ref,
-                api_surface=profile.api_surface,
-            ).status,
+            pricing_status=presentation.pricing_status,
             deployment_ref=deployment_ref,
             runnable=runnability.runnable,
             connection=self._connection_metadata(

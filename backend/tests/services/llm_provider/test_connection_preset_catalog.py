@@ -7,6 +7,7 @@ from dataclasses import FrozenInstanceError
 import json
 from pathlib import Path
 from types import MappingProxyType
+from typing import Any
 
 import pytest
 
@@ -293,17 +294,29 @@ def test_unsupported_preset_contract_values_are_rejected(
             None,
         ),
         (
-                lambda manifest: _set(manifest["presets"][4], "fixed_base_url", "https://host"),
+            lambda manifest: _set(
+                _preset_by_id(manifest, catalog.OLLAMA_OPENAI_COMPATIBLE_PRESET_ID),
+                "fixed_base_url",
+                "https://host",
+            ),
             "User endpoint preset must declare base_url only",
             None,
         ),
         (
-                lambda manifest: _set(manifest["presets"][4], "base_url_env", "OLLAMA_BASE_URL"),
+            lambda manifest: _set(
+                _preset_by_id(manifest, catalog.OLLAMA_OPENAI_COMPATIBLE_PRESET_ID),
+                "base_url_env",
+                "OLLAMA_BASE_URL",
+            ),
             "User endpoint preset must declare base_url only",
             None,
         ),
         (
-                lambda manifest: _set(manifest["presets"][4], "endpoint_config_field", "url"),
+            lambda manifest: _set(
+                _preset_by_id(manifest, catalog.OLLAMA_OPENAI_COMPATIBLE_PRESET_ID),
+                "endpoint_config_field",
+                "url",
+            ),
             "User endpoint preset must declare base_url only",
             None,
         ),
@@ -498,6 +511,10 @@ def _write_text(path: Path, content: str) -> Path:
 def _set(target: object, key: str, value: object) -> object:
     target[key] = value
     return target
+
+
+def _preset_by_id(manifest: dict[str, Any], preset_id: str) -> dict[str, Any]:
+    return next(preset for preset in manifest["presets"] if preset["id"] == preset_id)
 
 
 def _mutated_manifest(mutator: object) -> object:

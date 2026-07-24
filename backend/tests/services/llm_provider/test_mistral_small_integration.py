@@ -17,8 +17,7 @@ from agent.providers.llm.core.identity import ProviderModelRef
 from agent.providers.llm.profiles.registry import require_model_profile
 from backend.services.llm_provider.catalog_service import (
     LLMProviderCatalogService,
-    _default_visible_reasoning_effort,
-    _visible_reasoning_efforts,
+    catalog_model_presentation,
 )
 from backend.models import User
 from backend.services.llm_provider.catalog_projection_service import (
@@ -67,13 +66,14 @@ def test_mistral_small_profile_is_route_effective() -> None:
         ProviderModelRef("mistral", "mistral-small-2603")
     )
     effective = _mistral_effective_profile()
+    presentation = catalog_model_presentation(effective)
 
     assert canonical.context_window_tokens == 256_000
     assert effective.ref == canonical.ref
     assert effective.reasoning_efforts == frozenset({"none", "high"})
     assert effective.default_reasoning_effort == "none"
-    assert _visible_reasoning_efforts(effective) == ("none", "high")
-    assert _default_visible_reasoning_effort(effective) == "none"
+    assert presentation.visible_reasoning_efforts == ("none", "high")
+    assert presentation.default_visible_reasoning_effort == "none"
     assert effective.tool_choice_modes == frozenset({"auto", "required"})
     assert effective.supports(LLMCapability.STRUCTURED_OUTPUT_NATIVE)
     assert effective.supports(LLMCapability.PARALLEL_TOOLS)

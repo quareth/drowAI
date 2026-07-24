@@ -48,7 +48,7 @@ def test_revision_is_append_only_after_resumable_reports() -> None:
     assert _REVISION_PATH.exists()
     assert revision is not None
     assert revision.down_revision == "0005_resumable_reports"
-    assert script.get_heads() == ["0011_connection_credentials"]
+    assert script.get_heads() == ["0012_llm_connector_singletons"]
 
 
 def test_upgrade_adds_identity_tables_and_preserves_legacy_rows(

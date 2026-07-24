@@ -252,8 +252,7 @@ def test_compatible_adapter_rejects_wrong_or_overbroad_policy_binding() -> None:
                     capabilities=frozenset(
                         {
                             LLMCapability.CHAT,
-                            LLMCapability.TOOLS,
-                            LLMCapability.PARALLEL_TOOLS,
+                            LLMCapability.REMOTE_CONVERSATION_LIFECYCLE,
                         }
                     )
             )

@@ -141,6 +141,15 @@ class ProvingConnectionPreset:
             )
         return ProviderModelRef(provider, model).normalized()
 
+    def route_config(self, *, include_discovery_strategy: bool) -> dict[str, str]:
+        """Return the preset-derived metadata persisted on a deployment route."""
+
+        config = {"preset_id": self.id}
+        if include_discovery_strategy:
+            config["discovery_strategy"] = self.discovery_strategy
+        config["request_policy_id"] = self.request_policy_id
+        return config
+
 
 def _load_connection_presets_manifest(path: Path) -> _ConnectionPresetManifest:
     """Load and validate reviewed connection presets from checked-in data."""

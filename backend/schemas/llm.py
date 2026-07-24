@@ -148,10 +148,11 @@ class LLMProvingConnectionStatusResponse(BaseModel):
     runnability: Optional[LLMProvingRunnabilityResponse] = None
 
 
-class LLMManagedConnectionCreateRequest(BaseModel):
-    """Request body for creating a reviewed connection preset draft."""
+class LLMManagedConnectionSaveRequest(BaseModel):
+    """Request body for creating or updating one reviewed connector."""
 
     api_key: Optional[str] = None
+    connection_ref: Optional[LLMConnectionRefResponse] = None
     display_label: Optional[str] = None
     base_url: Optional[str] = None
     wire_model_id: Optional[str] = None

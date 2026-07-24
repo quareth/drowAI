@@ -567,11 +567,7 @@ class LLMInventoryService:
             api_surface=preset.api_surface,
             dialect_policy_id=preset.dialect_policy_id,
             billing_provider_id=preset.billing_provider_id,
-            route_config={
-                "preset_id": preset.id,
-                "discovery_strategy": preset.discovery_strategy,
-                "request_policy_id": preset.request_policy_id,
-            },
+            route_config=preset.route_config(include_discovery_strategy=True),
             enabled=True,
         )
         self._db.add(route)
