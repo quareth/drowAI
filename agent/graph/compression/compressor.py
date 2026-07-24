@@ -26,6 +26,7 @@ from .deterministic.envelope import (
     merge_decision_evidence,
 )
 from .deterministic import credential_attack as _credential_attack_deterministic  # noqa: F401
+from .deterministic import dns_discovery as _dns_discovery_deterministic  # noqa: F401
 from .deterministic import http as _http_deterministic  # noqa: F401
 from .deterministic import metasploit as _metasploit_deterministic  # noqa: F401
 from .deterministic import network_discovery as _network_discovery_deterministic  # noqa: F401

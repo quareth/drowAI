@@ -6,9 +6,15 @@ from agent.graph.compression.deterministic import (
     credential_attack as _credential_attack_registration,
 )
 from agent.graph.compression.deterministic import (
+    dns_discovery as _dns_discovery_registration,
+)
+from agent.graph.compression.deterministic import (
     filesystem as _filesystem_registration,
 )
 from agent.graph.compression.deterministic import http as _http_registration
+from agent.graph.compression.deterministic import (
+    metasploit as _metasploit_registration,
+)
 from agent.graph.compression.deterministic import (
     network_discovery as _network_discovery_registration,
 )
@@ -22,15 +28,22 @@ from agent.tools.catalog_visibility import visible_available_tools
 
 _REGISTERED_ADAPTER_MODULES = (
     _credential_attack_registration,
+    _dns_discovery_registration,
     _filesystem_registration,
     _http_registration,
+    _metasploit_registration,
     _network_discovery_registration,
     _pcap_registration,
     _utility_registration,
     _web_discovery_registration,
 )
 
-_VISIBLE_TOOL_EXEMPTIONS: dict[str, str] = {}
+_VISIBLE_TOOL_EXEMPTIONS: dict[str, str] = {
+    "service_access.ftp_download": "service-access compaction is outside Amass DNS coverage",
+    "service_access.ftp_list": "service-access compaction is outside Amass DNS coverage",
+    "service_access.ftp_login": "service-access compaction is outside Amass DNS coverage",
+    "service_access.ssh_login": "service-access compaction is outside Amass DNS coverage",
+}
 
 
 def test_visible_tools_have_registered_adapter_or_documented_exemption() -> None:
