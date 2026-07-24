@@ -1,4 +1,4 @@
-"""Enum4Linux tool for SMB enumeration."""
+"""Enum4linux-ng command adapter and output parser for SMB enumeration."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import time
 from enum import Enum
 from typing import List, Optional, Dict, Any
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from ...base_tool import BaseTool
 from ...schemas import BaseToolArgs, ToolResult
@@ -26,7 +26,7 @@ class Enum4LinuxMode(str, Enum):
 
 
 class Enum4LinuxArgs(BaseToolArgs):
-    """Arguments for the Enum4Linux tool."""
+    """Arguments supported by the enum4linux-ng command adapter."""
 
     mode: Enum4LinuxMode = Field(
         Enum4LinuxMode.BASIC,
@@ -42,7 +42,8 @@ class Enum4LinuxArgs(BaseToolArgs):
     )
     domain: Optional[str] = Field(
         None,
-        description="Domain name",
+        description="Deprecated alias for workgroup",
+        json_schema_extra={"deprecated": True},
     )
     workgroup: Optional[str] = Field(
         None,
@@ -50,10 +51,14 @@ class Enum4LinuxArgs(BaseToolArgs):
     )
     port: int = Field(
         445,
-        description="SMB port",
+        ge=445,
+        le=445,
+        description="SMB port; enum4linux-ng currently supports its default port only",
     )
     timeout: int = Field(
         30,
+        ge=1,
+        le=600,
         description="Connection timeout in seconds",
     )
     verbose: bool = Field(
@@ -62,12 +67,21 @@ class Enum4LinuxArgs(BaseToolArgs):
     )
     output_file: Optional[str] = Field(
         None,
-        description="Output file for results",
+        description="Output basename for enum4linux-ng JSON and YAML results",
     )
     max_timeout: int = Field(
         300,
+        ge=1,
+        le=3600,
         description="Maximum execution time in seconds before the tool is terminated",
     )
+
+    @model_validator(mode="after")
+    def validate_workgroup_aliases(self) -> "Enum4LinuxArgs":
+        """Reject ambiguous values for enum4linux-ng's single -w option."""
+        if self.domain and self.workgroup and self.domain != self.workgroup:
+            raise ValueError("domain and workgroup must match when both are provided")
+        return self
 
 
 def parse_enum4linux_output(output_text: str) -> Dict[str, Any]:
@@ -166,51 +180,82 @@ def parse_enum4linux_output(output_text: str) -> Dict[str, Any]:
 
 
 class Enum4LinuxTool(BaseTool):
-    """Enum4Linux tool for SMB enumeration."""
+    """Execute enum4linux-ng for SMB enumeration."""
 
     args_model = Enum4LinuxArgs
 
-    def run(self, args: Enum4LinuxArgs) -> ToolResult:
-        # Build command array
-        cmd = ["enum4linux"]
+    _MODE_FLAGS = {
+        Enum4LinuxMode.BASIC: ["-A"],
+        Enum4LinuxMode.FULL: ["-A", "-C", "-R"],
+        Enum4LinuxMode.USERS: ["-U"],
+        Enum4LinuxMode.SHARES: ["-S"],
+        Enum4LinuxMode.GROUPS: ["-G"],
+        Enum4LinuxMode.PASSWORDS: ["-P"],
+    }
 
-        # Add mode
-        cmd.extend(["--mode", args.mode.value])
+    def build_command(self, args: Enum4LinuxArgs) -> List[str]:
+        """Build an enum4linux-ng command using only supported CLI flags."""
+        cmd = ["enum4linux-ng", *self._MODE_FLAGS[args.mode]]
 
-        # Add username if provided
         if args.username:
             cmd.extend(["-u", args.username])
 
-        # Add password if provided
         if args.password:
             cmd.extend(["-p", args.password])
 
-        # Add domain if provided
-        if args.domain:
-            cmd.extend(["-d", args.domain])
+        workgroup = args.workgroup or args.domain
+        if workgroup:
+            cmd.extend(["-w", workgroup])
 
-        # Add workgroup if provided
-        if args.workgroup:
-            cmd.extend(["-w", args.workgroup])
-
-        # Add port
-        cmd.extend(["-P", str(args.port)])
-
-        # Add timeout
         cmd.extend(["-t", str(args.timeout)])
 
-        # Add verbose flag
         if args.verbose:
             cmd.append("-v")
 
-        # Add output file if provided
         if args.output_file:
-            cmd.extend(["-o", args.output_file])
+            cmd.extend(["-oA", args.output_file])
 
-        # Add target (usually last)
         cmd.append(args.target)
+        return cmd
 
-        # Execute with timing
+    def parse_output(
+        self,
+        stdout: str,
+        stderr: str,
+        exit_code: int,
+        args: Enum4LinuxArgs,
+    ) -> Dict[str, Any]:
+        """Parse enum4linux-ng text output into structured metadata."""
+        _ = stderr, exit_code, args
+        return parse_enum4linux_output(stdout)
+
+    def create_artifacts(
+        self,
+        stdout: str,
+        args: Enum4LinuxArgs,
+        timestamp: Optional[int] = None,
+    ) -> List[str]:
+        """Persist significant text output as an optional artifact."""
+        _ = args
+        artifacts: List[str] = []
+        if not stdout or len(stdout) <= 100:
+            return artifacts
+
+        artifact_timestamp = timestamp if timestamp is not None else int(time.time())
+        artifact_path = f"artifacts/enum4linux_{artifact_timestamp}.txt"
+        try:
+            os.makedirs("artifacts", exist_ok=True)
+            with open(artifact_path, "w", encoding="utf-8") as artifact_file:
+                artifact_file.write(stdout)
+            artifacts.append(artifact_path)
+        except Exception:
+            pass
+        return artifacts
+
+    def run(self, args: Enum4LinuxArgs) -> ToolResult:
+        """Execute enum4linux-ng and normalize its result."""
+        cmd = self.build_command(args)
+
         start = time.time()
         try:
             proc = subprocess.run(
@@ -230,21 +275,8 @@ class Enum4LinuxTool(BaseTool):
                 execution_time=time.time() - start,
             )
 
-        # Parse output for metadata
-        metadata = parse_enum4linux_output(proc.stdout)
-
-        # Generate artifacts if needed
-        artifacts: List[str] = []
-        if proc.stdout and len(proc.stdout) > 100:  # If significant output
-            timestamp = int(start)
-            artifact_path = f"artifacts/enum4linux_{timestamp}.txt"
-            try:
-                os.makedirs("artifacts", exist_ok=True)
-                with open(artifact_path, "w", encoding="utf-8") as f:
-                    f.write(proc.stdout)
-                artifacts.append(artifact_path)
-            except Exception:
-                pass  # Artifact creation is optional
+        metadata = self.parse_output(proc.stdout, proc.stderr, proc.returncode, args)
+        artifacts = self.create_artifacts(proc.stdout, args, timestamp=int(start))
 
         return ToolResult(
             success=proc.returncode == 0,

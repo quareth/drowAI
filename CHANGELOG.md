@@ -8,6 +8,12 @@ The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Kali task runtime images now include Amass, DNSRecon, enum4linux-ng, Hydra,
+  Nuclei with a bundled template snapshot, and WhatWeb, with adapters updated
+  for the installed Amass and enum4linux-ng command interfaces.
+
 ### Fixed
 
 - API settings now render every hosted catalog provider through the shared

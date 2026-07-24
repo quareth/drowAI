@@ -7,16 +7,20 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        amass \
         bash \
         ca-certificates \
         cifs-utils \
         curl \
+        dnsrecon \
         dnsutils \
+        enum4linux-ng \
         ffuf \
         file \
         fping \
         ftp \
         gobuster \
+        hydra \
         iproute2 \
         iputils-ping \
         iputils-tracepath \
@@ -32,6 +36,7 @@ RUN apt-get update \
         nfs-common \
         nikto \
         nmap \
+        nuclei \
         openssh-client \
         openvpn \
         php-cli \
@@ -56,10 +61,29 @@ RUN apt-get update \
         unzip \
         wget \
         whois \
+        whatweb \
         zip \
         7zip \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Kali's current dnsrecon dependency chain ships limits 4.4.1 beside
+# packaging 26.2. Overlay the compatible release without replacing its
+# dpkg-owned dependencies.
+RUN pip3 install --no-cache-dir --break-system-packages --ignore-installed --no-deps \
+        limits==5.8.0 \
+    && python3 -m pip check
+
+# Kali's Amass launcher downloads about 800 MB of optional libpostal data on
+# every fresh task. Domain enumeration does not require that data.
+RUN ln -sf /usr/lib/amass/amass /usr/local/bin/amass \
+    && amass -version >/dev/null
+
+# Ship a verified template snapshot so task-local Nuclei scans do not start
+# with an empty ruleset or require an implicit network download.
+RUN nuclei -update-templates -no-color \
+    && test -d /root/.local/nuclei-templates \
+    && test "$(find /root/.local/nuclei-templates -type f | wc -l)" -gt 0
 
 RUN setcap -r /usr/lib/nmap/nmap 2>/dev/null || true
 
@@ -69,6 +93,7 @@ RUN python3 --version \
     && openvpn --version >/dev/null \
     && flock --version >/dev/null \
     && for binary in \
+        amass dnsrecon enum4linux-ng hydra nuclei whatweb \
         fping nmap ftp lftp tftp ssh scp sftp sshpass rsync telnet smbclient rpcclient smbget \
         nc netcat ncat socat mtr tracepath showmount rpcinfo mount.cifs tcpdump tshark \
         file jq less zip unzip 7z php mysql psql sqlite3 redis-cli isql tsql; \

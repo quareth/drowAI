@@ -17,8 +17,11 @@ ENV DROWAI_RUNTIME_ROOT=/opt/drowai/runtime \
 RUN mkdir -p "${DROWAI_RUNTIME_PYTHON_ROOT}" "${DROWAI_RUNTIME_VPN_ROOT}" "${DROWAI_RUNTIME_MANIFEST_ROOT}"
 
 COPY runtime/image/runtime-requirements.txt /opt/drowai/runtime/runtime-requirements.txt
-RUN pip3 install --no-cache-dir --break-system-packages \
-    -r /opt/drowai/runtime/runtime-requirements.txt
+# Kali tools may install dpkg-owned Python packages. Preserve the locked
+# execution-plane dependency versions without attempting to uninstall them.
+RUN pip3 install --no-cache-dir --break-system-packages --ignore-installed \
+    -r /opt/drowai/runtime/runtime-requirements.txt \
+    && python3 -m pip check
 
 COPY agent/workspace_init.py /opt/drowai/runtime/python/workspace_init.py
 COPY kali_executor/__init__.py /opt/drowai/runtime/python/kali_executor/__init__.py

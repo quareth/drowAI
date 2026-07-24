@@ -1,4 +1,4 @@
-"""Amass subdomain enumeration tool using Pydantic models."""
+"""OWASP Amass v5 command adapter and result parser."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import os
 import subprocess
 import time
 import json
+import re
 from enum import Enum
 from typing import List, Optional, Dict, Any
 
@@ -26,7 +27,7 @@ class Mode(str, Enum):
 
 
 class OutputFormat(str, Enum):
-    """Amass output format options."""
+    """Requested presentation format retained for schema compatibility."""
     
     JSON = "json"
     CSV = "csv"
@@ -42,8 +43,8 @@ class AmassArgs(BaseToolArgs):
         description="Scan mode to use",
     )
     output_format: OutputFormat = Field(
-        OutputFormat.JSON,
-        description="Output format for parsing",
+        OutputFormat.TEXT,
+        description="Preferred output format; Amass v5 enumeration emits terminal text",
     )
     wordlist: Optional[str] = Field(
         None,
@@ -67,19 +68,22 @@ class AmassArgs(BaseToolArgs):
         10,
         ge=1,
         le=100,
-        description="Number of threads to use",
+        description="Deprecated Amass v4 concurrency setting; ignored by Amass v5",
+        json_schema_extra={"deprecated": True},
     )
     rate: int = Field(
         1000,
         ge=1,
         le=100000,
-        description="Rate of DNS queries per second",
+        description="Deprecated Amass v4 rate setting; ignored by Amass v5",
+        json_schema_extra={"deprecated": True},
     )
     max_dns_queries: int = Field(
         1000,
         ge=1,
         le=100000,
-        description="Maximum number of DNS queries",
+        description="Deprecated Amass v4 query setting; ignored by Amass v5",
+        json_schema_extra={"deprecated": True},
     )
     dns_server: Optional[str] = Field(
         None,
@@ -128,6 +132,51 @@ def parse_amass_json(json_text: str) -> Dict[str, Any]:
     return metadata
 
 
+def parse_amass_text(output_text: str) -> Dict[str, Any]:
+    """Extract discovered domain names and IPs from Amass terminal output."""
+    subdomains: List[Dict[str, Any]] = []
+    hosts: List[Dict[str, Any]] = []
+    ips: List[str] = []
+    seen_names: set[str] = set()
+
+    domain_pattern = re.compile(
+        r"(?:subdomain|name)\s*:\s*([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+)",
+        re.IGNORECASE,
+    )
+    resolved_pattern = re.compile(
+        r"^([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+)\s*(?:→|->)\s*"
+        r"((?:\d{1,3}\.){3}\d{1,3})$"
+    )
+
+    for raw_line in (output_text or "").splitlines():
+        line = raw_line.strip()
+        domain_match = domain_pattern.search(line)
+        resolved_match = resolved_pattern.search(line)
+        name = domain_match.group(1) if domain_match else None
+        address = None
+        if resolved_match:
+            name = resolved_match.group(1)
+            address = resolved_match.group(2)
+        if not name or name in seen_names:
+            continue
+
+        seen_names.add(name)
+        addresses = [address] if address else []
+        subdomains.append(
+            {
+                "subdomain": name,
+                "ip": addresses,
+                "source": "amass",
+                "type": "A",
+            }
+        )
+        hosts.append({"hostname": name, "ip": addresses})
+        if address and address not in ips:
+            ips.append(address)
+
+    return {"subdomains": subdomains, "hosts": hosts, "ips": ips}
+
+
 class AmassTool(BaseTool):
     """Run amass subdomain enumeration and parse the results.
     
@@ -137,7 +186,7 @@ class AmassTool(BaseTool):
     args_model = AmassArgs
 
     def build_command(self, args: AmassArgs) -> List[str]:
-        """Build amass command arguments.
+        """Build an Amass v5 enumeration command.
         
         Args:
             args: Validated AmassArgs
@@ -145,72 +194,46 @@ class AmassTool(BaseTool):
         Returns:
             List of command arguments for amass
         """
-        cmd = ["amass"]
-        
-        # Add mode
+        cmd = ["amass", "enum"]
+
         if args.mode == Mode.ACTIVE:
-            cmd.append("enum")
+            cmd.append("-active")
         elif args.mode == Mode.BRUTE:
-            cmd.append("enum")
             cmd.append("-brute")
-        elif args.mode == Mode.DNS:
-            cmd.append("dns")
         elif args.mode == Mode.REVERSE_DNS:
-            cmd.append("dns")
-            cmd.append("-reverse")
-        else:  # PASSIVE
-            cmd.append("enum")
+            pass
+        elif args.mode == Mode.PASSIVE:
             cmd.append("-passive")
-        
-        # Add wordlist if specified
+
         if args.wordlist:
+            if "-brute" not in cmd:
+                cmd.append("-brute")
             cmd.extend(["-w", args.wordlist])
-        
-        # Add timeout
-        cmd.extend(["-timeout", str(args.timeout)])
-        
-        # Add verbose option
+
+        timeout_minutes = max(1, (args.timeout + 59) // 60)
+        cmd.extend(["-timeout", str(timeout_minutes)])
+
         if args.verbose:
             cmd.append("-v")
-        
-        # Add quiet option
+
         if args.quiet:
-            cmd.append("-q")
-        
-        # Add threads
-        cmd.extend(["-t", str(args.threads)])
-        
-        # Add rate
-        cmd.extend(["-r", str(args.rate)])
-        
-        # Add max DNS queries
-        cmd.extend(["-max-dns-queries", str(args.max_dns_queries)])
-        
-        # Add DNS server if specified
+            cmd.append("-silent")
+
         if args.dns_server:
-            cmd.extend(["-dns", args.dns_server])
-        
-        # Add sources if specified
+            cmd.extend(["-r", args.dns_server])
+
         if args.source:
-            cmd.extend(["-src", ",".join(args.source)])
-        
-        # Add exclude sources if specified
+            cmd.extend(["-include", ",".join(args.source)])
+
         if args.exclude_source:
             cmd.extend(["-exclude", ",".join(args.exclude_source)])
-        
-        # Add output format
-        if args.output_format == OutputFormat.JSON:
-            cmd.extend(["-json", "-"])
-        elif args.output_format == OutputFormat.CSV:
-            cmd.extend(["-csv", "-"])
-        elif args.output_format == OutputFormat.XML:
-            cmd.extend(["-xml", "-"])
+
+        cmd.append("-nocolor")
+        if args.mode == Mode.REVERSE_DNS:
+            cmd.extend(["-addr", args.target])
         else:
-            cmd.extend(["-o", "-"])
-        
-        # Add target (usually last)
-        cmd.append(args.target)
-        
+            cmd.extend(["-d", args.target])
+
         return cmd
 
     def parse_output(
@@ -232,8 +255,10 @@ class AmassTool(BaseTool):
             Metadata dict with subdomains, hosts, and ips
         """
         if args.output_format == OutputFormat.JSON and stdout:
-            return parse_amass_json(stdout)
-        return {}
+            parsed_json = parse_amass_json(stdout)
+            if "error" not in parsed_json:
+                return parsed_json
+        return parse_amass_text(stdout)
 
     def create_artifacts(
         self,
@@ -253,9 +278,9 @@ class AmassTool(BaseTool):
         """
         artifacts: List[str] = []
         
-        if args.output_format == OutputFormat.JSON and stdout:
+        if stdout:
             ts = timestamp if timestamp is not None else int(time.time())
-            artifact_path = f"artifacts/amass_{ts}.json"
+            artifact_path = f"artifacts/amass_{ts}.txt"
             try:
                 os.makedirs("artifacts", exist_ok=True)
                 with open(artifact_path, "w", encoding="utf-8") as f:
