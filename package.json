@@ -1,6 +1,6 @@
 {
   "name": "drowai",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Pre-v1 platform for task-isolated AI security workflows",
   "private": true,
   "type": "module",
