@@ -1,60 +1,108 @@
-"""OWASP Amass v5 command adapter and result parser."""
+"""Execute OWASP Amass v5 and expose graph-free DNS discovery results."""
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 import subprocess
+import tempfile
 import time
-import json
-import re
 from enum import Enum
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
 
-from pydantic import Field
+from pydantic import Field, field_validator, model_validator
+from runtime_shared.workspace_files import RuntimeWorkspaceDirectory, RuntimeWorkspaceFile
 
 from ...base_tool import BaseTool
+from ...canonical_capture import (
+    CanonicalCaptureFormat,
+    CaptureFamily,
+    ToolCaptureContract,
+)
 from ...schemas import BaseToolArgs, ToolResult
+from .amass_analysis import (
+    AMASS_NAMES_BEGIN,
+    AMASS_NAMES_END,
+    AMASS_RESOLVED_BEGIN,
+    AMASS_RESOLVED_END,
+    normalize_dns_name,
+    parse_amass_v5_results,
+)
+
+_COLLECTOR_RELATIVE_PATH = ".drowai/amass/collect_v5.sh"
+_CONTAINER_COLLECTOR_PATH = f"/workspace/{_COLLECTOR_RELATIVE_PATH}"
+_COLLECTOR_SCRIPT = f"""#!/usr/bin/env bash
+set -u -o pipefail
+
+if [ "$#" -lt 2 ]; then
+    echo "usage: collect_v5.sh WORKSPACE_ROOT ROOT_DOMAIN [AMASS_ENUM_OPTIONS...]" >&2
+    exit 2
+fi
+
+workspace_root=$1
+root_domain=$2
+shift 2
+
+session_parent="${{workspace_root%/}}/.drowai/amass"
+mkdir -p "$session_parent"
+session_dir=$(mktemp -d "$session_parent/session.XXXXXX")
+cleanup() {{
+    rm -rf -- "$session_dir"
+}}
+trap cleanup EXIT
+
+amass enum -dir "$session_dir" -d "$root_domain" "$@" 1>&2
+enum_status=$?
+if [ "$enum_status" -ne 0 ]; then
+    exit "$enum_status"
+fi
+
+printf '%s\\n' '{AMASS_NAMES_BEGIN}'
+amass subs -dir "$session_dir" -d "$root_domain" -names -nocolor
+names_status=$?
+printf '%s\\n' '{AMASS_NAMES_END}'
+if [ "$names_status" -ne 0 ]; then
+    exit "$names_status"
+fi
+
+printf '%s\\n' '{AMASS_RESOLVED_BEGIN}'
+amass subs -dir "$session_dir" -d "$root_domain" -names -ip -nocolor
+resolved_status=$?
+printf '%s\\n' '{AMASS_RESOLVED_END}'
+exit "$resolved_status"
+"""
 
 
 class Mode(str, Enum):
-    """Amass scan modes."""
-    
+    """Supported Amass v5 domain-enumeration modes."""
+
     PASSIVE = "passive"
     ACTIVE = "active"
     BRUTE = "brute"
-    DNS = "dns"
-    REVERSE_DNS = "reverse"
-
-
-class OutputFormat(str, Enum):
-    """Requested presentation format retained for schema compatibility."""
-    
-    JSON = "json"
-    CSV = "csv"
-    TEXT = "text"
-    XML = "xml"
 
 
 class AmassArgs(BaseToolArgs):
-    """Arguments for the Amass tool."""
+    """Validated graph-free Amass v5 domain-enumeration arguments."""
 
     mode: Mode = Field(
         Mode.PASSIVE,
         description="Scan mode to use",
     )
-    output_format: OutputFormat = Field(
-        OutputFormat.TEXT,
-        description="Preferred output format; Amass v5 enumeration emits terminal text",
-    )
     wordlist: Optional[str] = Field(
         None,
         description="Custom wordlist for bruteforce",
     )
-    timeout: int = Field(
-        300,
+    inactivity_timeout_minutes: int = Field(
+        30,
+        ge=1,
+        le=1440,
+        description="Minutes without Amass progress before native termination",
+    )
+    execution_timeout: int = Field(
+        600,
         ge=1,
         le=3600,
-        description="Timeout in seconds for the scan",
+        description="Maximum wall-clock seconds to allow the Amass workflow to run",
     )
     verbose: bool = Field(
         False,
@@ -63,27 +111,6 @@ class AmassArgs(BaseToolArgs):
     quiet: bool = Field(
         False,
         description="Suppress all output except for errors",
-    )
-    threads: int = Field(
-        10,
-        ge=1,
-        le=100,
-        description="Deprecated Amass v4 concurrency setting; ignored by Amass v5",
-        json_schema_extra={"deprecated": True},
-    )
-    rate: int = Field(
-        1000,
-        ge=1,
-        le=100000,
-        description="Deprecated Amass v4 rate setting; ignored by Amass v5",
-        json_schema_extra={"deprecated": True},
-    )
-    max_dns_queries: int = Field(
-        1000,
-        ge=1,
-        le=100000,
-        description="Deprecated Amass v4 query setting; ignored by Amass v5",
-        json_schema_extra={"deprecated": True},
     )
     dns_server: Optional[str] = Field(
         None,
@@ -98,143 +125,110 @@ class AmassArgs(BaseToolArgs):
         description="Data sources to exclude",
     )
 
+    @field_validator("target")
+    @classmethod
+    def _validate_root_domain(cls, value: str) -> str:
+        """Require one DNS root domain instead of an IP or mixed target list."""
 
-def parse_amass_json(json_text: str) -> Dict[str, Any]:
-    """Parse amass JSON output into structured metadata."""
-    
-    metadata: Dict[str, Any] = {"subdomains": [], "hosts": [], "ips": []}
-    
-    try:
-        # Amass outputs one JSON object per line
-        lines = json_text.strip().split('\n')
-        for line in lines:
-            if line.strip():
-                data = json.loads(line)
-                if "name" in data:
-                    subdomain_info = {
-                        "subdomain": data["name"],
-                        "ip": data.get("address", []),
-                        "source": data.get("source", "amass"),
-                        "type": data.get("type", "A")
-                    }
-                    metadata["subdomains"].append(subdomain_info)
-                    metadata["hosts"].append({
-                        "hostname": data["name"],
-                        "ip": data.get("address", [])
-                    })
-                    # Add unique IPs
-                    for ip in data.get("address", []):
-                        if ip not in metadata["ips"]:
-                            metadata["ips"].append(ip)
-    except (json.JSONDecodeError, KeyError) as e:
-        metadata["error"] = f"Failed to parse JSON: {str(e)}"
-    
-    return metadata
+        raw = str(value or "").strip()
+        if "," in raw or any(character.isspace() for character in raw):
+            raise ValueError("target must contain exactly one root domain")
+        normalized = normalize_dns_name(raw)
+        if normalized is None:
+            raise ValueError("target must be a valid DNS root domain, not an IP address")
+        return normalized
 
+    @model_validator(mode="after")
+    def _validate_output_controls(self) -> "AmassArgs":
+        """Reject contradictory terminal-output controls."""
 
-def parse_amass_text(output_text: str) -> Dict[str, Any]:
-    """Extract discovered domain names and IPs from Amass terminal output."""
-    subdomains: List[Dict[str, Any]] = []
-    hosts: List[Dict[str, Any]] = []
-    ips: List[str] = []
-    seen_names: set[str] = set()
-
-    domain_pattern = re.compile(
-        r"(?:subdomain|name)\s*:\s*([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+)",
-        re.IGNORECASE,
-    )
-    resolved_pattern = re.compile(
-        r"^([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)+)\s*(?:→|->)\s*"
-        r"((?:\d{1,3}\.){3}\d{1,3})$"
-    )
-
-    for raw_line in (output_text or "").splitlines():
-        line = raw_line.strip()
-        domain_match = domain_pattern.search(line)
-        resolved_match = resolved_pattern.search(line)
-        name = domain_match.group(1) if domain_match else None
-        address = None
-        if resolved_match:
-            name = resolved_match.group(1)
-            address = resolved_match.group(2)
-        if not name or name in seen_names:
-            continue
-
-        seen_names.add(name)
-        addresses = [address] if address else []
-        subdomains.append(
-            {
-                "subdomain": name,
-                "ip": addresses,
-                "source": "amass",
-                "type": "A",
-            }
-        )
-        hosts.append({"hostname": name, "ip": addresses})
-        if address and address not in ips:
-            ips.append(address)
-
-    return {"subdomains": subdomains, "hosts": hosts, "ips": ips}
+        if self.verbose and self.quiet:
+            raise ValueError("verbose and quiet cannot both be enabled")
+        return self
 
 
 class AmassTool(BaseTool):
-    """Run amass subdomain enumeration and parse the results.
-    
-    Supports PTY execution via build_command(), parse_output(), and create_artifacts().
-    """
+    """Run Amass v5 enumeration, query its session, and discard the graph."""
 
     args_model = AmassArgs
+    _capture_contract = ToolCaptureContract(
+        family=CaptureFamily.TEXT_NATIVE,
+        canonical_format=CanonicalCaptureFormat.TEXT,
+    )
 
     def build_command(self, args: AmassArgs) -> List[str]:
-        """Build an Amass v5 enumeration command.
-        
-        Args:
-            args: Validated AmassArgs
-            
-        Returns:
-            List of command arguments for amass
-        """
-        cmd = ["amass", "enum"]
+        """Build the task-runtime collector command."""
+
+        return self._build_collector_command(
+            args,
+            workspace_root="/workspace",
+            script_path=_CONTAINER_COLLECTOR_PATH,
+        )
+
+    def prepare_workspace_files(self, args: AmassArgs) -> List[RuntimeWorkspaceFile]:
+        """Materialize the fixed Amass v5 collector in the task workspace."""
+
+        _ = args
+        return [
+            RuntimeWorkspaceFile.from_text(
+                relative_path=_COLLECTOR_RELATIVE_PATH,
+                content=_COLLECTOR_SCRIPT,
+                description="graph-free Amass v5 enum/subs collector",
+            )
+        ]
+
+    def prepare_workspace_directories(
+        self,
+        args: AmassArgs,
+    ) -> List[RuntimeWorkspaceDirectory]:
+        """Create the parent used for short-lived Amass session directories."""
+
+        _ = args
+        return [
+            RuntimeWorkspaceDirectory(
+                relative_path=".drowai/amass",
+                description="temporary Amass v5 sessions",
+            )
+        ]
+
+    @staticmethod
+    def _build_collector_command(
+        args: AmassArgs,
+        *,
+        workspace_root: str,
+        script_path: str,
+    ) -> List[str]:
+        """Return collector argv with native Amass enum options."""
+
+        command = ["bash", script_path, workspace_root, args.target]
+        enum_options: List[str] = []
 
         if args.mode == Mode.ACTIVE:
-            cmd.append("-active")
+            enum_options.append("-active")
         elif args.mode == Mode.BRUTE:
-            cmd.append("-brute")
-        elif args.mode == Mode.REVERSE_DNS:
-            pass
-        elif args.mode == Mode.PASSIVE:
-            cmd.append("-passive")
+            enum_options.append("-brute")
 
         if args.wordlist:
-            if "-brute" not in cmd:
-                cmd.append("-brute")
-            cmd.extend(["-w", args.wordlist])
+            if "-brute" not in enum_options:
+                enum_options.append("-brute")
+            enum_options.extend(["-w", args.wordlist])
 
-        timeout_minutes = max(1, (args.timeout + 59) // 60)
-        cmd.extend(["-timeout", str(timeout_minutes)])
+        enum_options.extend(["-timeout", str(args.inactivity_timeout_minutes)])
 
         if args.verbose:
-            cmd.append("-v")
-
+            enum_options.append("-v")
         if args.quiet:
-            cmd.append("-silent")
-
+            enum_options.append("-silent")
         if args.dns_server:
-            cmd.extend(["-r", args.dns_server])
-
+            enum_options.extend(["-r", args.dns_server])
         if args.source:
-            cmd.extend(["-include", ",".join(args.source)])
-
+            enum_options.extend(["-include", ",".join(args.source)])
         if args.exclude_source:
-            cmd.extend(["-exclude", ",".join(args.exclude_source)])
+            enum_options.extend(["-exclude", ",".join(args.exclude_source)])
 
-        cmd.append("-nocolor")
-        if args.mode == Mode.REVERSE_DNS:
-            cmd.extend(["-addr", args.target])
-        else:
-            cmd.extend(["-d", args.target])
-
-        return cmd
+        enum_options.append("-nocolor")
+        command.extend(enum_options)
+        return command
 
     def parse_output(
         self,
@@ -243,22 +237,10 @@ class AmassTool(BaseTool):
         exit_code: int,
         args: AmassArgs,
     ) -> Dict[str, Any]:
-        """Parse amass output into structured metadata.
-        
-        Args:
-            stdout: Command stdout (JSON if output_format=JSON)
-            stderr: Command stderr
-            exit_code: Command exit code
-            args: Original AmassArgs
-            
-        Returns:
-            Metadata dict with subdomains, hosts, and ips
-        """
-        if args.output_format == OutputFormat.JSON and stdout:
-            parsed_json = parse_amass_json(stdout)
-            if "error" not in parsed_json:
-                return parsed_json
-        return parse_amass_text(stdout)
+        """Parse the collector's tagged ``amass subs`` result stream."""
+
+        _ = stderr, args
+        return parse_amass_v5_results(stdout, exit_code=exit_code)
 
     def create_artifacts(
         self,
@@ -292,12 +274,18 @@ class AmassTool(BaseTool):
         return artifacts
 
     def run(self, args: AmassArgs) -> ToolResult:
-        """Execute amass subdomain enumeration.
-        
-        Uses build_command(), parse_output(), and create_artifacts() for
-        consistent behavior with PTY execution path.
-        """
-        cmd = self.build_command(args)
+        """Execute the same collector contract outside container transports."""
+
+        temporary_workspace = tempfile.TemporaryDirectory(prefix="drowai-amass-")
+        workspace_root = Path(temporary_workspace.name)
+        script_path = workspace_root / _COLLECTOR_RELATIVE_PATH
+        script_path.parent.mkdir(parents=True, exist_ok=True)
+        script_path.write_text(_COLLECTOR_SCRIPT, encoding="utf-8")
+        cmd = self._build_collector_command(
+            args,
+            workspace_root=str(workspace_root),
+            script_path=str(script_path),
+        )
 
         start = time.time()
         try:
@@ -305,9 +293,10 @@ class AmassTool(BaseTool):
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=args.timeout,
+                timeout=args.execution_timeout,
             )
         except subprocess.TimeoutExpired:
+            temporary_workspace.cleanup()
             return ToolResult(
                 success=False,
                 exit_code=-2,
@@ -320,6 +309,7 @@ class AmassTool(BaseTool):
 
         metadata = self.parse_output(proc.stdout, proc.stderr, proc.returncode, args)
         artifacts = self.create_artifacts(proc.stdout, args, timestamp=int(start))
+        temporary_workspace.cleanup()
 
         return ToolResult(
             success=proc.returncode == 0,
@@ -359,7 +349,7 @@ register_enhanced_tool_metadata(
         required_services=["dns"],
         target_protocols=["udp"],
         execution_priority=7,
-        parallel_compatible=True,
+        parallel_compatible=False,
         stealth_level=3,
         estimated_runtime_minutes=15,
     )

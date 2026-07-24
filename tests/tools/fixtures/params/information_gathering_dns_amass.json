@@ -4,14 +4,14 @@
     "minimal": {
       "description": "Required fields only",
       "params": {
-        "target": "127.0.0.1"
+        "target": "example.com"
       },
       "expected_valid": true
     },
     "full": {
       "description": "All optional fields populated",
       "params": {
-        "target": "127.0.0.1"
+        "target": "example.com"
       },
       "expected_valid": true
     },

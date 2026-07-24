@@ -621,9 +621,9 @@
         "test_parse_output_contract[information_gathering.dns.amass]": "passed",
         "test_schema_exhaustive[information_gathering.dns.amass]": "passed"
       },
-      "fixture_available": false,
+      "fixture_available": true,
       "help_cached": false,
-      "notes": "Pending fixture creation"
+      "notes": "Graph-free Amass v5.1.1 enum/subs fixture"
     },
     "information_gathering.dns.dnsenum": {
       "category": "information_gathering",

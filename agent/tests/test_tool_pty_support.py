@@ -24,7 +24,7 @@ from agent.tools.information_gathering.network_discovery.masscan import (
 
 # Amass tool tests
 from agent.tools.information_gathering.dns.amass import (
-    AmassTool, AmassArgs, Mode as AmassMode, OutputFormat as AmassOutputFormat, parse_amass_json
+    AmassTool, AmassArgs, Mode as AmassMode
 )
 
 # TheHarvester tool tests
@@ -494,9 +494,9 @@ class TestAmassBuildCommand:
         args = AmassArgs(target="example.com", mode=AmassMode.PASSIVE)
         cmd = tool.build_command(args)
         
-        assert cmd[0] == "amass"
-        assert "enum" in cmd
-        assert "-passive" in cmd
+        assert cmd[0] == "bash"
+        assert cmd[1] == "/workspace/.drowai/amass/collect_v5.sh"
+        assert "-passive" not in cmd
         assert "example.com" in cmd
     
     def test_active_enum(self):
@@ -505,7 +505,7 @@ class TestAmassBuildCommand:
         args = AmassArgs(target="example.com", mode=AmassMode.ACTIVE)
         cmd = tool.build_command(args)
         
-        assert "enum" in cmd
+        assert "-active" in cmd
         assert "-passive" not in cmd
     
     def test_brute_mode(self):
