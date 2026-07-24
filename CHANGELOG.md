@@ -8,6 +8,8 @@ The format is based on
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-24
+
 ### Added
 
 - A provider-neutral live agent compatibility harness now exercises DrowAI's
@@ -116,3 +118,7 @@ The format is based on
 - The canonical local launcher is now `scripts/local_dev.py`; startup can
   interactively provision its PostgreSQL login role, database, and pgvector
   extension before running migrations.
+
+[Unreleased]: https://github.com/quareth/drowAI/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/quareth/drowAI/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/quareth/drowAI/releases/tag/v0.1.0
