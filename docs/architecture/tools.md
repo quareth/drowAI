@@ -399,6 +399,7 @@ entrypoint. The deterministic compression adapter layer is defined by
 `agent/graph/compression/deterministic/filesystem.py`,
 `agent/graph/compression/deterministic/pcap.py`,
 `agent/graph/compression/deterministic/http.py`,
+`agent/graph/compression/deterministic/dns_discovery.py`,
 `agent/graph/compression/deterministic/network_discovery.py`,
 `agent/graph/compression/deterministic/credential_attack.py`,
 `agent/graph/compression/deterministic/utility.py`, and
@@ -409,7 +410,7 @@ runtime-provider services.
 
 ## Current Tool Completion Reference
 
-Code-verified on July 7, 2026.
+Code-verified on July 25, 2026.
 
 Completion means more than "the wrapper executes." A tool is treated as
 finished for the current tooling architecture when it has:
@@ -429,16 +430,17 @@ Current inventory:
 | Inventory slice | Count | Source of truth |
 | --- | ---: | --- |
 | Implemented `BaseTool` subclasses | 183 | `agent/tools/tool_registry.py` AST scan |
-| Visible planner tools | 29 | `agent/tools/catalog_visibility.py` |
-| Tools overriding `parse_output` | 144 | concrete tool classes |
-| Tools with semantic observations | 7 | `emit_semantic_observations` overrides |
-| Tools with semantic evidence | 5 | `emit_semantic_evidence` overrides |
-| Tools with declared capture contract | 11 | `_capture_contract` on tool classes |
+| Visible planner tools | 30 | `agent/tools/catalog_visibility.py` |
+| Tools overriding `parse_output` | 145 | concrete tool classes |
+| Tools with semantic observations | 8 | `emit_semantic_observations` overrides |
+| Tools with semantic evidence | 6 | `emit_semantic_evidence` overrides |
+| Tools with declared capture contract | 12 | `_capture_contract` on tool classes |
 
 Finished visible domain/runtime tools:
 
 | Tool | Why it is finished |
 | --- | --- |
+| `information_gathering.dns.amass` | Runs graph-free Amass v5 DNS enumeration through a task-local collector, parses only normalized v5 name/IP output, emits DNS/IP/`resolves_to` semantic observations and evidence, projects into existing `host.dns`, `host.ip`, and relationship knowledge entities, and has a DNS deterministic adapter. It does not import or persist the Amass Open Asset Model graph. |
 | `information_gathering.network_discovery.nmap` | Forces XML capture with `-oX -`, parses hosts, ports, services, OS/script enrichment, emits semantic observations/evidence, and has a network-discovery deterministic adapter. |
 | `web_applications.web_crawlers.ffuf` | Uses a planner-facing schema and compiler, materializes inline wordlists, parses ffuf JSON/text into crawler metadata, emits semantic observations/evidence, and has a web-discovery deterministic adapter. |
 | `sniffing_spoofing.network_sniffers.tshark` | Uses bounded analysis modes, structured JSON capture, PCAP compaction, semantic observations/evidence, sanitized process rendering, and a PCAP deterministic adapter. |
@@ -481,7 +483,7 @@ Implemented backlog by top-level namespace:
 | `exploitation_tools` | 13 | 3 | 5 | 10 |
 | `filesystem` | 15 | 15 | 12 | 0 |
 | `forensics` | 12 | 0 | 10 | 12 |
-| `information_gathering` | 29 | 4 | 27 | 25 |
+| `information_gathering` | 29 | 5 | 28 | 24 |
 | `knowledge` | 1 | 0 | 0 | 1 |
 | `maintaining_access` | 10 | 0 | 7 | 10 |
 | `networking_utilities` | 1 | 1 | 1 | 0 |
@@ -517,7 +519,8 @@ Use this sequence when graduating a tool from wrapper/backlog to finished:
 7. Register enhanced metadata near the tool implementation and keep the first
    capability description selector-grade.
 8. Add the tool id to `catalog_visibility.py` only after parser, deterministic
-   projection, metadata, security policy, and tests are complete.
+   projection, metadata, security policy, runtime compatibility, and tests are
+   complete.
 9. Update `capability_surface.py` only when the visible tool changes the
    advertised capability families.
 10. Verify product Runner behavior and explicit local-provider behavior through

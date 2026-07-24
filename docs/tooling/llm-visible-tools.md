@@ -8,7 +8,7 @@ over their results. The list is generated from
 `agent.tools.catalog_visibility.visible_available_tools()` and should be treated
 as the prompt-facing subset, not the complete implemented tool registry.
 
-Current count: 29 tools.
+Current count: 30 tools.
 
 - `exploitation_tools.metasploit.inspect_module`
 - `exploitation_tools.metasploit.run_exploit`
@@ -28,6 +28,7 @@ Current count: 29 tools.
 - `filesystem.search_text`
 - `filesystem.stat_path`
 - `filesystem.write_file`
+- `information_gathering.dns.amass`
 - `information_gathering.network_discovery.fping`
 - `information_gathering.network_discovery.nmap`
 - `information_gathering.web_enumeration.http_download`
@@ -39,3 +40,11 @@ Current count: 29 tools.
 - `service_access.ssh_login`
 - `sniffing_spoofing.network_sniffers.tshark`
 - `web_applications.web_crawlers.ffuf`
+
+## DNS Enumeration Scope
+
+`information_gathering.dns.amass` is exposed for graph-free Amass v5 DNS
+enumeration. DrowAI consumes the collector's normalized DNS-name/IP mappings,
+projects DNS names and IP addresses into existing knowledge assets, and
+persists explicit `resolves_to` relationships. It does not import or persist
+the Amass Open Asset Model graph.

@@ -28,12 +28,12 @@ from agent.graph.compression.deterministic.registry import (
 from agent.tools.catalog_visibility import visible_available_tools
 
 
-def test_dns_discovery_adapter_registers_exact_amass_tool_id_before_catalog_promotion() -> None:
-    """Amass has deterministic coverage before the later visible-catalog task."""
+def test_dns_discovery_adapter_registers_exact_visible_amass_tool_id() -> None:
+    """Amass has deterministic coverage after visible-catalog promotion."""
 
     assert get_adapter(AMASS_TOOL_ID) is dns_discovery_adapter
     assert registered_dns_discovery_tool_ids() == (AMASS_TOOL_ID,)
-    assert AMASS_TOOL_ID not in visible_available_tools()
+    assert AMASS_TOOL_ID in visible_available_tools()
 
 
 def test_amass_metadata_compacts_names_mappings_diagnostics_and_artifacts() -> None:

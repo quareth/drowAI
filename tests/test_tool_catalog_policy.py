@@ -53,6 +53,7 @@ def test_known_system_tools_are_not_user_configurable() -> None:
 
 def test_known_pentest_tools_are_user_configurable() -> None:
     pentest_tool_ids = [
+        "information_gathering.dns.amass",
         "information_gathering.network_discovery.nmap",
         "password_attacks.online_attacks.hydra",
         "sniffing_spoofing.network_sniffers.tshark",

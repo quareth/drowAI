@@ -13,6 +13,8 @@ The format is based on
 - Kali task runtime images now include Amass, DNSRecon, enum4linux-ng, Hydra,
   Nuclei with a bundled template snapshot, and WhatWeb, with adapters updated
   for the installed Amass and enum4linux-ng command interfaces.
+- Amass is available in the LLM-visible tool catalog for DNS enumeration, with
+  normalized DNS/IP knowledge assets and `resolves_to` relationships.
 
 ### Fixed
 

@@ -106,7 +106,7 @@ class SchemaValidator:
         )
         report.add_result(
             "build_command_full",
-            self._test_build_command_full(tool_cls),
+            self._test_build_command_full(tool_id, tool_cls),
         )
         report.add_result(
             "optional_fields",
@@ -131,6 +131,22 @@ class SchemaValidator:
             return None
 
         params = minimal_case.get("params")
+        return params if isinstance(params, dict) else None
+
+    def _get_fixture_full_args(self, tool_id: str) -> Optional[Dict[str, Any]]:
+        """Return a tool's fixture-backed full params when available."""
+        try:
+            fixture = load_param_fixture(tool_id)
+        except Exception:
+            return None
+
+        full_case = fixture.get("test_cases", {}).get("full")
+        if not isinstance(full_case, dict):
+            return None
+        if not full_case.get("expected_valid", True):
+            return None
+
+        params = full_case.get("params")
         return params if isinstance(params, dict) else None
 
     def _get_minimal_args(self, args_class: Type[BaseToolArgs]) -> Dict[str, Any]:
@@ -376,10 +392,12 @@ class SchemaValidator:
 
         return True
 
-    def _test_build_command_full(self, tool_cls: Type[BaseTool]) -> bool:
+    def _test_build_command_full(self, tool_id: str, tool_cls: Type[BaseTool]) -> bool:
         tool = tool_cls()
         args_class = tool_cls.args_model
-        full_args = self._build_full_args(args_class)
+        full_args = self._get_fixture_full_args(tool_id) or self._build_full_args(
+            args_class
+        )
 
         try:
             args_instance = args_class(**full_args)

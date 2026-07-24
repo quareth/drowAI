@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from agent.tools import capability_surface
 from agent.tools.capability_surface import (
     build_capability_surface,
     render_capability_surface,
@@ -83,6 +84,7 @@ def test_default_surface_reflects_mvp_visible_tools() -> None:
     }
 
     assert "filesystem.read_file" in surfaced_tools
+    assert "information_gathering.dns.amass" in surfaced_tools
     assert "information_gathering.network_discovery.fping" in surfaced_tools
     assert "information_gathering.network_discovery.masscan" not in surfaced_tools
     assert "information_gathering.network_discovery.nmap" in surfaced_tools
@@ -90,6 +92,15 @@ def test_default_surface_reflects_mvp_visible_tools() -> None:
     assert "exploitation_tools.metasploit.run_exploit" in surfaced_tools
     assert "web_applications.web_crawlers.ffuf" in surfaced_tools
     assert "shell.exec" not in surfaced_tools
+
+
+def test_visible_amass_uses_generic_dns_reconnaissance_inference() -> None:
+    surface = build_capability_surface(["information_gathering.dns.amass"])
+
+    assert "information_gathering.dns.amass" not in capability_surface._TOOL_ID_TO_FAMILIES
+    assert surface.families["dns_reconnaissance"] == [
+        "information_gathering.dns.amass"
+    ]
 
 
 def test_default_surface_does_not_assign_unrelated_capabilities() -> None:

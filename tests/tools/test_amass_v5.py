@@ -6,6 +6,7 @@ import os
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
@@ -70,6 +71,42 @@ def test_resolver_and_source_filters_use_v5_flag_names() -> None:
     assert command[command.index("-r") + 1] == "127.0.0.1"
     assert command[command.index("-include") + 1] == "crtsh,dns"
     assert command[command.index("-exclude") + 1] == "archive"
+
+
+def test_collector_command_prepares_flags_in_installed_v5_order(tmp_path) -> None:
+    wordlist = tmp_path / "word list.txt"
+    args = AmassArgs(
+        target="example.com",
+        mode=Mode.BRUTE,
+        wordlist=str(wordlist),
+        inactivity_timeout_minutes=11,
+        verbose=True,
+        dns_server="127.0.0.1",
+        source=["crtsh", "dns"],
+        exclude_source=["archive"],
+    )
+
+    command = AmassTool().build_command(args)
+
+    assert command == [
+        "bash",
+        "/workspace/.drowai/amass/collect_v5.sh",
+        "/workspace",
+        "example.com",
+        "-brute",
+        "-w",
+        str(wordlist),
+        "-timeout",
+        "11",
+        "-v",
+        "-r",
+        "127.0.0.1",
+        "-include",
+        "crtsh,dns",
+        "-exclude",
+        "archive",
+        "-nocolor",
+    ]
 
 
 def test_execution_timeout_is_separate_from_amass_inactivity_timeout() -> None:
@@ -150,6 +187,35 @@ def test_capture_contract_declares_canonical_text() -> None:
     assert contract is not None
     assert contract.family is CaptureFamily.TEXT_NATIVE
     assert contract.canonical_format is CanonicalCaptureFormat.TEXT
+
+
+def test_run_uses_wall_clock_timeout_without_changing_amass_inactivity_timeout() -> None:
+    tool = AmassTool()
+    args = AmassArgs(
+        target="example.com",
+        execution_timeout=3,
+        inactivity_timeout_minutes=17,
+    )
+    recorded: dict[str, object] = {}
+
+    def _timeout(*positional, **kwargs):
+        recorded["command"] = positional[0]
+        recorded["timeout"] = kwargs["timeout"]
+        raise subprocess.TimeoutExpired(positional[0], kwargs["timeout"])
+
+    with patch(
+        "agent.tools.information_gathering.dns.amass.subprocess.run",
+        side_effect=_timeout,
+    ):
+        result = tool.run(args)
+
+    command = recorded["command"]
+    assert isinstance(command, list)
+    assert recorded["timeout"] == 3
+    assert command[command.index("-timeout") + 1] == "17"
+    assert result.success is False
+    assert result.exit_code == -2
+    assert result.stderr == "Command timed out"
 
 
 def test_parser_preserves_unresolved_names_and_ipv4_ipv6_relationships() -> None:
@@ -350,32 +416,161 @@ def test_parser_reports_empty_and_rejects_legacy_progress_text() -> None:
     assert legacy_metadata["diagnostics"] == ["incomplete_capture_sections"]
 
 
-def test_collector_script_runs_two_queries_with_a_fake_amass_binary(tmp_path) -> None:
-    tool = AmassTool()
+def test_collector_script_preserves_order_tags_spaces_and_success_cleanup(tmp_path) -> None:
+    workspace = tmp_path / "workspace with spaces"
+    wordlist = workspace / "word list.txt"
+    args = AmassArgs(
+        target="example.com",
+        mode=Mode.BRUTE,
+        wordlist=str(wordlist),
+        inactivity_timeout_minutes=9,
+        verbose=True,
+        dns_server="127.0.0.1",
+        source=["crtsh", "dns"],
+        exclude_source=["archive"],
+    )
+
+    completed, log_path = _run_collector_with_fake_amass(tmp_path, workspace, args=args)
+
+    assert completed.returncode == 0
+    assert completed.stderr == ""
+    assert completed.stdout.splitlines() == [
+        AMASS_NAMES_BEGIN,
+        "api.example.com",
+        "unresolved.example.com",
+        AMASS_NAMES_END,
+        AMASS_RESOLVED_BEGIN,
+        "api.example.com 192.0.2.20,2001:db8::5",
+        AMASS_RESOLVED_END,
+    ]
+    metadata = AmassTool().parse_output(completed.stdout, completed.stderr, 0, args)
+    assert metadata["names_count"] == 2
+    assert metadata["resolved_names_count"] == 1
+
+    calls = _read_fake_amass_calls(log_path)
+    assert [call[0] for call in calls] == ["enum", "subs", "subs"]
+    session_dir = calls[0][2]
+    assert calls[0][1] == "-dir"
+    assert session_dir.startswith(str(workspace / ".drowai/amass" / "session."))
+    assert "workspace with spaces" in session_dir
+    assert calls[0][3] == "-d"
+    assert calls[0][4:] == [
+        "example.com",
+        "-brute",
+        "-w",
+        str(wordlist),
+        "-timeout",
+        "9",
+        "-v",
+        "-r",
+        "127.0.0.1",
+        "-include",
+        "crtsh,dns",
+        "-exclude",
+        "archive",
+        "-nocolor",
+    ]
+    assert calls[1][1:4] == ["-dir", session_dir, "-d"]
+    assert calls[2][1:4] == ["-dir", session_dir, "-d"]
+    assert calls[1][4:] == ["example.com", "-names", "-nocolor"]
+    assert calls[2][4:] == ["example.com", "-names", "-ip", "-nocolor"]
+    assert list((workspace / ".drowai/amass").glob("session.*")) == []
+
+
+@pytest.mark.parametrize(
+    ("fail_stage", "expected_code", "expected_stdout"),
+    [
+        ("enum", 23, ""),
+        ("names", 24, f"{AMASS_NAMES_BEGIN}\n{AMASS_NAMES_END}\n"),
+        (
+            "resolved",
+            25,
+            "\n".join(
+                [
+                    AMASS_NAMES_BEGIN,
+                    "api.example.com",
+                    "unresolved.example.com",
+                    AMASS_NAMES_END,
+                    AMASS_RESOLVED_BEGIN,
+                    AMASS_RESOLVED_END,
+                    "",
+                ]
+            ),
+        ),
+    ],
+)
+def test_collector_script_propagates_return_codes_and_cleans_failed_sessions(
+    tmp_path,
+    fail_stage: str,
+    expected_code: int,
+    expected_stdout: str,
+) -> None:
+    workspace = tmp_path / f"workspace {fail_stage}"
     args = AmassArgs(target="example.com", inactivity_timeout_minutes=9)
-    collector = tmp_path / ".drowai/amass/collect_v5.sh"
+
+    completed, _log_path = _run_collector_with_fake_amass(
+        tmp_path,
+        workspace,
+        args=args,
+        fail_stage=fail_stage,
+    )
+
+    assert completed.returncode == expected_code
+    assert completed.stdout == expected_stdout
+    assert list((workspace / ".drowai/amass").glob("session.*")) == []
+
+
+def _run_collector_with_fake_amass(
+    tmp_path: Path,
+    workspace: Path,
+    *,
+    args: AmassArgs,
+    fail_stage: str = "",
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    """Execute the collector with a fake Amass binary and task-local workspace."""
+
+    tool = AmassTool()
+    collector = workspace / ".drowai/amass/collect_v5.sh"
     collector.parent.mkdir(parents=True)
     collector.write_bytes(tool.prepare_workspace_files(args)[0].content_bytes())
 
     fake_bin = tmp_path / "bin"
-    fake_bin.mkdir()
+    fake_bin.mkdir(exist_ok=True)
+    log_path = tmp_path / "fake-amass-calls.log"
     fake_amass = fake_bin / "amass"
     fake_amass.write_text(
         """#!/usr/bin/env bash
 set -u
-case "$1" in
-    enum)
-        exit 0
-        ;;
-    subs)
-        if [[ " $* " == *" -ip "* ]]; then
-            printf '%s\n' 'api.example.com 192.0.2.20,2001:db8::5'
-        else
-            printf '%s\n' 'api.example.com' 'unresolved.example.com'
+{
+    printf 'CALL\\n'
+    for arg in "$@"; do
+        printf '[%s]\\n' "$arg"
+    done
+} >> "$AMASS_FAKE_LOG"
+
+if [[ "$1" == "enum" ]]; then
+    mkdir -p "$3"
+    if [[ "${AMASS_FAIL_STAGE:-}" == "enum" ]]; then
+        exit 23
+    fi
+    exit 0
+fi
+
+if [[ "$1" == "subs" ]]; then
+    if [[ " $* " == *" -ip "* ]]; then
+        if [[ "${AMASS_FAIL_STAGE:-}" == "resolved" ]]; then
+            exit 25
         fi
-        exit 0
-        ;;
-esac
+        printf '%s\\n' 'api.example.com 192.0.2.20,2001:db8::5'
+    else
+        if [[ "${AMASS_FAIL_STAGE:-}" == "names" ]]; then
+            exit 24
+        fi
+        printf '%s\\n' 'api.example.com' 'unresolved.example.com'
+    fi
+    exit 0
+fi
+
 exit 2
 """,
         encoding="utf-8",
@@ -384,11 +579,13 @@ exit 2
 
     command = tool._build_collector_command(
         args,
-        workspace_root=str(tmp_path),
+        workspace_root=str(workspace),
         script_path=str(collector),
     )
     env = dict(os.environ)
     env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+    env["AMASS_FAKE_LOG"] = str(log_path)
+    env["AMASS_FAIL_STAGE"] = fail_stage
     completed = subprocess.run(
         command,
         capture_output=True,
@@ -396,12 +593,24 @@ exit 2
         check=False,
         env=env,
     )
+    return completed, log_path
 
-    assert completed.returncode == 0
-    metadata = tool.parse_output(completed.stdout, completed.stderr, 0, args)
-    assert metadata["names_count"] == 2
-    assert metadata["resolved_names_count"] == 1
-    assert list((tmp_path / ".drowai/amass").glob("session.*")) == []
+
+def _read_fake_amass_calls(log_path: Path) -> list[list[str]]:
+    """Return logged fake Amass argv calls."""
+
+    calls: list[list[str]] = []
+    current: list[str] = []
+    for line in log_path.read_text(encoding="utf-8").splitlines():
+        if line == "CALL":
+            if current:
+                calls.append(current)
+            current = []
+            continue
+        current.append(line.removeprefix("[").removesuffix("]"))
+    if current:
+        calls.append(current)
+    return calls
 
 
 def _ip_sort_key(value: str) -> tuple[int, int]:
