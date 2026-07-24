@@ -3,6 +3,7 @@
 This package defines deterministic semantic adapter interfaces and dispatch
 helpers used by the backend service boundary."""
 
+from .amass_adapter import AmassKnowledgeAdapter
 from .masscan_adapter import MasscanKnowledgeAdapter
 from .msfconsole_adapter import MsfconsoleKnowledgeAdapter
 from .nmap_adapter import NmapKnowledgeAdapter
@@ -15,6 +16,7 @@ from .sqlmap_adapter import SqlmapKnowledgeAdapter
 from .tshark_adapter import TsharkKnowledgeAdapter
 
 __all__ = [
+    "AmassKnowledgeAdapter",
     "FfufKnowledgeAdapter",
     "FpingKnowledgeAdapter",
     "GobusterKnowledgeAdapter",

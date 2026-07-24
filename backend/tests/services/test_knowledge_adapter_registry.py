@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from backend.services.knowledge.adapters.amass_adapter import (
+    AMASS_TOOL_ID,
+    AmassKnowledgeAdapter,
+)
 from backend.services.knowledge.adapters.base import AdapterContext
 from backend.services.knowledge.adapters.ffuf_adapter import FfufKnowledgeAdapter
 from backend.services.knowledge.adapters.gobuster_adapter import GobusterKnowledgeAdapter
@@ -374,3 +378,173 @@ def test_gobuster_adapter_matches_locked_web_surface_contract() -> None:
     assert observation.payload.get("status_code") == 200
     assert observation.payload.get("response_size") == 4321
     assert observation.payload.get("source") == "web_applications.web_crawlers.gobuster"
+
+
+def test_default_registry_resolves_amass_by_exact_tool_name_only() -> None:
+    registry = KnowledgeAdapterRegistryService()
+    amass_context = registry.build_context(
+        user_id=1,
+        engagement_id=1,
+        task_id=2,
+        source_execution_id="exec-amass-registry-1",
+        ingestion_run_id="run-amass-registry-1",
+        execution_payload=_build_execution_payload(
+            tool_name=AMASS_TOOL_ID,
+            capability_family="dns_enumeration",
+            tool_metadata={"subdomains": []},
+        ),
+    )
+    unknown_context = registry.build_context(
+        user_id=1,
+        engagement_id=1,
+        task_id=2,
+        source_execution_id="exec-amass-registry-2",
+        ingestion_run_id="run-amass-registry-2",
+        execution_payload=_build_execution_payload(
+            tool_name="information_gathering.dns.unknown",
+            capability_family="dns_enumeration",
+            tool_metadata={"subdomains": [{"subdomain": "api.example.com"}]},
+        ),
+    )
+
+    adapters = registry.resolve_adapters(amass_context)
+    assert len(adapters) == 1
+    assert isinstance(adapters[0], AmassKnowledgeAdapter)
+    assert registry.resolve_adapters(unknown_context) == []
+
+
+def test_amass_adapter_semantic_rows_are_authoritative_and_receive_evidence_refs() -> None:
+    registry = KnowledgeAdapterRegistryService(adapters=[AmassKnowledgeAdapter()])
+    context = registry.build_context(
+        user_id=1,
+        engagement_id=1,
+        task_id=2,
+        source_execution_id="exec-amass-semantic-1",
+        ingestion_run_id="run-amass-semantic-1",
+        execution_payload=_build_execution_payload(
+            tool_name=AMASS_TOOL_ID,
+            semantic_observations=[
+                {
+                    "observation_type": "dns.name_discovered",
+                    "subject_type": "host.dns",
+                    "subject_key": "host.dns:api.example.com",
+                    "payload": {"tool_source": "amass", "dns_name": "api.example.com"},
+                },
+                {
+                    "observation_type": "dns.address_resolved",
+                    "subject_type": "host.ip",
+                    "subject_key": "host.ip:192.0.2.20",
+                    "payload": {"tool_source": "amass", "address": "192.0.2.20"},
+                },
+                {
+                    "observation_type": "relationship.resolves_to",
+                    "subject_type": "relationship.edge",
+                    "subject_key": (
+                        "relationship.edge:host.dns:api.example.com:"
+                        "resolves_to:host.ip:192.0.2.20"
+                    ),
+                    "payload": {
+                        "source_subject_type": "host.dns",
+                        "source_subject_key": "host.dns:api.example.com",
+                        "relationship_type": "resolves_to",
+                        "target_subject_type": "host.ip",
+                        "target_subject_key": "host.ip:192.0.2.20",
+                        "tool_source": "amass",
+                    },
+                },
+            ],
+            tool_metadata={
+                "subdomains": [{"subdomain": "fallback.example.com", "ip": ["192.0.2.21"]}]
+            },
+        ),
+        evidence_archives=[
+            {
+                "id": "archive-artifact-1",
+                "source_artifact_id": "artifact-1",
+                "lineage": {"artifact_id": "artifact-1"},
+            }
+        ],
+    )
+
+    observations = registry.extract(context)
+
+    assert [item.subject_key for item in observations] == [
+        "host.dns:api.example.com",
+        "host.ip:192.0.2.20",
+        "relationship.edge:host.dns:api.example.com:resolves_to:host.ip:192.0.2.20",
+    ]
+    assert all(
+        item.payload.get("evidence_refs") == [{"evidence_archive_id": "archive-artifact-1"}]
+        for item in observations
+    )
+
+
+def test_amass_adapter_falls_back_to_current_normalized_metadata_shape() -> None:
+    registry = KnowledgeAdapterRegistryService(adapters=[AmassKnowledgeAdapter()])
+    context = registry.build_context(
+        user_id=1,
+        engagement_id=1,
+        task_id=2,
+        source_execution_id="exec-amass-fallback-1",
+        ingestion_run_id="run-amass-fallback-1",
+        execution_payload=_build_execution_payload(
+            tool_name=AMASS_TOOL_ID,
+            tool_metadata={
+                "subdomains": [
+                    {
+                        "subdomain": "API.Example.COM.",
+                        "ip": ["192.0.2.20", "2001:0db8::5", "192.0.2.20"],
+                    },
+                    {"subdomain": "unresolved.example.com", "ip": []},
+                ],
+                "hosts": [
+                    {"hostname": "api.example.com", "ip": ["192.0.2.20"]},
+                    {"hostname": "www.example.com", "ip": ["192.0.2.10"]},
+                ],
+                "ips": ["192.0.2.10", "192.0.2.20", "2001:db8::5"],
+                "parse_status": "success",
+            },
+        ),
+    )
+
+    observations = registry.extract(context)
+
+    assert [item.subject_key for item in observations] == [
+        "host.dns:api.example.com",
+        "host.dns:unresolved.example.com",
+        "host.dns:www.example.com",
+        "host.ip:192.0.2.10",
+        "host.ip:192.0.2.20",
+        "host.ip:2001:db8::5",
+        "relationship.edge:host.dns:api.example.com:resolves_to:host.ip:192.0.2.20",
+        "relationship.edge:host.dns:api.example.com:resolves_to:host.ip:2001:db8::5",
+        "relationship.edge:host.dns:www.example.com:resolves_to:host.ip:192.0.2.10",
+    ]
+    relationship = next(
+        item for item in observations if item.observation_type == "relationship.resolves_to"
+    )
+    assert relationship.payload["source_subject_key"] == "host.dns:api.example.com"
+    assert relationship.payload["target_subject_key"] == "host.ip:192.0.2.20"
+    assert relationship.payload["relationship_type"] == "resolves_to"
+
+
+def test_amass_adapter_rejects_incompatible_metadata_without_artifact_parsing() -> None:
+    registry = KnowledgeAdapterRegistryService(adapters=[AmassKnowledgeAdapter()])
+    context = registry.build_context(
+        user_id=1,
+        engagement_id=1,
+        task_id=2,
+        source_execution_id="exec-amass-unsafe-1",
+        ingestion_run_id="run-amass-unsafe-1",
+        execution_payload=_build_execution_payload(
+            tool_name=AMASS_TOOL_ID,
+            tool_metadata={"subdomains": "api.example.com"},
+        ),
+        compact_output_hint={"subdomains": [{"subdomain": "compact.example.com"}]},
+        artifact_reader=lambda _artifact_id: (
+            "__DROWAI_AMASS_V5_NAMES_BEGIN__\nraw.example.com\n"
+            "__DROWAI_AMASS_V5_NAMES_END__"
+        ),
+    )
+
+    assert registry.extract(context) == []
