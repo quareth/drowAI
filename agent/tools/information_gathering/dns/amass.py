@@ -28,6 +28,12 @@ from .amass_analysis import (
     normalize_dns_name,
     parse_amass_v5_results,
 )
+from .amass_semantics import (
+    AMASS_CAPABILITY_FAMILY,
+    AMASS_SEMANTIC_SCHEMA_VERSION,
+    build_amass_evidence,
+    build_amass_observations,
+)
 
 _COLLECTOR_RELATIVE_PATH = ".drowai/amass/collect_v5.sh"
 _CONTAINER_COLLECTOR_PATH = f"/workspace/{_COLLECTOR_RELATIVE_PATH}"
@@ -240,7 +246,36 @@ class AmassTool(BaseTool):
         """Parse the collector's tagged ``amass subs`` result stream."""
 
         _ = stderr, args
-        return parse_amass_v5_results(stdout, exit_code=exit_code)
+        metadata = parse_amass_v5_results(stdout, exit_code=exit_code)
+        metadata["semantic_schema_version"] = AMASS_SEMANTIC_SCHEMA_VERSION
+        metadata["capability_family"] = AMASS_CAPABILITY_FAMILY
+        return metadata
+
+    def emit_semantic_observations(
+        self,
+        stdout: str,
+        stderr: str,
+        exit_code: int,
+        args: AmassArgs,
+        metadata: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Emit DNS, IP, and resolves_to observations from normalized metadata."""
+
+        _ = stdout, stderr, exit_code, args
+        return build_amass_observations(metadata)
+
+    def emit_semantic_evidence(
+        self,
+        stdout: str,
+        stderr: str,
+        exit_code: int,
+        args: AmassArgs,
+        metadata: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Emit bounded Amass run evidence from normalized metadata."""
+
+        _ = stdout, stderr, exit_code
+        return build_amass_evidence(metadata, args)
 
     def create_artifacts(
         self,

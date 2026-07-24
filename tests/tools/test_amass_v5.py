@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -19,6 +20,8 @@ from agent.tools.information_gathering.dns.amass_analysis import (
     AMASS_RESOLVED_END,
     parse_amass_v5_results,
 )
+
+FIXTURES_DIR = Path(__file__).parent / "fixtures" / "outputs"
 
 
 def test_passive_mode_uses_graph_free_v5_collector_without_deprecated_flag() -> None:
@@ -194,6 +197,139 @@ def test_parser_preserves_unresolved_names_and_ipv4_ipv6_relationships() -> None
     ]
 
 
+def test_parser_metadata_counts_agree_with_normalized_lists() -> None:
+    output = "\n".join(
+        [
+            AMASS_NAMES_BEGIN,
+            "WWW.Example.COM.",
+            "api.example.com",
+            "api.example.com",
+            AMASS_NAMES_END,
+            AMASS_RESOLVED_BEGIN,
+            "api.example.com 198.51.100.10",
+            "api.example.com 2001:0db8::2,198.51.100.10",
+            "www.example.com 2001:0db8::1,192.0.2.2,192.0.2.2",
+            AMASS_RESOLVED_END,
+        ]
+    )
+
+    metadata = parse_amass_v5_results(output)
+    subdomains_by_name = {
+        item["subdomain"]: item for item in metadata["subdomains"]
+    }
+    hosts_by_name = {item["hostname"]: item for item in metadata["hosts"]}
+    subdomain_ips = {
+        address
+        for item in metadata["subdomains"]
+        for address in item["ip"]
+    }
+    host_ips = {address for item in metadata["hosts"] for address in item["ip"]}
+
+    assert metadata["parse_status"] == "success"
+    assert metadata["names_count"] == len(metadata["subdomains"]) == len(
+        metadata["hosts"]
+    )
+    assert metadata["resolved_names_count"] == sum(
+        1 for item in metadata["subdomains"] if item["ip"]
+    )
+    assert metadata["unresolved_names_count"] == sum(
+        1 for item in metadata["subdomains"] if not item["ip"]
+    )
+    assert metadata["ip_count"] == len(metadata["ips"])
+    assert metadata["ips"] == sorted(subdomain_ips | host_ips, key=_ip_sort_key)
+    assert (
+        hosts_by_name["api.example.com"]["ip"]
+        == subdomains_by_name["api.example.com"]["ip"]
+    )
+    assert (
+        hosts_by_name["www.example.com"]["ip"]
+        == subdomains_by_name["www.example.com"]["ip"]
+    )
+    assert subdomains_by_name["api.example.com"]["ip"] == [
+        "198.51.100.10",
+        "2001:db8::2",
+    ]
+    assert subdomains_by_name["www.example.com"]["ip"] == [
+        "192.0.2.2",
+        "2001:db8::1",
+    ]
+    assert all("subject_key" not in item for item in metadata["subdomains"])
+    assert all("subject_type" not in item for item in metadata["hosts"])
+
+
+def test_parser_reports_invalid_rows_without_duplicating_raw_parse_paths() -> None:
+    output = "\n".join(
+        [
+            AMASS_NAMES_BEGIN,
+            "valid.example.com",
+            "bad host",
+            AMASS_NAMES_END,
+            AMASS_RESOLVED_BEGIN,
+            "valid.example.com not-an-ip",
+            "missing-address.example.com",
+            "other.example.com 203.0.113.4",
+            AMASS_RESOLVED_END,
+        ]
+    )
+
+    metadata = parse_amass_v5_results(output)
+
+    assert metadata["parse_status"] == "partial"
+    assert metadata["diagnostics"] == [
+        "invalid_name_row",
+        "resolved_row_without_valid_address",
+        "invalid_resolved_row",
+    ]
+    assert metadata["subdomains"] == [
+        {
+            "subdomain": "other.example.com",
+            "ip": ["203.0.113.4"],
+            "record_types": ["A"],
+            "source": "amass",
+        },
+        {
+            "subdomain": "valid.example.com",
+            "ip": [],
+            "record_types": [],
+            "source": "amass",
+        },
+    ]
+    assert metadata["ips"] == ["203.0.113.4"]
+    assert metadata["names_count"] == 2
+    assert metadata["resolved_names_count"] == 1
+    assert metadata["unresolved_names_count"] == 1
+
+
+def test_parser_locks_current_v5_fixture_contract() -> None:
+    output = (FIXTURES_DIR / "information_gathering_dns_amass.txt").read_text(
+        encoding="utf-8"
+    )
+
+    metadata = parse_amass_v5_results(output)
+
+    assert metadata["parse_status"] == "success"
+    assert metadata["diagnostics"] == []
+    assert metadata["names_count"] == 4
+    assert metadata["resolved_names_count"] == 3
+    assert metadata["unresolved_names_count"] == 1
+    assert metadata["ip_count"] == 4
+    assert metadata["ips"] == [
+        "93.184.216.34",
+        "93.184.216.35",
+        "93.184.216.36",
+        "2001:db8::34",
+    ]
+    assert metadata["hosts"] == [
+        {"hostname": "api.example.com", "ip": ["93.184.216.36"]},
+        {"hostname": "mail.example.com", "ip": ["93.184.216.35"]},
+        {"hostname": "unresolved.example.com", "ip": []},
+        {
+            "hostname": "www.example.com",
+            "ip": ["93.184.216.34", "2001:db8::34"],
+        },
+    ]
+
+
 def test_parser_reports_empty_and_rejects_legacy_progress_text() -> None:
     empty = "\n".join(
         [
@@ -266,3 +402,10 @@ exit 2
     assert metadata["names_count"] == 2
     assert metadata["resolved_names_count"] == 1
     assert list((tmp_path / ".drowai/amass").glob("session.*")) == []
+
+
+def _ip_sort_key(value: str) -> tuple[int, int]:
+    import ipaddress
+
+    address = ipaddress.ip_address(value)
+    return (address.version, int(address))
