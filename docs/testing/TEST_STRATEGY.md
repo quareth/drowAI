@@ -7,8 +7,8 @@ This document defines how DrowAI turns a large historical test surface into unde
 ## Current Test-Suite Maturity
 
 > **Important:** DrowAI contains a large historical test surface that is still
-> being audited. The generated inventory currently records 1,188 test files;
-> 1,139 are `untriaged`, 31 contain trusted CI selections, ten are useful slow
+> being audited. The generated inventory currently records 1,189 test files;
+> 1,140 are `untriaged`, 31 contain trusted CI selections, ten are useful slow
 > journeys, one is candidate E2E coverage, five are curated manual coverage,
 > and two are environment-dependent.
 > Only the documented curated gates currently represent release evidence. The
@@ -74,7 +74,7 @@ Never mark a test `trusted-ci-selection`, `useful-slow`, `flaky`, `duplicate`, o
 | Tier | Command and selector | CI ownership | Included environment | Explicit exclusions / status |
 |---|---|---|---|---|
 | Required release contracts | `npm run test:release:quick` | `.github/workflows/release-gate.yml` on pull requests | Curated backend, LangGraph, frontend, four environment-independent `node:test` fixture/security contracts, TypeScript, and build checks | No browser journey, Docker execution, managed runner, or Kali execution. |
-| PR browser core | `npm run test:e2e:pr` (`@pr-core`, Chromium) | Required `.github/workflows/e2e-smoke.yml` check on pull requests | Real frontend/backend/WebSocket/SQLite with deterministic graph execution; one worker and zero retries | No external LLM, Docker, viewer journey, full settings/reporting/knowledge lifecycle, or multi-browser certification. |
+| PR browser core | `npm run test:e2e:pr` (`@pr-core`, Chromium) | Required `.github/workflows/e2e-smoke.yml` check on pull requests | Real frontend/backend/WebSocket/SQLite with deterministic graph execution and hosted-provider catalog/settings parity; one worker and zero retries | No external LLM, Docker, viewer journey, full settings/reporting/knowledge lifecycle, or multi-browser certification. |
 | Deterministic journeys | `npm run test:e2e:journeys:chromium` on `main`/`master`; `npm run test:e2e:journeys:all` on `release/**` and manual dispatch | `.github/workflows/e2e-journeys.yml` after merge or on explicit certification | Isolated frontend/backend/database/workspaces plus offline process-scoped seeding; release/manual certification covers Chromium, Firefox, and WebKit | No real Docker, managed runner, live LLM, external credentials, mobile/Safari emulation, accessibility, or visual-regression certification. |
 | Local-runtime canary | `npm run test:e2e:runtime:local` (`@runtime-local`, Chromium) | `.github/workflows/e2e-runtime-local.yml` nightly/manual, with a separate manual `release_certification` job | Clean supported Linux host, real Docker image/container/terminal/workspace, deterministic safe shell command | No external LLM or managed runner. Missing Linux, Docker daemon, image, or runtime capability fails explicitly. The first scheduled run found a final-read polling defect that PR #2 fixed; a successful clean-host rerun is pending. |
 

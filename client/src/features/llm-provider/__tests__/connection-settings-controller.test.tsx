@@ -23,6 +23,7 @@ import type {
 
 const mocked = vi.hoisted(() => ({
   saveLLMManagedConnection: vi.fn(),
+  deleteLLMManagedConnection: vi.fn(),
   enableLLMManagedConnection: vi.fn(),
   refreshLLMManagedConnectionInventory: vi.fn(),
   testLLMManagedConnection: vi.fn(),
@@ -149,7 +150,9 @@ describe("useConnectionSettingsController", () => {
 
     expect(Object.keys(result.current).sort()).toEqual([
       "connect",
+      "connected",
       "connectionRef",
+      "disconnect",
       "isPending",
       "runnable",
     ]);
@@ -179,8 +182,8 @@ describe("useConnectionSettingsController", () => {
         },
       );
       expect(onSuccess).toHaveBeenCalledWith(
-        "Ollama-compatible HTTPS endpoint connected",
-        "GPT-OSS 20B is ready.",
+        "Ollama connected",
+        "The provider connection is ready.",
       );
     });
     expect(mocked.testLLMManagedConnection).toHaveBeenCalledWith(
@@ -297,8 +300,8 @@ describe("useConnectionSettingsController", () => {
 
     await waitFor(() => {
       expect(onSuccess).toHaveBeenCalledWith(
-        "Ollama-compatible HTTPS endpoint connected",
-        "The connection was saved, but GPT-OSS 20B is not ready yet.",
+        "Ollama connected",
+        "The connection was saved, but it is not ready yet.",
       );
     });
     expect(result.current.connectionRef).toBeNull();
@@ -389,8 +392,8 @@ describe("useConnectionSettingsController", () => {
 
     await waitFor(() => {
       expect(onSuccess).toHaveBeenCalledWith(
-        "Ollama-compatible HTTPS endpoint connected",
-        "The connection was saved, but GPT-OSS 20B is not ready yet.",
+        "Ollama connected",
+        "The connection was saved, but it is not ready yet.",
       );
     });
     expect(result.current.connectionRef).toEqual(connectionRef);
@@ -443,8 +446,8 @@ describe("useConnectionSettingsController", () => {
         },
       );
       expect(onSuccess).toHaveBeenCalledWith(
-        "Ollama-compatible HTTPS endpoint connected",
-        "GPT-OSS 20B is ready.",
+        "Ollama connected",
+        "The provider connection is ready.",
       );
     });
     expect(result.current.connectionRef).toEqual(refreshedConnectionRef);
@@ -478,8 +481,8 @@ describe("useConnectionSettingsController", () => {
     await waitFor(() => {
       expect(mocked.refreshLLMManagedConnectionInventory).toHaveBeenCalled();
       expect(onSuccess).toHaveBeenCalledWith(
-        "Ollama-compatible HTTPS endpoint connected",
-        "The connection was saved, but GPT-OSS 20B is not ready yet.",
+        "Ollama connected",
+        "The connection was saved, but it is not ready yet.",
       );
     });
     expect(mocked.enableLLMManagedConnection).not.toHaveBeenCalled();
@@ -519,8 +522,8 @@ describe("useConnectionSettingsController", () => {
         },
       );
       expect(onSuccess).toHaveBeenCalledWith(
-        "Ollama-compatible HTTPS endpoint connected",
-        "The connection was saved, but GPT-OSS 20B is not ready yet.",
+        "Ollama connected",
+        "The connection was saved, but it is not ready yet.",
       );
     });
     expect(mocked.enableLLMManagedConnection).not.toHaveBeenCalled();
@@ -565,10 +568,45 @@ describe("useConnectionSettingsController", () => {
 
     await waitFor(() => {
       expect(onSuccess).toHaveBeenCalledWith(
-        "Ollama-compatible HTTPS endpoint connected",
-        "GPT-OSS 20B is ready.",
+        "Ollama connected",
+        "The provider connection is ready.",
       );
     });
+  });
+
+  it("disconnects through the managed lifecycle and clears local connection state", async () => {
+    const onSuccess = vi.fn();
+    const onError = vi.fn();
+    mocked.deleteLLMManagedConnection.mockResolvedValue({ success: true });
+    const { invalidateQueries, result } = renderController({
+      connection: {
+        ...baseConnection,
+        connectionRef,
+        deploymentRef,
+      },
+      hasStoredCredential: true,
+      onSuccess,
+      onError,
+    });
+
+    expect(result.current.connected).toBe(true);
+    act(() => { result.current.disconnect(); });
+
+    await waitFor(() => {
+      expect(mocked.deleteLLMManagedConnection).toHaveBeenCalledWith(
+        "ollama_openai_compatible_chat",
+        { connection_ref: connectionRef },
+      );
+      expect(onSuccess).toHaveBeenCalledWith(
+        "Ollama disconnected",
+        "The provider credential has been removed.",
+      );
+    });
+    expect(result.current.connected).toBe(false);
+    expect(result.current.connectionRef).toBeNull();
+    expect(result.current.runnable).toBe(false);
+    expect(invalidateQueries).toHaveBeenCalledTimes(1);
+    expect(onError).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -605,7 +643,7 @@ describe("useConnectionSettingsController", () => {
       expect(onError).toHaveBeenCalledTimes(1);
     });
     expect(onError.mock.calls[0]?.[0]).toBe(
-      "Ollama-compatible HTTPS endpoint connection failed",
+      "Ollama connection failed",
     );
     expect(onError.mock.calls[0]?.[1]).toBeInstanceOf(Error);
     expect(onError.mock.calls[0]?.[1].message).toBe(`${stage} failed`);
@@ -630,6 +668,7 @@ describe("useConnectionSettingsController", () => {
 function renderController({
   connection = baseConnection,
   fieldValues = defaultFieldValues,
+  hasStoredCredential = false,
   invalidateQueries = async () => undefined,
   model = baseModel,
   onError = vi.fn(),
@@ -637,6 +676,7 @@ function renderController({
 }: {
   connection?: LLMConnectionMetadata;
   fieldValues?: Readonly<Record<string, string>>;
+  hasStoredCredential?: boolean;
   invalidateQueries?: () => Promise<void>;
   model?: LLMCatalogModel;
   onError?: (title: string, error: Error) => void;
@@ -658,9 +698,11 @@ function renderController({
   );
   const rendered = renderHook(
     () => useConnectionSettingsController({
+      providerLabel: "Ollama",
       model,
       connection,
       fieldValues,
+      hasStoredCredential,
       onSuccess,
       onError,
     }),

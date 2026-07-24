@@ -2,7 +2,7 @@
 
 This service owns ordered, read-only catalog composition over existing provider
 authorities. It excludes HTTP schemas, migration and transaction side effects,
-credential resolution, guarded transport, and public route adaptation.
+plaintext credential resolution, guarded transport, and public route adaptation.
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ from .catalog_service import (
 )
 from .connection_service import LLMConnectionService
 from .connection_status_service import LLMConnectionStatusService
+from .credential_service import LLMCredentialService
 from .deployment_service import LLMDeploymentService
 from .effective_profile_service import compose_reviewed_compatible_profile
 from .operation_registry import (
@@ -43,6 +44,7 @@ from .operation_registry import (
 )
 from .types import (
     CredentialStatus,
+    LLMConnectionCredentialRef,
     LLMConnectionState,
     LLMDeploymentValidationError,
     ProviderConfigurationError,
@@ -57,6 +59,7 @@ class LLMCatalogProjectionService:
 
     def __init__(self, db: Session) -> None:
         self._connections = LLMConnectionService(db)
+        self._credentials = LLMCredentialService(db)
         self._deployments = LLMDeploymentService(db)
         self._status = LLMConnectionStatusService(db)
         self._registry = ConnectionOperationRegistry()
@@ -280,6 +283,11 @@ class LLMCatalogProjectionService:
             if preset.id in PUBLIC_REVIEWED_MODEL_PRESET_IDS:
                 models = [max(models, key=self._product_catalog_model_score)]
             model_outcomes = tuple(models)
+            credential_status = self._reviewed_connection_credential_status(
+                user_id=user_id,
+                preset=preset,
+                connections=preset_connections,
+            )
             rows.append(
                 CatalogProviderOutcome(
                     id=preset.id,
@@ -292,27 +300,44 @@ class LLMCatalogProjectionService:
                     ),
                     available=True,
                     selectable=True,
-                    credential=MaskedCredentialStatusOutcome(
+                    credential=self._masked_credential_status(
                         user_id=user_id,
-                        provider=preset.id,
-                        enabled=any(
-                            connection.state == LLMConnectionState.ENABLED.value
-                            for connection in preset_connections
-                        ),
-                        has_api_key=bool(preset_connections),
-                        masked_api_key=None,
-                        connection_ref=(
-                            self._status.connection_ref(preset_connections[0])
-                            if preset_connections
-                            else None
-                        ),
-                        auth_mode="bearer",
+                        status=credential_status,
                     ),
                     models=model_outcomes,
                     default_model=model_outcomes[0].id,
                 )
             )
         return tuple(rows)
+
+    def _reviewed_connection_credential_status(
+        self,
+        *,
+        user_id: int,
+        preset: ProvingConnectionPreset,
+        connections: Sequence[LLMInferenceConnection],
+    ) -> CredentialStatus:
+        """Return masked credential state for one reviewed preset connector."""
+
+        if not connections:
+            return CredentialStatus(
+                user_id=user_id,
+                provider=preset.id,
+                enabled=False,
+                has_api_key=False,
+                masked_api_key=None,
+                connection_id=None,
+                auth_mode=None,
+            )
+        connection = connections[0]
+        return self._credentials.get_connection_masked_status(
+            user_id=user_id,
+            connection_ref=LLMConnectionCredentialRef(
+                connection_id=str(connection.id),
+                expected_revision=int(connection.revision),
+            ),
+            provider=preset.id,
+        )
 
     @staticmethod
     def _product_catalog_model_score(

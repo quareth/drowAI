@@ -785,6 +785,69 @@ def test_managed_create_success_and_missing_secret_failure(monkeypatch, caplog) 
         app.dependency_overrides.clear()
 
 
+def test_managed_disconnect_revokes_credential_and_preserves_connector(caplog) -> None:
+    """Disconnect uses the shared credential state without deleting route identity."""
+
+    user = _user("llm-managed-disconnect")
+    connection_ref, _deployment_ref_value, _route_id = _managed_connection(
+        user_id=user.id,
+        with_product_deployment=True,
+    )
+    connection_id = UUID(connection_ref["connection_id"])
+    client, app = _client(user)
+    try:
+        before = client.get("/api/llm/models")
+        assert before.status_code == 200, before.text
+        before_provider = next(
+            provider
+            for provider in before.json()["providers"]
+            if provider["id"] == HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID
+        )
+        assert before_provider["credential"]["has_api_key"] is True
+
+        disconnected = client.request(
+            "DELETE",
+            (
+                "/api/llm/connection-presets/"
+                f"{HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID}/connection"
+            ),
+            json={"connection_ref": connection_ref},
+        )
+        assert disconnected.status_code == 200, disconnected.text
+        assert disconnected.json() == {"success": True}
+        _assert_secret_absent(_MANAGED_SECRET, disconnected.text, caplog.text)
+
+        after = client.get("/api/llm/models")
+        assert after.status_code == 200, after.text
+        after_provider = next(
+            provider
+            for provider in after.json()["providers"]
+            if provider["id"] == HUGGINGFACE_OPENAI_COMPATIBLE_PRESET_ID
+        )
+        assert after_provider["credential"]["has_api_key"] is False
+        assert after_provider["credential"]["enabled"] is False
+    finally:
+        app.dependency_overrides.clear()
+
+    db = SessionLocal()
+    try:
+        assert db.get(LLMInferenceConnection, connection_id) is not None
+        assert (
+            db.query(LLMConnectionCredential)
+            .filter(LLMConnectionCredential.connection_id == connection_id)
+            .one_or_none()
+            is None
+        )
+        assert (
+            db.query(LLMModelDeployment)
+            .filter(LLMModelDeployment.connection_id == connection_id)
+            .one_or_none()
+            is not None
+        )
+    finally:
+        db.close()
+
+
 def test_managed_test_health_and_product_probe_ordering(monkeypatch) -> None:
     """Managed test authorizes immediately before health or capability egress."""
 

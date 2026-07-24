@@ -449,6 +449,7 @@ backend/tests/llm_deployment/test_runtime_selection_baseline.py,pytest,backend,b
 backend/tests/migrations/test_alembic_baseline_architecture.py,pytest,backend,backend/migrations,unit,,untriaged,,
 backend/tests/migrations/test_gpt_oss_agent_dialect_migration.py,pytest,backend,backend/migrations,unit,,untriaged,,
 backend/tests/migrations/test_llm_connection_credentials_migration.py,pytest,backend,backend/migrations,unit,,untriaged,,
+backend/tests/migrations/test_llm_connector_singleton_migration.py,pytest,backend,backend/migrations,unit,,untriaged,,
 backend/tests/migrations/test_llm_conversation_origin_migration.py,pytest,backend,backend/migrations,unit,,untriaged,,
 backend/tests/migrations/test_llm_deployment_backfill_migration.py,pytest,backend,backend/migrations,unit,,untriaged,,
 backend/tests/migrations/test_llm_deployment_identity_migration.py,pytest,backend,backend/migrations,unit,,untriaged,,

@@ -5,7 +5,7 @@
  * accepts headers or arbitrary provider inventory values.
  */
 import { useState } from "react";
-import { Key, Loader2 } from "lucide-react";
+import { Key, Loader2, Trash2 } from "lucide-react";
 
 import type {
   LLMCatalogModel,
@@ -21,16 +21,20 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 export interface ConnectionSettingsPanelProps {
+  providerLabel: string;
   model: LLMCatalogModel;
   connection: LLMConnectionMetadata;
+  hasStoredCredential: boolean;
   setupNote?: string | null;
   onSuccess: (title: string, description: string) => void;
   onError: (title: string, error: Error) => void;
 }
 
 export function ConnectionSettingsPanel({
+  providerLabel,
   model,
   connection,
+  hasStoredCredential,
   setupNote = null,
   onSuccess,
   onError,
@@ -58,30 +62,26 @@ export function ConnectionSettingsPanel({
     !field.required || Boolean((fieldValues[field.name] ?? "").trim()),
   );
   const {
-    connectionRef,
-    runnable,
+    connected,
     isPending,
     connect,
+    disconnect,
   } = useConnectionSettingsController({
+    providerLabel,
     model,
     connection,
     fieldValues,
+    hasStoredCredential,
     onSuccess,
     onError,
   });
 
-  const statusLabel = runnable
-    ? "Ready"
-    : connectionRef
-      ? "Connected"
-      : "Not connected";
-
   return (
     <ProviderSettingsCard
-      title={connection.displayName}
+      title={providerLabel}
       setupNote={setupNote}
-      statusLabel={statusLabel}
-      statusPositive={Boolean(runnable || connectionRef)}
+      statusLabel={connected ? "Connected" : "Not connected"}
+      statusPositive={connected}
     >
       {visibleConfigFields.map((field) => (
         field.name === "api_key" ? (
@@ -93,7 +93,7 @@ export function ConnectionSettingsPanel({
               setFieldValues((current) => ({ ...current, [field.name]: value }))
             }
             placeholder={
-              connectionRef
+              connected
                 ? "Enter a new API key to update"
                 : "Enter provider API key"
             }
@@ -135,7 +135,7 @@ export function ConnectionSettingsPanel({
       <div className="flex flex-wrap gap-3">
         <Button
           type="button"
-          aria-label={`${connectionRef ? "Update" : "Connect"} ${connection.displayName}`}
+          aria-label={`${connected ? "Update" : "Connect"} ${providerLabel}`}
           onClick={connect}
           disabled={isPending || !requiredFieldsComplete}
           className="bg-blue-600 hover:bg-blue-700"
@@ -145,8 +145,25 @@ export function ConnectionSettingsPanel({
           ) : (
             <Key className="h-4 w-4" />
           )}
-          {connectionRef ? "Update" : "Connect"}
+          {connected ? "Update" : "Connect"}
         </Button>
+        {connected ? (
+          <Button
+            type="button"
+            aria-label={`Disconnect ${providerLabel}`}
+            onClick={disconnect}
+            disabled={isPending}
+            variant="outline"
+            className="border-slate-600 text-gray-300 hover:text-white"
+          >
+            {isPending ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Trash2 className="h-4 w-4" />
+            )}
+            Disconnect
+          </Button>
+        ) : null}
       </div>
     </ProviderSettingsCard>
   );

@@ -258,6 +258,74 @@ class LLMCredentialService:
             provider=normalized_provider,
         )
 
+    def get_connection_masked_status(
+        self,
+        *,
+        user_id: int,
+        connection_ref: LLMConnectionCredentialRef,
+        provider: str,
+    ) -> CredentialStatus:
+        """Return non-secret status for one authorized connection credential."""
+
+        connection = self._authorize_connection_ref(
+            connection_ref,
+            runtime_user_id=user_id,
+            task_id=None,
+        )
+        normalized_provider = self._require_reviewed_connection_provider(
+            connection,
+            provider,
+        )
+        credential = self._get_connection_credential(connection.id)
+        if credential is None:
+            return CredentialStatus(
+                user_id=user_id,
+                provider=normalized_provider,
+                enabled=False,
+                has_api_key=False,
+                masked_api_key=None,
+                connection_id=str(connection.id),
+                auth_mode=LLMAuthMode.API_KEY,
+            )
+        return self._status_from_connection_credential(
+            credential,
+            connection=connection,
+            provider=normalized_provider,
+        )
+
+    def delete_connection_api_key(
+        self,
+        *,
+        user_id: int,
+        connection_ref: LLMConnectionCredentialRef,
+        provider: str,
+    ) -> CredentialStatus:
+        """Delete encrypted material from one authorized reviewed connection."""
+
+        connection = self._authorize_connection_ref(
+            connection_ref,
+            runtime_user_id=user_id,
+            task_id=None,
+        )
+        normalized_provider = self._require_reviewed_connection_provider(
+            connection,
+            provider,
+        )
+        credential = self._get_connection_credential(connection.id)
+        if credential is not None:
+            self._db.delete(credential)
+            connection.revision += 1
+            self._db.flush()
+        return CredentialStatus(
+            user_id=user_id,
+            provider=normalized_provider,
+            enabled=False,
+            has_api_key=False,
+            masked_api_key=None,
+            connection_id=str(connection.id),
+            auth_mode=LLMAuthMode.API_KEY,
+        )
+
     def connection_credential_fingerprint(
         self,
         *,

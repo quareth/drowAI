@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * Verifies the intentionally limited GPT-OSS provider settings experience.
+ * Verifies catalog-driven reviewed-provider connection settings.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -13,6 +13,7 @@ import type { LLMDeploymentRef, LLMModelCatalogResponse } from "../types";
 
 const mocked = vi.hoisted(() => ({
   saveLLMManagedConnection: vi.fn(),
+  deleteLLMManagedConnection: vi.fn(),
   deleteLLMProviderCredential: vi.fn(),
   enableLLMManagedConnection: vi.fn(),
   fetchLLMModelCatalog: vi.fn(),
@@ -191,6 +192,63 @@ const managedCatalog: LLMModelCatalogResponse = {
   ],
 };
 
+const mistralCatalog: LLMModelCatalogResponse = {
+  providers: [
+    {
+      id: "mistral_openai_compatible_chat",
+      label: "Mistral",
+      capabilities: ["chat", "tools"],
+      available: true,
+      selectable: true,
+      credential: {
+        user_id: 1,
+        provider: "mistral_openai_compatible_chat",
+        enabled: false,
+        has_api_key: false,
+      },
+      defaultModel: "mistral-small-latest",
+      models: [
+        {
+          ...catalog.providers[0].models[0],
+          id: "mistral-small-latest",
+          canonicalModelId: "mistral/mistral-small-2603",
+          exactWireModelId: "mistral-small-latest",
+          label: "Mistral",
+          deploymentRef: null,
+          runnable: false,
+          proving: null,
+          connection: {
+            presetId: "mistral_openai_compatible_chat",
+            displayName: "Mistral",
+            enabled: true,
+            authMode: "bearer_api_key",
+            userConfigFields: ["api_key"],
+            configFields: [
+              {
+                name: "api_key",
+                label: "API key",
+                fieldType: "password",
+                required: true,
+                secret: true,
+              },
+            ],
+            lifecycleState: "not_created",
+            connectionRef: null,
+            deploymentRef: null,
+            verification: null,
+            runnability: {
+              status: "not_created",
+              selectable: true,
+              runnable: false,
+              reason: "Connection configuration is required.",
+            },
+          },
+        },
+      ],
+    },
+  ],
+};
+
 function renderWithQueryClient(component: ReactNode) {
   const queryClient = new QueryClient({
     defaultOptions: {
@@ -231,6 +289,33 @@ afterEach(() => {
 });
 
 describe("Connection management", () => {
+  it("renders a hosted managed provider directly from catalog connection metadata", async () => {
+    mocked.fetchLLMModelCatalog.mockResolvedValue(mistralCatalog);
+
+    renderWithQueryClient(
+      <ProviderSettingsSection
+        queryEnabled
+        onSuccess={() => undefined}
+        onError={() => undefined}
+      />,
+    );
+
+    const aiProvidersHeading = await screen.findByRole("heading", {
+      name: "AI providers",
+    });
+    const aiProvidersSection = aiProvidersHeading.closest("section");
+    expect(aiProvidersSection).toBeTruthy();
+    const providerCard = within(aiProvidersSection as HTMLElement).getByRole(
+      "group",
+      { name: "Mistral provider settings" },
+    );
+
+    expect(within(providerCard).getByLabelText("Mistral status: Not connected")).toBeTruthy();
+    expect(within(providerCard).getByRole("button", { name: "Connect Mistral" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Open models" })).toBeNull();
+    expect(screen.queryByText("Ready", { exact: true })).toBeNull();
+  });
+
   it("hides unfinished self-hosted connection settings when the gate is unset", async () => {
     vi.unstubAllEnvs();
     mocked.fetchLLMModelCatalog.mockResolvedValue(managedCatalog);
@@ -480,11 +565,11 @@ describe("Connection management", () => {
       />,
     );
 
-    expect(await screen.findByText("NVIDIA")).toBeTruthy();
-    expect(screen.getAllByText("NVIDIA")).toHaveLength(1);
+    expect(await screen.findByText("NVIDIA NIM")).toBeTruthy();
+    expect(screen.getAllByText("NVIDIA NIM")).toHaveLength(1);
     expect(screen.getByRole("button", { name: /update nvidia/i })).toBeTruthy();
-    const providerCard = screen.getByRole("group", { name: "NVIDIA provider settings" });
-    expect(within(providerCard).getByLabelText("NVIDIA status: Ready")).toBeTruthy();
+    const providerCard = screen.getByRole("group", { name: "NVIDIA NIM provider settings" });
+    expect(within(providerCard).getByLabelText("NVIDIA NIM status: Connected")).toBeTruthy();
     expect(within(providerCard).getByRole("button", { name: "Show API key" })).toBeTruthy();
     expect(screen.getAllByText("OpenAI").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Anthropic").length).toBeGreaterThan(0);
@@ -504,7 +589,7 @@ describe("Connection management", () => {
         expect.objectContaining({
           connection_ref: nimConnectionRef,
           wire_model_id: "openai/gpt-oss-20b",
-          canonical_model_id: "openai/gpt-oss-20b",
+          canonical_model_id: null,
         }),
       );
       expect(mocked.testLLMManagedConnection).toHaveBeenCalledWith(
@@ -751,8 +836,8 @@ describe("Connection management", () => {
     expect(await screen.findByRole("heading", { name: "AI providers" })).toBeTruthy();
     expect(screen.getAllByRole("heading", { level: 3 })[0].textContent).toBe("Reporting model");
     expect(screen.getAllByRole("heading", { level: 3 })[1].textContent).toBe("AI providers");
-    expect(screen.getByRole("heading", { name: "Open models" })).toBeTruthy();
-    expect(screen.getByText("Connect open models through hosted providers.")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Open models" })).toBeNull();
+    expect(screen.queryByText("Connect open models through hosted providers.")).toBeNull();
     expect(screen.queryByText("Connect GPT-OSS 20B to a hosted service.")).toBeNull();
     expect(screen.getByText("Reporting model")).toBeTruthy();
     expect(screen.queryByText("Workload deployment")).toBeNull();
@@ -767,7 +852,7 @@ describe("Connection management", () => {
     expect(screen.getByText("Usage is billed by Anthropic for the selected model.")).toBeTruthy();
     expect(screen.getByText("Usage is billed by OpenAI for the selected model.")).toBeTruthy();
     expect(screen.getAllByText("Hugging Face").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("NVIDIA").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("NVIDIA NIM").length).toBeGreaterThan(0);
     expect(screen.getByText("Credits and pay-as-you-go usage apply.")).toBeTruthy();
     expect(screen.getByText("Free development and prototyping access has usage limits.")).toBeTruthy();
     expect(screen.queryByText("Custom OpenAI-compatible HTTPS endpoint")).toBeNull();
@@ -984,7 +1069,7 @@ describe("Connection management", () => {
       );
       expect(onSuccess).toHaveBeenCalledWith(
         "Hugging Face connected",
-        "GPT-OSS 20B is ready.",
+        "The provider connection is ready.",
       );
     });
     expect(
@@ -1046,21 +1131,23 @@ describe("Connection management", () => {
     expect(screen.queryByRole("button", { name: /test connection/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /refresh inventory/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /^enable$/i })).toBeNull();
-    expect(screen.getByRole("button", { name: /update ollama/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /connect ollama/i })).toBeTruthy();
   });
 
   it("does not start the managed workflow while required visible fields are missing", async () => {
     renderWithQueryClient(
       <ConnectionSettingsPanel
+        providerLabel={managedCatalog.providers[0].label}
         model={managedCatalog.providers[0].models[0]}
         connection={managedCatalog.providers[0].models[0].connection!}
+        hasStoredCredential
         onSuccess={() => undefined}
         onError={() => undefined}
       />,
     );
 
     const action = screen.getByRole("button", {
-      name: /update ollama-compatible https endpoint/i,
+      name: /update ollama/i,
     }) as HTMLButtonElement;
     expect(action.disabled).toBe(true);
     fireEvent.click(action);
@@ -1132,7 +1219,7 @@ describe("Connection management", () => {
     fireEvent.change(screen.getByLabelText("Model name"), {
       target: { value: "team/model" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /update ollama/i }));
+    fireEvent.click(screen.getByRole("button", { name: /connect ollama/i }));
 
     await waitFor(() => {
       expect(mocked.saveLLMManagedConnection).toHaveBeenCalledWith(

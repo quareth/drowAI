@@ -79,7 +79,7 @@ authority for CI triggers and environments.
 |---|---|---|---|
 | Required release contracts | `npm run test:release:quick` | Curated backend, LangGraph, frontend, environment-independent E2E fixture/security contracts, TypeScript, and production build | `.github/workflows/release-gate.yml`; every pull request and pushes to `main` or `master` |
 | Manual main contracts | `npm run test:release:main` | Quick gate plus selected runner-control, runtime-provider context, and runner protocol contracts | Developer/manual; not a separate required workflow |
-| PR browser core | `npm run test:e2e:pr` | Four `@pr-core` Chromium cases through the real app stack with deterministic graph behavior | Required `.github/workflows/e2e-smoke.yml` check on every pull request |
+| PR browser core | `npm run test:e2e:pr` | Five `@pr-core` Chromium cases through the real app stack with deterministic graph behavior and hosted-provider catalog/settings parity | Required `.github/workflows/e2e-smoke.yml` check on every pull request |
 | Deterministic Chromium journeys | `npm run test:e2e:journeys:chromium` | All `@journey` cases in Chromium | `.github/workflows/e2e-journeys.yml`; pushes to `main` or `master` |
 | Deterministic release matrix | `npm run test:e2e:journeys:all` | All `@journey` cases in Chromium, Firefox, and WebKit | `.github/workflows/e2e-journeys.yml`; pushes to `release/**` and manual dispatch |
 | Local-runtime canary | `npm run test:e2e:runtime:local` | Real Linux Docker, terminal, task workspace, lifecycle, isolation, and leak-free teardown | `.github/workflows/e2e-runtime-local.yml`; nightly at `02:30 UTC` and manual dispatch, including an explicit release-certification job |

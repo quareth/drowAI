@@ -1,9 +1,10 @@
 """Orchestrate reviewed managed LLM connection lifecycle workflows.
 
-This application service owns create, test, inventory refresh, enablement, and
-their transaction boundaries. It delegates persistence, authorization,
-credential, inventory, status, and guarded-egress policy to existing focused
-authorities and excludes HTTP adaptation, public schemas, and proving flows.
+This application service owns create, test, inventory refresh, enablement,
+credential disconnect, and their transaction boundaries. It delegates
+persistence, authorization, credential, inventory, status, and guarded-egress
+policy to existing focused authorities and excludes HTTP adaptation, public
+schemas, and proving flows.
 """
 
 from __future__ import annotations
@@ -371,6 +372,45 @@ class LLMManagedConnectionLifecycleService:
             )
             self._db.commit()
             return outcome
+        except Exception:
+            self._db.rollback()
+            raise
+
+    def disconnect_connection(
+        self,
+        *,
+        user_id: int,
+        preset_id: str,
+        connection_id: str,
+        expected_connection_revision: int,
+    ) -> None:
+        """Revoke one reviewed credential while preserving connector identity."""
+
+        try:
+            preset = self._managed_preset(preset_id)
+            connection = self._owned_preset_connection(
+                user_id=user_id,
+                preset_id=preset.id,
+                connection_id=connection_id,
+                expected_connection_revision=expected_connection_revision,
+            )
+            self._credentials.delete_connection_api_key(
+                user_id=user_id,
+                connection_ref=LLMConnectionCredentialRef(
+                    connection_id=str(connection.id),
+                    expected_revision=int(connection.revision),
+                ),
+                provider=preset.id,
+            )
+            self._db.refresh(connection)
+            if connection.state == LLMConnectionState.ENABLED.value:
+                self._connections.transition_state(
+                    user_id=user_id,
+                    connection_id=connection.id,
+                    expected_revision=int(connection.revision),
+                    target_state=LLMConnectionState.DISABLED,
+                )
+            self._db.commit()
         except Exception:
             self._db.rollback()
             raise

@@ -1,8 +1,8 @@
 /**
  * Provider-neutral LLM settings section.
  *
- * Keeps direct provider credentials separate from reviewed hosted and
- * self-hosted compatible routes.
+ * Renders direct and reviewed hosted providers together while keeping
+ * self-hosted compatible routes behind their explicit visibility gate.
  */
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -43,16 +43,11 @@ export interface ProviderSettingsSectionProps {
 const catalogQueryKey = ["/api/llm/models"] as const;
 const reportingSelectionQueryKey = ["/api/llm/reporting-selection"] as const;
 interface ConnectionSettingsEntry {
+  providerLabel: string;
   model: LLMCatalogModel;
   connection: LLMConnectionMetadata;
+  hasStoredCredential: boolean;
 }
-
-const publicOpenModelPresetNames: Record<string, string> = {
-  huggingface_openai_compatible_chat: "Hugging Face",
-  nvidia_nim_openai_compatible_chat: "NVIDIA",
-  ollama_openai_compatible_chat: "Ollama",
-  vllm_openai_compatible_chat: "vLLM",
-};
 
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error && error.message) {
@@ -108,7 +103,7 @@ export function ProviderSettingsSection({
     !isHostedConnection(connection),
   );
   const credentialProviders = providers.filter((provider) =>
-    isDirectHostedCredentialProvider(provider.id),
+    provider.models.every((model) => !model.connection?.enabled),
   );
   const selectedReportingModel =
     reportingSelection?.provider && reportingSelection.model
@@ -195,7 +190,7 @@ export function ProviderSettingsSection({
             </div>
           </section>
 
-          {credentialProviders.length > 0 ? (
+          {credentialProviders.length > 0 || hostedConnectionModels.length > 0 ? (
             <section className="space-y-3">
               <h3 className="text-sm font-semibold text-white">AI providers</h3>
               <div className="grid gap-4 lg:grid-cols-2">
@@ -208,24 +203,18 @@ export function ProviderSettingsSection({
                     onError={onError}
                   />
                 ))}
-              </div>
-            </section>
-          ) : null}
-
-          {hostedConnectionModels.length > 0 ? (
-            <section className="space-y-3">
-              <div>
-                <h3 className="text-sm font-semibold text-white">Open models</h3>
-                <p className="mt-1 text-xs text-slate-400">
-                  Connect open models through hosted providers.
-                </p>
-              </div>
-              <div className="grid gap-4 lg:grid-cols-2">
-                {hostedConnectionModels.map(({ model, connection }) => (
+                {hostedConnectionModels.map(({
+                  providerLabel,
+                  model,
+                  connection,
+                  hasStoredCredential,
+                }) => (
                   <ConnectionSettingsPanel
                     key={connectionSettingsKey(connection)}
+                    providerLabel={providerLabel}
                     model={model}
                     connection={connection}
+                    hasStoredCredential={hasStoredCredential}
                     setupNote={connectionSetupNote(connection.presetId)}
                     onSuccess={handleProviderSuccess}
                     onError={onError}
@@ -248,11 +237,18 @@ export function ProviderSettingsSection({
               </Button>
               {advancedOpen ? (
                 <div className="space-y-4">
-                  {advancedConnectionModels.map(({ model, connection }) => (
+                  {advancedConnectionModels.map(({
+                    providerLabel,
+                    model,
+                    connection,
+                    hasStoredCredential,
+                  }) => (
                     <ConnectionSettingsPanel
                       key={connectionSettingsKey(connection)}
+                      providerLabel={providerLabel}
                       model={model}
                       connection={connection}
+                      hasStoredCredential={hasStoredCredential}
                       setupNote="Run GPT-OSS 20B through your own HTTPS endpoint."
                       onSuccess={handleProviderSuccess}
                       onError={onError}
@@ -284,7 +280,7 @@ function getConnectionSettingsEntries(
   const entriesByConnection = new Map<string, ConnectionSettingsEntry>();
   for (const provider of providers) {
     for (const model of provider.models) {
-      const entry = getConnectionSettingsEntry(model);
+      const entry = getConnectionSettingsEntry(provider, model);
       if (!entry) {
         continue;
       }
@@ -299,20 +295,18 @@ function getConnectionSettingsEntries(
 }
 
 function getConnectionSettingsEntry(
+  provider: LLMCatalogProvider,
   model: LLMCatalogModel,
 ): ConnectionSettingsEntry | null {
   const connection = model.connection;
-  const displayName = connection
-    ? publicOpenModelPresetNames[connection.presetId]
-    : null;
-  if (
-    connection?.enabled
-    && displayName
-    && model.canonicalModelId?.trim().toLowerCase() === "openai/gpt-oss-20b"
-  ) {
+  if (connection?.enabled) {
     return {
+      providerLabel: provider.label,
       model,
-      connection: { ...connection, displayName },
+      connection,
+      hasStoredCredential: (
+        provider.credential.enabled && provider.credential.has_api_key
+      ),
     };
   }
   return null;
@@ -373,8 +367,4 @@ function providerCredentialNote(providerId: string): string | null {
     return "Usage is billed by Anthropic for the selected model.";
   }
   return null;
-}
-
-function isDirectHostedCredentialProvider(providerId: string): boolean {
-  return providerId === "openai" || providerId === "anthropic";
 }

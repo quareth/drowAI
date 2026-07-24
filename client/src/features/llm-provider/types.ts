@@ -233,3 +233,7 @@ export interface LLMManagedConnectionEnableRequest {
   connection_ref: LLMConnectionRef;
   deployment_ref?: LLMDeploymentRef | null;
 }
+
+export interface LLMManagedConnectionDeleteRequest {
+  connection_ref: LLMConnectionRef;
+}
