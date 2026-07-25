@@ -1,0 +1,80 @@
+{
+  "schema_version": 1,
+  "tool_id": "information_gathering.dns.amass",
+  "final_status": "PASS",
+  "mechanics_only": true,
+  "model": {
+    "preset_id": "nvidia_nim_openai_compatible_chat",
+    "model_id": "openai/gpt-oss-20b",
+    "connection_status": "existing_verified",
+    "secret_marker": "<KEY_SET>"
+  },
+  "safe_target": {
+    "kind": "reserved_domain",
+    "value": "drowai.test",
+    "source": "reserved_local_fixture",
+    "controlled_resolver": "127.0.0.1"
+  },
+  "schema_runs": {
+    "minimal": {
+      "status": "pass",
+      "report_ref": "artifacts/amass-minimal.md"
+    },
+    "full": {
+      "status": "pass",
+      "report_ref": "artifacts/amass-full.md"
+    }
+  },
+  "cases": {
+    "success": {
+      "required": true,
+      "status": "pass",
+      "evidence_ref": "fixture://amass-success"
+    },
+    "empty": {
+      "required": true,
+      "status": "pass",
+      "evidence_ref": "fixture://amass-empty"
+    },
+    "partial_timeout": {
+      "required": true,
+      "status": "pass",
+      "evidence_ref": "fixture://amass-partial"
+    },
+    "failure": {
+      "required": true,
+      "status": "pass",
+      "evidence_ref": "fixture://amass-failure"
+    }
+  },
+  "compression": {
+    "total": 5,
+    "shown": 3,
+    "omitted": 2,
+    "deterministic": true,
+    "omission_marker_in_budget": true
+  },
+  "artifacts": {
+    "required": true,
+    "status": "pass",
+    "evidence_ref": "artifact://amass-result"
+  },
+  "knowledge": {
+    "required": true,
+    "status": "pass",
+    "evidence_ref": "knowledge://task-local-dns-facts"
+  },
+  "gui": {
+    "selected_tool_id": "information_gathering.dns.amass",
+    "parameters_preserved": true,
+    "tool_result_rendered": true,
+    "selection_attempts": 1,
+    "selection_classification": "pass"
+  },
+  "cleanup": {
+    "task_deleted": true,
+    "runtime_removed": true,
+    "stack_stopped_if_owned": true,
+    "status": "pass"
+  }
+}

@@ -40,7 +40,8 @@ from agent.tools.tool_registry import get_tool_metadata  # noqa: E402
 # Safe optional targets by type (exact param-name match only).
 SAFE_IP = "127.0.0.1"
 SAFE_HOSTNAME = "localhost"
-SAFE_DOMAIN = "example.com"
+# RFC 2606 reserved test domain. Never substitute a real public target.
+SAFE_DOMAIN = "drowai.test"
 SAFE_URL = "http://localhost"
 SAFE_RANGE = "127.0.0.1-127.255.255.255"
 SAFE_SUBNET = "127.0.0.0/24"
