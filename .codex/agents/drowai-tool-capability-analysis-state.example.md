@@ -22,6 +22,29 @@ analysis:
   registry:
     status: unknown
     evidence: []
+  kali_installation:
+    status: unknown
+    executable: ""
+    resolved_path: ""
+    installed_version: ""
+    version_command: ""
+    temporary_task_cleaned: false
+    evidence: []
+  official_cli_contract:
+    status: unknown
+    installed_version: ""
+    documented_version: ""
+    checked_at: ""
+    source_urls: []
+    mismatches: []
+    evidence: []
+  preimplementation_corrections:
+    status: unknown
+    corrected_files: []
+    focused_checks: []
+    commit_sha: ""
+    deferred_drift: []
+    evidence: []
   execution_schema:
     status: unknown
     evidence: []

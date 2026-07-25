@@ -34,7 +34,19 @@ child_states:
   mechanical: ".codex/agents/drowai-tool-mechanical-validation-state.md"
   quality: ".codex/agents/implementation-quality-review-state.md"
 phase_commits: []
+preimplementation:
+  executable: ""
+  resolved_path: ""
+  installed_version: ""
+  official_docs: []
+  contract_review_status: pending
+  corrected_files: []
+  correction_commit: ""
+  deferred_drift: []
+  temporary_task_cleaned: false
 gates:
+  kali_installation: pending
+  official_cli_contract: pending
   capability: pending
   guide_review: pending
   phase_reviews: pending

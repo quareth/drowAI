@@ -6,6 +6,9 @@ not broad architectural claims.
 | Dimension | Required evidence | Blocking examples |
 |---|---|---|
 | Registry | `available_tools`, class-declared ID, concrete `BaseTool` | helper module mistaken for a tool; ambiguous IDs |
+| Kali installation | provider-mediated `command -v`, installed path/version, disposable-task cleanup | host-only package check; missing executable; unknown cleanup |
+| Official CLI contract | installed-version help/manual plus primary official versioned URLs | relying on latest docs for an older Kali package; third-party examples |
+| Definition drift | args model, function schema/description, registry metadata, `build_command`, direct correction commit or deferred gap | stale/removed flag; missing subcommand; correction expands into a refactor |
 | Execution schema | `args_model` JSON schema, validators, required/default fields | missing target; contradictory defaults; unsafe unconstrained input |
 | Planner schema | provider-neutral function spec and resolver path | required fields removed or renamed |
 | Runtime | `build_command`, workspace preparation, runtime-provider transport | host-side execution bypass; missing executable |
@@ -42,7 +45,8 @@ correct.
 
 ## Evidence order
 
-Follow registry → schema → runtime → result semantics → compression/PTR →
-knowledge → tests/docs → visibility. A tool hidden from the catalog may still
-have useful foundation code; a visible tool with missing mechanics is a
-blocker.
+Follow registry → expected executable → real Kali installation/version →
+official CLI contract → definition drift/correction → schema → runtime →
+result semantics → compression/PTR → knowledge → tests/docs → visibility. A
+tool hidden from the catalog may still have useful foundation code; a visible
+tool with missing mechanics is a blocker.

@@ -49,6 +49,14 @@ only to the recorded `resume_status` after the condition is resolved.
 
 - Running an agent before the tool branch exists.
 - Reviewing or modifying a different branch, base, issue, or tool.
+- Creating the implementation guide before the real Kali installation and
+  official CLI-contract gates pass.
+- Treating a host package, image manifest, or repository wrapper as proof that
+  the executable exists inside the selected task Kali runtime.
+- Applying latest official CLI flags to an older installed version without
+  checking its versioned help/manual.
+- Expanding an obvious pre-implementation definition correction into new
+  modules, architecture, or unrelated files.
 - Starting the next phase before the successful current phase is committed.
 - Implementing before the guide review reaches `COMPLETE`.
 - Entering quality review with uncommitted implementation changes.
@@ -63,6 +71,8 @@ only to the recorded `resume_status` after the condition is resolved.
 
 | Gate | Authority | Failure route |
 |---|---|---|
+| Kali installation | capability state plus provider-mediated task-runtime evidence | defer and return to selection |
+| Official CLI contract | versioned primary sources plus installed help/manual | direct obvious correction or guide gap |
 | Capability | capability-analysis state | decision or clarification |
 | Guide | guide-review state `COMPLETE` | guide fixer/reviewer loop |
 | Phase | implementation-review state | implementation fixer |
@@ -72,6 +82,7 @@ only to the recorded `resume_status` after the condition is resolved.
 
 ## Commit boundaries
 
+- Obvious selected-tool definition drift corrected before guide creation.
 - Every successful implementation phase before the next phase starts.
 - Reviewed mechanical fixes and verified user-guide corrections.
 - Bounded quality fixes.

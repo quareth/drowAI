@@ -13,7 +13,9 @@ correct.
 
 - Exact visible `tool_id` and reviewed implementation guide.
 - Current tool branch and `origin/main` base.
-- Completed capability-analysis state.
+- Completed capability-analysis state proving the selected executable was
+  installed in a real task Kali runtime and its official CLI contract was
+  reviewed against that installed version.
 - Minimal and full schema profiles.
 - A loopback, reserved, or locally controlled fixture profile.
 - An existing verified NVIDIA connection. Never create, reveal, copy, or log

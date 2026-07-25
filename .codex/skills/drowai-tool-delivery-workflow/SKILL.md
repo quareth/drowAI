@@ -1,6 +1,6 @@
 ---
 name: drowai-tool-delivery-workflow
-description: Deliver exactly one DrowAI milestone pentesting tool on one Codex branch from its attached evaluation issue through wired-path analysis, reviewed implementation guide, phase-reviewed commits, safe Kali and GUI mechanics, branch-scoped quality work, push, and pull request. Use when starting or continuing one Phase 01 tool contribution; never batch multiple tools into one branch or PR.
+description: Deliver exactly one DrowAI milestone pentesting tool on one Codex branch from its attached evaluation issue through real-Kali installation proof, official CLI drift correction, wired-path analysis, reviewed implementation guide, phase-reviewed commits, safe Kali and GUI mechanics, branch-scoped quality work, push, and pull request. Use when starting or continuing one Phase 01 tool contribution; never batch multiple tools into one branch or PR.
 ---
 
 # DrowAI Tool Delivery Workflow
@@ -40,9 +40,21 @@ ledger, initialized from its committed example.
 
 Run `$drowai-tool-capability-analysis` on the current branch.
 
+- Do not create the guide until a disposable real Kali task proves the selected
+  executable is installed and records its path and version.
+- Compare the installed version's local CLI contract with primary official
+  version-matched documentation and the existing tool function, args model,
+  function schema/description, registry definition, and command builder.
+- The main agent directly fixes and commits only obvious selected-tool
+  definition drift before guide creation; do not create another agent, guide,
+  or workflow for this correction.
+- Record broader or ambiguous drift as an implementation-guide gap instead of
+  turning the preflight into a refactor.
 - `SUITABLE` or bounded `NEEDS_FOUNDATION` continues.
-- `DEFERRED` or `NOT_PLANNED` records the evidence-backed issue decision,
-  cleans this run's state, and stops without implementation.
+- A missing Kali executable records `DEFERRED`, returns to tool selection, and
+  does not start implementation.
+- Other `DEFERRED` or `NOT_PLANNED` outcomes record the evidence-backed issue
+  decision, clean this run's state, and stop without implementation.
 - `NEEDS_CLARIFICATION` stops for the exact unresolved tool or scope decision.
 
 Use Amass as the completed reference and reuse
@@ -50,11 +62,14 @@ Use Amass as the completed reference and reuse
 
 ## 3. Create and review the implementation guide
 
-1. Run `implementation-guide-creator` with the branch, tool ID, issue, and
-   capability evidence.
-2. Write the ignored guide under `docs/devdocs/plan/`.
-3. Run `$implementation-guide-review-loop` until its state is `COMPLETE`.
-4. Initialize schema-2 implementation state with the reviewed guide and full
+1. Require the Kali-installation and official-contract gates to be passed and
+   any direct drift-correction commit to be recorded.
+2. Run `implementation-guide-creator` with the branch, tool ID, issue,
+   capability evidence, installed version, official documentation sources, and
+   deferred non-obvious drift.
+3. Write the ignored guide under `docs/devdocs/plan/`.
+4. Run `$implementation-guide-review-loop` until its state is `COMPLETE`.
+5. Initialize schema-2 implementation state with the reviewed guide and full
    first task ID.
 
 Do not create an empty commit for an ignored guide.
