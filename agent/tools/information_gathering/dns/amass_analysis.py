@@ -22,6 +22,18 @@ from .amass_runtime import (
 
 _DNS_LABEL_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _NO_NAMES_MESSAGE = "no names were discovered"
+_SECTION_BY_MARKER = {
+    AMASS_BEFORE_NAMES_BEGIN: "before_names",
+    AMASS_BEFORE_NAMES_END: None,
+    AMASS_BEFORE_RESOLVED_BEGIN: "before_resolved",
+    AMASS_BEFORE_RESOLVED_END: None,
+    AMASS_NAMES_BEGIN: "names",
+    AMASS_NAMES_END: None,
+    AMASS_RESOLVED_BEGIN: "resolved",
+    AMASS_RESOLVED_END: None,
+    AMASS_STATUS_BEGIN: "status",
+    AMASS_STATUS_END: None,
+}
 
 
 def normalize_dns_name(value: Any) -> str | None:
@@ -57,7 +69,6 @@ def parse_amass_v5_results(
     """Parse tagged ``amass subs`` output into deterministic name/IP metadata."""
 
     before_names: set[str] = set()
-    before_addresses_by_name: dict[str, set[str]] = {}
     names: set[str] = set()
     addresses_by_name: dict[str, set[str]] = {}
     diagnostics: list[str] = []
@@ -67,44 +78,8 @@ def parse_amass_v5_results(
 
     for raw_line in str(output_text or "").splitlines():
         line = raw_line.strip()
-        if line == AMASS_BEFORE_NAMES_BEGIN:
-            section = "before_names"
-            seen_markers.add(line)
-            continue
-        if line == AMASS_BEFORE_NAMES_END:
-            section = None
-            seen_markers.add(line)
-            continue
-        if line == AMASS_BEFORE_RESOLVED_BEGIN:
-            section = "before_resolved"
-            seen_markers.add(line)
-            continue
-        if line == AMASS_BEFORE_RESOLVED_END:
-            section = None
-            seen_markers.add(line)
-            continue
-        if line == AMASS_NAMES_BEGIN:
-            section = "names"
-            seen_markers.add(line)
-            continue
-        if line == AMASS_NAMES_END:
-            section = None
-            seen_markers.add(line)
-            continue
-        if line == AMASS_RESOLVED_BEGIN:
-            section = "resolved"
-            seen_markers.add(line)
-            continue
-        if line == AMASS_RESOLVED_END:
-            section = None
-            seen_markers.add(line)
-            continue
-        if line == AMASS_STATUS_BEGIN:
-            section = "status"
-            seen_markers.add(line)
-            continue
-        if line == AMASS_STATUS_END:
-            section = None
+        if line in _SECTION_BY_MARKER:
+            section = _SECTION_BY_MARKER[line]
             seen_markers.add(line)
             continue
         if not line or line.lower() == _NO_NAMES_MESSAGE:
@@ -117,7 +92,6 @@ def parse_amass_v5_results(
                 continue
             if section == "before_names":
                 before_names.add(name)
-                before_addresses_by_name.setdefault(name, set())
             else:
                 names.add(name)
                 addresses_by_name.setdefault(name, set())
@@ -135,7 +109,6 @@ def parse_amass_v5_results(
                 continue
             if section == "before_resolved":
                 before_names.add(name)
-                before_addresses_by_name.setdefault(name, set()).update(addresses)
             else:
                 names.add(name)
                 addresses_by_name.setdefault(name, set()).update(addresses)
@@ -212,7 +185,6 @@ def parse_amass_v5_results(
     enumeration_status = _enumeration_status(status_fields, exit_code=int(exit_code))
     result_completeness = _result_completeness(
         enumeration_status=enumeration_status,
-        parse_status=parse_status,
         names_count=len(ordered_names),
     )
     partial_results = result_completeness == "partial"
@@ -304,7 +276,6 @@ def _enumeration_status(status_fields: dict[str, str], *, exit_code: int) -> str
 def _result_completeness(
     *,
     enumeration_status: str,
-    parse_status: str,
     names_count: int,
 ) -> str:
     """Return result completeness separately from capture/parser validity."""

@@ -285,11 +285,12 @@ def _dns_name_records(metadata: Mapping[str, Any]) -> list[_DnsNameRecord]:
     if records is None:
         return []
 
+    roles_by_name = _discovery_role_by_name(metadata)
     return [
         _DnsNameRecord(
             name=name,
             addresses=addresses,
-            discovery_role=_discovery_role_by_name(metadata).get(name),
+            discovery_role=roles_by_name.get(name),
         )
         for name, addresses in sorted(records.items())
     ]

@@ -1,7 +1,7 @@
-"""Pure canonical-key helpers for semantic finding identities.
+"""Canonical host, relationship, and finding identity key helpers.
 
-This module defines deterministic token and finding-key builders that are safe
-to import from runtime-image code and backend adapters.
+This backend-free module owns host IP/DNS and relationship-edge keys alongside
+finding-key construction and token normalization for shared runtime imports.
 """
 
 from __future__ import annotations

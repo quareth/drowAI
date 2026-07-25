@@ -7,6 +7,8 @@ import json
 from dataclasses import asdict
 from typing import Any, Mapping
 
+import pytest
+
 from core.prompts.constants import (
     COMPACT_DECISION_EVIDENCE_MAX_CHARS,
     COMPACT_KEY_FINDINGS_MAX_ITEMS,
@@ -783,226 +785,48 @@ def test_amass_execution_status_and_roles_are_compacted_from_metadata() -> None:
     assert "ignored raw collector text" not in str(result)
 
 
-def test_amass_adapter_falls_back_for_incompatible_metadata_and_unsupported_tools() -> None:
-    """Incompatible metadata and other tool ids use explicit fallback contracts."""
+@pytest.mark.parametrize(
+    "case",
+    (
+        "diagnostics_only",
+        "hosts_only",
+        "ips_only",
+        "parse_status_only",
+        "wrong_capture_format",
+        "non_mapping_subdomain_row",
+        "missing_required_counts",
+        "wrong_subdomain_key",
+        "missing_subdomain_rows",
+        "unknown_parse_status",
+        "incomplete_subdomain_contract",
+        "missing_source",
+        "wrong_source",
+        "ipv4_record_type_mismatch",
+        "ipv6_record_type_mismatch",
+        "record_type_without_address",
+        "host_mismatch",
+        "ips_mismatch",
+        "count_mismatch",
+        "noncanonical_address",
+    ),
+)
+def test_amass_adapter_falls_back_for_incompatible_metadata(case: str) -> None:
+    """Each incompatible normalized contract reports the explicit fallback."""
 
-    incompatible_metadata = (
-        {"diagnostics": ["generic_tool_warning"]},
-        {"hosts": []},
-        {"ips": ["192.0.2.1"]},
-        {"parse_status": "success"},
-        {
-            "capture_format": "nmap_xml",
-            "hosts": [{"hostname": "example.com", "ip": ["192.0.2.1"]}],
-        },
-        {
-            "capture_format": "amass_v5_subs_text",
-            "subdomains": ["NOT_A_NORMALIZED_ROW.EXAMPLE.COM"],
-            "hosts": [],
-            "names_count": 1,
-            "resolved_names_count": 0,
-            "unresolved_names_count": 1,
-            "ip_count": 0,
-            "parse_status": "success",
-        },
-        {
-            "capture_format": "amass_v5_subs_text",
-            "subdomains": [{"subdomain": "api.example.com", "ip": []}],
-            "hosts": [{"hostname": "api.example.com", "ip": []}],
-        },
-        {
-            "capture_format": "amass_v5_subs_text",
-            "subdomains": [{"name": "api.example.com", "ip": []}],
-            "hosts": [{"hostname": "api.example.com", "ip": []}],
-            "names_count": 1,
-            "resolved_names_count": 0,
-            "unresolved_names_count": 1,
-            "ip_count": 0,
-            "parse_status": "success",
-        },
-        {
-            "capture_format": "amass_v5_subs_text",
-            "hosts": [{"hostname": "api.example.com", "ip": []}],
-            "subdomains": [],
-            "names_count": 1,
-            "resolved_names_count": 0,
-            "unresolved_names_count": 1,
-            "ip_count": 0,
-            "parse_status": "success",
-        },
-        {
-            "capture_format": "amass_v5_subs_text",
-            "subdomains": [_subdomain_row("api.example.com", [])],
-            "hosts": [{"hostname": "api.example.com", "ip": []}],
-            "ips": [],
-            "names_count": 1,
-            "resolved_names_count": 0,
-            "unresolved_names_count": 1,
-            "ip_count": 0,
-            "parse_status": "mystery",
-        },
-        {
-            "capture_format": "amass_v5_subs_text",
-            "subdomains": [{"subdomain": "api.example.com", "ip": []}],
-            "hosts": [{"hostname": "api.example.com", "ip": []}],
-            "ips": [],
-            "names_count": 1,
-            "resolved_names_count": 0,
-            "unresolved_names_count": 1,
-            "ip_count": 0,
-            "parse_status": "success",
-        },
-        {
-            "capture_format": "amass_v5_subs_text",
-            "subdomains": [
-                {
-                    "subdomain": "api.example.com",
-                    "ip": [],
-                    "record_types": [],
-                }
-            ],
-            "hosts": [{"hostname": "api.example.com", "ip": []}],
-            "ips": [],
-            "names_count": 1,
-            "resolved_names_count": 0,
-            "unresolved_names_count": 1,
-            "ip_count": 0,
-            "parse_status": "success",
-        },
-        {
-            "capture_format": "amass_v5_subs_text",
-            "subdomains": [
-                {
-                    "subdomain": "api.example.com",
-                    "ip": [],
-                    "record_types": [],
-                    "source": "other",
-                }
-            ],
-            "hosts": [{"hostname": "api.example.com", "ip": []}],
-            "ips": [],
-            "names_count": 1,
-            "resolved_names_count": 0,
-            "unresolved_names_count": 1,
-            "ip_count": 0,
-            "parse_status": "success",
-        },
-        {
-            "capture_format": "amass_v5_subs_text",
-            "subdomains": [
-                {
-                    "subdomain": "api.example.com",
-                    "ip": ["192.0.2.5"],
-                    "record_types": ["AAAA"],
-                    "source": "amass",
-                }
-            ],
-            "hosts": [{"hostname": "api.example.com", "ip": ["192.0.2.5"]}],
-            "ips": ["192.0.2.5"],
-            "names_count": 1,
-            "resolved_names_count": 1,
-            "unresolved_names_count": 0,
-            "ip_count": 1,
-            "parse_status": "success",
-        },
-        {
-            "capture_format": "amass_v5_subs_text",
-            "subdomains": [
-                {
-                    "subdomain": "api.example.com",
-                    "ip": ["2001:db8::5"],
-                    "record_types": ["A"],
-                    "source": "amass",
-                }
-            ],
-            "hosts": [{"hostname": "api.example.com", "ip": ["2001:db8::5"]}],
-            "ips": ["2001:db8::5"],
-            "names_count": 1,
-            "resolved_names_count": 1,
-            "unresolved_names_count": 0,
-            "ip_count": 1,
-            "parse_status": "success",
-        },
-        {
-            "capture_format": "amass_v5_subs_text",
-            "subdomains": [
-                {
-                    "subdomain": "api.example.com",
-                    "ip": [],
-                    "record_types": ["A"],
-                    "source": "amass",
-                }
-            ],
-            "hosts": [{"hostname": "api.example.com", "ip": []}],
-            "ips": [],
-            "names_count": 1,
-            "resolved_names_count": 0,
-            "unresolved_names_count": 1,
-            "ip_count": 0,
-            "parse_status": "success",
-        },
-        {
-            "capture_format": "amass_v5_subs_text",
-            "subdomains": [_subdomain_row("api.example.com", ["192.0.2.5"])],
-            "hosts": [{"hostname": "other.example.com", "ip": ["192.0.2.5"]}],
-            "ips": ["192.0.2.5"],
-            "names_count": 1,
-            "resolved_names_count": 1,
-            "unresolved_names_count": 0,
-            "ip_count": 1,
-            "parse_status": "success",
-        },
-        {
-            "capture_format": "amass_v5_subs_text",
-            "subdomains": [_subdomain_row("api.example.com", ["192.0.2.5"])],
-            "hosts": [{"hostname": "api.example.com", "ip": ["192.0.2.5"]}],
-            "ips": ["198.51.100.99"],
-            "names_count": 1,
-            "resolved_names_count": 1,
-            "unresolved_names_count": 0,
-            "ip_count": 1,
-            "parse_status": "success",
-        },
-        {
-            "capture_format": "amass_v5_subs_text",
-            "subdomains": [_subdomain_row("api.example.com", ["192.0.2.5"])],
-            "hosts": [{"hostname": "api.example.com", "ip": ["192.0.2.5"]}],
-            "ips": ["192.0.2.5"],
-            "names_count": 99,
-            "resolved_names_count": 50,
-            "unresolved_names_count": 49,
-            "ip_count": 77,
-            "parse_status": "success",
-        },
-        {
-            "capture_format": "amass_v5_subs_text",
-            "subdomains": [
-                {
-                    "subdomain": "api.example.com",
-                    "ip": ["2001:0db8::5"],
-                    "record_types": ["AAAA"],
-                    "source": "amass",
-                }
-            ],
-            "hosts": [{"hostname": "api.example.com", "ip": ["2001:0db8::5"]}],
-            "ips": ["2001:db8::5"],
-            "names_count": 1,
-            "resolved_names_count": 1,
-            "unresolved_names_count": 0,
-            "ip_count": 1,
-            "parse_status": "success",
-        },
-    )
-
-    incompatible_results = tuple(
-        compress_deterministically(
-            CompressionInput(
-                tool_name=AMASS_TOOL_ID,
-                raw_result={"metadata": metadata},
-            )
+    result = compress_deterministically(
+        CompressionInput(
+            tool_name=AMASS_TOOL_ID,
+            raw_result={"metadata": _invalid_amass_metadata(case)},
         )
-        for metadata in incompatible_metadata
     )
+
+    assert result.completeness == "none"
+    assert result.fallback_reason == "no_dns_discovery_metadata"
+
+
+def test_amass_adapter_falls_back_for_unsupported_tool() -> None:
+    """Other tool ids use the unsupported DNS-discovery fallback contract."""
+
     unsupported = dns_discovery_adapter(
         CompressionInput(
             tool_name="information_gathering.dns.other",
@@ -1010,11 +834,6 @@ def test_amass_adapter_falls_back_for_incompatible_metadata_and_unsupported_tool
         )
     )
 
-    assert all(result.completeness == "none" for result in incompatible_results)
-    assert all(
-        result.fallback_reason == "no_dns_discovery_metadata"
-        for result in incompatible_results
-    )
     assert unsupported.completeness == "none"
     assert unsupported.fallback_reason == "unsupported_dns_discovery_tool"
 
@@ -1124,6 +943,100 @@ def test_amass_adapter_falls_back_without_normalized_metadata_or_raw_parsing() -
 
     assert result.completeness == "none"
     assert result.fallback_reason == "no_dns_discovery_metadata"
+
+
+def _invalid_amass_metadata(case: str) -> Mapping[str, Any]:
+    """Return one focused mutation of a valid single-name Amass envelope."""
+
+    metadata = _single_name_amass_metadata()
+    if case == "diagnostics_only":
+        return {"diagnostics": ["generic_tool_warning"]}
+    if case == "hosts_only":
+        return {"hosts": []}
+    if case == "ips_only":
+        return {"ips": ["192.0.2.1"]}
+    if case == "parse_status_only":
+        return {"parse_status": "success"}
+    if case == "wrong_capture_format":
+        return {
+            "capture_format": "nmap_xml",
+            "hosts": [{"hostname": "example.com", "ip": ["192.0.2.1"]}],
+        }
+    if case == "non_mapping_subdomain_row":
+        metadata["subdomains"] = ["NOT_A_NORMALIZED_ROW.EXAMPLE.COM"]
+        metadata["hosts"] = []
+    elif case == "missing_required_counts":
+        return {
+            "capture_format": metadata["capture_format"],
+            "subdomains": [{"subdomain": "api.example.com", "ip": []}],
+            "hosts": metadata["hosts"],
+        }
+    elif case == "wrong_subdomain_key":
+        metadata["subdomains"] = [{"name": "api.example.com", "ip": []}]
+    elif case == "missing_subdomain_rows":
+        metadata["subdomains"] = []
+    elif case == "unknown_parse_status":
+        metadata["parse_status"] = "mystery"
+    elif case == "incomplete_subdomain_contract":
+        metadata["subdomains"] = [{"subdomain": "api.example.com", "ip": []}]
+    elif case == "missing_source":
+        metadata["subdomains"] = [
+            {
+                "subdomain": "api.example.com",
+                "ip": [],
+                "record_types": [],
+            }
+        ]
+    elif case == "wrong_source":
+        metadata["subdomains"][0]["source"] = "other"
+    elif case == "ipv4_record_type_mismatch":
+        metadata = _single_name_amass_metadata(["192.0.2.5"])
+        metadata["subdomains"][0]["record_types"] = ["AAAA"]
+    elif case == "ipv6_record_type_mismatch":
+        metadata = _single_name_amass_metadata(["2001:db8::5"])
+        metadata["subdomains"][0]["record_types"] = ["A"]
+    elif case == "record_type_without_address":
+        metadata["subdomains"][0]["record_types"] = ["A"]
+    elif case == "host_mismatch":
+        metadata = _single_name_amass_metadata(["192.0.2.5"])
+        metadata["hosts"][0]["hostname"] = "other.example.com"
+    elif case == "ips_mismatch":
+        metadata = _single_name_amass_metadata(["192.0.2.5"])
+        metadata["ips"] = ["198.51.100.99"]
+    elif case == "count_mismatch":
+        metadata = _single_name_amass_metadata(["192.0.2.5"])
+        metadata.update(
+            names_count=99,
+            resolved_names_count=50,
+            unresolved_names_count=49,
+            ip_count=77,
+        )
+    elif case == "noncanonical_address":
+        metadata = _single_name_amass_metadata(["2001:0db8::5"])
+        metadata["ips"] = ["2001:db8::5"]
+    else:
+        raise AssertionError(f"unknown invalid Amass metadata case: {case}")
+    return metadata
+
+
+def _single_name_amass_metadata(
+    ips: list[str] | None = None,
+) -> dict[str, Any]:
+    """Return a valid normalized Amass envelope for one DNS name."""
+
+    addresses = list(ips or [])
+    resolved_count = int(bool(addresses))
+    return {
+        "capture_format": "amass_v5_subs_text",
+        "subdomains": [_subdomain_row("api.example.com", addresses)],
+        "hosts": [{"hostname": "api.example.com", "ip": addresses}],
+        "ips": addresses,
+        "names_count": 1,
+        "resolved_names_count": resolved_count,
+        "unresolved_names_count": 1 - resolved_count,
+        "ip_count": len(addresses),
+        "parse_status": "success",
+    }
 
 
 def _sample_raw_result() -> Mapping[str, Any]:
