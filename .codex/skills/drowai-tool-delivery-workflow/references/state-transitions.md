@@ -26,7 +26,8 @@ ANALYZING -> DECISION_PENDING -> DECISION_RECORDED
 ```
 
 Use this path for final `DEFERRED` or `NOT_PLANNED` outcomes, record the
-evidence in the attached issue, clean state, and stop.
+evidence and concise reason on only the selected milestone-list entry, preserve
+the rest of the description, clean state, and stop.
 
 ## Fix and refactor loops
 
@@ -48,7 +49,12 @@ only to the recorded `resume_status` after the condition is resolved.
 ## Invalid transitions
 
 - Running an agent before the tool branch exists.
-- Reviewing or modifying a different branch, base, issue, or tool.
+- Reviewing or modifying a different branch, base, milestone entry, or tool.
+- Requiring a per-tool issue before selecting a milestone-list entry.
+- Selecting an entry already marked terminal or represented by an attached open
+  tool PR.
+- Treating an unrelated milestone issue or unmarked PR as delivery evidence for
+  a selected tool.
 - Creating the implementation guide before current registered/visible tools
   are discovered and mature references are selected per responsibility.
 - Using Amass or any other fixed tool as a universal implementation reference.
@@ -76,6 +82,7 @@ only to the recorded `resume_status` after the condition is resolved.
 
 | Gate | Authority | Failure route |
 |---|---|---|
+| Milestone selection | current description plus attached PR markers | reconcile and choose one pending entry |
 | Repository references | capability state plus current wired registry/visibility evidence | rediscover and select per responsibility |
 | Kali installation | capability state plus provider-mediated task-runtime evidence | defer and return to selection |
 | Official CLI contract | versioned primary sources plus installed help/manual | direct obvious correction or guide gap |
@@ -100,7 +107,11 @@ commit.
 
 ## GitHub bookkeeping
 
-- Use the evaluation issue already attached to Milestone #1.
+- Use the milestone description's `Selected tools` list as the backlog.
+- Use attached PRs with explicit milestone-tool and tool-ID markers as delivery
+  evidence; issues are optional context only.
+- For a final deferred/not-planned decision, update only the selected milestone
+  list entry with a concise evidence-backed status and reason.
 - Attach the completed delivery PR to Milestone #1.
 - End the run immediately after push, PR creation, attachment, and state
   cleanup.

@@ -13,7 +13,7 @@ tool_name: "<tool-name>"
 candidate_tool_ids:
   - "category.subcategory.tool_name"
 tool_id: "category.subcategory.tool_name"
-source_issue: "#NN"
+source_issue: "" # optional
 milestone: "Phase 01 milestone"
 base_ref: "origin/main"
 branch: "codex/feat/<tool-slug>-full-wiring"

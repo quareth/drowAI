@@ -1,6 +1,6 @@
 ---
 name: drowai-tool-delivery-workflow
-description: Deliver exactly one DrowAI milestone pentesting tool on one Codex branch from its attached evaluation issue through repository-discovered mature wiring references, real-Kali installation proof, official CLI drift correction, reviewed implementation guide, phase-reviewed commits, safe Kali and GUI mechanics, branch-scoped quality work, push, and pull request. Use when starting or continuing one Phase 01 tool contribution; never batch multiple tools into one branch or PR.
+description: Deliver exactly one DrowAI pentesting tool selected from the Phase 01 milestone description on one Codex branch through repository-discovered mature wiring references, real-Kali installation proof, official CLI drift correction, reviewed implementation guide, phase-reviewed commits, safe Kali and GUI mechanics, branch-scoped quality work, push, and a milestone-attached pull request. Use when starting or continuing the milestone’s selected-tool backlog; a per-tool issue is optional and multiple tools must never share one branch or PR.
 ---
 
 # DrowAI Tool Delivery Workflow
@@ -10,11 +10,15 @@ agents without replacing their state contracts.
 
 ## Invariants
 
-- Use one exact tool ID, one evaluation issue, one branch, and one PR per run.
+- Treat the milestone description's `Selected tools` list as the authoritative
+  backlog and preserve its order and explicit statuses.
+- Use one exact milestone entry, one tool ID, one branch, and one PR per run.
+- A linked issue is optional supporting context and never a selection
+  prerequisite.
 - Create the branch before invoking any workflow agent and keep every action on
   that branch.
-- Give every agent the current branch, `origin/main` base, selected issue,
-  tool ID, and reviewed guide when one exists.
+- Give every agent the current branch, `origin/main` base, selected milestone
+  entry, tool ID, optional issue, and reviewed guide when one exists.
 - Agents may inspect repository context, but reviews, fixes, quality work, and
   refactors must remain within `origin/main...HEAD` and the selected tool.
 - Stop after the branch is pushed, the PR is created and attached to the
@@ -27,13 +31,28 @@ ledger, initialized from its committed example.
 
 ## 1. Select the tool and create its branch
 
-1. Read `AGENTS.md`, `CONTRIBUTING.md`, and the selected milestone issue.
-2. Resolve one exact tool ID and stop on ambiguous duplicate registrations.
-3. Require a clean worktree, update local `main` from `origin/main`, and create
+1. Read `AGENTS.md`, `CONTRIBUTING.md`, the current milestone description, and
+   PRs already attached to that milestone.
+2. Parse the numbered `Selected tools` list and classify each entry:
+   - an explicit `Completed`, `Deferred`, `Abandoned`, or equivalent final
+     annotation is terminal;
+   - an attached open PR whose body identifies the milestone tool and exact
+     tool ID is `PR_OPEN`;
+   - an attached merged PR is `COMPLETED` and may reconcile that exact
+     milestone line to `Completed`;
+   - a closed-unmerged PR without a final milestone annotation returns the tool
+     to `PENDING`;
+   - unrelated milestone issues or PRs without a selected-tool marker do not
+     represent a tool entry.
+3. Select the user-named pending entry or otherwise the first pending entry in
+   milestone order, and never select a terminal or `PR_OPEN` entry.
+4. Resolve that entry to one exact current registry `tool_id`; stop on an
+   ambiguous name or duplicate registration.
+5. Require a clean worktree, update local `main` from `origin/main`, and create
    `codex/feat/<tool-slug>-full-wiring`.
-4. Record `base_ref: origin/main` and the current branch in every workflow
-   state.
-5. Inspect live state before resetting it and never overwrite another active
+6. Record the milestone entry, tool ID, optional issue, `base_ref: origin/main`,
+   and current branch in every workflow state.
+7. Inspect live state before resetting it and never overwrite another active
    workflow.
 
 ## 2. Analyze capability
@@ -58,8 +77,10 @@ Run `$drowai-tool-capability-analysis` on the current branch.
 - `SUITABLE` or bounded `NEEDS_FOUNDATION` continues.
 - A missing Kali executable records `DEFERRED`, returns to tool selection, and
   does not start implementation.
-- Other `DEFERRED` or `NOT_PLANNED` outcomes record the evidence-backed issue
-  decision, clean this run's state, and stop without implementation.
+- `DEFERRED` or `NOT_PLANNED` records a concise evidence-backed status and
+  reason on only the selected milestone-list entry, preserves every other
+  milestone-description byte, cleans this run's state, and stops without
+  implementation.
 - `NEEDS_CLARIFICATION` stops for the exact unresolved tool or scope decision.
 
 Do not use Amass as the universal implementation reference; reuse only
@@ -71,9 +92,10 @@ mandatory shared budget authority and do not copy other Amass-specific policy.
 1. Require the Kali-installation and official-contract gates to be passed and
    require the repository reference matrix and any direct drift-correction
    commit to be recorded.
-2. Run `implementation-guide-creator` with the branch, tool ID, issue,
-   capability evidence, responsibility-specific mature references, installed
-   version, official documentation sources, and deferred non-obvious drift.
+2. Run `implementation-guide-creator` with the branch, milestone entry, tool
+   ID, optional issue context, capability evidence, responsibility-specific
+   mature references, installed version, official documentation sources, and
+   deferred non-obvious drift.
 3. Write the ignored guide under `docs/devdocs/plan/`.
 4. Run `$implementation-guide-review-loop` until its state is `COMPLETE`.
 5. Initialize schema-2 implementation state with the reviewed guide and full
@@ -154,7 +176,8 @@ Update only affected canonical documentation and add one concise
 2. Commit the final documentation and validation changes.
 3. Push the branch and create a PR following `CONTRIBUTING.md`, including
    problem, solution, risks, validation, user-facing changes, AI assistance,
-   and `Closes #<issue>`.
+   `Milestone tool: <exact-list-name>`, and `Tool ID: <exact-tool-id>`; include
+   `Closes #<issue>` only when an optional issue exists.
 4. Attach the PR to Milestone #1.
 5. Record `PR_OPENED`, preserve the PR URL for the final response, remove only
    this run's ignored live states, and stop immediately.
@@ -168,8 +191,8 @@ within the same run.
 - Reinitialize review and quality state before each fresh scope.
 - Preserve the branch and commits when an external action fails, then retry
   only that external action.
-- Stop for user direction when required work would exceed the selected issue
-  or branch diff.
+- Stop for user direction when required work would exceed the selected
+  milestone entry or branch diff.
 
 ## Validation
 

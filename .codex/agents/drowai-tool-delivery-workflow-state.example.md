@@ -2,7 +2,7 @@
 
 Neutral template for the ignored one-tool delivery ledger; copy the YAML block
 to `.codex/agents/drowai-tool-delivery-workflow-state.md`, fill the exact
-branch/tool/issue values, and never commit the live state.
+branch/tool/milestone values, and never commit the live state.
 
 ```yaml
 ---
@@ -13,11 +13,18 @@ resume_status: ""
 tool:
   name: "<tool-name>"
   tool_id: "category.subcategory.tool_name"
-  issue_number: 0
-  issue_url: ""
+  milestone_entry: "3. <tool-name>"
+  milestone_position: 3
+  source: "milestone_description"
+  issue_number: 0 # optional
+  issue_url: "" # optional
 milestone:
   number: 1
   title: "Phase 01: Reliable Pentesting Tools — Collection 1"
+  url: ""
+  entry_status: "PENDING"
+  selected_tools_snapshot: []
+  attached_tool_prs: []
 base_ref: "origin/main"
 branch: "codex/feat/<tool-slug>-full-wiring"
 branch_scope:
@@ -50,6 +57,7 @@ preimplementation:
   deferred_drift: []
   temporary_task_cleaned: false
 gates:
+  milestone_selection: pending
   repository_reference_discovery: pending
   kali_installation: pending
   official_cli_contract: pending
@@ -71,7 +79,7 @@ documentation:
   browser_runbook_checked: false
   browser_runbook_updated: false
 external_actions:
-  issue_attached: false
+  milestone_entry_reconciled: false
   decision_recorded: false
   decision: ""
   pr_attached: false
