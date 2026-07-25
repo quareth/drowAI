@@ -10,6 +10,9 @@ The format is based on
 
 ### Added
 
+- Repo-local Codex workflows can deliver one Phase 01 milestone tool per
+  branch and pull request with wired-path analysis, real-Kali and GUI
+  mechanical validation, phased reviews, and branch-scoped quality gates.
 - Kali task runtime images now include Amass, DNSRecon, enum4linux-ng, Hydra,
   Nuclei with a bundled template snapshot, and WhatWeb, with adapters updated
   for the installed Amass and enum4linux-ng command interfaces.
