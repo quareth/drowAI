@@ -1,0 +1,4 @@
+interface:
+  display_name: "DrowAI Tool Capability Analysis"
+  short_description: "Audit one tool’s real integration readiness"
+  default_prompt: "Use $drowai-tool-capability-analysis to evaluate the next Phase 01 tool."
