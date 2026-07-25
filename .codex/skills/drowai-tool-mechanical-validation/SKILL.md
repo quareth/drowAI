@@ -109,15 +109,12 @@ an explicit tool-name/schema prompt at most twice. Then classify
 `INCONCLUSIVE_MODEL_SELECTION`; do not call the tool broken. A missing catalog
 entry/function spec or selected tool that loses parameters is a failure.
 
-### 6. Report, validate, and clean up
+### 6. Record and clean up
 
-Write a secret-safe JSON report matching
-[references/mechanical-scorecard.md](references/mechanical-scorecard.md), then:
-
-```bash
-.venv/bin/python .codex/skills/drowai-tool-mechanical-validation/scripts/validate_mechanical_report.py \
-  artifacts/tool-mechanical-<tool-slug>.json
-```
+Record a secret-safe result using
+[references/mechanical-scorecard.md](references/mechanical-scorecard.md) and
+update the mechanical-validation state. The reviewer judges the recorded
+evidence directly; do not add a report validator or workflow test suite.
 
 Delete the temporary validation task/runtime. Preserve a failed task only when
 the user explicitly requests debugging; otherwise cleanup failure routes to
@@ -140,5 +137,4 @@ Do not score prose quality, prompt quality, helpfulness, tone, or answer style.
 ```bash
 python3 /Users/gunesalcan/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
   .codex/skills/drowai-tool-mechanical-validation
-.venv/bin/python -m pytest tests/codex_workflows/test_tool_mechanical_report_contract.py -q
 ```

@@ -39,23 +39,21 @@ committed example. It is ignored and never committed.
 
 ## Stage 0 — resume guard and reset
 
-1. Inspect GitHub for an open tool-delivery PR and inspect any live delivery
-   state. If either says `AWAITING_MERGE`, verify merge or stop.
+1. Inspect open and closed delivery PRs attached to the milestone, their linked
+   tool issues, and any live delivery state. Positively classify the preceding
+   delivery as `none`, `merged`, or `decision_recorded`. Zero open PRs is not
+   enough: a closed-unmerged PR blocks until its tool issue records a final
+   deferred/not-planned decision or the user authorizes a replacement.
 2. Resolve one issue/tool ID. Ambiguous duplicate IDs require clarification.
 3. Verify the worktree is clean and update local `main` from `origin/main`.
-4. Preview, then reset only workflow-owned child states:
-
-   ```bash
-   .venv/bin/python .codex/skills/drowai-tool-delivery-workflow/scripts/manage_tool_delivery_state.py \
-     reset-child-states --repo-root .
-   .venv/bin/python .codex/skills/drowai-tool-delivery-workflow/scripts/manage_tool_delivery_state.py \
-     reset-child-states --repo-root . --apply --confirm-no-active-workflow
-   ```
-
-   Never reset cleanup, architecture-documentation, or unrelated program state.
-5. Initialize delivery state with tool, issue, milestone, base, and the planned
-   branch. Do not create the branch until capability analysis and guide
-   creation justify implementation work.
+4. Inspect every child state before resetting it. If any state belongs to
+   another active workflow, stop. Otherwise copy only the required committed
+   examples to their ignored live paths. Never touch cleanup,
+   architecture-documentation, or unrelated program state.
+5. Initialize the delivery state with the exact tool, issue, milestone, prior
+   outcome, base, and planned branch.
+6. Do not create the branch until capability analysis and guide creation
+   justify implementation work.
 
 ## Stage 1 — capability decision
 
@@ -64,7 +62,7 @@ Run `$drowai-tool-capability-analysis`.
 - `SUITABLE` or a bounded `NEEDS_FOUNDATION` → continue.
 - `DEFERRED` / `NOT_PLANNED` → write an evidence-backed issue decision, attach
   it to the milestone, close with the appropriate reason when final, clean
-  local child state, and stop. Do not create implementation code.
+  this run's local state, and stop. Do not create implementation code.
 - Any ambiguity → `NEEDS_CLARIFICATION`.
 
 Use Amass as the completed reference and reuse
@@ -100,18 +98,22 @@ fresh phase/final review before proceeding.
 
 ## Stage 4 — security and mechanical gates
 
-1. Run `static-security-analyzer` over the branch diff, using the reviewed tool
-   guide as intent context.
-2. Record a secret-safe report reference/conclusion in delivery state.
-3. Critical, High, or Medium findings—or any secret, authorization,
+1. Commit all reviewed code and record that Git SHA in delivery state.
+2. Run `static-security-analyzer` over that branch diff, using the reviewed
+   tool guide as intent context.
+3. Record its result and exact reviewed code SHA.
+4. Critical, High, or Medium findings—or any secret, authorization,
    task/workspace isolation, command-injection, unsafe-target, or
    runtime-provider-boundary issue—block. Fix through the implementation flow,
    rerun final review, then rerun security.
-4. Run `$drowai-tool-mechanical-validation`.
-5. `FAIL` returns to implementation. `INCONCLUSIVE` is allowed only for bounded
+5. Run `$drowai-tool-mechanical-validation` against the same code SHA and
+   record its status.
+6. `FAIL` returns to implementation. `INCONCLUSIVE` is allowed only for bounded
    model selection; resolve or explicitly record before PR. `NEEDS_CLEANUP`
    blocks.
-6. Commit reviewed mechanical fixes, never reports.
+7. Commit reviewed mechanical fixes, never reports. Any code-changing fix
+   invalidates security and mechanical evidence: rerun original-guide final
+   review, security, and mechanics against the new commit before quality.
 
 ## Stage 5 — committed-scope quality and bounded refactor
 
@@ -122,28 +124,36 @@ fresh phase/final review before proceeding.
    - `scope.base_ref: origin/main`
    - `scope.locked: false`
 3. Run `$implementation-quality-review-loop` to `COMPLETE`.
-4. Commit any bounded behavior-neutral quality fixes.
-5. If quality creates a refactor suggestion:
-   - automatically execute at most one same-PR refactor cycle, as requested;
+4. Commit any bounded behavior-neutral quality fixes. Because those change the
+   reviewed code head, rerun original-guide final review, security, mechanics,
+   and a freshly reset quality review against the new commit.
+5. If quality creates a refactor suggestion, first require it to remain inside
+   the accepted tool issue and reviewed guide. It may not expand public APIs,
+   schemas/migrations, architecture boundaries, unrelated components, or
+   milestone scope.
+   - automatically execute at most one qualifying same-PR refactor cycle;
    - create/review the refactor guide through the existing refactor and guide
      workflows;
    - implement/review/commit it;
    - rerun security, affected mechanical cases, original-guide final review,
      and a freshly reset quality review against the new branch head.
-6. A second broad suggestion becomes a follow-up issue and does not block
-   unless correctness/security requires it. Required broad work sets `BLOCKED`
-   for a human scope decision.
+6. A non-qualifying or second suggestion is not silently added to this PR.
+   Record it as a proposed follow-up; if correctness/security makes it
+   mandatory, set `BLOCKED` for a human scope decision.
 
 ## Stage 6 — final contribution gate
 
 Run:
 
 - all focused tool/parser/runtime/semantic/compression/knowledge tests;
-- workflow contract tests;
 - `python3 scripts/check_publication_safety.py`;
 - `git diff --check`;
 - frontend checks only when frontend contracts changed;
 - a final original-guide implementation review after all refactors/fixes.
+
+Before `READY_FOR_PR`, confirm final implementation, security, mechanics,
+quality, and focused tests all cover the latest code commit. A later code
+commit invalidates those reviews; docs-only contribution commits do not.
 
 Update only affected canonical docs and add one concise `CHANGELOG.md`
 `[Unreleased]` entry for the contributor-visible workflow/tool outcome. Never
@@ -160,10 +170,9 @@ change product versions.
    `Closes #<issue>`.
 4. Attach the PR to Milestone #1.
 5. Record `PR_OPENED` then `AWAITING_MERGE`.
-6. Preserve the PR URL for the final response, then preview and apply
-   `cleanup-workflow-states` with `--confirm-no-active-workflow`. Verify all
-   workflow-owned live state files, including the delivery ledger, are absent.
-   The next run must verify merge status from GitHub.
+6. Preserve the PR URL for the final response, then remove only the ignored
+   live state files created or adopted by this run. Verify they are absent.
+   The next run must still verify GitHub status, including closed-unmerged PRs.
 7. Stop. Do not begin another tool.
 
 ## Recovery
@@ -180,5 +189,4 @@ change product versions.
 ```bash
 python3 /Users/gunesalcan/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
   .codex/skills/drowai-tool-delivery-workflow
-.venv/bin/python -m pytest tests/codex_workflows -q
 ```

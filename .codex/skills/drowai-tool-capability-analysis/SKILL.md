@@ -39,16 +39,11 @@ state is ignored and must never be staged.
 ## Workflow
 
 1. Reset the live state from its committed example and record the exact tool ID.
-2. Collect registry/schema/visibility evidence:
-
-   ```bash
-   .venv/bin/python .codex/skills/drowai-tool-capability-analysis/scripts/collect_tool_capability_inputs.py \
-     --tool-id information_gathering.dns.amass
-   ```
-
-   The script is read-only. A missing dependency is a bounded diagnostic, not
-   permission to boot the backend or set fake database configuration.
-3. Spawn `drowai-tool-capability-analyzer`. It must follow
+2. Spawn `drowai-tool-capability-analyzer`. It must trace the exact ID through
+   the current registry, tool class, planner schema, executor/runtime dispatch,
+   visibility policy, compression, semantic, and knowledge paths. Use `rg` and
+   read-only repository commands; do not introduce a collector or validator.
+3. Require the analyzer to follow
    [references/capability-checklist.md](references/capability-checklist.md) and
    write evidence paths into the live state.
 4. Route from state:
@@ -93,10 +88,7 @@ Assess each dimension separately:
 
 ## Validation
 
-Run:
-
 ```bash
 python3 /Users/gunesalcan/.codex/skills/.system/skill-creator/scripts/quick_validate.py \
   .codex/skills/drowai-tool-capability-analysis
-.venv/bin/python -m pytest tests/codex_workflows/test_tool_capability_inputs.py -q
 ```

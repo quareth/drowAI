@@ -38,7 +38,7 @@ python .codex/skills/kalitool/scripts/run_real_kali_tool_schema_test.py --tool-i
 - Never run against real external targets.
 - Use safe placeholders:
   - IP-like fields -> `127.0.0.1`
-  - host/domain-like fields -> `drowai.test` or `localhost`
+  - host/domain-like fields -> `example.com`, `localhost`, or `acme.local`
 - Require authentication for task APIs via JWT bearer token.
 - Output a markdown report file.
 - Never log raw JWTs, passwords, cookies, or bearer tokens.
@@ -114,7 +114,7 @@ Suggested mapping heuristics:
 - key contains `ip`, `address`, `src_ip`, `dst_ip` -> `127.0.0.1`
 - key contains `target`, `host`, `hostname`, `domain`, `url`:
   - if field appears IP-typed -> `127.0.0.1`
-  - else -> `drowai.test` (or `http://localhost` if URL with scheme is required)
+  - else -> `example.com` (or `http://localhost` if URL with scheme is required)
 
 ### 7) Execute in real Kali
 

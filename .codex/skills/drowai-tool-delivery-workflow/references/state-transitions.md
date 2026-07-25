@@ -40,14 +40,23 @@ the recorded `resume_status` after the condition is resolved.
 ## Invalid transitions
 
 - Any new tool while status is not `MERGED` or `DECISION_RECORDED`.
-- Any next tool while GitHub still has an open prior tool-delivery PR.
+- Any next tool without a positive GitHub classification of the prior delivery
+  as `none`, `merged`, or `decision_recorded`.
+- Any next tool while GitHub has an open prior delivery PR, or a closed-unmerged
+  PR without a final linked-issue decision.
 - Implementation before guide review is `COMPLETE`.
 - Security pass without a report reference, acceptable conclusion, and zero
   blocking findings.
+- Any gate transition whose owning child workflow has not completed.
+- Security, mechanics, quality, final implementation, or final tests that
+  predate the latest code-changing commit.
 - Quality review with uncommitted implementation changes or a locked stale
   scope.
 - `READY_FOR_PR` while any required gate is not `passed`.
 - More than one automatic same-PR refactor cycle.
+- Automatic refactor work that expands the accepted issue/guide, public API,
+  schema/migrations, architecture boundaries, or unrelated components.
+- Resetting or deleting a nonterminal state owned by another workflow.
 
 ## Gate order
 
@@ -60,6 +69,10 @@ the recorded `resume_status` after the condition is resolved.
 | Mechanics | mechanical-validation state/report | implementation flow or cleanup |
 | Quality | frozen committed branch scope | quality fixer/refactor route |
 | Final | original guide plus all required commands | return to owning gate |
+
+Record the reviewed code commit for the final correctness, security,
+mechanical, and quality gates. Any later code-changing commit invalidates them
+and routes back through those reviews.
 
 ## Commit boundaries
 
