@@ -11,6 +11,9 @@ and `.codex/skills/drowai-tool-capability-analysis/references/capability-checkli
 Code is authoritative. Confirm imports and production call sites before making
 architectural claims.
 
+Work only on the current tool branch and use `origin/main` as its recorded
+base; do not switch branches or expand into unrelated milestone tools.
+
 You may modify only
 `.codex/agents/drowai-tool-capability-analysis-state.md`. Do not modify
 implementation code, tests, docs, guides, visibility, other state files, Git,

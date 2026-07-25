@@ -1,8 +1,8 @@
 # drowai-tool-delivery-workflow-state.example.md
 
-Neutral template for the ignored one-tool delivery ledger. Copy the YAML block
+Neutral template for the ignored one-tool delivery ledger; copy the YAML block
 to `.codex/agents/drowai-tool-delivery-workflow-state.md`, fill the exact
-tool/issue values, and never commit the live state.
+branch/tool/issue values, and never commit the live state.
 
 ```yaml
 ---
@@ -20,11 +20,10 @@ milestone:
   title: "Phase 01: Reliable Pentesting Tools — Collection 1"
 base_ref: "origin/main"
 branch: "codex/feat/<tool-slug>-full-wiring"
-prior_delivery:
-  outcome: "unknown" # none | merged | decision_recorded | blocked
-  reference: ""
+branch_scope:
+  diff_range: "origin/main...HEAD"
+  changed_files: []
 one_tool_only: true
-next_tool_allowed: false
 guide: ""
 child_states:
   capability: ".codex/agents/drowai-tool-capability-analysis-state.md"
@@ -34,31 +33,25 @@ child_states:
   implementation_review: ".codex/agents/implementation-review-state.md"
   mechanical: ".codex/agents/drowai-tool-mechanical-validation-state.md"
   quality: ".codex/agents/implementation-quality-review-state.md"
-  refactor: ".codex/agents/refactor-guide-state.md"
 phase_commits: []
-reviewed_code_head: ""
 gates:
   capability: pending
   guide_review: pending
   phase_reviews: pending
   final_implementation: pending
-  static_security:
-    status: pending
-    code_head: ""
-    report: ""
-  mechanical:
-    status: pending
-    code_head: ""
-  quality:
-    status: pending
-    code_head: ""
-  final_tests:
-    status: pending
-    code_head: ""
+  user_guide_current: pending
+  mechanical: pending
+  quality: pending
+  final_tests: pending
 quality:
-  refactor_round: 0
-  max_refactor_rounds: 1
   refactor_suggestions: []
+  executed_suggestions: []
+  deferred_suggestions: []
+documentation:
+  user_guide_checked: false
+  user_guide_updated: false
+  browser_runbook_checked: false
+  browser_runbook_updated: false
 external_actions:
   issue_attached: false
   decision_recorded: false
@@ -74,11 +67,11 @@ stack:
 ---
 ```
 
-Valid statuses are `READY`, `ANALYZING`, `DECISION_PENDING`,
-`DECISION_RECORDED`, `BRANCH_READY`, `GUIDE_REVIEW`, `IMPLEMENTING`,
-`IMPLEMENTATION_REVIEW`, `SECURITY_REVIEW`, `MECHANICAL_VALIDATION`,
-`QUALITY_REVIEW`, `REFACTORING`, `FINAL_REVIEW`, `READY_FOR_PR`, `PR_OPENED`,
-`AWAITING_MERGE`, `MERGED`, `BLOCKED`, and `NEEDS_CLARIFICATION`.
+Valid statuses are `READY`, `BRANCH_READY`, `ANALYZING`,
+`DECISION_PENDING`, `DECISION_RECORDED`, `GUIDE_REVIEW`, `IMPLEMENTING`,
+`IMPLEMENTATION_REVIEW`, `MECHANICAL_VALIDATION`, `QUALITY_REVIEW`,
+`REFACTORING`, `FINAL_REVIEW`, `READY_FOR_PR`, `PR_OPENED`, `BLOCKED`, and
+`NEEDS_CLARIFICATION`.
 
-Set `next_tool_allowed: true` only after a verified merge or a recorded final
-deferred/not-planned decision.
+`PR_OPENED` is terminal for the run and must be followed by ignored-state
+cleanup and an immediate stop.

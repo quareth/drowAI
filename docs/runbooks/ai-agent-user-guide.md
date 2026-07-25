@@ -9,7 +9,7 @@ A walkthrough of the DrowAI web interface for end users: how to get into the app
 1. [Signing in and the main layout](#1-signing-in-and-the-main-layout)
 2. [Settings — API keys, CVE database, and more](#2-settings--api-keys-cve-database-and-more)
 3. [Engagements — grouping work by client/project](#3-engagements--grouping-work-by-clientproject)
-4. [Tasks — creating a pentesting task](#4-tasks--creating-a-pentesting-task)
+4. [Operations — creating a pentesting task](#4-operations--creating-a-pentesting-task)
 5. [The agent chat — prompting and watching it work](#5-the-agent-chat--prompting-and-watching-it-work)
 6. [Execution modes — Chat / Agent / Agent (Full Access)](#6-execution-modes--chat--agent--agent-full-access)
 7. [Plan mode — enabling and disabling](#7-plan-mode--enabling-and-disabling)
@@ -41,54 +41,49 @@ After login, every page shares the same chrome:
 Across the top of the window:
 
 - **Left** — DrowAI logo and the subtitle *Red Team Platform*.
-- **Center** — a search bar with placeholder *Search tasks, logs, or commands…*.
-- **Right** — notification bell, a *Credits* counter, and your avatar/username. Clicking the avatar opens a dropdown with:
+- **Center** — the destination search field with placeholder *Search*.
+- **Right** — tenant selector when applicable, notifications, and your avatar/username. Clicking the avatar opens a dropdown with:
   - **Profile**
   - **Settings**
-  - **Billing**
+  - **Docs**
   - **Logout**
 
 #### Left sidebar (collapsible)
 
-The sidebar is a thin rail by default. Hover it to expand into a drawer. Six destinations, each with an icon:
+The sidebar is a thin rail by default. Hover it to expand into a drawer with four destinations:
 
 | Label | Icon | Destination |
 |-------|------|-------------|
 | **Outpost** | Tent | `/` — dashboard / home |
 | **Knowledge** | Brain | `/knowledge` — Knowledge Workspace |
-| **Tasks** | List | `/tasks` — task list and chat |
 | **Reports** | File | `/reports` — generated reports |
 | **Usage** | Gauge | `/usage` — LLM usage and cost |
-| **Settings** | Gear | `/settings` — global configuration |
 
-> Tip: hover any rail icon to see its label. The active page shows a blue highlight.
+> Tip: task operations and chat now live together on **Outpost → Operations**, while **Settings** is opened from the avatar menu.
 
 ---
 
 ## 2. Settings — API keys, CVE database, and more
 
-Open **Settings** from the left sidebar (gear icon) or from the avatar dropdown. The page is organized into five tabs along the top:
+Open **Settings** from the avatar dropdown. The page is organized into seven tabs along the top:
 
 | Tab | Purpose |
 |-----|---------|
-| **API** | API keys (OpenAI, Shodan), AI model selection |
+| **API** | LLM provider connections, credentials, and reporting model selection |
 | **Network** | Network/proxy/VPN-related settings |
+| **Runner Sites** | Managed runner enrollment and site status |
 | **System** | Storage, uptime, data management, danger zone |
+| **Data Management** | Retention and deletion settings |
 | **Display** | UI display preferences |
 | **CVE** | Global CVE database indexing |
 
-### 2.1 Setting the OpenAI API key (and other API keys)
+### 2.1 Connecting an LLM provider
 
-1. Click **Settings** (gear icon in the sidebar).
-2. Select the **API** tab.
-3. Locate the **OpenAI Configuration** card.
-4. In the `openai_api_key` field, click the eye icon to show the input, paste your key, and click the eye icon again to mask it. The masked state shows `••••••••`.
-5. (Optional) Pick a model from the `openai_model` dropdown.
-6. Toggle **`enable_ai`** to **on** to activate AI features.
-7. Click **Test OpenAI** to verify the key. A success toast reads *"OpenAI API Test Successful"*; a failure toast tells you what went wrong.
-8. Click **Save** to persist the changes.
-
-To configure **Shodan**, scroll down in the same tab to the **Shodan Configuration** card and follow the same paste/save flow with the `shodan_api_key` field.
+1. Open the avatar menu, click **Settings**, and select **API**.
+2. Under **AI providers**, locate the provider card you need.
+3. For NVIDIA-backed mechanical validation, locate **NVIDIA NIM**, enter its API key, and click **Connect NVIDIA NIM**.
+4. Wait for the card status to show **Connected**; use **Update** only when intentionally replacing the stored key.
+5. Choose the task model from the model selector in the Operations chat header, not from the **Reporting model** selector used for memos and reports.
 
 ### 2.2 Configuring the CVE database
 
@@ -142,36 +137,35 @@ The **Knowledge** page groups tasks by engagement. Each row shows the engagement
 
 ---
 
-## 4. Tasks — creating a pentesting task
+## 4. Operations — creating a pentesting task
 
 A task is a single piece of work the agent runs. Each task has its own scope, its own isolated container, and its own chat history.
 
 ### 4.1 Creating a task
 
-1. Click **Tasks** in the sidebar (or the **Tasks** link from the dashboard).
-2. On the Tasks page, click the blue **New Task** button at the top right of the page (icon: plus).
-3. The **Create New Pentest Task** modal opens.
+1. Open **Outpost** and select the **Operations** workspace.
+2. In the left task panel, click **New** and choose **New Task**.
+3. The **Create New Task** modal opens.
 
 Fill in:
 
 | Field | Required? | What to enter |
 |-------|-----------|---------------|
 | **Task Name** | Yes | A short title — e.g. *Web Application Assessment*. |
-| **Target Scope** | Yes | One target per line. Examples: `target.example.com`, `192.168.1.0/24`, `api.client.com`. |
+| **Target Scope** | Optional | One target per line when the task requires an explicit scope. |
 | **Engagement** | Optional | Pick an existing engagement or create a new one inline. |
 | **Or Upload Scope File** | Optional | Drag-and-drop or pick a `.md` / `.txt` file. Its contents replace the Target Scope textarea. |
 | **Enable VPN** | Optional | Toggle to reveal the VPN configuration form (provider dropdown: `htb`, `tryhackme`, `custom`, plus credentials/config file as needed). |
 
-Click **Create Task** when ready (or **Cancel** to abandon). The task appears on the Tasks page in *pending* state and will transition to *starting* → *running* as the container is spun up.
+Click **Create Task** when ready (or **Cancel** to abandon). The task appears in the Operations task panel and transitions through its runtime startup states.
 
-### 4.2 The Tasks page
+### 4.2 The Operations task panel
 
-Header reads **Tasks** with the subtitle *Manage your pentesting operations*.
+The left side of the Operations workspace contains the task panel, while the agent chat is displayed on the right.
 
-- **Search tasks…** — search by name.
-- **Filter: All** — dropdown filters by status (All, Pending, Running, Paused, Completed, Failed).
-- View toggles — **Grid** vs **List**.
-- Stats cards — **Total Tasks**, **Running**, **Completed**, **Failed**.
+- **Grouped view** and **Flat view** switch task organization.
+- **Filter tasks and engagements** searches by task or engagement name.
+- **New** opens the task/engagement creation menu.
 
 Each task card shows a name, target summary, a status badge (color-coded — running = green, paused = yellow, completed = gray, failed = red), and a `…` overflow menu with:
 
@@ -196,11 +190,11 @@ Inline action buttons depend on the status:
 
 ## 5. The agent chat — prompting and watching it work
 
-The chat panel is where you actually talk to the agent. It opens when you click a task on the Tasks page and lives in the right side of the task workspace.
+The chat panel is where you talk to the agent and lives on the right side of **Outpost → Operations**.
 
 ### 5.1 Sending a prompt
 
-1. Open a task by clicking it from the Tasks list.
+1. Select a task from the Operations task panel or the chat header task selector.
 2. The chat panel loads on the right; any prior conversation history is restored.
 3. At the bottom of the panel, find the **chat input** — a textarea with a placeholder. Above the textarea is a controls row:
    - **Mode dropdown** (left) — currently selected execution mode (Chat / Agent / Agent (Full Access)).
@@ -393,8 +387,8 @@ Open from the avatar dropdown → **Profile** (or `/profile`). The header reads 
 
 ### Run my first scan
 
-1. **Settings → API** — paste OpenAI key, toggle **enable_ai** on, click **Save**.
-2. **Tasks → New Task** — name it, paste the target into **Target Scope**, click **Create Task**.
+1. **Avatar → Settings → API** — connect the required AI provider and confirm its card shows **Connected**.
+2. **Outpost → Operations → New → New Task** — name it, optionally set **Target Scope**, and click **Create Task**.
 3. Open the new task. The chat panel loads.
 4. Verify the mode pill says **Agent** and the **Plan** toggle is off.
 5. Type *"Enumerate the target and report open ports and services."* and press Enter.
@@ -421,8 +415,8 @@ Open from the avatar dropdown → **Profile** (or `/profile`). The header reads 
 
 ### Stop a runaway task
 
-1. **Tasks**.
-2. Find the task card.
+1. Open **Outpost → Operations**.
+2. Find the task in the left task panel.
 3. Click **Stop**. The status moves to *stopping* → *paused* (resumable) or *failed* depending on the cause.
 
 ---

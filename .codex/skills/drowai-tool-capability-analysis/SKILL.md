@@ -14,7 +14,8 @@ supporting evidence only.
 - Exact candidate `tool_id`. If a name maps to multiple registry IDs, stop with
   `NEEDS_CLARIFICATION` until one ID is selected.
 - Source issue and milestone context, when available.
-- Current base ref. Use the checked-out branch only as read-only evidence.
+- Current tool branch and `origin/main` base; use only that checked-out branch
+  as read-only evidence.
 
 The durable ledger is
 `.codex/agents/drowai-tool-capability-analysis-state.md`. Initialize it from
@@ -24,6 +25,8 @@ state is ignored and must never be staged.
 ## Hard boundaries
 
 - Read repository code and run read-only metadata/test commands only.
+- Stay on the recorded tool branch and do not inspect or switch to other
+  branches.
 - The analyzer may write only the ignored capability-analysis state.
 - Do not edit tools, tests, guides, prompts, visibility, or GitHub issues.
 - Do not start containers, the DrowAI stack, or browser sessions.

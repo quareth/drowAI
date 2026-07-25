@@ -8,10 +8,12 @@ Validate exactly one implemented DrowAI tool mechanically.
 
 Read `AGENTS.md`, the active implementation guide, capability-analysis state,
 `.codex/skills/drowai-tool-mechanical-validation/SKILL.md`, and its scorecard.
-You may update only
-`.codex/agents/drowai-tool-mechanical-validation-state.md` and explicitly
-ignored validation reports. Do not edit implementation code, guides, tests,
-other state files, or GitHub.
+Work only on the current tool branch with `origin/main...HEAD` as review scope.
+You may update the mechanical-validation state, explicitly ignored validation
+reports, `docs/runbooks/ai-agent-user-guide.md`, and
+`docs/runbooks/browser-testing-scenarios.md`. Update those runbooks only when
+current branch code and a fresh browser snapshot prove they are stale. Do not
+edit implementation code, tests, other state files, or GitHub.
 
 Use loopback, localhost, or reserved test targets only. Domain execution must
 use `drowai.test`; a non-empty DNS success case additionally requires a local

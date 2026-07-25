@@ -18,15 +18,13 @@ Use these scenarios to:
 1. Start the stack and the dev server.
 2. Open the app in Chrome / Firefox.
 3. Log in with the default credentials — username `bot`, password `bot123456`.
-4. **Settings → API**:
-   - `openai_api_key` is set.
-   - `enable_ai` is **on**.
-   - Click **Test OpenAI** → toast reads *"OpenAI API Test Successful"*.
-5. **Tasks → New Task**:
+4. Open **Avatar → Settings → API** and confirm the required provider card shows **Connected**.
+5. For the default scenarios, use the Operations chat model selector to choose **Open models** → **GPT-OSS 20B** → **NVIDIA**; a scenario that names another model overrides this step.
+6. Open **Outpost → Operations → New → New Task**:
    - **Task Name:** `Browser QA — <scenario letter>` *(this is the only field you set)*.
    - Click **Create Task** immediately. **Do NOT** fill in Target Scope, Engagement, scope file, VPN, or any other field.
-6. Open the task. Wait until the status badge turns **running** (container ready). The chat panel becomes interactive.
-7. (Optional) Open the browser DevTools **Network** tab and filter `EventSource` / `WebSocket` to inspect the live stream while testing.
+7. Select the task in the Operations panel or chat header and wait until its runtime is ready and the chat becomes interactive.
+8. (Optional) Open the browser DevTools **Network** tab and filter `EventSource` / `WebSocket` to inspect the live stream while testing.
 
 ### Task-creation rule (applies to every scenario)
 

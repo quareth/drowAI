@@ -1,188 +1,153 @@
 ---
 name: drowai-tool-delivery-workflow
-description: Deliver exactly one DrowAI milestone pentesting tool from an attached evaluation issue through wired-path analysis, reviewed implementation guide, phased implementation/reviews/commits, safe Kali and GUI mechanics, security and quality gates, push, and pull request. Use when starting or continuing one Phase 01 tool contribution; never use it to batch multiple tools into one branch or PR.
+description: Deliver exactly one DrowAI milestone pentesting tool on one Codex branch from its attached evaluation issue through wired-path analysis, reviewed implementation guide, phase-reviewed commits, safe Kali and GUI mechanics, branch-scoped quality work, push, and pull request. Use when starting or continuing one Phase 01 tool contribution; never batch multiple tools into one branch or PR.
 ---
 
 # DrowAI Tool Delivery Workflow
 
-This is a main-agent router. It delegates to existing skills and agents; it
-does not replace their reviewer/fixer contracts.
+Act as the main-agent router and delegate to the existing specialist skills and
+agents without replacing their state contracts.
 
-## One-tool invariant
+## Invariants
 
-- One exact tool ID, one evaluation issue, one short-lived branch, one PR.
-- Do not start a second tool while an earlier tool-delivery PR is open.
-- After a PR is created, stop at `AWAITING_MERGE`. A later invocation must
-  verify merge before selecting the next issue.
-- A rejected/deferred tool may advance only after its evaluation issue records
-  the decision and is closed or explicitly left deferred.
+- Use one exact tool ID, one evaluation issue, one branch, and one PR per run.
+- Create the branch before invoking any workflow agent and keep every action on
+  that branch.
+- Give every agent the current branch, `origin/main` base, selected issue,
+  tool ID, and reviewed guide when one exists.
+- Agents may inspect repository context, but reviews, fixes, quality work, and
+  refactors must remain within `origin/main...HEAD` and the selected tool.
+- Stop after the branch is pushed, the PR is created and attached to the
+  milestone, and ignored workflow state is cleaned; do not wait for merge.
+- Never stage live state, `docs/devdocs/`, reports, browser artifacts,
+  credentials, cookies, or private targets.
 
-The durable local ledger is
-`.codex/agents/drowai-tool-delivery-workflow-state.md`, initialized from the
-committed example. It is ignored and never committed.
+Use `.codex/agents/drowai-tool-delivery-workflow-state.md` as the ignored
+ledger, initialized from its committed example.
 
-## Binding rules
+## 1. Select the tool and create its branch
 
-1. Read `AGENTS.md`, `CONTRIBUTING.md`, and current wired code before acting.
-2. Start from updated `main`; use a `codex/feat/<tool-slug>-full-wiring` branch
-   in Codex.
-3. Use the issue already attached to Milestone #1. Create/attach one before
-   implementation only when the user authorized that GitHub write.
-4. Live state, `docs/devdocs/`, `artifacts/`, browser output, credentials, and
-   private targets are never staged.
-5. Runtime effects remain inside task/runtime-provider boundaries.
-6. Commit coherent reviewed phases. Quality review sees committed Git scope,
-   never an uncommitted worktree.
-7. Follow [references/state-transitions.md](references/state-transitions.md)
-   exactly. Stop on an invalid transition, `BLOCKED`, or
-   `NEEDS_CLARIFICATION`.
+1. Read `AGENTS.md`, `CONTRIBUTING.md`, and the selected milestone issue.
+2. Resolve one exact tool ID and stop on ambiguous duplicate registrations.
+3. Require a clean worktree, update local `main` from `origin/main`, and create
+   `codex/feat/<tool-slug>-full-wiring`.
+4. Record `base_ref: origin/main` and the current branch in every workflow
+   state.
+5. Inspect live state before resetting it and never overwrite another active
+   workflow.
 
-## Stage 0 — resume guard and reset
+## 2. Analyze capability
 
-1. Inspect open and closed delivery PRs attached to the milestone, their linked
-   tool issues, and any live delivery state. Positively classify the preceding
-   delivery as `none`, `merged`, or `decision_recorded`. Zero open PRs is not
-   enough: a closed-unmerged PR blocks until its tool issue records a final
-   deferred/not-planned decision or the user authorizes a replacement.
-2. Resolve one issue/tool ID. Ambiguous duplicate IDs require clarification.
-3. Verify the worktree is clean and update local `main` from `origin/main`.
-4. Inspect every child state before resetting it. If any state belongs to
-   another active workflow, stop. Otherwise copy only the required committed
-   examples to their ignored live paths. Never touch cleanup,
-   architecture-documentation, or unrelated program state.
-5. Initialize the delivery state with the exact tool, issue, milestone, prior
-   outcome, base, and planned branch.
-6. Do not create the branch until capability analysis and guide creation
-   justify implementation work.
+Run `$drowai-tool-capability-analysis` on the current branch.
 
-## Stage 1 — capability decision
-
-Run `$drowai-tool-capability-analysis`.
-
-- `SUITABLE` or a bounded `NEEDS_FOUNDATION` → continue.
-- `DEFERRED` / `NOT_PLANNED` → write an evidence-backed issue decision, attach
-  it to the milestone, close with the appropriate reason when final, clean
-  this run's local state, and stop. Do not create implementation code.
-- Any ambiguity → `NEEDS_CLARIFICATION`.
+- `SUITABLE` or bounded `NEEDS_FOUNDATION` continues.
+- `DEFERRED` or `NOT_PLANNED` records the evidence-backed issue decision,
+  cleans this run's state, and stops without implementation.
+- `NEEDS_CLARIFICATION` stops for the exact unresolved tool or scope decision.
 
 Use Amass as the completed reference and reuse
 `budget_rendered_items`; do not copy Amass-specific timeout policy.
 
-## Stage 2 — guide creation and review
+## 3. Create and review the implementation guide
 
-1. Call `implementation-guide-creator` with the exact tool, capability state,
-   issue, and current code evidence. The guide lives under ignored
-   `docs/devdocs/plan/`.
-2. Create the planned topic branch from the recorded updated base, then record
-   `BRANCH_READY`.
-3. Run `$implementation-guide-review-loop` until `COMPLETE`.
-4. Seed implementation state with the reviewed guide, full first task ID, and
-   schema-2 lifecycle fields.
+1. Run `implementation-guide-creator` with the branch, tool ID, issue, and
+   capability evidence.
+2. Write the ignored guide under `docs/devdocs/plan/`.
+3. Run `$implementation-guide-review-loop` until its state is `COMPLETE`.
+4. Initialize schema-2 implementation state with the reviewed guide and full
+   first task ID.
 
-The ignored guide produces no empty “guide commit.”
+Do not create an empty commit for an ignored guide.
 
-## Stage 3 — phased implementation
+## 4. Implement and commit each phase
 
-Run `$feature-implementation-workflow`.
+Run `$feature-implementation-workflow` one guide task at a time.
 
-- One implementer invocation equals one guide task.
-- Every phase boundary runs `$implementation-review-loop` in
-  `current_phase` mode.
-- After a phase review reaches `COMPLETE`, stage only that phase’s coherent
-  tracked changes, run its focused checks, and commit.
-- Continue until implementation state is terminal `COMPLETE`.
-- Run `$implementation-review-loop` in `final_implementation` mode.
+For every phase:
 
-Any mechanical fix later returns through the affected implementation task and
-fresh phase/final review before proceeding.
+1. Complete all phase tasks.
+2. Run `$implementation-review-loop` in `current_phase` mode.
+3. Fix blockers and repeat with a fresh reviewer until `COMPLETE`.
+4. Run the phase's focused checks.
+5. Commit the successful phase before beginning the next phase.
 
-## Stage 4 — security and mechanical gates
+After the final phase, require implementation state `COMPLETE` and run
+`$implementation-review-loop` in `final_implementation` mode.
 
-1. Commit all reviewed code and record that Git SHA in delivery state.
-2. Run `static-security-analyzer` over that branch diff, using the reviewed
-   tool guide as intent context.
-3. Record its result and exact reviewed code SHA.
-4. Critical, High, or Medium findings—or any secret, authorization,
-   task/workspace isolation, command-injection, unsafe-target, or
-   runtime-provider-boundary issue—block. Fix through the implementation flow,
-   rerun final review, then rerun security.
-5. Run `$drowai-tool-mechanical-validation` against the same code SHA and
-   record its status.
-6. `FAIL` returns to implementation. `INCONCLUSIVE` is allowed only for bounded
-   model selection; resolve or explicitly record before PR. `NEEDS_CLEANUP`
-   blocks.
-7. Commit reviewed mechanical fixes, never reports. Any code-changing fix
-   invalidates security and mechanical evidence: rerun original-guide final
-   review, security, and mechanics against the new commit before quality.
+## 5. Validate mechanics and current GUI guidance
 
-## Stage 5 — committed-scope quality and bounded refactor
+Run `$drowai-tool-mechanical-validation` against the committed branch.
 
-1. Ensure the worktree is clean and all implementation changes are committed.
-2. Reset quality state from its example:
-   - `scope.kind: branch`
-   - `scope.target_ref`: current branch
-   - `scope.base_ref: origin/main`
-   - `scope.locked: false`
-3. Run `$implementation-quality-review-loop` to `COMPLETE`.
-4. Commit any bounded behavior-neutral quality fixes. Because those change the
-   reviewed code head, rerun original-guide final review, security, mechanics,
-   and a freshly reset quality review against the new commit.
-5. If quality creates a refactor suggestion, first require it to remain inside
-   the accepted tool issue and reviewed guide. It may not expand public APIs,
-   schemas/migrations, architecture boundaries, unrelated components, or
-   milestone scope.
-   - automatically execute at most one qualifying same-PR refactor cycle;
-   - create/review the refactor guide through the existing refactor and guide
-     workflows;
-   - implement/review/commit it;
-   - rerun security, affected mechanical cases, original-guide final review,
-     and a freshly reset quality review against the new branch head.
-6. A non-qualifying or second suggestion is not silently added to this PR.
-   Record it as a proposed follow-up; if correctness/security makes it
-   mandatory, set `BLOCKED` for a human scope decision.
+Before browser testing:
 
-## Stage 6 — final contribution gate
+1. Compare `docs/runbooks/ai-agent-user-guide.md` and
+   `docs/runbooks/browser-testing-scenarios.md` with current routes, labels,
+   model selection, and a fresh browser snapshot.
+2. Update stale guidance on the current branch before using it.
+3. Use the current Operations task panel and select **Open models** →
+   **GPT-OSS 20B** → **NVIDIA**.
+
+`FAIL` returns to the affected implementation phase and fresh phase/final
+review; `INCONCLUSIVE` is reserved for bounded model-selection uncertainty;
+`NEEDS_CLEANUP` blocks until workflow-created runtime state is removed.
+
+Commit reviewed mechanical fixes and any verified user-guide correction.
+
+## 6. Run branch-scoped quality and direct refactors
+
+1. Require a clean worktree with all implementation changes committed.
+2. Reset quality state with `scope.kind: branch`,
+   `scope.target_ref: <current-branch>`, `scope.base_ref: origin/main`, and
+   `scope.locked: false`.
+3. Run `$implementation-quality-review-loop` until `COMPLETE`.
+4. Commit bounded behavior-neutral quality fixes.
+5. Read every suggestion created under `docs/devdocs/refactor/` and execute it
+   directly without creating a separate refactor guide.
+6. Before executing a suggestion, use
+   `git diff --name-only origin/main...HEAD` as the refactor allowlist.
+7. Modify only files already changed by this branch; defer any suggestion that
+   requires untouched files, wider architecture, public contracts, schema
+   changes, or unrelated components.
+8. Review and commit each accepted refactor, then rerun the original-guide
+   final review, affected mechanical checks, and fresh branch quality review.
+
+Refactor suggestion files remain ignored and are never committed.
+
+## 7. Run final contribution checks
 
 Run:
 
-- all focused tool/parser/runtime/semantic/compression/knowledge tests;
+- focused tool/parser/runtime/semantic/compression/knowledge checks;
 - `python3 scripts/check_publication_safety.py`;
 - `git diff --check`;
-- frontend checks only when frontend contracts changed;
-- a final original-guide implementation review after all refactors/fixes.
+- frontend checks only when the branch changed frontend contracts;
+- a final implementation review against the original tool guide.
 
-Before `READY_FOR_PR`, confirm final implementation, security, mechanics,
-quality, and focused tests all cover the latest code commit. A later code
-commit invalidates those reviews; docs-only contribution commits do not.
+Update only affected canonical documentation and add one concise
+`CHANGELOG.md` `[Unreleased]` entry without changing product versions.
 
-Update only affected canonical docs and add one concise `CHANGELOG.md`
-`[Unreleased]` entry for the contributor-visible workflow/tool outcome. Never
-change product versions.
+## 8. Publish and stop
 
-## Stage 7 — publish and stop
-
-1. Verify staged/tracked scope contains no ignored state, guide, reports,
-   credentials, cookies, private targets, or browser artifacts.
-2. Make the final coherent docs/gate commit.
-3. Push and use the existing GitHub publishing capability to open a PR whose
-   title follows `CONTRIBUTING.md` and whose body covers problem, solution,
-   risk/security, exact validation, user-facing changes, AI assistance, and
-   `Closes #<issue>`.
+1. Verify the staged scope contains only intended branch changes.
+2. Commit the final documentation and validation changes.
+3. Push the branch and create a PR following `CONTRIBUTING.md`, including
+   problem, solution, risks, validation, user-facing changes, AI assistance,
+   and `Closes #<issue>`.
 4. Attach the PR to Milestone #1.
-5. Record `PR_OPENED` then `AWAITING_MERGE`.
-6. Preserve the PR URL for the final response, then remove only the ignored
-   live state files created or adopted by this run. Verify they are absent.
-   The next run must still verify GitHub status, including closed-unmerged PRs.
-7. Stop. Do not begin another tool.
+5. Record `PR_OPENED`, preserve the PR URL for the final response, remove only
+   this run's ignored live states, and stop immediately.
+
+Do not monitor, wait for, or perform the merge, and do not start another tool
+within the same run.
 
 ## Recovery
 
-- Never skip a failed child gate by editing its status.
-- Reinitialize review/quality state from the committed example before each
-  fresh scope.
-- If user input is required, persist the exact missing decision and stop.
-- If an external write fails, preserve the code/commit state, record the failed
-  action, and retry only that action.
+- Never bypass a failed child workflow by editing its status.
+- Reinitialize review and quality state before each fresh scope.
+- Preserve the branch and commits when an external action fails, then retry
+  only that external action.
+- Stop for user direction when required work would exceed the selected issue
+  or branch diff.
 
 ## Validation
 

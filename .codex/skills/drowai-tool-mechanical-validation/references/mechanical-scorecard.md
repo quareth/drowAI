@@ -16,6 +16,7 @@ targets, or full sensitive output.
 | `artifacts` | expected vs observed and secret-safe reference |
 | `knowledge` | expected vs observed task-scoped facts |
 | `gui` | selected tool, preserved params, rendered result, attempt count |
+| `documentation` | current branch guide/runbook checks and any corrections |
 | `cleanup` | task/runtime deletion and stack ownership |
 
 ## Allowed targets
@@ -38,12 +39,11 @@ use `drowai.test` with a resolver on loopback.
 - Unknown or failed cleanup is `NEEDS_CLEANUP`.
 - `PASS` requires all required cases and gates.
 
-The report must set `mechanics_only: true`. Any `prompt_quality`,
-`prose_quality`, `answer_quality`, or equivalent scoring field invalidates the
-report.
+The report must set `mechanics_only: true` and must not contain
+`prompt_quality`, `prose_quality`, `answer_quality`, or equivalent scoring.
 
 ## Secret handling
 
-Only `<KEY_SET>` and `<NO_KEY>` may represent credential presence. The report
-validator rejects bearer-token and common API-key shapes and reports field
-codes without echoing the sensitive value.
+Only `<KEY_SET>` and `<NO_KEY>` may represent credential presence, and the
+mechanical validator must reject any report containing bearer-token or common
+API-key shapes without echoing the sensitive value.

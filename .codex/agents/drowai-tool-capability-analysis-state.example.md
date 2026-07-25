@@ -16,6 +16,7 @@ tool_id: "category.subcategory.tool_name"
 source_issue: "#NN"
 milestone: "Phase 01 milestone"
 base_ref: "origin/main"
+branch: "codex/feat/<tool-slug>-full-wiring"
 reference_tool_id: "information_gathering.dns.amass"
 analysis:
   registry:

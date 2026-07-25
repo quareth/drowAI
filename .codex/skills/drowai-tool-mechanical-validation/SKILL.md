@@ -12,6 +12,7 @@ correct.
 ## Required inputs
 
 - Exact visible `tool_id` and reviewed implementation guide.
+- Current tool branch and `origin/main` base.
 - Completed capability-analysis state.
 - Minimal and full schema profiles.
 - A loopback, reserved, or locally controlled fixture profile.
@@ -42,13 +43,16 @@ must never be staged.
 ### 1. Preflight and stack ownership
 
 1. Read `AGENTS.md`, `docs/runbooks/ai-agent-user-guide.md`, and
-   `docs/runbooks/browser-testing-scenarios.md`, then verify paths/labels against
-   current code and a fresh browser snapshot.
-2. Check `http://127.0.0.1:8000/api/health`.
-3. Start `python3 scripts/local_dev.py up` only when the stack is not healthy.
+   `docs/runbooks/browser-testing-scenarios.md`.
+2. Verify their routes, task-creation flow, labels, and model-selection steps
+   against current branch code and a fresh browser snapshot.
+3. Update either guide on the current branch when it is stale before relying
+   on it for validation.
+4. Check `http://127.0.0.1:8000/api/health`.
+5. Start `python3 scripts/local_dev.py up` only when the stack is not healthy.
    Record `stack.started_by_workflow: true`. If it was already healthy, record
    false.
-4. Stop the stack at the end only when this workflow started it.
+6. Stop the stack at the end only when this workflow started it.
 
 ### 2. Direct real-Kali mechanics
 
@@ -119,6 +123,9 @@ evidence directly; do not add a report validator or workflow test suite.
 Delete the temporary validation task/runtime. Preserve a failed task only when
 the user explicitly requests debugging; otherwise cleanup failure routes to
 `NEEDS_CLEANUP`.
+
+Keep all inspection, documentation corrections, and recorded evidence on the
+current tool branch; do not review or modify another branch.
 
 ## Final statuses
 

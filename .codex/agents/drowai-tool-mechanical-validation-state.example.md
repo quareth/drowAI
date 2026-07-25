@@ -12,6 +12,8 @@ status_reason: ""
 tool_id: "category.subcategory.tool_name"
 guide: "docs/devdocs/plan/<tool>-implementation-guide.md"
 capability_state: ".codex/agents/drowai-tool-capability-analysis-state.md"
+base_ref: "origin/main"
+branch: "codex/feat/<tool-slug>-full-wiring"
 model:
   preset_id: "nvidia_nim_openai_compatible_chat"
   model_id: "openai/gpt-oss-20b"
@@ -49,6 +51,11 @@ gui:
   tool_result_rendered: false
   selection_attempts: 0
   selection_classification: pending
+documentation:
+  user_guide_checked: false
+  user_guide_updated: false
+  browser_runbook_checked: false
+  browser_runbook_updated: false
 stack:
   was_running: false
   started_by_workflow: false
