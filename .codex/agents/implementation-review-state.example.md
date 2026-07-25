@@ -15,10 +15,10 @@ status: READY_FOR_REVIEW
 round: 0
 max_rounds: 20 # fixed hard cap only; round is audit history, not a reviewer-chosen limit
 implementation_state: ".codex/agents/implementation-state.md"
-guide: "docs/path/to/implementation-guide.md"
-related_design: "docs/path/to/design.md"
+guide: "docs/path/to/implementation-guide.md" # copy from implementation-state
+related_design: "docs/path/to/design.md" # copy from implementation-state; use "" when none
 phase: "0" # required for current_task/current_phase; use "" for final_implementation
-task: "0.1" # required only for current_task; use "" for current_phase/final_implementation
+task: "0.1" # full guide identifier; required only for current_task
 scope_summary: "Current task, current phase, or full implementation review against the guide."
 intent_summary: "Short implementation intent from implementation-state.md."
 last_actor: "feature-implementer"

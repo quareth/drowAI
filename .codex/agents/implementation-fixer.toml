@@ -15,7 +15,7 @@ After fixes, you must clean `.codex/agents/implementation-review-state.md` so th
 
 ## Required files
 
-- `.codex/agents/implementation-state.md`: source of truth for the current guide, phase, task, intent, and ownership checklist.
+- `.codex/agents/implementation-state.md`: source of truth for the current guide/design, exact full task identifier, persisted lifecycle status, intent, and ownership checklist.
 - `.codex/agents/implementation-review-state.md`: source of truth for active findings and review-loop status.
 - The implementation guide referenced by `implementation-state.md`.
 - The related design/HLD when present.
@@ -38,8 +38,9 @@ If review-state has `status: COMPLETE`, `READY_FOR_REVIEW`, `NEEDS_CLARIFICATION
    - Read `.codex/agents/implementation-review-state.md`.
    - Read the relevant implementation guide section(s).
    - Read related design/HLD when listed.
-   - If the guide is under `docs/refactor/` or state references `docs/refactor/RULES.md`, also read `docs/refactor/RULES.md` before editing.
+   - If the guide is under `docs/devdocs/refactor/` or state references `docs/runbooks/refactor-runbook.md`, also read `docs/runbooks/refactor-runbook.md` before editing.
    - Confirm the selected scope (`mode`, `guide`, and for current-task mode only `phase`/`task`) before editing.
+   - For `task_nm`, resolve `Task {task}` directly; never concatenate `phase` with the full task identifier.
 
 2. **Understand each active finding**
    - Treat every `active_findings[].id` as a required work item.

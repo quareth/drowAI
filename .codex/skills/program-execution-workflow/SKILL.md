@@ -35,6 +35,7 @@ ONLY THEN return final response
 |-------|---------|
 | `doc_root` | Directory with numbered phase docs |
 | `file_glob` | Discovery pattern (default `phase-*.md`) |
+| `guide_output_root` | Creator destination (`docs/devdocs/refactor/<program>/` or `docs/devdocs/plan/`) |
 | `last_completed_index` | Last fully finished item (0-based). `-1` = none done |
 | `guide_mode` | `refactor` or `feature` creator |
 | `pipeline_stage` | Resume point |
