@@ -1,6 +1,6 @@
 ---
 name: implementation-quality-review-loop
-description: Run DrowAI's automated state-driven implementation code-quality reviewer/fixer loop for one strict frozen Git scope recorded in `.codex/agents/implementation-quality-review-state.md`. Use when the user supplies a branch name or commit id and asks for quality assessment, behavior-neutral cleanup, DRY/modularity/separation-of-concerns review, removal of scoped unused/dead/residual/duplicated code, or a final quality gate without changing implementation behavior.
+description: Run DrowAI's automated state-driven implementation code-quality reviewer/fixer loop for one strict frozen Git scope recorded in `.codex/agents/implementation-quality-review-state.md`. Use when the user supplies a branch name or commit id and asks for quality assessment, behavior-neutral simplification, overengineering/DRY/modularity/separation-of-concerns review, removal of scoped unused/dead/residual/duplicated code, or a final quality gate without changing implementation behavior.
 ---
 
 # Implementation Quality Review Loop
@@ -26,16 +26,20 @@ Read surrounding code and wired callers only for context. Findings must identify
 
 ## Quality-only boundary
 
-Include maintainability concerns only: responsibilities, cohesion, architectural placement, DRY, modularity, coupling, simplicity, abstractions, readability, complexity, scoped residual code, module docstrings, test-code quality, and type/interface clarity.
+Include maintainability concerns only: responsibilities, cohesion, architectural placement, DRY, modularity, coupling, simplicity, abstractions, readability, complexity, code economy, obvious structural inefficiency, scoped residual code, module docstrings, test-code quality, and type/interface clarity.
 
 Prioritize behavior-neutral cleanup:
 
 - remove unused imports, variables, branches, helpers, and files introduced by the scope;
 - remove dead or residual compatibility/temporary code introduced by the scope;
 - remove or refine scoped duplication by using an established authority without modifying that authority;
+- replace obviously overengineered or unnecessarily code-heavy local structure with a concrete, materially shorter behavior-equivalent implementation;
+- remove provably redundant local traversals, pure computations, intermediate collections/conversions, duplicated branching, or wrapper layers;
 - simplify scoped internal structure, names, and tests without changing results or contracts.
 
-Exclude security, functional correctness, feature completeness, acceptance criteria, performance, guide quality, repository-wide dead-code discovery, and pre-existing unrelated debt. Do not change features, algorithms, public APIs, persistence contracts, security boundaries, runtime behavior, or the approved implementation approach.
+Exclude security, functional correctness, feature completeness, acceptance criteria, benchmark-driven performance tuning, capacity analysis, micro-optimization, uncertain algorithm replacement, guide quality, repository-wide dead-code discovery, and pre-existing unrelated debt. Do not change features, public APIs, persistence contracts, security boundaries, runtime behavior, or the approved implementation approach.
+
+Do not flag length alone or encourage code golf. A simplicity or structural-efficiency finding must identify the exact removable complexity or redundant work and a concrete simpler alternative that preserves behavior, contracts, error semantics, ordering, and side effects.
 
 ## New-chat simulation rule
 
@@ -66,7 +70,7 @@ To review a different branch or commit later, start a new run by resetting the s
 
 ## Fixability rule
 
-Only evidence-backed, small-to-medium, behavior-neutral cleanup inside the frozen changed-file set may enter `active_findings`.
+Only evidence-backed, small-to-medium, behavior-neutral cleanup inside the frozen changed-file set may enter `active_findings`. For overengineering or structural-efficiency findings, the reviewer must name the removable complexity or redundant work and the concrete simpler equivalent; vague claims that code is "too complex" are not findings.
 
 If safe resolution requires broad redesign, cross-component migration, out-of-scope edits, public contract or schema changes, widespread caller edits, staged extraction, new source modules, or uncertain behavior preservation:
 
