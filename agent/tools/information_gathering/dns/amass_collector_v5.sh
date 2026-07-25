@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Packaged Amass v5 collector template rendered by amass_runtime for task-local collection.
 set -u -o pipefail
 
 if [ "$#" -lt 6 ]; then

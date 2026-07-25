@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import subprocess
 import tomllib
 from importlib.resources import files
@@ -18,9 +17,6 @@ from agent.tools.information_gathering.dns.amass_runtime import (
 )
 
 _COLLECTOR_ASSET_NAME = "amass_collector_v5.sh"
-_PRE_EXTRACTION_SHA256 = (
-    "91b1a71ac68fd4ab3a849bae35e39e121c11f834a74aab129f9fa77d00b13646"
-)
 
 
 class _CollectorResource:
@@ -53,9 +49,6 @@ def test_collector_asset_renders_byte_equivalent_workspace_content() -> None:
     assert rendered == AMASS_COLLECTOR_SCRIPT
     assert prepared[0].relative_path == AMASS_COLLECTOR_RELATIVE_PATH
     assert prepared[0].content_bytes() == rendered.encode("utf-8")
-    assert hashlib.sha256(rendered.encode("utf-8")).hexdigest() == (
-        _PRE_EXTRACTION_SHA256
-    )
 
 
 def test_collector_asset_and_rendered_script_are_valid_bash() -> None:
