@@ -18,6 +18,13 @@ The format is based on
 
 ### Fixed
 
+- Amass now reuses serialized task-scoped v5 state across enumeration and
+  result queries, returns stored partial results after bounded enumeration,
+  and distinguishes parser status, enumeration status, completeness, and
+  seed/prior/new DNS names.
+- Amass deterministic summaries now apply shared bounded finding limits with
+  explicit total, shown, and omitted DNS-detail counts instead of silently
+  dropping mappings.
 - API settings now render every hosted catalog provider through the shared
   provider card and connection status, including reviewed compatible models.
 - Pull-request and post-merge browser journeys now verify that hosted catalog

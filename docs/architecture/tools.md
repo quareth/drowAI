@@ -436,11 +436,15 @@ Current inventory:
 | Tools with semantic evidence | 6 | `emit_semantic_evidence` overrides |
 | Tools with declared capture contract | 12 | `_capture_contract` on tool classes |
 
-Finished visible domain/runtime tools:
+Functionally wired visible domain/runtime tools:
 
-| Tool | Why it is finished |
+This is a wiring classification, not broad runtime or release certification.
+Tool-specific validation maturity is documented in
+`docs/tooling/llm-visible-tools.md`.
+
+| Tool | Wired scope |
 | --- | --- |
-| `information_gathering.dns.amass` | Runs graph-free Amass v5 DNS enumeration through a task-local collector, parses only normalized v5 name/IP output, emits DNS/IP/`resolves_to` semantic observations and evidence, projects into existing `host.dns`, `host.ip`, and relationship knowledge entities, and has a DNS deterministic adapter. It does not import or persist the Amass Open Asset Model graph. |
+| `information_gathering.dns.amass` | Runs graph-free Amass v5 DNS enumeration through a serialized task-local collector and task-scoped Amass database, queries stored results after bounded enumeration, distinguishes parser status, enumeration status, completeness, seed/prior/new names, emits DNS/IP/`resolves_to` semantic observations and evidence, projects into existing `host.dns`, `host.ip`, and relationship knowledge entities, and has a bounded DNS deterministic adapter with explicit omission accounting. It does not import or persist the Amass Open Asset Model graph. |
 | `information_gathering.network_discovery.nmap` | Forces XML capture with `-oX -`, parses hosts, ports, services, OS/script enrichment, emits semantic observations/evidence, and has a network-discovery deterministic adapter. |
 | `web_applications.web_crawlers.ffuf` | Uses a planner-facing schema and compiler, materializes inline wordlists, parses ffuf JSON/text into crawler metadata, emits semantic observations/evidence, and has a web-discovery deterministic adapter. |
 | `sniffing_spoofing.network_sniffers.tshark` | Uses bounded analysis modes, structured JSON capture, PCAP compaction, semantic observations/evidence, sanitized process rendering, and a PCAP deterministic adapter. |
