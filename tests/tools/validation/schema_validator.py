@@ -90,7 +90,7 @@ class SchemaValidator:
 
     def validate_tool(self, tool_id: str, tool_cls: Type[BaseTool]) -> ValidationReport:
         report = ValidationReport(tool_id)
-        minimal_args = self._get_fixture_minimal_args(tool_id)
+        minimal_args = self._get_fixture_case_args(tool_id, "minimal")
 
         report.add_result(
             "schema_instantiation",
@@ -106,7 +106,7 @@ class SchemaValidator:
         )
         report.add_result(
             "build_command_full",
-            self._test_build_command_full(tool_cls),
+            self._test_build_command_full(tool_id, tool_cls),
         )
         report.add_result(
             "optional_fields",
@@ -119,18 +119,26 @@ class SchemaValidator:
 
         return report
 
-    def _get_fixture_minimal_args(self, tool_id: str) -> Optional[Dict[str, Any]]:
-        """Return a tool's fixture-backed minimal params when available."""
+    def _get_fixture_case_args(
+        self,
+        tool_id: str,
+        case_name: str,
+        *,
+        require_expected_valid: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """Return a tool's fixture-backed case params when available."""
         try:
             fixture = load_param_fixture(tool_id)
         except Exception:
             return None
 
-        minimal_case = fixture.get("test_cases", {}).get("minimal")
-        if not isinstance(minimal_case, dict):
+        fixture_case = fixture.get("test_cases", {}).get(case_name)
+        if not isinstance(fixture_case, dict):
+            return None
+        if require_expected_valid and not fixture_case.get("expected_valid", True):
             return None
 
-        params = minimal_case.get("params")
+        params = fixture_case.get("params")
         return params if isinstance(params, dict) else None
 
     def _get_minimal_args(self, args_class: Type[BaseToolArgs]) -> Dict[str, Any]:
@@ -376,10 +384,14 @@ class SchemaValidator:
 
         return True
 
-    def _test_build_command_full(self, tool_cls: Type[BaseTool]) -> bool:
+    def _test_build_command_full(self, tool_id: str, tool_cls: Type[BaseTool]) -> bool:
         tool = tool_cls()
         args_class = tool_cls.args_model
-        full_args = self._build_full_args(args_class)
+        full_args = self._get_fixture_case_args(
+            tool_id,
+            "full",
+            require_expected_valid=True,
+        ) or self._build_full_args(args_class)
 
         try:
             args_instance = args_class(**full_args)

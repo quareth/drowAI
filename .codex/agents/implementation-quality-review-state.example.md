@@ -38,6 +38,9 @@ quality_policy:
   behavior_change_prohibited: true
   implementation_outcome_change_prohibited: true
   structural_cleanup_only: true
+  lean_implementation_review_required: true
+  concrete_simpler_alternative_required: true
+  speculative_optimization_out_of_scope: true
   out_of_scope_edits_prohibited: true
   new_implementation_files_prohibited: true
   security_out_of_scope: true

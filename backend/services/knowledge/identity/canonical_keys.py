@@ -9,44 +9,19 @@ This module defines deterministic key normalization/building for:
 
 from __future__ import annotations
 
-import ipaddress
 import posixpath
 import re
 from urllib.parse import urlsplit
 from runtime_shared.semantic.canonical_keys import (
     build_finding_vulnerability_key as shared_build_finding_vulnerability_key,
+    build_host_dns_key as shared_build_host_dns_key,
+    build_host_ip_key as shared_build_host_ip_key,
+    build_relationship_edge_key as shared_build_relationship_edge_key,
     sanitize_finding_token as shared_sanitize_finding_token,
 )
 from runtime_shared.semantic.service_identity import (
     build_service_socket_key as shared_build_service_socket_key,
 )
-
-
-_DNS_LABEL_PATTERN = re.compile(r"^[a-z0-9-]{1,63}$")
-_RELATIONSHIP_TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
-
-
-def _normalize_ip(value: str) -> str:
-    raw = str(value or "").strip()
-    if not raw:
-        raise ValueError("ip cannot be empty")
-    try:
-        return str(ipaddress.ip_address(raw))
-    except ValueError as exc:
-        raise ValueError(f"invalid ip address: {value}") from exc
-
-
-def _normalize_dns_name(value: str) -> str:
-    hostname = str(value or "").strip().lower().rstrip(".")
-    if not hostname:
-        raise ValueError("hostname cannot be empty")
-    labels = hostname.split(".")
-    if any(not label for label in labels):
-        raise ValueError("hostname contains empty labels")
-    for label in labels:
-        if not _DNS_LABEL_PATTERN.fullmatch(label):
-            raise ValueError("hostname contains invalid label characters")
-    return hostname
 
 
 def normalize_web_url(value: str) -> str:
@@ -85,11 +60,11 @@ def normalize_web_url(value: str) -> str:
 
 
 def build_host_ip_key(ip: str) -> str:
-    return f"host.ip:{_normalize_ip(ip)}"
+    return shared_build_host_ip_key(ip)
 
 
 def build_host_dns_key(hostname: str) -> str:
-    return f"host.dns:{_normalize_dns_name(hostname)}"
+    return shared_build_host_dns_key(hostname)
 
 
 def build_service_socket_key(*, ip: str, protocol: str, port: int | str) -> str:
@@ -159,15 +134,8 @@ def build_relationship_edge_key(
     relationship_type: str,
     target_subject_key: str,
 ) -> str:
-    source = str(source_subject_key or "").strip().lower()
-    target = str(target_subject_key or "").strip().lower()
-    rel_type = str(relationship_type or "").strip().lower()
-
-    if not source:
-        raise ValueError("source_subject_key cannot be empty")
-    if not target:
-        raise ValueError("target_subject_key cannot be empty")
-    if not _RELATIONSHIP_TYPE_PATTERN.fullmatch(rel_type):
-        raise ValueError("relationship_type must be a lowercase token")
-
-    return f"relationship.edge:{source}:{rel_type}:{target}"
+    return shared_build_relationship_edge_key(
+        source_subject_key=source_subject_key,
+        relationship_type=relationship_type,
+        target_subject_key=target_subject_key,
+    )

@@ -8,8 +8,23 @@ The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Kali task runtime images now include Amass, DNSRecon, enum4linux-ng, Hydra,
+  Nuclei with a bundled template snapshot, and WhatWeb, with adapters updated
+  for the installed Amass and enum4linux-ng command interfaces.
+- Amass is available in the LLM-visible tool catalog for DNS enumeration, with
+  normalized DNS/IP knowledge assets and `resolves_to` relationships.
+
 ### Fixed
 
+- Amass now reuses serialized task-scoped v5 state across enumeration and
+  result queries, returns stored partial results after bounded enumeration,
+  and distinguishes parser status, enumeration status, completeness, and
+  seed/prior/new DNS names.
+- Amass deterministic summaries now apply shared bounded finding limits with
+  explicit total, shown, and omitted DNS-detail counts instead of silently
+  dropping mappings.
 - API settings now render every hosted catalog provider through the shared
   provider card and connection status, including reviewed compatible models.
 - Pull-request and post-merge browser journeys now verify that hosted catalog

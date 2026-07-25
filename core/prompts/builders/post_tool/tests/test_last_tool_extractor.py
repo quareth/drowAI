@@ -23,11 +23,15 @@ The tests use the public API only and never reach into private helpers.
 from __future__ import annotations
 
 import copy
+from dataclasses import asdict
 from types import SimpleNamespace
 from typing import Any, Dict, List, Mapping, Optional
 
 import pytest
 
+from agent.graph.compression.deterministic.contracts import CompressionInput
+from agent.graph.compression.deterministic.dns_discovery import AMASS_TOOL_ID
+from agent.graph.compression.deterministic.registry import compress_deterministically
 from core.prompts.builders.post_tool._formatting import MAX_SUMMARY_CHARS
 from core.prompts.builders.post_tool.evidence import EvidenceView
 from core.prompts.builders.post_tool.last_tool import (
@@ -298,6 +302,65 @@ def test_compact_summary_and_key_findings_win_over_synthesized() -> None:
     assert "compact-finding-1" in result["key_findings"]
     assert "compact-finding-2" in result["key_findings"]
     assert "synth-finding" not in result["key_findings"]
+
+
+def test_amass_seven_dns_mappings_all_reach_ptr_key_findings() -> None:
+    """PTR renders all seven deterministic-lane Amass mapping findings."""
+
+    rows = [
+        _amass_subdomain_row(f"resolved-{index}.example.com", [f"192.0.2.{index}"])
+        for index in range(1, 8)
+    ]
+    deterministic_result = compress_deterministically(
+        CompressionInput(
+            tool_name=AMASS_TOOL_ID,
+            raw_result={
+                "metadata": {
+                    "subdomains": rows,
+                    "hosts": [
+                        {"hostname": row["subdomain"], "ip": list(row["ip"])}
+                        for row in rows
+                    ],
+                    "ips": [row["ip"][0] for row in rows],
+                    "names_count": len(rows),
+                    "resolved_names_count": len(rows),
+                    "unresolved_names_count": 0,
+                    "ip_count": len(rows),
+                    "parse_status": "success",
+                    "capture_format": "amass_v5_subs_text",
+                }
+            },
+        )
+    )
+    metadata: Dict[str, Any] = {
+        "last_tool_result_compact_batch": {
+            "status": "completed",
+            "success": True,
+            "results": [
+                {
+                    "tool_call_id": "tc_amass",
+                    "tool_id": AMASS_TOOL_ID,
+                    "intent": "dns_enumeration",
+                    "status": "success",
+                    "success": True,
+                    "deterministic_compact_tool_result": asdict(
+                        deterministic_result
+                    ),
+                }
+            ],
+        },
+    }
+
+    result = extract_last_tool_sections(metadata, _ObjectFacts())
+
+    assert deterministic_result.fallback_reason is None
+    assert deterministic_result.lossiness_risk == "low"
+    for mapping in deterministic_result.key_findings:
+        assert f"• {mapping}" in result["key_findings"]
+    assert len(deterministic_result.key_findings) == 7
+    assert result["key_findings"].startswith("Deterministic lane:")
+    assert "resolved-7.example.com resolves to 192.0.2.7" in result["key_findings"]
+    assert "omitted" not in result["key_findings"]
 
 
 def test_synthesized_summary_and_key_findings_used_when_compact_missing() -> None:
@@ -724,6 +787,17 @@ def test_returned_dict_has_only_the_ten_documented_keys() -> None:
     assert set(result.keys()) == EXPECTED_KEYS
     # And every value remains a string (the helper's documented value type).
     assert all(isinstance(v, str) for v in result.values())
+
+
+def _amass_subdomain_row(name: str, ips: List[str]) -> Dict[str, Any]:
+    """Return one normalized Amass metadata row for PTR projection tests."""
+
+    return {
+        "subdomain": name,
+        "ip": list(ips),
+        "record_types": ["A"] if ips else [],
+        "source": "amass",
+    }
 
 
 __all__: List[str] = []

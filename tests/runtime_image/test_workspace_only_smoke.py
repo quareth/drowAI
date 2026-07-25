@@ -137,6 +137,49 @@ def test_runtime_image_packages_service_access_clients() -> None:
     not DOCKER_AVAILABLE or not RUN_RUNTIME_IMAGE_SMOKE,
     reason="Docker/runtime image smoke disabled (set RUN_RUNTIME_IMAGE_SMOKE=1).",
 )
+def test_runtime_image_packages_amass_v5_collector_cli_contract() -> None:
+    """Installed Amass must support the graph-free enum/subs collector flags."""
+
+    _ensure_runtime_image_available()
+
+    version = _run_docker(["amass", "-version"])
+    enum_help = _run_docker(["amass", "enum", "-h"])
+    subs_help = _run_docker(["amass", "subs", "-h"])
+    version_output = version.stdout + version.stderr
+    enum_help_output = enum_help.stdout + enum_help.stderr
+    subs_help_output = subs_help.stdout + subs_help.stderr
+
+    assert version.returncode == 0, version.stderr
+    assert version_output.strip().startswith("v5.")
+    assert enum_help.returncode == 0, enum_help.stderr
+    assert subs_help.returncode == 0, subs_help.stderr
+
+    for flag in (
+        "-active",
+        "-brute",
+        "-w",
+        "-timeout",
+        "-v",
+        "-silent",
+        "-r",
+        "-include",
+        "-exclude",
+        "-nocolor",
+        "-dir",
+        "-d",
+    ):
+        assert flag in enum_help_output
+
+    for flag in ("-dir", "-d", "-names", "-ip", "-nocolor"):
+        assert flag in subs_help_output
+
+
+@pytest.mark.integration
+@pytest.mark.execution_plane_non_dind_regression
+@pytest.mark.skipif(
+    not DOCKER_AVAILABLE or not RUN_RUNTIME_IMAGE_SMOKE,
+    reason="Docker/runtime image smoke disabled (set RUN_RUNTIME_IMAGE_SMOKE=1).",
+)
 def test_runtime_image_requires_executor_daemon_entrypoint_path() -> None:
     _ensure_runtime_image_available()
 

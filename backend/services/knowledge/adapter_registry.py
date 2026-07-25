@@ -17,6 +17,7 @@ from backend.services.artifact.memory_service import ArtifactMemoryService, Arti
 
 from .adapters.base import AdapterContext, ArtifactReader, KnowledgeAdapter
 from .adapters import (
+    AmassKnowledgeAdapter,
     FfufKnowledgeAdapter,
     FpingKnowledgeAdapter,
     GobusterKnowledgeAdapter,
@@ -113,6 +114,7 @@ class KnowledgeAdapterRegistryService:
           - sqlmap        (structured_native, json)
           - gobuster      (text_native, text)
           - hydra         (semantic-first, confirmed weak-auth findings)
+          - amass         (semantic-first, DNS names/IPs/resolves_to relationships)
           - msfconsole    (text_native, text)
           - tshark        (semantic-first, redacted PCAP analysis)
         """
@@ -123,6 +125,7 @@ class KnowledgeAdapterRegistryService:
             FfufKnowledgeAdapter(),
             GobusterKnowledgeAdapter(),
             HydraKnowledgeAdapter(),
+            AmassKnowledgeAdapter(),
             NucleiKnowledgeAdapter(),
             SqlmapKnowledgeAdapter(),
             MsfconsoleKnowledgeAdapter(),

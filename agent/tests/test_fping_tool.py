@@ -12,11 +12,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from agent.tools import FpingTool, validate_and_execute_tool
+from agent.tools.information_gathering.network_discovery.fping_analysis import (
+    _extract_alive_hosts,
+    _extract_unresponsive_count,
+)
 from agent.tools.information_gathering.network_discovery.fping import (
     FpingArgs,
     FpingTool as FpingToolDirect,
-    _extract_alive_hosts,
-    _extract_unresponsive_count,
 )
 from agent.tool_runtime.pty_transport import _include_stderr_in_artifacts
 from agent.tool_runtime.result_enrichment import build_pty_tool_result

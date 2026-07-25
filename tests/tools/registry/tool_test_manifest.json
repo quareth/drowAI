@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "last_updated": "2026-03-07T14:27:22+00:00",
+  "last_updated": "2026-07-24T21:58:15+00:00",
   "tools": {
     "database_assessment.database_enumeration.enum4linux": {
       "category": "database_assessment",
@@ -614,16 +614,16 @@
       "subcategory": "dns",
       "binary": "amass",
       "status": "partial",
-      "last_tested": "2026-02-22T09:22:19+00:00",
+      "last_tested": "2026-07-24T21:58:15+00:00",
       "test_results": {
         "test_schema_contract[information_gathering.dns.amass]": "passed",
         "test_command_contract[information_gathering.dns.amass]": "passed",
         "test_parse_output_contract[information_gathering.dns.amass]": "passed",
         "test_schema_exhaustive[information_gathering.dns.amass]": "passed"
       },
-      "fixture_available": false,
+      "fixture_available": true,
       "help_cached": false,
-      "notes": "Pending fixture creation"
+      "notes": "Graph-free Amass v5.1.1 enum/subs fixture"
     },
     "information_gathering.dns.dnsenum": {
       "category": "information_gathering",
@@ -2706,11 +2706,11 @@
       "partial": 0
     },
     "exploitation_tools": {
-      "total": 12,
+      "total": 14,
       "tested": 0,
       "pending": 0,
       "failed": 8,
-      "partial": 4
+      "partial": 6
     },
     "filesystem": {
       "total": 11,

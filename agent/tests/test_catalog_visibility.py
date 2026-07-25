@@ -12,6 +12,7 @@ MVP_VISIBLE_TOOLS = [
     "service_access.ftp_list",
     "service_access.ftp_download",
     "service_access.ssh_login",
+    "information_gathering.dns.amass",
     "information_gathering.network_discovery.nmap",
     "information_gathering.network_discovery.fping",
     "information_gathering.web_enumeration.http_request",
@@ -78,6 +79,18 @@ def test_hidden_and_visible_predicates_match_mvp_allowlist_policy() -> None:
     )
     assert (
         catalog_visibility.is_tool_hidden_from_catalog(
+            "information_gathering.dns.amass"
+        )
+        is False
+    )
+    assert (
+        catalog_visibility.is_tool_visible_in_catalog(
+            "information_gathering.dns.amass"
+        )
+        is True
+    )
+    assert (
+        catalog_visibility.is_tool_hidden_from_catalog(
             "information_gathering.network_discovery.masscan"
         )
         is True
@@ -123,6 +136,7 @@ def test_filter_visible_tool_ids_is_stable_deduped_and_stripped() -> None:
             "",
             None,
             "service_access.ftp_login",
+            "information_gathering.dns.amass",
             "information_gathering.network_discovery.fping",
             "information_gathering.network_discovery.masscan",
             "password_attacks.online_attacks.hydra",
@@ -136,6 +150,7 @@ def test_filter_visible_tool_ids_is_stable_deduped_and_stripped() -> None:
         "filesystem.read_file",
         "filesystem.grep",
         "service_access.ftp_login",
+        "information_gathering.dns.amass",
         "information_gathering.network_discovery.fping",
         "information_gathering.network_discovery.nmap",
     ]
@@ -148,6 +163,7 @@ def test_visible_available_tools_delegates_to_registry_and_visibility(monkeypatc
             "shell.exec",
             "filesystem.read_file",
             "service_access.ftp_login",
+            "information_gathering.dns.amass",
             "shell.script",
             "filesystem.grep",
             "filesystem.read_file",
@@ -157,6 +173,7 @@ def test_visible_available_tools_delegates_to_registry_and_visibility(monkeypatc
     assert catalog_visibility.visible_available_tools() == [
         "filesystem.read_file",
         "service_access.ftp_login",
+        "information_gathering.dns.amass",
         "filesystem.grep",
     ]
 
@@ -188,8 +205,9 @@ def test_http_download_is_visible_utility_not_user_configurable_pentest() -> Non
     assert is_user_configurable_tool(tool_id) is False
 
 
-def test_fping_and_metasploit_are_visible_pentest_tools() -> None:
+def test_dns_fping_and_metasploit_are_visible_pentest_tools() -> None:
     for tool_id in (
+        "information_gathering.dns.amass",
         "information_gathering.network_discovery.fping",
         "exploitation_tools.metasploit.search_modules",
         "exploitation_tools.metasploit.inspect_module",

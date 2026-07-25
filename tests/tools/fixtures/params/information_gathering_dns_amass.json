@@ -4,14 +4,22 @@
     "minimal": {
       "description": "Required fields only",
       "params": {
-        "target": "127.0.0.1"
+        "target": "example.com"
       },
       "expected_valid": true
     },
     "full": {
       "description": "All optional fields populated",
       "params": {
-        "target": "127.0.0.1"
+        "target": "example.com",
+        "mode": "brute",
+        "wordlist": "/workspace/wordlists/dns names.txt",
+        "inactivity_timeout_minutes": 9,
+        "execution_timeout": 120,
+        "verbose": true,
+        "dns_server": "127.0.0.1",
+        "source": ["crtsh", "dns"],
+        "exclude_source": ["archive"]
       },
       "expected_valid": true
     },
@@ -19,7 +27,29 @@
     "invalid": []
   },
   "expected_command_patterns": {
-    "minimal": [],
-    "full": []
+    "minimal": [
+      "/workspace/.drowai/amass/collect_v5.sh",
+      "example.com",
+      "-timeout",
+      "30",
+      "-nocolor"
+    ],
+    "full": [
+      "/workspace/.drowai/amass/collect_v5.sh",
+      "example.com",
+      "-brute",
+      "-w",
+      "/workspace/wordlists/dns names.txt",
+      "-timeout",
+      "9",
+      "-v",
+      "-r",
+      "127.0.0.1",
+      "-include",
+      "crtsh,dns",
+      "-exclude",
+      "archive",
+      "-nocolor"
+    ]
   }
 }

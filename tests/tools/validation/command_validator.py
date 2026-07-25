@@ -223,15 +223,15 @@ COMMAND_PATTERNS: Dict[str, CommandPattern] = {
     ),
     "amass": CommandPattern(
         tool_name="amass",
-        binary_name="amass",
+        binary_name="bash",
         flag_patterns={
-            "-d": r"^[\w\.\-]+$",  # domain
-            "-o": r".+",  # output file
-            "-json": r".+",  # JSON output
             "-timeout": r"^\d+$",
-            "-max-depth": r"^\d+$",
+            "-w": r".+",
+            "-r": r".+",
+            "-include": r".+",
+            "-exclude": r".+",
         },
-        boolean_flags={"-passive", "-active", "-v", "-ip"},
+        boolean_flags={"-active", "-brute", "-v", "-silent", "-nocolor"},
     ),
     "masscan": CommandPattern(
         tool_name="masscan",

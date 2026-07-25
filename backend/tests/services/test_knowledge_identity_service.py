@@ -18,6 +18,11 @@ from backend.services.knowledge.identity.canonical_keys import (
 )
 from backend.services.knowledge.contracts import ObservationCreate as _ObservationCreate
 from backend.services.knowledge.contracts import validate_subject_key_matches_type
+from runtime_shared.semantic.canonical_keys import (
+    build_host_dns_key as shared_build_host_dns_key,
+    build_host_ip_key as shared_build_host_ip_key,
+    build_relationship_edge_key as shared_build_relationship_edge_key,
+)
 
 ObservationCreate = partial(_ObservationCreate, user_id=1)
 
@@ -25,6 +30,15 @@ ObservationCreate = partial(_ObservationCreate, user_id=1)
 def test_host_key_builders_normalize_ip_and_dns() -> None:
     assert build_host_ip_key("10.10.10.5") == "host.ip:10.10.10.5"
     assert build_host_dns_key("App.Example.COM.") == "host.dns:app.example.com"
+
+
+def test_backend_and_runtime_shared_host_key_builders_match() -> None:
+    assert build_host_ip_key("2001:0db8:0:0:0:0:0:1") == shared_build_host_ip_key(
+        "2001:db8::1"
+    )
+    assert build_host_dns_key("T\u00e4st.Example.") == shared_build_host_dns_key(
+        "xn--tst-qla.example"
+    )
 
 
 def test_service_socket_key_builder_normalizes_protocol_and_port() -> None:
@@ -75,6 +89,11 @@ def test_relationship_edge_key_builder_is_deterministic() -> None:
     assert (
         first
         == "relationship.edge:service.socket:10.10.10.5/tcp/443:contains:web.url:https://target.example/admin"
+    )
+    assert first == shared_build_relationship_edge_key(
+        source_subject_key="service.socket:10.10.10.5/tcp/443",
+        relationship_type="contains",
+        target_subject_key="web.url:https://target.example/admin",
     )
 
 
