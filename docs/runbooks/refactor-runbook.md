@@ -1,9 +1,9 @@
 # Refactor Rules (Binding)
 
-**Document Version**: 1.1  
+**Document Version**: 1.2
 **Created**: 2026-05-29  
 **Status**: Authoritative  
-**Applies to**: every refactor guide and every implementation under `docs/refactor/`
+**Applies to**: every refactor guide and every implementation under `docs/devdocs/refactor/`
 
 > **Purpose.** Define the non-negotiable rules that govern how refactors are
 > planned and executed in this repository.
@@ -209,7 +209,7 @@ A guide's final phase then runs the [Review & Cleanup acceptance criteria](#revi
 
 ## Related documentation
 
-- `docs/refactor/<program>/` — per-program statements, phase guides, and optional
+- `docs/devdocs/refactor/<program>/` — per-program statements, phase guides, and optional
   `safety-rules.md` / `naming-map.md`
 - `AGENTS.md` — repo conventions for assistants and implementers
 
@@ -218,4 +218,5 @@ A guide's final phase then runs the [Review & Cleanup acceptance criteria](#revi
 | Version | Date | Changes |
 |---------|------|---------|
 | 1.0 | 2026-05-29 | Initial binding refactor rules. |
-| 1.1 | 2026-06-10 | Moved to `docs/refactor/RULES.md`; generalized for all refactor programs; added Rule 8 for identifier rename programs. |
+| 1.1 | 2026-06-10 | Generalized for all refactor programs and added Rule 8 for identifier rename programs. |
+| 1.2 | 2026-07-25 | Relocated the rulebook under `docs/runbooks/` and corrected the canonical program root. |

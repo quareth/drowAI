@@ -27,7 +27,7 @@ Do not rely on pasted chat reports as source of truth.
 ## Workflow
 1. Load guide-state and guide-review-state.
 2. Ensure `status: REVIEW_BLOCKED` and active blocker findings exist.
-3. Read the guide and apply minimal edits for each active finding. If the guide is under `docs/refactor/`, also read `docs/refactor/RULES.md` and preserve its binding requirements.
+3. Read the guide and apply minimal edits for each active finding. If the guide is under `docs/devdocs/refactor/`, also read `docs/runbooks/refactor-runbook.md` and preserve its binding requirements.
 4. Validate consistency in the changed guide sections.
 5. Reset guide-review-state to clean next-cycle state:
    - `status: READY_FOR_REVIEW`

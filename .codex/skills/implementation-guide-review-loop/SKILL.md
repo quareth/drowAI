@@ -59,9 +59,9 @@ Rules:
 
 ## Refactor Guide Overlay
 
-When the guide is under `docs/refactor/`:
+When the guide is under `docs/devdocs/refactor/`:
 
-- Review against `docs/refactor/RULES.md` as binding authority.
+- Review against `docs/runbooks/refactor-runbook.md` as binding authority.
 - Block guides that omit P0 baseline/snapshot before extraction.
 - Block guides that omit structural extract/prove/migrate/remove sequencing.
 - Block guides that allow fallback paths, compatibility shims, re-exports, aliases, or new flags.

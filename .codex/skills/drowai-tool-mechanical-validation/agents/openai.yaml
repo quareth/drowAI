@@ -1,0 +1,4 @@
+interface:
+  display_name: "DrowAI Tool Mechanical Validation"
+  short_description: "Validate one tool through Kali and the GUI"
+  default_prompt: "Use $drowai-tool-mechanical-validation to mechanically validate the current tool."

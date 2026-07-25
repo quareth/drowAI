@@ -15,7 +15,7 @@ This skill preserves the state-driven behavior:
 
 ## Durable Files
 
-- `.codex/agents/implementation-state.md` - current guide, phase, task, intent, `advance_after_complete`, and ownership checklist.
+- `.codex/agents/implementation-state.md` - current guide/design, exact task identifier, persisted next-task/phase-boundary handoff, terminal status, intent, `advance_after_complete`, and ownership checklist.
 - `.codex/agents/implementation-review-state.md` - current task blocker ledger and review-loop status.
 - `.codex/agents/IMPLEMENTATION_FLOW.toml` - detailed orchestration reference for manual recovery.
 
@@ -31,14 +31,17 @@ This skill preserves the state-driven behavior:
 ## Workflow
 
 1. Read `.codex/agents/implementation-state.md`.
-2. If the user named a guide, phase, or task, pass that scope to `feature-implementer`; otherwise call `feature-implementer` with the current state.
+2. Normalize legacy state to `implementation-state.example.md` without changing the selected guide, phase, or task. If the user named a guide, phase, or task, pass that scope to `feature-implementer`; otherwise call it with the current state.
 3. Let `feature-implementer` implement one task and run verification.
-4. Determine whether the next task remains in the same phase:
-   - If yes, call `feature-implementer` with `next` and continue implementation without review.
-   - If no (phase boundary reached), initialize `.codex/agents/implementation-review-state.md` with `mode: current_phase`, current `phase`, `task: ""`, and `status: READY_FOR_REVIEW`.
+4. Route from the status and handoff fields persisted by `feature-implementer`:
+   - `TASK_COMPLETE`: call `feature-implementer` with `next`; it advances from `next_task`.
+   - `AWAITING_PHASE_REVIEW`: initialize `.codex/agents/implementation-review-state.md` from its clean example, copy `guide`, `related_design`, `intent_summary`, and current `phase`, and set `mode: current_phase`, `task: ""`, and `status: READY_FOR_REVIEW`.
+   - `NEEDS_CLARIFICATION`: stop and ask for the missing decision recorded in implementation-state `status_reason`.
+   - `COMPLETE`: stop; the guide already has a durable terminal state.
 5. At phase boundary, invoke `implementation-review-loop` in Current Phase Review mode.
 6. Route by review-state:
-   - `COMPLETE`: call `feature-implementer` with `next` to start the next phase task (if any), else stop.
+   - `COMPLETE` with non-empty `next_task`: call `feature-implementer` with `next`.
+   - `COMPLETE` with `guide_complete: true` and empty `next_task`: set implementation-state `status: COMPLETE` and `advance_after_complete: false`.
    - `REVIEW_BLOCKED`: continue the phase review-loop; do not manually paste reports.
    - `READY_FOR_REVIEW`: call a fresh reviewer through the review-loop skill.
    - `NEEDS_CLARIFICATION`: stop and ask for missing input from review-state.
@@ -53,13 +56,15 @@ This skill preserves the state-driven behavior:
 - Do not call `feature-implementer next` after `MAX_ROUNDS_REACHED` or `NEEDS_CLARIFICATION`.
 - Keep implementation task-scoped; one `feature-implementer` invocation equals one guide task.
 - Phase transitions must be gated by Current Phase Review `COMPLETE`.
+- Route from persisted `completed_task`, `next_task`, `next_phase`, `phase_complete`, and `guide_complete`; do not rely on chat-only handoff values.
+- Treat `task` and `next_task` as full guide identifiers such as `7.1`; never prefix them with `phase`.
 - If state files conflict, resolve or ask before continuing.
 
 ## Refactor Guide Overlay
 
-When the active guide is under `docs/refactor/` or references `docs/refactor/RULES.md`:
+When the active guide is under `docs/devdocs/refactor/` or references `docs/runbooks/refactor-runbook.md`:
 
-- Treat `docs/refactor/RULES.md` as binding over the guide.
+- Treat `docs/runbooks/refactor-runbook.md` as binding over the guide.
 - Do not begin structural extraction until every guide-defined stabilization and baseline phase is review-complete.
 - The structural program as a whole must follow extract beside legacy -> prove intact -> migrate references -> remove legacy -> rerun locked tests.
 - Do not allow fallback paths, compatibility shims, re-exports, aliases, or new feature flags as implementation shortcuts.
@@ -70,7 +75,7 @@ When the active guide is under `docs/refactor/` or references `docs/refactor/RUL
 ## Final Response
 
 When the workflow stops, report:
-- final status from `.codex/agents/implementation-review-state.md`,
+- final status from `.codex/agents/implementation-state.md` and `.codex/agents/implementation-review-state.md`,
 - current `guide`, `phase`, and `task`,
 - verification summary if available,
 - whether the guide completed or why the loop stopped.

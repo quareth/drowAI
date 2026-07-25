@@ -34,8 +34,8 @@ If any required file/field is missing, set `status: NEEDS_CLARIFICATION` in guid
 - Security, migration, runtime, and ownership boundary blockers.
 - Check whether the implementation guide fully aligns with the guide-state scope and any related design.
 
-For guides under `docs/refactor/`, also treat these as blockers:
-- Missing or weakened compliance with `docs/refactor/RULES.md`.
+For guides under `docs/devdocs/refactor/`, also treat these as blockers:
+- Missing or weakened compliance with `docs/runbooks/refactor-runbook.md`.
 - Missing P0 baseline/snapshot before extraction.
 - Missing structural extract/prove/migrate/remove sequencing.
 - Missing no-fallback/no-shim/no-alias/no-new-flag guardrails.

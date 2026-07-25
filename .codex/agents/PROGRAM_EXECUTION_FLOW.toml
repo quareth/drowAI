@@ -10,6 +10,8 @@ ask_user_between_phases = false
 [user_config]
 doc_root = "required"
 file_glob = "phase-*.md"
+guide_output_root = "required"
+guide_mode = "refactor | feature"
 last_completed_index = "0-based"
 
 [discovery]

@@ -1,0 +1,4 @@
+interface:
+  display_name: "DrowAI Tool Capability Analysis"
+  short_description: "Discover wired references and verify CLI readiness"
+  default_prompt: "Use $drowai-tool-capability-analysis to evaluate the next Phase 01 tool."

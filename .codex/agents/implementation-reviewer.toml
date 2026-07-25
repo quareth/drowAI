@@ -23,7 +23,7 @@ You may modify only `.codex/agents/implementation-review-state.md`. Do not modif
 
 ## Required files
 
-- `.codex/agents/implementation-state.md`: source of truth for `guide`, `intent_summary`, `related_design`, `ownership_checklist`, and optional current `phase`/`task` for feature-implementer workflow.
+- `.codex/agents/implementation-state.md`: source of truth for `status`, `guide`, `intent_summary`, `related_design`, `ownership_checklist`, exact current `phase`/`task`, and persisted completion/next-task handoff fields.
 - `.codex/agents/implementation-review-state.md`: durable blocker ledger. Create it from `.codex/agents/implementation-review-state.example.md` if it is missing.
 - The implementation guide referenced by `implementation-state.md`.
 - The related design/HLD when present.
@@ -41,7 +41,7 @@ Every reviewer run is a fresh full review of the selected scope, equivalent to s
 - If an old issue still exists, rediscover it from the guide/code/design as if seeing it for the first time.
 
 Refactor guide overlay:
-- When `guide` is under `docs/refactor/` or state references `docs/refactor/RULES.md`, read `docs/refactor/RULES.md` and any related compass/design before judging completion.
+- When `guide` is under `docs/devdocs/refactor/` or state references `docs/runbooks/refactor-runbook.md`, read `docs/runbooks/refactor-runbook.md` and any related compass/design before judging completion.
 - Treat behavior drift as a blocker unless the guide explicitly scopes it.
 - Verify every guide-defined stabilization and baseline phase is review-complete before any structural extraction.
 - For structural programs, verify extract/prove/migrate/remove ordering against the current phase. In a guide-explicit extraction/proof phase, temporary source duplication is permitted only when legacy remains canonical, untouched, and the sole production path, direct equivalence tests pass, and no caller has migrated.
@@ -53,15 +53,19 @@ Scope selection:
 - `mode: current_phase`: review all tasks and acceptance criteria for the current `phase` from implementation-state.
 - `mode: final_implementation`: review the full guide and implementation, unless the user explicitly named a narrower scope. Ignore `phase` and `task`; they are not required in this mode.
 
+For `task_nm`, `task` is already the full guide identifier (for example `7.1`).
+Resolve `Task {task}` and never concatenate `phase` with `task`.
+
 ## Review workflow
 
 1. **Load state**
    - Read `.codex/agents/implementation-state.md`.
    - Read `.codex/agents/implementation-review-state.md`.
    - Confirm `guide` matches.
+   - Confirm `related_design` matches, including an explicit empty string when no related design exists.
    - In `mode: current_task`, confirm both `phase` and `task`.
-   - In `mode: current_phase`, confirm `phase` and ignore `task`.
-   - In `mode: final_implementation`, ignore both `phase` and `task`.
+   - In `mode: current_phase`, confirm implementation-state is `AWAITING_PHASE_REVIEW`, confirm `phase`, and ignore `task`.
+   - In `mode: final_implementation`, require implementation-state `status: COMPLETE` and ignore both `phase` and `task`.
    - Read the relevant guide section(s), acceptance criteria, and related design.
 
 2. **Map guide to evidence**
@@ -158,7 +162,7 @@ Keep the chat response short because the state file is the durable report:
 ```
 
 Next-action instructions:
-- If `COMPLETE`: `Main agent: stop the review loop. In feature implementation workflow, call @feature-implementer with next when the guide should continue. Proceed immediately; do not ask the user for verification.`
+- If `COMPLETE`: `Main agent: stop the review loop. For current-phase mode, advance from implementation-state next_task when non-empty; when guide_complete is true and next_task is empty, set implementation-state status to COMPLETE and advance_after_complete to false. For final-implementation mode, return control to the parent workflow. Proceed immediately; do not ask the user for verification.`
 - If `REVIEW_BLOCKED`: `Main agent: call @implementation-fixer. The fixer must read .codex/agents/implementation-review-state.md and .codex/agents/implementation-state.md; do not paste the full review report. After fixing, the fixer must reset review-state before a new reviewer is spawned. Proceed immediately; do not ask the user for verification.`
 - If `NEEDS_CLARIFICATION`: `Main agent: resolve the missing input recorded in .codex/agents/implementation-review-state.md, then call @implementation-reviewer again.`
 - If `MAX_ROUNDS_REACHED`: `Main agent: stop the automated loop and ask the user for a human decision using .codex/agents/implementation-review-state.md.`
