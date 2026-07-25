@@ -122,7 +122,7 @@ class AmassTool(BaseTool):
     def build_command(self, args: AmassArgs) -> List[str]:
         """Build the task-runtime collector command."""
 
-        return self._build_collector_command(
+        return build_amass_collector_command(
             args,
             workspace_root="/workspace",
             script_path=AMASS_CONTAINER_COLLECTOR_PATH,
@@ -140,19 +140,6 @@ class AmassTool(BaseTool):
         """Create task-scoped Amass runtime state directories."""
 
         return prepare_amass_workspace_directories(args)
-
-    @staticmethod
-    def _build_collector_command(
-        args: AmassArgs,
-        *,
-        workspace_root: str,
-        script_path: str,
-    ) -> List[str]:
-        return build_amass_collector_command(
-            args,
-            workspace_root=workspace_root,
-            script_path=script_path,
-        )
 
     def parse_output(
         self,

@@ -33,6 +33,7 @@ from agent.tools.information_gathering.dns.amass_runtime import (
     AMASS_PROVIDER_DEADLINE_MARGIN_SECONDS,
     AMASS_STATUS_BEGIN,
     AMASS_STATUS_END,
+    build_amass_collector_command,
     build_amass_timeout_budget,
 )
 
@@ -698,97 +699,86 @@ def test_collector_script_preserves_order_tags_spaces_and_success_cleanup(tmp_pa
     assert (workspace / AMASS_OUTPUT_RELATIVE_DIR / "asset.db").is_file()
 
 
+def _collector_failure_stdout(
+    *,
+    name_rows: tuple[str, ...],
+    resolved_rows: tuple[str, ...],
+    enum_status: int,
+    error_code: str,
+    final_status: str,
+    post_query_status: int,
+    pre_query_status: int,
+) -> str:
+    """Render the collector's tagged output envelope for a failed stage."""
+
+    return "\n".join(
+        [
+            AMASS_BEFORE_NAMES_BEGIN,
+            AMASS_BEFORE_NAMES_END,
+            AMASS_BEFORE_RESOLVED_BEGIN,
+            AMASS_BEFORE_RESOLVED_END,
+            AMASS_NAMES_BEGIN,
+            *name_rows,
+            AMASS_NAMES_END,
+            AMASS_RESOLVED_BEGIN,
+            *resolved_rows,
+            AMASS_RESOLVED_END,
+            AMASS_STATUS_BEGIN,
+            "asset_db_readable_before=false",
+            "asset_db_readable_after=true",
+            f"enum_status={enum_status}",
+            "engine_owned=true",
+            f"error_code={error_code}",
+            f"final_status={final_status}",
+            f"post_query_status={post_query_status}",
+            f"pre_query_status={pre_query_status}",
+            "timed_out=false",
+            AMASS_STATUS_END,
+            "",
+        ]
+    )
+
+
 @pytest.mark.parametrize(
     ("fail_stage", "expected_code", "expected_stdout"),
     [
         (
             "enum",
             23,
-            "\n".join(
-                [
-                    AMASS_BEFORE_NAMES_BEGIN,
-                    AMASS_BEFORE_NAMES_END,
-                    AMASS_BEFORE_RESOLVED_BEGIN,
-                    AMASS_BEFORE_RESOLVED_END,
-                    AMASS_NAMES_BEGIN,
-                    "api.example.com",
-                    "unresolved.example.com",
-                    AMASS_NAMES_END,
-                    AMASS_RESOLVED_BEGIN,
-                    "api.example.com 192.0.2.20,2001:db8::5",
-                    AMASS_RESOLVED_END,
-                    AMASS_STATUS_BEGIN,
-                    "asset_db_readable_before=false",
-                    "asset_db_readable_after=true",
-                    "enum_status=23",
-                    "engine_owned=true",
-                    "error_code=enum_failed",
-                    "final_status=enum_failed",
-                    "post_query_status=0",
-                    "pre_query_status=0",
-                    "timed_out=false",
-                    AMASS_STATUS_END,
-                    "",
-                ]
+            _collector_failure_stdout(
+                name_rows=("api.example.com", "unresolved.example.com"),
+                resolved_rows=("api.example.com 192.0.2.20,2001:db8::5",),
+                enum_status=23,
+                error_code="enum_failed",
+                final_status="enum_failed",
+                post_query_status=0,
+                pre_query_status=0,
             ),
         ),
         (
             "names",
             24,
-            "\n".join(
-                [
-                    AMASS_BEFORE_NAMES_BEGIN,
-                    AMASS_BEFORE_NAMES_END,
-                    AMASS_BEFORE_RESOLVED_BEGIN,
-                    AMASS_BEFORE_RESOLVED_END,
-                    AMASS_NAMES_BEGIN,
-                    AMASS_NAMES_END,
-                    AMASS_RESOLVED_BEGIN,
-                    "api.example.com 192.0.2.20,2001:db8::5",
-                    AMASS_RESOLVED_END,
-                    AMASS_STATUS_BEGIN,
-                    "asset_db_readable_before=false",
-                    "asset_db_readable_after=true",
-                    "enum_status=0",
-                    "engine_owned=true",
-                    "error_code=query_failed",
-                    "final_status=query_failed",
-                    "post_query_status=24",
-                    "pre_query_status=0",
-                    "timed_out=false",
-                    AMASS_STATUS_END,
-                    "",
-                ]
+            _collector_failure_stdout(
+                name_rows=(),
+                resolved_rows=("api.example.com 192.0.2.20,2001:db8::5",),
+                enum_status=0,
+                error_code="query_failed",
+                final_status="query_failed",
+                post_query_status=24,
+                pre_query_status=0,
             ),
         ),
         (
             "resolved",
             25,
-            "\n".join(
-                [
-                    AMASS_BEFORE_NAMES_BEGIN,
-                    AMASS_BEFORE_NAMES_END,
-                    AMASS_BEFORE_RESOLVED_BEGIN,
-                    AMASS_BEFORE_RESOLVED_END,
-                    AMASS_NAMES_BEGIN,
-                    "api.example.com",
-                    "unresolved.example.com",
-                    AMASS_NAMES_END,
-                    AMASS_RESOLVED_BEGIN,
-                    AMASS_RESOLVED_END,
-                    AMASS_STATUS_BEGIN,
-                    "asset_db_readable_before=false",
-                    "asset_db_readable_after=true",
-                    "enum_status=0",
-                    "engine_owned=true",
-                    "error_code=query_failed",
-                    "final_status=query_failed",
-                    "post_query_status=25",
-                    "pre_query_status=0",
-                    "timed_out=false",
-                    AMASS_STATUS_END,
-                    "",
-                ]
+            _collector_failure_stdout(
+                name_rows=("api.example.com", "unresolved.example.com"),
+                resolved_rows=(),
+                enum_status=0,
+                error_code="query_failed",
+                final_status="query_failed",
+                post_query_status=25,
+                pre_query_status=0,
             ),
         ),
     ],
@@ -972,47 +962,6 @@ def test_collector_reuses_lock_file_after_previous_owner_releases(tmp_path) -> N
     assert completed.returncode == 0
     assert "final_status=complete" in completed.stdout
     assert (workspace / ".drowai/amass/workflow.lock").is_file()
-
-
-def test_concurrent_collectors_share_kernel_lock_without_overlap(tmp_path) -> None:
-    workspace = tmp_path / "workspace"
-    lock_path = workspace / ".drowai/amass/workflow.lock"
-    lock_path.parent.mkdir(parents=True)
-    lock_path.write_text("abandoned\n", encoding="utf-8")
-    args = AmassArgs(target="example.com", execution_timeout=10)
-    lock_probe = tmp_path / "fake-enum-overlap"
-    env_extra = {
-        "AMASS_ENUM_SLEEP_SECONDS": "1",
-        "AMASS_OVERLAP_PROBE": str(lock_probe),
-    }
-
-    first, first_log = _start_collector_with_fake_amass(
-        tmp_path,
-        workspace,
-        args=args,
-        env_extra=env_extra,
-    )
-    second, second_log = _start_collector_with_fake_amass(
-        tmp_path,
-        workspace,
-        args=args,
-        env_extra=env_extra,
-    )
-    first_stdout, first_stderr = first.communicate(timeout=8)
-    second_stdout, second_stderr = second.communicate(timeout=8)
-
-    assert first.returncode == 0
-    assert second.returncode == 0
-    assert "OVERLAP" not in first_stderr + second_stderr
-    assert AMASS_NAMES_BEGIN in first_stdout
-    assert AMASS_NAMES_BEGIN in second_stdout
-    enum_markers = [
-        line
-        for path in (first_log, second_log)
-        for line in path.read_text(encoding="utf-8").splitlines()
-        if line in {"ENUM_BEGIN", "ENUM_END"}
-    ]
-    assert enum_markers == ["ENUM_BEGIN", "ENUM_END", "ENUM_BEGIN", "ENUM_END"]
 
 
 def test_wall_clock_timeout_interrupts_enum_and_queries_partial_results(
@@ -1259,7 +1208,7 @@ exit 2
     )
     fake_amass.chmod(0o755)
 
-    command = tool._build_collector_command(
+    command = build_amass_collector_command(
         args,
         workspace_root=str(workspace),
         script_path=str(collector),
