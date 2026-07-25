@@ -7,8 +7,13 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from core.prompts.constants import COMPACT_SUMMARY_MAX_CHARS
+from core.prompts.constants import (
+    COMPACT_KEY_FINDINGS_MAX_ITEMS,
+    COMPACT_KEY_FINDINGS_TOTAL_MAX_CHARS,
+    COMPACT_SUMMARY_MAX_CHARS,
+)
 
+from .budget import BudgetedItems, budget_rendered_items
 from .common import (
     as_int,
     compact_evidence_line,
@@ -44,6 +49,15 @@ class _DnsNameRecord:
     name: str
     addresses: tuple[str, ...]
     discovery_role: Optional[str] = None
+
+
+@dataclass(frozen=True, slots=True)
+class _DnsDetailCounts:
+    """DNS detail totals derived from the final key-findings projection."""
+
+    total: int
+    shown: int
+    omitted: int
 
 
 def dns_discovery_adapter(
@@ -83,16 +97,19 @@ def dns_discovery_adapter(
     mappings = [record for record in records if record.addresses]
     unresolved = [record for record in records if not record.addresses]
     artifact_refs = _artifact_refs(input_data.raw_result, metadata=metadata)
-
-    findings = (
-        _mapping_findings(mappings)
-        + _unresolved_findings(unresolved)
-        + _diagnostic_findings(diagnostics)
-        + [f"artifact: {ref['path']}" for ref in artifact_refs]
+    dns_detail_findings = _dns_detail_findings(mappings, unresolved=unresolved)
+    assembled_findings = dedupe_string_list(
+        [*dns_detail_findings, *_diagnostic_findings(diagnostics)],
+        limit=None,
     )
-    findings = dedupe_string_list(findings, limit=None)
-    if not findings and names_count == 0:
-        findings = ["Amass metadata contained no DNS names."]
+    if not assembled_findings and names_count == 0:
+        assembled_findings = ["Amass metadata contained no DNS names."]
+    findings_budget = _key_findings_budget(assembled_findings)
+    findings = findings_budget.items
+    dns_detail_counts = _dns_detail_counts(
+        dns_detail_findings,
+        selected_findings=findings,
+    )
 
     return DeterministicCompressionResult(
         summary=_summary(
@@ -123,6 +140,7 @@ def dns_discovery_adapter(
                 unresolved_names_count=unresolved_names_count,
                 unique_ip_count=unique_ip_count,
                 metadata=metadata,
+                dns_detail_counts=dns_detail_counts,
             )
         ),
         decision_evidence=tuple(
@@ -133,7 +151,7 @@ def dns_discovery_adapter(
             )
         ),
         completeness="partial",
-        lossiness_risk="low",
+        lossiness_risk="medium" if dns_detail_counts.omitted else "low",
     )
 
 
@@ -375,24 +393,46 @@ def _summary_text(
     return f"Amass discovered {counts}"
 
 
-def _mapping_findings(records: list[_DnsNameRecord]) -> list[str]:
-    """Return bounded name/address mapping findings."""
+def _key_findings_budget(findings: Iterable[str]) -> BudgetedItems:
+    """Return the final bounded Amass key-findings projection."""
 
-    return [
-        compact_evidence_line(
-            f"{record.name} resolves to {', '.join(record.addresses)}"
-        )
-        for record in records[:DNS_MAPPING_SAMPLE_LIMIT]
-    ]
+    return budget_rendered_items(
+        findings,
+        max_items=COMPACT_KEY_FINDINGS_MAX_ITEMS,
+        max_characters=COMPACT_KEY_FINDINGS_TOTAL_MAX_CHARS,
+        omission_label="key findings",
+    )
 
 
-def _unresolved_findings(records: list[_DnsNameRecord]) -> list[str]:
-    """Return bounded unresolved DNS name findings."""
+def _dns_detail_findings(
+    mappings: list[_DnsNameRecord],
+    *,
+    unresolved: list[_DnsNameRecord],
+) -> list[str]:
+    """Return ordered DNS detail findings without applying budget limits."""
 
-    return [
-        compact_evidence_line(f"{record.name}: no address returned")
-        for record in records[:DNS_UNRESOLVED_SAMPLE_LIMIT]
-    ]
+    findings: list[str] = []
+    for record in mappings:
+        for address in record.addresses:
+            findings.append(
+                compact_evidence_line(f"{record.name} resolves to {address}")
+            )
+    for record in unresolved:
+        findings.append(compact_evidence_line(f"{record.name}: no address returned"))
+    return findings
+
+
+def _dns_detail_counts(
+    dns_detail_findings: list[str],
+    *,
+    selected_findings: Iterable[str],
+) -> _DnsDetailCounts:
+    """Return DNS detail counts from the final selected key-finding prefix."""
+
+    dns_details = set(dns_detail_findings)
+    shown = sum(1 for finding in selected_findings if finding in dns_details)
+    total = len(dns_detail_findings)
+    return _DnsDetailCounts(total=total, shown=shown, omitted=max(total - shown, 0))
 
 
 def _diagnostic_findings(diagnostics: Iterable[str]) -> list[str]:
@@ -436,6 +476,7 @@ def _structured_signals(
     unresolved_names_count: int,
     unique_ip_count: int,
     metadata: Mapping[str, Any],
+    dns_detail_counts: _DnsDetailCounts,
 ) -> list[Mapping[str, Any]]:
     """Return bounded key-value structured signals for normalized Amass facts."""
 
@@ -457,6 +498,25 @@ def _structured_signals(
             "value": unique_ip_count,
         },
     ]
+    signals.extend(
+        [
+            {
+                "type": "kv_pair",
+                "key": "amass_dns_detail_total",
+                "value": dns_detail_counts.total,
+            },
+            {
+                "type": "kv_pair",
+                "key": "amass_dns_detail_shown",
+                "value": dns_detail_counts.shown,
+            },
+            {
+                "type": "kv_pair",
+                "key": "amass_dns_detail_omitted",
+                "value": dns_detail_counts.omitted,
+            },
+        ]
+    )
     for key, value in _execution_structured_signals(metadata):
         signals.append({"type": "kv_pair", "key": key, "value": value})
     sample_signals: list[Mapping[str, Any]] = []
@@ -504,8 +564,9 @@ def _structured_signals(
                 "value": _compact_signal_text(diagnostic),
             }
         )
+    artifact_signals: list[Mapping[str, Any]] = []
     for ref in artifact_refs:
-        sample_signals.append(
+        artifact_signals.append(
             {
                 "type": "kv_pair",
                 "key": "amass_artifact_ref",
@@ -513,7 +574,12 @@ def _structured_signals(
             }
         )
 
-    signals.extend(sample_signals[:DNS_STRUCTURED_SIGNAL_SAMPLE_LIMIT])
+    remaining_sample_limit = max(
+        DNS_STRUCTURED_SIGNAL_SAMPLE_LIMIT - len(artifact_signals),
+        0,
+    )
+    signals.extend(sample_signals[:remaining_sample_limit])
+    signals.extend(artifact_signals)
     return signals
 
 

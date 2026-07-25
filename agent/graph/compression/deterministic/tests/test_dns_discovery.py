@@ -7,7 +7,11 @@ import json
 from dataclasses import asdict
 from typing import Any, Mapping
 
-from core.prompts.constants import COMPACT_DECISION_EVIDENCE_MAX_CHARS
+from core.prompts.constants import (
+    COMPACT_DECISION_EVIDENCE_MAX_CHARS,
+    COMPACT_KEY_FINDINGS_MAX_ITEMS,
+    COMPACT_KEY_FINDINGS_TOTAL_MAX_CHARS,
+)
 
 from agent.graph.compression.deterministic.contracts import CompressionInput
 from agent.graph.compression.deterministic.dns_discovery import (
@@ -99,12 +103,11 @@ def test_amass_metadata_compacts_names_mappings_diagnostics_and_artifacts() -> N
         "1 unresolved, 3 unique IPs."
     )
     assert result.key_findings == (
-        "api.example.com resolves to 192.0.2.20, 2001:db8::5",
+        "api.example.com resolves to 192.0.2.20",
+        "api.example.com resolves to 2001:db8::5",
         "www.example.com resolves to 192.0.2.10",
         "unresolved.example.com: no address returned",
         "diagnostic: incomplete_capture_sections",
-        "artifact: artifacts/amass/amass.json",
-        "artifact: artifact://artifact-1",
     )
     assert result.decision_evidence == (
         "dns mapping: api.example.com -> 192.0.2.20, 2001:db8::5",
@@ -138,8 +141,8 @@ def test_amass_metadata_compacts_names_mappings_diagnostics_and_artifacts() -> N
     assert result.lossiness_risk == "low"
 
 
-def test_amass_metadata_bounds_samples_without_changing_complete_counts() -> None:
-    """Presentation samples are bounded while count signals keep complete totals."""
+def test_amass_metadata_preserves_fitting_details_and_complete_counts() -> None:
+    """Fitting DNS details are complete while count signals keep complete totals."""
 
     resolved = [
         _subdomain_row(
@@ -190,14 +193,70 @@ def test_amass_metadata_bounds_samples_without_changing_complete_counts() -> Non
         "Amass partially parsed DNS output; discovered 17 DNS names: 7 resolved, "
         "10 unresolved, 7 unique IPs."
     )
-    assert len(mapping_findings) == DNS_MAPPING_SAMPLE_LIMIT
-    assert len(unresolved_findings) == DNS_UNRESOLVED_SAMPLE_LIMIT
+    assert len(mapping_findings) == len(resolved)
+    assert len(unresolved_findings) == len(unresolved)
     assert len(diagnostic_findings) == DNS_DIAGNOSTIC_LIMIT
     assert {
         "type": "kv_pair",
         "key": "amass_dns_names_count",
         "value": len(resolved) + len(unresolved),
     } in result.structured_signals
+    assert {
+        "type": "kv_pair",
+        "key": "amass_dns_detail_omitted",
+        "value": 0,
+    } in result.structured_signals
+
+
+def test_seven_small_amass_dns_mappings_all_survive_key_findings() -> None:
+    """Small complete mapping sets are not capped by the old five-row sample."""
+
+    resolved = [
+        _subdomain_row(f"resolved-{index}.example.com", [f"192.0.2.{index}"])
+        for index in range(1, 8)
+    ]
+
+    result = dns_discovery_adapter(
+        CompressionInput(
+            tool_name=AMASS_TOOL_ID,
+            raw_result={
+                "metadata": {
+                    "subdomains": resolved,
+                    "hosts": _hosts_from_subdomains(resolved),
+                    "ips": [item["ip"][0] for item in resolved],
+                    "names_count": len(resolved),
+                    "resolved_names_count": len(resolved),
+                    "unresolved_names_count": 0,
+                    "ip_count": len(resolved),
+                    "parse_status": "success",
+                    "capture_format": "amass_v5_subs_text",
+                }
+            },
+        )
+    )
+
+    expected_mappings = tuple(
+        f"resolved-{index}.example.com resolves to 192.0.2.{index}"
+        for index in range(1, 8)
+    )
+
+    assert result.key_findings == expected_mappings
+    assert {
+        "type": "kv_pair",
+        "key": "amass_dns_detail_total",
+        "value": 7,
+    } in result.structured_signals
+    assert {
+        "type": "kv_pair",
+        "key": "amass_dns_detail_shown",
+        "value": 7,
+    } in result.structured_signals
+    assert {
+        "type": "kv_pair",
+        "key": "amass_dns_detail_omitted",
+        "value": 0,
+    } in result.structured_signals
+    assert result.lossiness_risk == "low"
 
 
 def test_identical_amass_metadata_produces_byte_equivalent_compact_fields() -> None:
@@ -236,8 +295,8 @@ def test_reordered_amass_metadata_produces_same_normalized_compact_result() -> N
     assert _canonical_bytes(first) == _canonical_bytes(second)
 
 
-def test_large_amass_result_respects_every_named_output_bound() -> None:
-    """All presentation collections remain bounded by named DNS constants."""
+def test_large_amass_result_respects_non_detail_sample_bounds() -> None:
+    """Non-detail presentation samples remain bounded by named DNS constants."""
 
     resolved = [
         _subdomain_row(
@@ -281,20 +340,19 @@ def test_large_amass_result_respects_every_named_output_bound() -> None:
 
     assert len(
         [finding for finding in result.key_findings if " resolves to " in finding]
-    ) == DNS_MAPPING_SAMPLE_LIMIT
+    ) == len(resolved)
     assert len(
         [finding for finding in result.key_findings if "no address returned" in finding]
-    ) == DNS_UNRESOLVED_SAMPLE_LIMIT
+    ) == len(unresolved)
     assert len(
         [finding for finding in result.key_findings if finding.startswith("diagnostic:")]
     ) == DNS_DIAGNOSTIC_LIMIT
-    assert len(
-        [finding for finding in result.key_findings if finding.startswith("artifact:")]
-    ) == DNS_ARTIFACT_REF_LIMIT
+    assert len(result.key_findings) <= COMPACT_KEY_FINDINGS_MAX_ITEMS
+    assert len("\n".join(result.key_findings)) <= COMPACT_KEY_FINDINGS_TOTAL_MAX_CHARS
     assert len(result.decision_evidence) == (
         DNS_MAPPING_SAMPLE_LIMIT + DNS_UNRESOLVED_SAMPLE_LIMIT + DNS_DIAGNOSTIC_LIMIT
     )
-    assert len(result.structured_signals) <= 4 + DNS_STRUCTURED_SIGNAL_SAMPLE_LIMIT
+    assert len(result.structured_signals) <= 7 + DNS_STRUCTURED_SIGNAL_SAMPLE_LIMIT
     assert _signal_count(result.structured_signals, "amass_dns_name_sample") <= (
         DNS_NAME_SAMPLE_LIMIT
     )
@@ -315,6 +373,144 @@ def test_large_amass_result_respects_every_named_output_bound() -> None:
         "key": "amass_dns_names_count",
         "value": len(resolved) + len(unresolved),
     } in result.structured_signals
+    assert {
+        "type": "kv_pair",
+        "key": "amass_dns_detail_omitted",
+        "value": 0,
+    } in result.structured_signals
+
+
+def test_large_amass_dns_details_report_exact_omission_accounting() -> None:
+    """Large DNS detail sets are bounded without losing summary/artifact truth."""
+
+    resolved = [
+        _subdomain_row(f"resolved-{index:02d}.example.com", [f"192.0.2.{index}"])
+        for index in range(1, COMPACT_KEY_FINDINGS_MAX_ITEMS + 5)
+    ]
+    artifacts = [
+        {
+            "artifact_id": "large-amass",
+            "artifact_kind": "object_store",
+            "path": "s3://tenant-private/large-amass.json",
+        }
+    ]
+
+    result = dns_discovery_adapter(
+        CompressionInput(
+            tool_name=AMASS_TOOL_ID,
+            raw_result={
+                "metadata": {
+                    "subdomains": resolved,
+                    "hosts": _hosts_from_subdomains(resolved),
+                    "ips": [item["ip"][0] for item in resolved],
+                    "names_count": len(resolved),
+                    "resolved_names_count": len(resolved),
+                    "unresolved_names_count": 0,
+                    "ip_count": len(resolved),
+                    "parse_status": "success",
+                    "capture_format": "amass_v5_subs_text",
+                    "artifacts": artifacts,
+                }
+            },
+        )
+    )
+
+    mapping_findings = [
+        finding for finding in result.key_findings if " resolves to " in finding
+    ]
+    omission_findings = [
+        finding
+        for finding in result.key_findings
+        if finding.startswith("key findings omitted:")
+    ]
+
+    expected_shown = COMPACT_KEY_FINDINGS_MAX_ITEMS - 1
+    expected_omitted = len(resolved) - expected_shown
+
+    assert len(result.key_findings) <= COMPACT_KEY_FINDINGS_MAX_ITEMS
+    assert len("\n".join(result.key_findings)) <= COMPACT_KEY_FINDINGS_TOTAL_MAX_CHARS
+    assert len(mapping_findings) == expected_shown
+    assert omission_findings == [
+        (
+            "key findings omitted: showing "
+            f"{expected_shown} of {len(resolved)}; omitted {expected_omitted}."
+        )
+    ]
+    assert result.summary == (
+        f"Amass discovered {len(resolved)} DNS names: {len(resolved)} resolved, "
+        f"0 unresolved, {len(resolved)} unique IPs."
+    )
+    assert {
+        "type": "kv_pair",
+        "key": "amass_dns_detail_total",
+        "value": len(resolved),
+    } in result.structured_signals
+    assert {
+        "type": "kv_pair",
+        "key": "amass_dns_detail_shown",
+        "value": expected_shown,
+    } in result.structured_signals
+    assert {
+        "type": "kv_pair",
+        "key": "amass_dns_detail_omitted",
+        "value": expected_omitted,
+    } in result.structured_signals
+    assert result.lossiness_risk == "medium"
+
+
+def test_oversized_sanitized_artifact_handle_cannot_reduce_dns_budget() -> None:
+    """A huge artifact handle stays out of key-finding budget reservation."""
+
+    oversized_artifact_id = "artifact-" + ("x" * COMPACT_KEY_FINDINGS_TOTAL_MAX_CHARS)
+    resolved = [_subdomain_row("api.example.com", ["192.0.2.20"])]
+
+    result = dns_discovery_adapter(
+        CompressionInput(
+            tool_name=AMASS_TOOL_ID,
+            raw_result={
+                "metadata": {
+                    "subdomains": resolved,
+                    "hosts": _hosts_from_subdomains(resolved),
+                    "ips": ["192.0.2.20"],
+                    "names_count": 1,
+                    "resolved_names_count": 1,
+                    "unresolved_names_count": 0,
+                    "ip_count": 1,
+                    "parse_status": "success",
+                    "capture_format": "amass_v5_subs_text",
+                    "artifacts": [
+                        {
+                            "artifact_id": oversized_artifact_id,
+                            "artifact_kind": "object_store",
+                            "path": "s3://tenant-private/amass/raw.json",
+                        }
+                    ],
+                },
+            },
+        )
+    )
+
+    artifact_signals = [
+        signal
+        for signal in result.structured_signals
+        if signal.get("key") == "amass_artifact_ref"
+    ]
+
+    assert result.key_findings == ("api.example.com resolves to 192.0.2.20",)
+    assert {
+        "type": "kv_pair",
+        "key": "amass_dns_detail_shown",
+        "value": 1,
+    } in result.structured_signals
+    assert {
+        "type": "kv_pair",
+        "key": "amass_dns_detail_omitted",
+        "value": 0,
+    } in result.structured_signals
+    assert artifact_signals
+    assert str(artifact_signals[0]["value"]).startswith("artifact://artifact-")
+    assert len(str(artifact_signals[0]["value"])) <= COMPACT_DECISION_EVIDENCE_MAX_CHARS
+    assert result.lossiness_risk == "low"
 
 
 def test_long_amass_names_and_diagnostics_are_compacted_in_all_text_outputs() -> None:
@@ -397,7 +593,8 @@ def test_amass_ipv4_and_ipv6_mappings_remain_distinguishable() -> None:
         "Amass discovered 1 DNS names: 1 resolved, 0 unresolved, 2 unique IPs."
     )
     assert result.key_findings == (
-        "dualstack.example.com resolves to 192.0.2.5, 2001:db8::5",
+        "dualstack.example.com resolves to 192.0.2.5",
+        "dualstack.example.com resolves to 2001:db8::5",
     )
     assert {
         "type": "kv_pair",
@@ -843,11 +1040,64 @@ def test_amass_artifact_references_survive_adapter_output() -> None:
         )
     )
 
-    assert "artifact: artifact://rich-amass" in result.key_findings
+    assert all(not finding.startswith("artifact:") for finding in result.key_findings)
     assert {
         "type": "kv_pair",
         "key": "amass_artifact_ref",
         "value": "artifact://rich-amass",
+    } in result.structured_signals
+
+
+def test_large_scope_seed_samples_preserve_amass_artifact_ref() -> None:
+    """Artifact refs survive even when optional structured samples fill the cap."""
+
+    resolved = []
+    for index in range(1, DNS_NAME_SAMPLE_LIMIT + 1):
+        row = _subdomain_row(f"seed-{index:02d}.example.com", [f"192.0.2.{index}"])
+        row["discovery_role"] = "scope_seed"
+        resolved.append(row)
+    unresolved = [
+        _subdomain_row(f"unresolved-{index:02d}.example.com", [])
+        for index in range(1, DNS_UNRESOLVED_SAMPLE_LIMIT + 1)
+    ]
+    diagnostics = [
+        f"diagnostic_{index}" for index in range(1, DNS_DIAGNOSTIC_LIMIT + 1)
+    ]
+
+    result = dns_discovery_adapter(
+        CompressionInput(
+            tool_name=AMASS_TOOL_ID,
+            raw_result={
+                "metadata": {
+                    "subdomains": resolved + unresolved,
+                    "hosts": _hosts_from_subdomains(resolved + unresolved),
+                    "ips": [item["ip"][0] for item in resolved],
+                    "names_count": len(resolved) + len(unresolved),
+                    "resolved_names_count": len(resolved),
+                    "unresolved_names_count": len(unresolved),
+                    "ip_count": len(resolved),
+                    "parse_status": "success",
+                    "capture_format": "amass_v5_subs_text",
+                    "diagnostics": diagnostics,
+                    "artifacts": [
+                        {
+                            "artifact_id": "pressure-amass",
+                            "artifact_kind": "object_store",
+                            "path": "s3://tenant-private/pressure-amass.json",
+                        }
+                    ],
+                }
+            },
+        )
+    )
+
+    sample_signal_count = len(result.structured_signals) - 7
+
+    assert sample_signal_count <= DNS_STRUCTURED_SIGNAL_SAMPLE_LIMIT
+    assert {
+        "type": "kv_pair",
+        "key": "amass_artifact_ref",
+        "value": "artifact://pressure-amass",
     } in result.structured_signals
 
 
