@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
-import subprocess
-import tempfile
 import time
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -21,12 +18,15 @@ from ...canonical_capture import (
 )
 from ...schemas import BaseToolArgs, ToolResult
 from .amass_analysis import (
-    AMASS_NAMES_BEGIN,
-    AMASS_NAMES_END,
-    AMASS_RESOLVED_BEGIN,
-    AMASS_RESOLVED_END,
     normalize_dns_name,
     parse_amass_v5_results,
+)
+from .amass_runtime import (
+    AMASS_CONTAINER_COLLECTOR_PATH,
+    build_amass_collector_command,
+    execute_amass_collector_locally,
+    prepare_amass_workspace_directories,
+    prepare_amass_workspace_files,
 )
 from .amass_semantics import (
     AMASS_CAPABILITY_FAMILY,
@@ -34,49 +34,6 @@ from .amass_semantics import (
     build_amass_evidence,
     build_amass_observations,
 )
-
-_COLLECTOR_RELATIVE_PATH = ".drowai/amass/collect_v5.sh"
-_CONTAINER_COLLECTOR_PATH = f"/workspace/{_COLLECTOR_RELATIVE_PATH}"
-_COLLECTOR_SCRIPT = f"""#!/usr/bin/env bash
-set -u -o pipefail
-
-if [ "$#" -lt 2 ]; then
-    echo "usage: collect_v5.sh WORKSPACE_ROOT ROOT_DOMAIN [AMASS_ENUM_OPTIONS...]" >&2
-    exit 2
-fi
-
-workspace_root=$1
-root_domain=$2
-shift 2
-
-session_parent="${{workspace_root%/}}/.drowai/amass"
-mkdir -p "$session_parent"
-session_dir=$(mktemp -d "$session_parent/session.XXXXXX")
-cleanup() {{
-    rm -rf -- "$session_dir"
-}}
-trap cleanup EXIT
-
-amass enum -dir "$session_dir" -d "$root_domain" "$@" 1>&2
-enum_status=$?
-if [ "$enum_status" -ne 0 ]; then
-    exit "$enum_status"
-fi
-
-printf '%s\\n' '{AMASS_NAMES_BEGIN}'
-amass subs -dir "$session_dir" -d "$root_domain" -names -nocolor
-names_status=$?
-printf '%s\\n' '{AMASS_NAMES_END}'
-if [ "$names_status" -ne 0 ]; then
-    exit "$names_status"
-fi
-
-printf '%s\\n' '{AMASS_RESOLVED_BEGIN}'
-amass subs -dir "$session_dir" -d "$root_domain" -names -ip -nocolor
-resolved_status=$?
-printf '%s\\n' '{AMASS_RESOLVED_END}'
-exit "$resolved_status"
-"""
 
 
 class Mode(str, Enum):
@@ -168,34 +125,21 @@ class AmassTool(BaseTool):
         return self._build_collector_command(
             args,
             workspace_root="/workspace",
-            script_path=_CONTAINER_COLLECTOR_PATH,
+            script_path=AMASS_CONTAINER_COLLECTOR_PATH,
         )
 
     def prepare_workspace_files(self, args: AmassArgs) -> List[RuntimeWorkspaceFile]:
         """Materialize the fixed Amass v5 collector in the task workspace."""
 
-        _ = args
-        return [
-            RuntimeWorkspaceFile.from_text(
-                relative_path=_COLLECTOR_RELATIVE_PATH,
-                content=_COLLECTOR_SCRIPT,
-                description="graph-free Amass v5 enum/subs collector",
-            )
-        ]
+        return prepare_amass_workspace_files(args)
 
     def prepare_workspace_directories(
         self,
         args: AmassArgs,
     ) -> List[RuntimeWorkspaceDirectory]:
-        """Create the parent used for short-lived Amass session directories."""
+        """Create task-scoped Amass runtime state directories."""
 
-        _ = args
-        return [
-            RuntimeWorkspaceDirectory(
-                relative_path=".drowai/amass",
-                description="temporary Amass v5 sessions",
-            )
-        ]
+        return prepare_amass_workspace_directories(args)
 
     @staticmethod
     def _build_collector_command(
@@ -204,37 +148,11 @@ class AmassTool(BaseTool):
         workspace_root: str,
         script_path: str,
     ) -> List[str]:
-        """Return collector argv with native Amass enum options."""
-
-        command = ["bash", script_path, workspace_root, args.target]
-        enum_options: List[str] = []
-
-        if args.mode == Mode.ACTIVE:
-            enum_options.append("-active")
-        elif args.mode == Mode.BRUTE:
-            enum_options.append("-brute")
-
-        if args.wordlist:
-            if "-brute" not in enum_options:
-                enum_options.append("-brute")
-            enum_options.extend(["-w", args.wordlist])
-
-        enum_options.extend(["-timeout", str(args.inactivity_timeout_minutes)])
-
-        if args.verbose:
-            enum_options.append("-v")
-        if args.quiet:
-            enum_options.append("-silent")
-        if args.dns_server:
-            enum_options.extend(["-r", args.dns_server])
-        if args.source:
-            enum_options.extend(["-include", ",".join(args.source)])
-        if args.exclude_source:
-            enum_options.extend(["-exclude", ",".join(args.exclude_source)])
-
-        enum_options.append("-nocolor")
-        command.extend(enum_options)
-        return command
+        return build_amass_collector_command(
+            args,
+            workspace_root=workspace_root,
+            script_path=script_path,
+        )
 
     def parse_output(
         self,
@@ -311,49 +229,24 @@ class AmassTool(BaseTool):
     def run(self, args: AmassArgs) -> ToolResult:
         """Execute the same collector contract outside container transports."""
 
-        temporary_workspace = tempfile.TemporaryDirectory(prefix="drowai-amass-")
-        workspace_root = Path(temporary_workspace.name)
-        script_path = workspace_root / _COLLECTOR_RELATIVE_PATH
-        script_path.parent.mkdir(parents=True, exist_ok=True)
-        script_path.write_text(_COLLECTOR_SCRIPT, encoding="utf-8")
-        cmd = self._build_collector_command(
-            args,
-            workspace_root=str(workspace_root),
-            script_path=str(script_path),
-        )
-
         start = time.time()
-        try:
-            proc = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=args.execution_timeout,
-            )
-        except subprocess.TimeoutExpired:
-            temporary_workspace.cleanup()
-            return ToolResult(
-                success=False,
-                exit_code=-2,
-                stdout="",
-                stderr="Command timed out",
-                artifacts=[],
-                metadata={},
-                execution_time=time.time() - start,
-            )
-
-        metadata = self.parse_output(proc.stdout, proc.stderr, proc.returncode, args)
-        artifacts = self.create_artifacts(proc.stdout, args, timestamp=int(start))
-        temporary_workspace.cleanup()
+        execution = execute_amass_collector_locally(args)
+        metadata = self.parse_output(
+            execution.stdout,
+            execution.stderr,
+            execution.exit_code,
+            args,
+        )
+        artifacts = self.create_artifacts(execution.stdout, args, timestamp=int(start))
 
         return ToolResult(
-            success=proc.returncode == 0,
-            exit_code=proc.returncode,
-            stdout=proc.stdout,
-            stderr=proc.stderr,
+            success=execution.exit_code == 0,
+            exit_code=execution.exit_code,
+            stdout=execution.stdout,
+            stderr=execution.stderr,
             artifacts=artifacts,
             metadata=metadata,
-            execution_time=time.time() - start,
+            execution_time=execution.execution_time,
         )
 
 

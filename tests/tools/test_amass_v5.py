@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import fcntl
 import os
+import socket
 import subprocess
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -20,6 +23,17 @@ from agent.tools.information_gathering.dns.amass_analysis import (
     AMASS_RESOLVED_BEGIN,
     AMASS_RESOLVED_END,
     parse_amass_v5_results,
+)
+from agent.tools.information_gathering.dns.amass_runtime import (
+    AMASS_BEFORE_NAMES_BEGIN,
+    AMASS_BEFORE_NAMES_END,
+    AMASS_BEFORE_RESOLVED_BEGIN,
+    AMASS_BEFORE_RESOLVED_END,
+    AMASS_OUTPUT_RELATIVE_DIR,
+    AMASS_PROVIDER_DEADLINE_MARGIN_SECONDS,
+    AMASS_STATUS_BEGIN,
+    AMASS_STATUS_END,
+    build_amass_timeout_budget,
 )
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "outputs"
@@ -39,6 +53,12 @@ def test_passive_mode_uses_graph_free_v5_collector_without_deprecated_flag() -> 
         "/workspace/.drowai/amass/collect_v5.sh",
         "/workspace",
         "example.com",
+    ]
+    assert command[4:8] == [
+        str(build_amass_timeout_budget(600).lock_wait_seconds),
+        str(build_amass_timeout_budget(600).enum_deadline_seconds),
+        str(build_amass_timeout_budget(600).query_grace_seconds),
+        str(build_amass_timeout_budget(600).force_kill_grace_seconds),
     ]
     assert "-passive" not in command
     assert command[command.index("-timeout") + 1] == "7"
@@ -88,11 +108,16 @@ def test_collector_command_prepares_flags_in_installed_v5_order(tmp_path) -> Non
 
     command = AmassTool().build_command(args)
 
+    budget = build_amass_timeout_budget(args.execution_timeout)
     assert command == [
         "bash",
         "/workspace/.drowai/amass/collect_v5.sh",
         "/workspace",
         "example.com",
+        str(budget.lock_wait_seconds),
+        str(budget.enum_deadline_seconds),
+        str(budget.query_grace_seconds),
+        str(budget.force_kill_grace_seconds),
         "-brute",
         "-w",
         str(wordlist),
@@ -136,22 +161,46 @@ def test_verbose_and_quiet_are_mutually_exclusive() -> None:
         AmassArgs(target="example.com", verbose=True, quiet=True)
 
 
-def test_workspace_collector_queries_names_and_resolutions_then_cleans_session() -> None:
+def test_workspace_collector_uses_one_task_scoped_output_directory() -> None:
     tool = AmassTool()
     args = AmassArgs(target="example.com")
     prepared_files = tool.prepare_workspace_files(args)
     prepared_directories = tool.prepare_workspace_directories(args)
 
-    assert [item.relative_path for item in prepared_directories] == [".drowai/amass"]
+    assert [item.relative_path for item in prepared_directories] == [
+        ".drowai/amass",
+        ".drowai/amass/xdg-config",
+        ".drowai/amass/xdg-config/amass",
+        ".drowai/amass/xdg-data",
+        ".drowai/amass/xdg-cache",
+        ".drowai/amass/runs",
+    ]
     assert [item.relative_path for item in prepared_files] == [
         ".drowai/amass/collect_v5.sh"
     ]
 
     script = prepared_files[0].content_bytes().decode("utf-8")
-    assert 'amass enum -dir "$session_dir"' in script
-    assert script.count('amass subs -dir "$session_dir"') == 2
-    assert 'mktemp -d "$session_parent/session.XXXXXX"' in script
-    assert 'rm -rf -- "$session_dir"' in script
+    assert 'amass enum -dir "$output_dir"' in script
+    assert script.count('amass subs -dir "$output_dir"') == 1
+    assert 'output_dir="$xdg_config_home/amass"' in script
+    assert 'asset_db="$output_dir/asset.db"' in script
+    assert 'XDG_CONFIG_HOME="$xdg_config_home"' in script
+    assert 'lock_path="$runtime_dir/workflow.lock"' in script
+    assert 'engine_port="${DROWAI_AMASS_ENGINE_PORT:-4000}"' in script
+    assert "mktemp" not in script
+    assert "session." not in script
+
+
+def test_collector_engine_default_db_path_matches_subs_dir_contract() -> None:
+    script = AmassTool().prepare_workspace_files(AmassArgs(target="example.com"))[
+        0
+    ].content_bytes().decode("utf-8")
+
+    assert 'xdg_config_home="$runtime_dir/xdg-config"' in script
+    assert 'output_dir="$xdg_config_home/amass"' in script
+    assert 'asset_db="$output_dir/asset.db"' in script
+    assert 'amass enum -dir "$output_dir"' in script
+    assert 'amass subs -dir "$output_dir"' in script
 
 
 @pytest.mark.asyncio
@@ -168,9 +217,19 @@ async def test_command_preparation_carries_collector_workspace_materialization(
         explicit_command_builder=lambda _tool_id, _parameters: "",
     )
 
-    assert prepared.command.startswith(
-        "bash /workspace/.drowai/amass/collect_v5.sh /workspace example.com"
-    )
+    command_parts = prepared.command.split()
+    assert command_parts[:4] == [
+        "bash",
+        "/workspace/.drowai/amass/collect_v5.sh",
+        "/workspace",
+        "example.com",
+    ]
+    assert command_parts[4:8] == [
+        str(build_amass_timeout_budget(75).lock_wait_seconds),
+        str(build_amass_timeout_budget(75).enum_deadline_seconds),
+        str(build_amass_timeout_budget(75).query_grace_seconds),
+        str(build_amass_timeout_budget(75).force_kill_grace_seconds),
+    ]
     assert prepared.timeout_plan.native_timeout_field == "execution_timeout"
     assert prepared.timeout_plan.deadline_seconds == 75
     assert [item.relative_path for item in prepared.pre_execution_workspace_files] == [
@@ -178,7 +237,14 @@ async def test_command_preparation_carries_collector_workspace_materialization(
     ]
     assert [
         item.relative_path for item in prepared.pre_execution_workspace_directories
-    ] == [".drowai/amass"]
+    ] == [
+        ".drowai/amass",
+        ".drowai/amass/xdg-config",
+        ".drowai/amass/xdg-config/amass",
+        ".drowai/amass/xdg-data",
+        ".drowai/amass/xdg-cache",
+        ".drowai/amass/runs",
+    ]
 
 
 def test_capture_contract_declares_canonical_text() -> None:
@@ -204,7 +270,7 @@ def test_run_uses_wall_clock_timeout_without_changing_amass_inactivity_timeout()
         raise subprocess.TimeoutExpired(positional[0], kwargs["timeout"])
 
     with patch(
-        "agent.tools.information_gathering.dns.amass.subprocess.run",
+        "agent.tools.information_gathering.dns.amass_runtime.subprocess.run",
         side_effect=_timeout,
     ):
         result = tool.run(args)
@@ -213,9 +279,35 @@ def test_run_uses_wall_clock_timeout_without_changing_amass_inactivity_timeout()
     assert isinstance(command, list)
     assert recorded["timeout"] == 3
     assert command[command.index("-timeout") + 1] == "17"
+    assert command[4:8] == [
+        str(build_amass_timeout_budget(3).lock_wait_seconds),
+        str(build_amass_timeout_budget(3).enum_deadline_seconds),
+        str(build_amass_timeout_budget(3).query_grace_seconds),
+        str(build_amass_timeout_budget(3).force_kill_grace_seconds),
+    ]
     assert result.success is False
     assert result.exit_code == -2
     assert result.stderr == "Command timed out"
+
+
+@pytest.mark.parametrize("execution_timeout", [1, 2, 3, 5, 75])
+def test_collector_internal_budgets_fit_inside_provider_deadline(
+    execution_timeout: int,
+) -> None:
+    budget = build_amass_timeout_budget(execution_timeout)
+    internal_seconds = (
+        budget.lock_wait_seconds
+        + budget.enum_deadline_seconds
+        + budget.query_grace_seconds
+        + budget.force_kill_grace_seconds
+    )
+
+    assert internal_seconds <= execution_timeout
+    if execution_timeout > AMASS_PROVIDER_DEADLINE_MARGIN_SECONDS + 2:
+        assert (
+            internal_seconds
+            <= execution_timeout - AMASS_PROVIDER_DEADLINE_MARGIN_SECONDS
+        )
 
 
 def test_parser_preserves_unresolved_names_and_ipv4_ipv6_relationships() -> None:
@@ -435,6 +527,10 @@ def test_collector_script_preserves_order_tags_spaces_and_success_cleanup(tmp_pa
     assert completed.returncode == 0
     assert completed.stderr == ""
     assert completed.stdout.splitlines() == [
+        AMASS_BEFORE_NAMES_BEGIN,
+        AMASS_BEFORE_NAMES_END,
+        AMASS_BEFORE_RESOLVED_BEGIN,
+        AMASS_BEFORE_RESOLVED_END,
         AMASS_NAMES_BEGIN,
         "api.example.com",
         "unresolved.example.com",
@@ -442,6 +538,17 @@ def test_collector_script_preserves_order_tags_spaces_and_success_cleanup(tmp_pa
         AMASS_RESOLVED_BEGIN,
         "api.example.com 192.0.2.20,2001:db8::5",
         AMASS_RESOLVED_END,
+        AMASS_STATUS_BEGIN,
+        "asset_db_readable_before=false",
+        "asset_db_readable_after=true",
+        "enum_status=0",
+        "engine_owned=true",
+        "error_code=",
+        "final_status=complete",
+        "post_query_status=0",
+        "pre_query_status=0",
+        "timed_out=false",
+        AMASS_STATUS_END,
     ]
     metadata = AmassTool().parse_output(completed.stdout, completed.stderr, 0, args)
     assert metadata["names_count"] == 2
@@ -449,10 +556,10 @@ def test_collector_script_preserves_order_tags_spaces_and_success_cleanup(tmp_pa
 
     calls = _read_fake_amass_calls(log_path)
     assert [call[0] for call in calls] == ["enum", "subs", "subs"]
-    session_dir = calls[0][2]
+    output_dir = calls[0][2]
     assert calls[0][1] == "-dir"
-    assert session_dir.startswith(str(workspace / ".drowai/amass" / "session."))
-    assert "workspace with spaces" in session_dir
+    assert output_dir == str(workspace / AMASS_OUTPUT_RELATIVE_DIR)
+    assert "workspace with spaces" in output_dir
     assert calls[0][3] == "-d"
     assert calls[0][4:] == [
         "example.com",
@@ -470,29 +577,102 @@ def test_collector_script_preserves_order_tags_spaces_and_success_cleanup(tmp_pa
         "archive",
         "-nocolor",
     ]
-    assert calls[1][1:4] == ["-dir", session_dir, "-d"]
-    assert calls[2][1:4] == ["-dir", session_dir, "-d"]
+    assert calls[1][1:4] == ["-dir", output_dir, "-d"]
+    assert calls[2][1:4] == ["-dir", output_dir, "-d"]
     assert calls[1][4:] == ["example.com", "-names", "-nocolor"]
     assert calls[2][4:] == ["example.com", "-names", "-ip", "-nocolor"]
-    assert list((workspace / ".drowai/amass").glob("session.*")) == []
+    assert (workspace / AMASS_OUTPUT_RELATIVE_DIR / "asset.db").is_file()
 
 
 @pytest.mark.parametrize(
     ("fail_stage", "expected_code", "expected_stdout"),
     [
-        ("enum", 23, ""),
-        ("names", 24, f"{AMASS_NAMES_BEGIN}\n{AMASS_NAMES_END}\n"),
+        (
+            "enum",
+            23,
+            "\n".join(
+                [
+                    AMASS_BEFORE_NAMES_BEGIN,
+                    AMASS_BEFORE_NAMES_END,
+                    AMASS_BEFORE_RESOLVED_BEGIN,
+                    AMASS_BEFORE_RESOLVED_END,
+                    AMASS_NAMES_BEGIN,
+                    "api.example.com",
+                    "unresolved.example.com",
+                    AMASS_NAMES_END,
+                    AMASS_RESOLVED_BEGIN,
+                    "api.example.com 192.0.2.20,2001:db8::5",
+                    AMASS_RESOLVED_END,
+                    AMASS_STATUS_BEGIN,
+                    "asset_db_readable_before=false",
+                    "asset_db_readable_after=true",
+                    "enum_status=23",
+                    "engine_owned=true",
+                    "error_code=enum_failed",
+                    "final_status=enum_failed",
+                    "post_query_status=0",
+                    "pre_query_status=0",
+                    "timed_out=false",
+                    AMASS_STATUS_END,
+                    "",
+                ]
+            ),
+        ),
+        (
+            "names",
+            24,
+            "\n".join(
+                [
+                    AMASS_BEFORE_NAMES_BEGIN,
+                    AMASS_BEFORE_NAMES_END,
+                    AMASS_BEFORE_RESOLVED_BEGIN,
+                    AMASS_BEFORE_RESOLVED_END,
+                    AMASS_NAMES_BEGIN,
+                    AMASS_NAMES_END,
+                    AMASS_RESOLVED_BEGIN,
+                    "api.example.com 192.0.2.20,2001:db8::5",
+                    AMASS_RESOLVED_END,
+                    AMASS_STATUS_BEGIN,
+                    "asset_db_readable_before=false",
+                    "asset_db_readable_after=true",
+                    "enum_status=0",
+                    "engine_owned=true",
+                    "error_code=query_failed",
+                    "final_status=query_failed",
+                    "post_query_status=24",
+                    "pre_query_status=0",
+                    "timed_out=false",
+                    AMASS_STATUS_END,
+                    "",
+                ]
+            ),
+        ),
         (
             "resolved",
             25,
             "\n".join(
                 [
+                    AMASS_BEFORE_NAMES_BEGIN,
+                    AMASS_BEFORE_NAMES_END,
+                    AMASS_BEFORE_RESOLVED_BEGIN,
+                    AMASS_BEFORE_RESOLVED_END,
                     AMASS_NAMES_BEGIN,
                     "api.example.com",
                     "unresolved.example.com",
                     AMASS_NAMES_END,
                     AMASS_RESOLVED_BEGIN,
                     AMASS_RESOLVED_END,
+                    AMASS_STATUS_BEGIN,
+                    "asset_db_readable_before=false",
+                    "asset_db_readable_after=true",
+                    "enum_status=0",
+                    "engine_owned=true",
+                    "error_code=query_failed",
+                    "final_status=query_failed",
+                    "post_query_status=25",
+                    "pre_query_status=0",
+                    "timed_out=false",
+                    AMASS_STATUS_END,
                     "",
                 ]
             ),
@@ -517,7 +697,336 @@ def test_collector_script_propagates_return_codes_and_cleans_failed_sessions(
 
     assert completed.returncode == expected_code
     assert completed.stdout == expected_stdout
-    assert list((workspace / ".drowai/amass").glob("session.*")) == []
+    assert (workspace / AMASS_OUTPUT_RELATIVE_DIR / "asset.db").is_file()
+
+
+def test_collector_reuses_database_across_sequential_invocations(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    args = AmassArgs(target="example.com")
+
+    first, first_log = _run_collector_with_fake_amass(tmp_path, workspace, args=args)
+    second, second_log = _run_collector_with_fake_amass(tmp_path, workspace, args=args)
+
+    assert first.returncode == 0
+    assert second.returncode == 0
+    output_dir = str(workspace / AMASS_OUTPUT_RELATIVE_DIR)
+    assert (workspace / AMASS_OUTPUT_RELATIVE_DIR / "asset.db").read_text(
+        encoding="utf-8"
+    ) == "fake asset db\n"
+    first_calls = _read_fake_amass_calls(first_log)
+    second_calls = _read_fake_amass_calls(second_log)
+    assert [call[0] for call in first_calls] == ["enum", "subs", "subs"]
+    assert [call[0] for call in second_calls] == [
+        "subs",
+        "subs",
+        "enum",
+        "subs",
+        "subs",
+    ]
+    assert all(call[2] == output_dir for call in first_calls + second_calls)
+    assert AMASS_BEFORE_NAMES_BEGIN in second.stdout
+    assert second.stdout.index(AMASS_BEFORE_NAMES_BEGIN) < second.stdout.index(
+        AMASS_NAMES_BEGIN
+    )
+
+
+def test_collector_serializes_enumeration_sections_for_one_workspace(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    args = AmassArgs(target="example.com", execution_timeout=10)
+    lock_probe = tmp_path / "fake-enum-overlap"
+    env_extra = {
+        "AMASS_ENUM_SLEEP_SECONDS": "2",
+        "AMASS_OVERLAP_PROBE": str(lock_probe),
+    }
+
+    first, first_log = _start_collector_with_fake_amass(
+        tmp_path,
+        workspace,
+        args=args,
+        env_extra=env_extra,
+    )
+    second, second_log = _start_collector_with_fake_amass(
+        tmp_path,
+        workspace,
+        args=args,
+        env_extra=env_extra,
+    )
+    first_stdout, first_stderr = first.communicate(timeout=8)
+    second_stdout, second_stderr = second.communicate(timeout=8)
+
+    assert first.returncode == 0
+    assert second.returncode == 0
+    assert "OVERLAP" not in first_stderr + second_stderr
+    assert AMASS_NAMES_BEGIN in first_stdout
+    assert AMASS_NAMES_BEGIN in second_stdout
+    enum_markers = [
+        line
+        for path in (first_log, second_log)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line in {"ENUM_BEGIN", "ENUM_END"}
+    ]
+    assert enum_markers == ["ENUM_BEGIN", "ENUM_END", "ENUM_BEGIN", "ENUM_END"]
+
+
+def test_collector_lock_wait_times_out_before_provider_deadline(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    asset_dir = workspace / AMASS_OUTPUT_RELATIVE_DIR
+    asset_dir.mkdir(parents=True)
+    (asset_dir / "asset.db").write_text("existing fake db\n", encoding="utf-8")
+    args = AmassArgs(target="example.com", execution_timeout=5)
+    lock_handle = _hold_workflow_lock(workspace)
+
+    try:
+        started = time.monotonic()
+        completed, log_path = _run_collector_with_fake_amass(
+            tmp_path,
+            workspace,
+            args=args,
+            timeout=4,
+        )
+        duration = time.monotonic() - started
+    finally:
+        lock_handle.close()
+
+    assert duration < args.execution_timeout
+    assert completed.returncode == 124
+    assert "DROWAI_AMASS_LOCK_TIMEOUT" in completed.stderr
+    assert "error_code=lock_timeout" in completed.stdout
+    assert "final_status=timed_out" in completed.stdout
+    assert "asset_db_readable_before=true" in completed.stdout
+    assert "asset_db_readable_after=true" in completed.stdout
+    assert not log_path.exists()
+
+
+def test_collector_ignores_abandoned_lock_file_before_running(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    lock_path = workspace / ".drowai/amass/workflow.lock"
+    lock_path.parent.mkdir(parents=True)
+    lock_path.write_text("abandoned\n", encoding="utf-8")
+    args = AmassArgs(target="example.com", execution_timeout=5)
+
+    completed, log_path = _run_collector_with_fake_amass(
+        tmp_path,
+        workspace,
+        args=args,
+        timeout=5,
+    )
+
+    assert completed.returncode == 0
+    assert "final_status=complete" in completed.stdout
+    assert [call[0] for call in _read_fake_amass_calls(log_path)] == [
+        "enum",
+        "subs",
+        "subs",
+    ]
+    assert lock_path.is_file()
+
+
+def test_collector_treats_live_kernel_lock_as_active(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    args = AmassArgs(target="example.com", execution_timeout=5)
+    lock_handle = _hold_workflow_lock(workspace)
+
+    try:
+        completed, _log_path = _run_collector_with_fake_amass(
+            tmp_path,
+            workspace,
+            args=args,
+            timeout=4,
+        )
+    finally:
+        lock_handle.close()
+
+    assert completed.returncode == 124
+    assert "error_code=lock_timeout" in completed.stdout
+    assert (workspace / ".drowai/amass/workflow.lock").is_file()
+
+
+def test_collector_reuses_lock_file_after_previous_owner_releases(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    args = AmassArgs(target="example.com", execution_timeout=5)
+    lock_handle = _hold_workflow_lock(workspace)
+    lock_handle.close()
+
+    completed, _log_path = _run_collector_with_fake_amass(
+        tmp_path,
+        workspace,
+        args=args,
+        timeout=5,
+    )
+
+    assert completed.returncode == 0
+    assert "final_status=complete" in completed.stdout
+    assert (workspace / ".drowai/amass/workflow.lock").is_file()
+
+
+def test_concurrent_collectors_share_kernel_lock_without_overlap(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    lock_path = workspace / ".drowai/amass/workflow.lock"
+    lock_path.parent.mkdir(parents=True)
+    lock_path.write_text("abandoned\n", encoding="utf-8")
+    args = AmassArgs(target="example.com", execution_timeout=10)
+    lock_probe = tmp_path / "fake-enum-overlap"
+    env_extra = {
+        "AMASS_ENUM_SLEEP_SECONDS": "1",
+        "AMASS_OVERLAP_PROBE": str(lock_probe),
+    }
+
+    first, first_log = _start_collector_with_fake_amass(
+        tmp_path,
+        workspace,
+        args=args,
+        env_extra=env_extra,
+    )
+    second, second_log = _start_collector_with_fake_amass(
+        tmp_path,
+        workspace,
+        args=args,
+        env_extra=env_extra,
+    )
+    first_stdout, first_stderr = first.communicate(timeout=8)
+    second_stdout, second_stderr = second.communicate(timeout=8)
+
+    assert first.returncode == 0
+    assert second.returncode == 0
+    assert "OVERLAP" not in first_stderr + second_stderr
+    assert AMASS_NAMES_BEGIN in first_stdout
+    assert AMASS_NAMES_BEGIN in second_stdout
+    enum_markers = [
+        line
+        for path in (first_log, second_log)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line in {"ENUM_BEGIN", "ENUM_END"}
+    ]
+    assert enum_markers == ["ENUM_BEGIN", "ENUM_END", "ENUM_BEGIN", "ENUM_END"]
+
+
+def test_wall_clock_timeout_interrupts_enum_and_queries_partial_results(
+    tmp_path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    args = AmassArgs(target="example.com", execution_timeout=3)
+
+    completed, _log_path = _run_collector_with_fake_amass(
+        tmp_path,
+        workspace,
+        args=args,
+        env_extra={"AMASS_ENUM_SLEEP_SECONDS": "8"},
+        timeout=6,
+    )
+
+    assert completed.returncode == 124
+    assert "INTERRUPTED_ENUM" in completed.stderr
+    assert AMASS_NAMES_BEGIN in completed.stdout
+    assert "api.example.com" in completed.stdout
+    assert "final_status=timed_out" in completed.stdout
+    assert "timed_out=true" in completed.stdout
+    metadata = AmassTool().parse_output(
+        completed.stdout,
+        completed.stderr,
+        completed.returncode,
+        args,
+    )
+    assert metadata["parse_status"] == "partial"
+    assert metadata["names_count"] == 2
+
+
+def test_query_grace_is_total_bounded_and_pre_query_cannot_starve_post_query(
+    tmp_path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    asset_dir = workspace / AMASS_OUTPUT_RELATIVE_DIR
+    asset_dir.mkdir(parents=True)
+    (asset_dir / "asset.db").write_text("existing fake db\n", encoding="utf-8")
+    args = AmassArgs(target="example.com", execution_timeout=5)
+
+    started = time.monotonic()
+    completed, _log_path = _run_collector_with_fake_amass(
+        tmp_path,
+        workspace,
+        args=args,
+        env_extra={"AMASS_SUBS_SLEEP_SECONDS": "8"},
+        timeout=8,
+    )
+    duration = time.monotonic() - started
+
+    assert duration < 7
+    assert completed.returncode == 124
+    assert "pre_query_status=124" in completed.stdout
+    assert "post_query_status=124" in completed.stdout
+    assert AMASS_NAMES_BEGIN in completed.stdout
+    assert AMASS_RESOLVED_BEGIN in completed.stdout
+
+
+def test_unexpected_enum_failure_still_attempts_post_query(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    args = AmassArgs(target="example.com")
+
+    completed, log_path = _run_collector_with_fake_amass(
+        tmp_path,
+        workspace,
+        args=args,
+        fail_stage="enum",
+    )
+
+    assert completed.returncode == 23
+    assert "final_status=enum_failed" in completed.stdout
+    calls = _read_fake_amass_calls(log_path)
+    assert [call[0] for call in calls] == ["enum", "subs", "subs"]
+
+
+def test_unowned_engine_port_fails_closed_with_stable_diagnostic(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    args = AmassArgs(target="example.com")
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        port = listener.getsockname()[1]
+        completed, _log_path = _run_collector_with_fake_amass(
+            tmp_path,
+            workspace,
+            args=args,
+            env_extra={"DROWAI_AMASS_ENGINE_PORT": str(port)},
+        )
+
+    assert completed.returncode == 70
+    assert "DROWAI_AMASS_ENGINE_UNOWNED" in completed.stderr
+    assert "error_code=unowned_engine_port_occupied" in completed.stdout
+    assert AMASS_NAMES_BEGIN not in completed.stdout
+
+
+@pytest.mark.asyncio
+async def test_pty_and_file_comm_prepare_the_same_amass_runtime_contract(tmp_path) -> None:
+    config = SimpleNamespace(task_id=1, tenant_id=7, workspace_path=str(tmp_path))
+    parameters = {"target": "example.com", "execution_timeout": 75}
+
+    file_comm = await prepare_tool_command(
+        tool_id="information_gathering.dns.amass",
+        parameters=parameters,
+        config=config,
+        transport="file-comm",
+        explicit_command_builder=lambda _tool_id, _parameters: "",
+    )
+    pty = await prepare_tool_command(
+        tool_id="information_gathering.dns.amass",
+        parameters=parameters,
+        config=config,
+        transport="pty",
+        explicit_command_builder=lambda _tool_id, _parameters: "",
+    )
+
+    assert file_comm.command == pty.command
+    assert file_comm.timeout_plan.deadline_seconds == pty.timeout_plan.deadline_seconds
+    assert (
+        file_comm.pre_execution_workspace_files
+        == pty.pre_execution_workspace_files
+    )
+    assert (
+        file_comm.pre_execution_workspace_directories
+        == pty.pre_execution_workspace_directories
+    )
 
 
 def _run_collector_with_fake_amass(
@@ -526,17 +1035,48 @@ def _run_collector_with_fake_amass(
     *,
     args: AmassArgs,
     fail_stage: str = "",
+    env_extra: dict[str, str] | None = None,
+    timeout: float | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     """Execute the collector with a fake Amass binary and task-local workspace."""
 
+    process, log_path = _start_collector_with_fake_amass(
+        tmp_path,
+        workspace,
+        args=args,
+        fail_stage=fail_stage,
+        env_extra=env_extra,
+    )
+    stdout, stderr = process.communicate(timeout=timeout)
+    return (
+        subprocess.CompletedProcess(
+            args=process.args,
+            returncode=int(process.returncode if process.returncode is not None else -1),
+            stdout=stdout,
+            stderr=stderr,
+        ),
+        log_path,
+    )
+
+
+def _start_collector_with_fake_amass(
+    tmp_path: Path,
+    workspace: Path,
+    *,
+    args: AmassArgs,
+    fail_stage: str = "",
+    env_extra: dict[str, str] | None = None,
+) -> tuple[subprocess.Popen[str], Path]:
+    """Start the collector with a fake Amass binary and task-local workspace."""
+
     tool = AmassTool()
     collector = workspace / ".drowai/amass/collect_v5.sh"
-    collector.parent.mkdir(parents=True)
+    collector.parent.mkdir(parents=True, exist_ok=True)
     collector.write_bytes(tool.prepare_workspace_files(args)[0].content_bytes())
 
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir(exist_ok=True)
-    log_path = tmp_path / "fake-amass-calls.log"
+    log_path = tmp_path / f"fake-amass-calls-{time.time_ns()}.log"
     fake_amass = fake_bin / "amass"
     fake_amass.write_text(
         """#!/usr/bin/env bash
@@ -550,13 +1090,38 @@ set -u
 
 if [[ "$1" == "enum" ]]; then
     mkdir -p "$3"
+    printf '%s\\n' 'fake asset db' > "$3/asset.db"
+    printf '%s\\n' 'ENUM_BEGIN' >> "$AMASS_FAKE_LOG"
+    if [[ -n "${AMASS_OVERLAP_PROBE:-}" ]]; then
+        if ! mkdir "$AMASS_OVERLAP_PROBE" 2>/dev/null; then
+            printf '%s\\n' 'OVERLAP' >&2
+            exit 88
+        fi
+    fi
+    trap 'printf "%s\\n" "INTERRUPTED_ENUM" >&2; [[ -n "${AMASS_OVERLAP_PROBE:-}" ]] && rmdir "$AMASS_OVERLAP_PROBE" 2>/dev/null || true; exit 130' INT TERM
+    if [[ -n "${AMASS_ENUM_SLEEP_SECONDS:-}" ]]; then
+        sleep_until=$((SECONDS + AMASS_ENUM_SLEEP_SECONDS))
+        while [[ "$SECONDS" -lt "$sleep_until" ]]; do
+            sleep 0.1
+        done
+    fi
     if [[ "${AMASS_FAIL_STAGE:-}" == "enum" ]]; then
+        [[ -n "${AMASS_OVERLAP_PROBE:-}" ]] && rmdir "$AMASS_OVERLAP_PROBE" 2>/dev/null || true
         exit 23
     fi
+    [[ -n "${AMASS_OVERLAP_PROBE:-}" ]] && rmdir "$AMASS_OVERLAP_PROBE" 2>/dev/null || true
+    printf '%s\\n' 'ENUM_END' >> "$AMASS_FAKE_LOG"
     exit 0
 fi
 
 if [[ "$1" == "subs" ]]; then
+    trap 'exit 130' INT TERM
+    if [[ -n "${AMASS_SUBS_SLEEP_SECONDS:-}" ]]; then
+        sleep_until=$((SECONDS + AMASS_SUBS_SLEEP_SECONDS))
+        while [[ "$SECONDS" -lt "$sleep_until" ]]; do
+            sleep 0.1
+        done
+    fi
     if [[ " $* " == *" -ip "* ]]; then
         if [[ "${AMASS_FAIL_STAGE:-}" == "resolved" ]]; then
             exit 25
@@ -586,14 +1151,17 @@ exit 2
     env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
     env["AMASS_FAKE_LOG"] = str(log_path)
     env["AMASS_FAIL_STAGE"] = fail_stage
-    completed = subprocess.run(
+    env.setdefault("DROWAI_AMASS_ENGINE_PORT", str(_unused_local_port()))
+    if env_extra:
+        env.update(env_extra)
+    process = subprocess.Popen(
         command,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        check=False,
         env=env,
     )
-    return completed, log_path
+    return process, log_path
 
 
 def _read_fake_amass_calls(log_path: Path) -> list[list[str]]:
@@ -602,6 +1170,8 @@ def _read_fake_amass_calls(log_path: Path) -> list[list[str]]:
     calls: list[list[str]] = []
     current: list[str] = []
     for line in log_path.read_text(encoding="utf-8").splitlines():
+        if line in {"ENUM_BEGIN", "ENUM_END"}:
+            continue
         if line == "CALL":
             if current:
                 calls.append(current)
@@ -611,6 +1181,24 @@ def _read_fake_amass_calls(log_path: Path) -> list[list[str]]:
     if current:
         calls.append(current)
     return calls
+
+
+def _hold_workflow_lock(workspace: Path):
+    """Hold the same kernel file lock used by the generated collector."""
+
+    lock_path = workspace / ".drowai/amass/workflow.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("w", encoding="utf-8")
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    return handle
+
+
+def _unused_local_port() -> int:
+    """Return a currently unused localhost TCP port for collector tests."""
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
 
 
 def _ip_sort_key(value: str) -> tuple[int, int]:

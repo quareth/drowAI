@@ -7,10 +7,12 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
-AMASS_NAMES_BEGIN = "__DROWAI_AMASS_V5_NAMES_BEGIN__"
-AMASS_NAMES_END = "__DROWAI_AMASS_V5_NAMES_END__"
-AMASS_RESOLVED_BEGIN = "__DROWAI_AMASS_V5_RESOLVED_BEGIN__"
-AMASS_RESOLVED_END = "__DROWAI_AMASS_V5_RESOLVED_END__"
+from .amass_runtime import (
+    AMASS_NAMES_BEGIN,
+    AMASS_NAMES_END,
+    AMASS_RESOLVED_BEGIN,
+    AMASS_RESOLVED_END,
+)
 
 _DNS_LABEL_PATTERN = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
 _NO_NAMES_MESSAGE = "no names were discovered"
