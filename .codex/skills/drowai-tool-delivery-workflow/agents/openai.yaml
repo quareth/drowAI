@@ -1,0 +1,4 @@
+interface:
+  display_name: "DrowAI Tool Delivery Workflow"
+  short_description: "Deliver one milestone tool from issue to PR"
+  default_prompt: "Use $drowai-tool-delivery-workflow to deliver the next Phase 01 tool."

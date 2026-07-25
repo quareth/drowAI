@@ -1,0 +1,15 @@
+schema_version: 1
+status: AWAITING_MERGE
+one_tool_only: true
+next_tool_allowed: true
+validation_gates: {}
+static_security_review: {}
+quality:
+  refactor_round: 0
+  max_refactor_rounds: 1
+external_actions:
+  decision_recorded: false
+pr:
+  number: 42
+  url: "https://github.com/example/repo/pull/42"
+  status: "open"

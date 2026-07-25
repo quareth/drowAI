@@ -1,0 +1,16 @@
+schema_version: 1
+status: DECISION_RECORDED
+one_tool_only: true
+next_tool_allowed: true
+validation_gates:
+  capability: passed
+static_security_review: {}
+quality:
+  refactor_round: 0
+  max_refactor_rounds: 1
+external_actions:
+  decision_recorded: true
+pr:
+  number: 0
+  url: ""
+  status: ""
