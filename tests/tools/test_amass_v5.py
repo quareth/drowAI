@@ -508,6 +508,120 @@ def test_parser_reports_empty_and_rejects_legacy_progress_text() -> None:
     assert legacy_metadata["diagnostics"] == ["incomplete_capture_sections"]
 
 
+def test_parser_classifies_root_seed_without_discovered_count() -> None:
+    output = "\n".join(
+        [
+            AMASS_NAMES_BEGIN,
+            "example.com",
+            AMASS_NAMES_END,
+            AMASS_RESOLVED_BEGIN,
+            "example.com 192.0.2.10",
+            AMASS_RESOLVED_END,
+            AMASS_STATUS_BEGIN,
+            "enum_status=0",
+            "final_status=complete",
+            "timed_out=false",
+            AMASS_STATUS_END,
+        ]
+    )
+
+    metadata = parse_amass_v5_results(output, root_domain="Example.COM.")
+
+    assert metadata["parse_status"] == "success"
+    assert metadata["enumeration_status"] == "complete"
+    assert metadata["result_completeness"] == "complete"
+    assert metadata["partial_results"] is False
+    assert metadata["seed_names_count"] == 1
+    assert metadata["discovered_names_count"] == 0
+    assert metadata["newly_discovered_names_count"] == 0
+    assert metadata["prior_names_count"] == 0
+    assert metadata["subdomains"] == [
+        {
+            "subdomain": "example.com",
+            "ip": ["192.0.2.10"],
+            "record_types": ["A"],
+            "source": "amass",
+            "discovery_role": "scope_seed",
+            "result_scope": "task_cumulative",
+        }
+    ]
+
+
+def test_parser_distinguishes_prior_and_newly_discovered_names() -> None:
+    output = "\n".join(
+        [
+            AMASS_BEFORE_NAMES_BEGIN,
+            "old.example.com",
+            AMASS_BEFORE_NAMES_END,
+            AMASS_BEFORE_RESOLVED_BEGIN,
+            "old.example.com 192.0.2.11",
+            AMASS_BEFORE_RESOLVED_END,
+            AMASS_NAMES_BEGIN,
+            "example.com",
+            "new.example.com",
+            "old.example.com",
+            AMASS_NAMES_END,
+            AMASS_RESOLVED_BEGIN,
+            "new.example.com 192.0.2.12",
+            "old.example.com 192.0.2.11",
+            AMASS_RESOLVED_END,
+            AMASS_STATUS_BEGIN,
+            "enum_status=0",
+            "final_status=complete",
+            "timed_out=false",
+            AMASS_STATUS_END,
+        ]
+    )
+
+    metadata = parse_amass_v5_results(output, root_domain="example.com")
+
+    assert metadata["seed_names_count"] == 1
+    assert metadata["prior_names_count"] == 1
+    assert metadata["newly_discovered_names_count"] == 1
+    assert metadata["discovered_names_count"] == 1
+    assert metadata["prior_names"] == ["old.example.com"]
+    assert metadata["newly_discovered_names"] == ["new.example.com"]
+    assert {
+        row["subdomain"]: row["discovery_role"]
+        for row in metadata["subdomains"]
+    } == {
+        "example.com": "scope_seed",
+        "new.example.com": "newly_discovered",
+        "old.example.com": "prior_known",
+    }
+
+
+def test_parser_keeps_parse_status_independent_from_timed_out_execution() -> None:
+    output = "\n".join(
+        [
+            AMASS_NAMES_BEGIN,
+            "api.example.com",
+            AMASS_NAMES_END,
+            AMASS_RESOLVED_BEGIN,
+            "api.example.com 192.0.2.20",
+            AMASS_RESOLVED_END,
+            AMASS_STATUS_BEGIN,
+            "enum_status=124",
+            "final_status=timed_out",
+            "timed_out=true",
+            AMASS_STATUS_END,
+        ]
+    )
+
+    metadata = parse_amass_v5_results(
+        output,
+        exit_code=124,
+        root_domain="example.com",
+    )
+
+    assert metadata["parse_status"] == "success"
+    assert metadata["enumeration_status"] == "timed_out"
+    assert metadata["enumeration_exit_code"] == 124
+    assert metadata["result_completeness"] == "partial"
+    assert metadata["partial_results"] is True
+    assert metadata["names_count"] == 1
+
+
 def test_collector_script_preserves_order_tags_spaces_and_success_cleanup(tmp_path) -> None:
     workspace = tmp_path / "workspace with spaces"
     wordlist = workspace / "word list.txt"
@@ -927,7 +1041,10 @@ def test_wall_clock_timeout_interrupts_enum_and_queries_partial_results(
         completed.returncode,
         args,
     )
-    assert metadata["parse_status"] == "partial"
+    assert metadata["parse_status"] == "success"
+    assert metadata["enumeration_status"] == "timed_out"
+    assert metadata["result_completeness"] == "partial"
+    assert metadata["partial_results"] is True
     assert metadata["names_count"] == 2
 
 

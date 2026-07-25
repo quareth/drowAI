@@ -94,6 +94,12 @@ class AmassKnowledgeAdapter:
                 "dns_name": name,
                 "resolved_address_count": len(facts.addresses_by_name.get(name, ())),
             }
+            role = facts.roles_by_name.get(name)
+            if role:
+                payload["discovery_role"] = role
+            result_scope = facts.result_scope_by_name.get(name)
+            if result_scope:
+                payload["result_scope"] = result_scope
             if evidence_refs:
                 payload["evidence_refs"] = evidence_refs
             observations.append(
@@ -163,10 +169,14 @@ class _AmassMetadataFacts:
         names: tuple[str, ...],
         ips: tuple[str, ...],
         addresses_by_name: dict[str, tuple[str, ...]],
+        roles_by_name: dict[str, str],
+        result_scope_by_name: dict[str, str],
     ) -> None:
         self.names = names
         self.ips = ips
         self.addresses_by_name = addresses_by_name
+        self.roles_by_name = roles_by_name
+        self.result_scope_by_name = result_scope_by_name
 
 
 def _collect_metadata_facts(
@@ -212,11 +222,47 @@ def _collect_metadata_facts(
         name: tuple(_sort_ip_addresses(addresses_by_name.get(name, set())))
         for name in ordered_names
     }
+    roles_by_name = _roles_by_name(tool_metadata, ordered_names)
+    result_scope_by_name = _result_scope_by_name(tool_metadata, ordered_names)
     return _AmassMetadataFacts(
         names=ordered_names,
         ips=ordered_ips,
         addresses_by_name=ordered_addresses_by_name,
+        roles_by_name=roles_by_name,
+        result_scope_by_name=result_scope_by_name,
     )
+
+
+def _roles_by_name(
+    tool_metadata: Mapping[str, Any],
+    names: tuple[str, ...],
+) -> dict[str, str]:
+    roles: dict[str, str] = {}
+    for row in _as_list(tool_metadata.get("subdomains")):
+        item = _as_mapping(row)
+        name = _canonical_dns_name(item.get("subdomain"))
+        role = str(item.get("discovery_role") or "").strip()
+        if name in names and role in {
+            "scope_seed",
+            "prior_known",
+            "newly_discovered",
+        }:
+            roles[name] = role
+    return roles
+
+
+def _result_scope_by_name(
+    tool_metadata: Mapping[str, Any],
+    names: tuple[str, ...],
+) -> dict[str, str]:
+    scopes: dict[str, str] = {}
+    for row in _as_list(tool_metadata.get("subdomains")):
+        item = _as_mapping(row)
+        name = _canonical_dns_name(item.get("subdomain"))
+        scope = str(item.get("result_scope") or "").strip()
+        if name in names and scope:
+            scopes[name] = scope
+    return scopes
 
 
 def _has_compatible_list_fields(tool_metadata: Mapping[str, Any]) -> bool:

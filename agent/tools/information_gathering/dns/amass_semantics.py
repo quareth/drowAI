@@ -30,7 +30,7 @@ AMASS_SUBJECT_TYPE_RELATIONSHIP = "relationship.edge"
 AMASS_RELATIONSHIP_TYPE_RESOLVES_TO = "resolves_to"
 
 AMASS_TOOL_SOURCE = "amass"
-AMASS_EVIDENCE_LIMIT = 6
+AMASS_EVIDENCE_LIMIT = 8
 
 
 def build_amass_observations(
@@ -48,6 +48,12 @@ def build_amass_observations(
             "dns_name": name,
             "resolved_address_count": len(addresses),
         }
+        role = facts.roles_by_name.get(name)
+        if role:
+            payload["discovery_role"] = role
+        result_scope = facts.result_scope_by_name.get(name)
+        if result_scope:
+            payload["result_scope"] = result_scope
         if addresses:
             payload["record_types"] = sorted(
                 {_record_type(address) for address in addresses}
@@ -153,6 +159,15 @@ def build_amass_evidence(
             "detail": {"unit": "names"},
         }
     )
+    if "newly_discovered_names_count" in metadata_dict:
+        evidence.append(
+            {
+                "type": SemanticEvidenceType.RESULT_SUMMARY.value,
+                "name": "newly_discovered_names",
+                "value": _safe_int(metadata_dict.get("newly_discovered_names_count")),
+                "detail": {"unit": "names"},
+            }
+        )
     evidence.append(
         {
             "type": SemanticEvidenceType.RESULT_SUMMARY.value,
@@ -175,6 +190,21 @@ def build_amass_evidence(
             }
         )
 
+    enumeration_status = str(metadata_dict.get("enumeration_status") or "").strip().lower()
+    if enumeration_status:
+        evidence.append(
+            {
+                "type": SemanticEvidenceType.DIAGNOSTIC.value,
+                "name": "enumeration_status",
+                "value": enumeration_status,
+                "detail": {
+                    "severity": "info"
+                    if enumeration_status == "complete"
+                    else "warning"
+                },
+            }
+        )
+
     return evidence[:AMASS_EVIDENCE_LIMIT]
 
 
@@ -185,10 +215,14 @@ class _AmassFacts:
         names: tuple[str, ...],
         ips: tuple[str, ...],
         addresses_by_name: dict[str, tuple[str, ...]],
+        roles_by_name: dict[str, str],
+        result_scope_by_name: dict[str, str],
     ) -> None:
         self.names = names
         self.ips = ips
         self.addresses_by_name = addresses_by_name
+        self.roles_by_name = roles_by_name
+        self.result_scope_by_name = result_scope_by_name
 
 
 def _collect_normalized_facts(metadata: Mapping[str, object]) -> _AmassFacts:
@@ -228,11 +262,47 @@ def _collect_normalized_facts(metadata: Mapping[str, object]) -> _AmassFacts:
         name: tuple(_sort_ip_addresses(addresses_by_name.get(name, set())))
         for name in ordered_names
     }
+    roles_by_name = _roles_by_name(metadata_dict, ordered_names)
+    result_scope_by_name = _result_scope_by_name(metadata_dict, ordered_names)
     return _AmassFacts(
         names=ordered_names,
         ips=ordered_ips,
         addresses_by_name=ordered_addresses_by_name,
+        roles_by_name=roles_by_name,
+        result_scope_by_name=result_scope_by_name,
     )
+
+
+def _roles_by_name(
+    metadata_dict: Mapping[str, object],
+    names: tuple[str, ...],
+) -> dict[str, str]:
+    roles: dict[str, str] = {}
+    for row in _as_list(metadata_dict.get("subdomains")):
+        item = _as_mapping(row)
+        name = _normalize_dns_candidate(item.get("subdomain"))
+        role = str(item.get("discovery_role") or "").strip()
+        if name in names and role in {
+            "scope_seed",
+            "prior_known",
+            "newly_discovered",
+        }:
+            roles[name] = role
+    return roles
+
+
+def _result_scope_by_name(
+    metadata_dict: Mapping[str, object],
+    names: tuple[str, ...],
+) -> dict[str, str]:
+    scopes: dict[str, str] = {}
+    for row in _as_list(metadata_dict.get("subdomains")):
+        item = _as_mapping(row)
+        name = _normalize_dns_candidate(item.get("subdomain"))
+        scope = str(item.get("result_scope") or "").strip()
+        if name in names and scope:
+            scopes[name] = scope
+    return scopes
 
 
 def _as_mapping(value: object) -> Mapping[str, object]:

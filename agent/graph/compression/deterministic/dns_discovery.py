@@ -43,6 +43,7 @@ class _DnsNameRecord:
 
     name: str
     addresses: tuple[str, ...]
+    discovery_role: Optional[str] = None
 
 
 def dns_discovery_adapter(
@@ -97,10 +98,18 @@ def dns_discovery_adapter(
         summary=_summary(
             _summary_text(
                 parse_status=_text_or_none(metadata.get("parse_status")),
+                enumeration_status=_text_or_none(metadata.get("enumeration_status")),
+                result_completeness=_text_or_none(metadata.get("result_completeness")),
+                partial_results=bool(metadata.get("partial_results") is True),
                 names_count=names_count,
                 resolved_names_count=resolved_names_count,
                 unresolved_names_count=unresolved_names_count,
                 unique_ip_count=unique_ip_count,
+                seed_names_count=as_int(metadata.get("seed_names_count")),
+                prior_names_count=as_int(metadata.get("prior_names_count")),
+                newly_discovered_names_count=as_int(
+                    metadata.get("newly_discovered_names_count")
+                ),
             )
         ),
         key_findings=tuple(findings),
@@ -113,6 +122,7 @@ def dns_discovery_adapter(
                 resolved_names_count=resolved_names_count,
                 unresolved_names_count=unresolved_names_count,
                 unique_ip_count=unique_ip_count,
+                metadata=metadata,
             )
         ),
         decision_evidence=tuple(
@@ -258,9 +268,32 @@ def _dns_name_records(metadata: Mapping[str, Any]) -> list[_DnsNameRecord]:
         return []
 
     return [
-        _DnsNameRecord(name=name, addresses=addresses)
+        _DnsNameRecord(
+            name=name,
+            addresses=addresses,
+            discovery_role=_discovery_role_by_name(metadata).get(name),
+        )
         for name, addresses in sorted(records.items())
     ]
+
+
+def _discovery_role_by_name(metadata: Mapping[str, Any]) -> dict[str, str]:
+    """Return valid discovery roles keyed by normalized DNS name."""
+
+    roles: dict[str, str] = {}
+    for item in _iterable_or_empty(metadata.get("subdomains")):
+        if not isinstance(item, Mapping):
+            continue
+        name = _normalized_dns_name(item.get("subdomain"))
+        role = _text_or_none(item.get("discovery_role"))
+        if name is None or role not in {
+            "scope_seed",
+            "prior_known",
+            "newly_discovered",
+        }:
+            continue
+        roles[name] = role
+    return roles
 
 
 def _record_type_tuple(value: Any) -> tuple[str, ...] | None:
@@ -296,12 +329,33 @@ def _record_types_for_addresses(addresses: tuple[str, ...]) -> tuple[str, ...]:
 def _summary_text(
     *,
     parse_status: Optional[str],
+    enumeration_status: Optional[str],
+    result_completeness: Optional[str],
+    partial_results: bool,
     names_count: int,
     resolved_names_count: int,
     unresolved_names_count: int,
     unique_ip_count: int,
+    seed_names_count: int,
+    prior_names_count: int,
+    newly_discovered_names_count: int,
 ) -> str:
     """Build a truthful status-aware Amass DNS summary."""
+
+    if enumeration_status or result_completeness or partial_results:
+        execution = str(enumeration_status or "unknown").strip().lower()
+        completeness = str(result_completeness or "unknown").strip().lower()
+        status_text = f"Amass enumeration {execution.replace('_', ' ')}"
+        if completeness == "partial" or partial_results:
+            status_text += " with partial results"
+        counts = (
+            f"{names_count} DNS names: {seed_names_count} seed, "
+            f"{newly_discovered_names_count} newly discovered, "
+            f"{prior_names_count} prior, {resolved_names_count} resolved, "
+            f"{unresolved_names_count} unresolved, {unique_ip_count} unique IPs."
+        )
+        parse = str(parse_status or "unknown").strip().lower()
+        return f"{status_text}; parser status {parse}; {counts}"
 
     counts = (
         f"{names_count} DNS names: {resolved_names_count} resolved, "
@@ -381,6 +435,7 @@ def _structured_signals(
     resolved_names_count: int,
     unresolved_names_count: int,
     unique_ip_count: int,
+    metadata: Mapping[str, Any],
 ) -> list[Mapping[str, Any]]:
     """Return bounded key-value structured signals for normalized Amass facts."""
 
@@ -402,6 +457,8 @@ def _structured_signals(
             "value": unique_ip_count,
         },
     ]
+    for key, value in _execution_structured_signals(metadata):
+        signals.append({"type": "kv_pair", "key": key, "value": value})
     sample_signals: list[Mapping[str, Any]] = []
 
     for record in records[:DNS_NAME_SAMPLE_LIMIT]:
@@ -412,6 +469,14 @@ def _structured_signals(
                 "value": _compact_signal_text(record.name),
             }
         )
+        if record.discovery_role == "scope_seed":
+            sample_signals.append(
+                {
+                    "type": "kv_pair",
+                    "key": "amass_scope_seed",
+                    "value": _compact_signal_text(record.name),
+                }
+            )
     mappings = [record for record in records if record.addresses]
     unresolved = [record for record in records if not record.addresses]
 
@@ -449,6 +514,29 @@ def _structured_signals(
         )
 
     signals.extend(sample_signals[:DNS_STRUCTURED_SIGNAL_SAMPLE_LIMIT])
+    return signals
+
+
+def _execution_structured_signals(metadata: Mapping[str, Any]) -> list[tuple[str, Any]]:
+    """Return normalized execution/role count signals when present."""
+
+    fields = (
+        ("enumeration_status", "amass_enumeration_status"),
+        ("result_completeness", "amass_result_completeness"),
+        ("partial_results", "amass_partial_results"),
+        ("seed_names_count", "amass_seed_names_count"),
+        ("prior_names_count", "amass_prior_names_count"),
+        ("newly_discovered_names_count", "amass_newly_discovered_names_count"),
+        ("discovered_names_count", "amass_discovered_names_count"),
+    )
+    signals: list[tuple[str, Any]] = []
+    for metadata_key, signal_key in fields:
+        if metadata_key not in metadata:
+            continue
+        value = metadata.get(metadata_key)
+        if isinstance(value, str):
+            value = _compact_signal_text(value)
+        signals.append((signal_key, value))
     return signals
 
 

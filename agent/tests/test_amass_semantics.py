@@ -33,18 +33,24 @@ def _metadata() -> dict[str, object]:
                 "ip": ["192.0.2.20", "2001:db8::5"],
                 "record_types": ["A", "AAAA"],
                 "source": "amass",
+                "discovery_role": "newly_discovered",
+                "result_scope": "task_cumulative",
             },
             {
                 "subdomain": "unresolved.example.com",
                 "ip": [],
                 "record_types": [],
                 "source": "amass",
+                "discovery_role": "prior_known",
+                "result_scope": "task_cumulative",
             },
             {
                 "subdomain": "www.example.com",
                 "ip": ["192.0.2.10", "192.0.2.10"],
                 "record_types": ["A"],
                 "source": "amass",
+                "discovery_role": "scope_seed",
+                "result_scope": "task_cumulative",
             },
         ],
         "hosts": [
@@ -58,6 +64,13 @@ def _metadata() -> dict[str, object]:
         "unresolved_names_count": 1,
         "ip_count": 3,
         "parse_status": "success",
+        "enumeration_status": "complete",
+        "result_completeness": "complete",
+        "partial_results": False,
+        "seed_names_count": 1,
+        "prior_names_count": 1,
+        "newly_discovered_names_count": 1,
+        "discovered_names_count": 1,
         "diagnostics": [],
     }
 
@@ -95,6 +108,16 @@ def test_build_amass_observations_projects_dns_ip_and_relationships() -> None:
         and not item["observation_type"].startswith("finding.")
         for item in observations
     )
+    roles_by_dns_name = {
+        item["payload"]["dns_name"]: item["payload"]["discovery_role"]
+        for item in observations
+        if item["subject_type"] == "host.dns"
+    }
+    assert roles_by_dns_name == {
+        "api.example.com": "newly_discovered",
+        "unresolved.example.com": "prior_known",
+        "www.example.com": "scope_seed",
+    }
 
 
 def test_relationships_have_endpoint_observations_and_record_types() -> None:
@@ -171,10 +194,37 @@ def test_build_amass_evidence_is_bounded_valid_and_reconstructable() -> None:
         ),
         (SemanticEvidenceType.VARIANT.value, "scan_mode", "passive"),
         (SemanticEvidenceType.RESULT_SUMMARY.value, "names_total", 3),
+        (SemanticEvidenceType.RESULT_SUMMARY.value, "newly_discovered_names", 1),
         (SemanticEvidenceType.RESULT_SUMMARY.value, "unique_ips", 3),
         (SemanticEvidenceType.DIAGNOSTIC.value, "parse_status", "success"),
     }
-    assert len(evidence) <= 6
+    assert len(evidence) <= 8
+
+
+def test_timeout_metadata_remains_semantic_observation_eligible() -> None:
+    metadata = {
+        **_metadata(),
+        "parse_status": "success",
+        "enumeration_status": "timed_out",
+        "result_completeness": "partial",
+        "partial_results": True,
+        "enumeration_exit_code": 124,
+    }
+
+    observations = build_amass_observations(metadata)
+    evidence = build_amass_evidence(metadata, AmassArgs(target="example.com"))
+
+    assert observations
+    assert all(
+        "discovery_role" in item["payload"]
+        for item in observations
+        if item["subject_type"] == "host.dns"
+    )
+    assert (
+        SemanticEvidenceType.DIAGNOSTIC.value,
+        "enumeration_status",
+        "timed_out",
+    ) in {(item["type"], item["name"], item["value"]) for item in evidence}
 
 
 def test_amass_tool_hooks_delegate_to_semantic_builders() -> None:

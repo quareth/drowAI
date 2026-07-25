@@ -509,6 +509,83 @@ def test_amass_parser_statuses_produce_truthful_summaries() -> None:
     )
 
 
+def test_amass_execution_status_and_roles_are_compacted_from_metadata() -> None:
+    """Completion and discovery roles come from normalized metadata, not stdout."""
+
+    metadata = {
+        "subdomains": [
+            {
+                **_subdomain_row("example.com", []),
+                "discovery_role": "scope_seed",
+                "result_scope": "task_cumulative",
+            },
+            {
+                **_subdomain_row("old.example.com", []),
+                "discovery_role": "prior_known",
+                "result_scope": "task_cumulative",
+            },
+            {
+                **_subdomain_row("new.example.com", ["192.0.2.44"]),
+                "discovery_role": "newly_discovered",
+                "result_scope": "task_cumulative",
+            },
+        ],
+        "hosts": [
+            {"hostname": "example.com", "ip": []},
+            {"hostname": "old.example.com", "ip": []},
+            {"hostname": "new.example.com", "ip": ["192.0.2.44"]},
+        ],
+        "ips": ["192.0.2.44"],
+        "names_count": 3,
+        "resolved_names_count": 1,
+        "unresolved_names_count": 2,
+        "ip_count": 1,
+        "parse_status": "success",
+        "enumeration_status": "timed_out",
+        "result_completeness": "partial",
+        "partial_results": True,
+        "enumeration_exit_code": 124,
+        "seed_names_count": 1,
+        "prior_names_count": 1,
+        "newly_discovered_names_count": 1,
+        "discovered_names_count": 1,
+        "capture_format": "amass_v5_subs_text",
+        "diagnostics": [],
+    }
+
+    result = dns_discovery_adapter(
+        CompressionInput(
+            tool_name=AMASS_TOOL_ID,
+            raw_result={
+                "stdout": "ignored raw collector text",
+                "metadata": metadata,
+            },
+        )
+    )
+
+    assert result.summary == (
+        "Amass enumeration timed out with partial results; parser status success; "
+        "3 DNS names: 1 seed, 1 newly discovered, 1 prior, 1 resolved, "
+        "2 unresolved, 1 unique IPs."
+    )
+    assert {
+        "type": "kv_pair",
+        "key": "amass_enumeration_status",
+        "value": "timed_out",
+    } in result.structured_signals
+    assert {
+        "type": "kv_pair",
+        "key": "amass_newly_discovered_names_count",
+        "value": 1,
+    } in result.structured_signals
+    assert {
+        "type": "kv_pair",
+        "key": "amass_scope_seed",
+        "value": "example.com",
+    } in result.structured_signals
+    assert "ignored raw collector text" not in str(result)
+
+
 def test_amass_adapter_falls_back_for_incompatible_metadata_and_unsupported_tools() -> None:
     """Incompatible metadata and other tool ids use explicit fallback contracts."""
 

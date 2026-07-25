@@ -164,7 +164,11 @@ class AmassTool(BaseTool):
         """Parse the collector's tagged ``amass subs`` result stream."""
 
         _ = stderr, args
-        metadata = parse_amass_v5_results(stdout, exit_code=exit_code)
+        metadata = parse_amass_v5_results(
+            stdout,
+            exit_code=exit_code,
+            root_domain=args.target,
+        )
         metadata["semantic_schema_version"] = AMASS_SEMANTIC_SCHEMA_VERSION
         metadata["capability_family"] = AMASS_CAPABILITY_FAMILY
         return metadata
