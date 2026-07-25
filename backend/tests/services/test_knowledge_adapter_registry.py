@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from agent.tools.information_gathering.dns.amass_semantics import (
+    build_amass_observations,
+)
 from backend.services.knowledge.adapters.amass_adapter import (
     AMASS_TOOL_ID,
     AmassKnowledgeAdapter,
@@ -526,6 +529,64 @@ def test_amass_adapter_falls_back_to_current_normalized_metadata_shape() -> None
     assert relationship.payload["source_subject_key"] == "host.dns:api.example.com"
     assert relationship.payload["target_subject_key"] == "host.ip:192.0.2.20"
     assert relationship.payload["relationship_type"] == "resolves_to"
+
+
+def test_amass_semantic_and_metadata_fallback_projection_remain_in_parity() -> None:
+    """Both consumers preserve the same normalized fact identities and values."""
+
+    metadata = {
+        "subdomains": [
+            {
+                "subdomain": "API.Example.COM.",
+                "ip": ["2001:0db8::5", "192.0.2.20", "invalid"],
+                "discovery_role": "scope_seed",
+                "result_scope": "input",
+            },
+            {
+                "subdomain": "api.example.com",
+                "ip": ["192.0.2.20"],
+                "discovery_role": "newly_discovered",
+                "result_scope": "updated",
+            },
+            {"subdomain": "unresolved.example.com", "ip": []},
+            {"subdomain": "invalid name", "ip": ["192.0.2.99"]},
+        ],
+        "hosts": [{"hostname": "www.example.com", "ip": ["192.0.2.10"]}],
+        "ips": ["192.0.2.10", "2001:db8::5"],
+    }
+    registry = KnowledgeAdapterRegistryService(adapters=[AmassKnowledgeAdapter()])
+    context = registry.build_context(
+        user_id=1,
+        engagement_id=1,
+        task_id=2,
+        source_execution_id="exec-amass-parity-1",
+        ingestion_run_id="run-amass-parity-1",
+        execution_payload=_build_execution_payload(
+            tool_name=AMASS_TOOL_ID,
+            tool_metadata=metadata,
+        ),
+    )
+
+    semantic = build_amass_observations(metadata)
+    fallback = registry.extract(context)
+
+    semantic_by_identity = {
+        (
+            str(row["observation_type"]),
+            str(row["subject_type"]),
+            str(row["subject_key"]),
+        ): row["payload"]
+        for row in semantic
+    }
+    fallback_by_identity = {
+        (row.observation_type, row.subject_type, row.subject_key): row.payload
+        for row in fallback
+    }
+    assert tuple(semantic_by_identity) == tuple(fallback_by_identity)
+    for identity, fallback_payload in fallback_by_identity.items():
+        expected_payload = dict(semantic_by_identity[identity])
+        expected_payload.pop("record_types", None)
+        assert fallback_payload == expected_payload
 
 
 def test_amass_adapter_rejects_incompatible_metadata_without_artifact_parsing() -> None:

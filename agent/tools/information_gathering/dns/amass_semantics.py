@@ -7,10 +7,13 @@ output, execute commands, or import backend knowledge services.
 
 from __future__ import annotations
 
-import ipaddress
 from typing import Any, Mapping
 
 from agent.semantic.evidence_vocabulary import SemanticEvidenceType
+from runtime_shared.semantic.amass_facts import (
+    collect_amass_facts,
+    dns_record_type,
+)
 from runtime_shared.semantic.canonical_keys import (
     build_host_dns_key,
     build_host_ip_key,
@@ -37,7 +40,7 @@ def build_amass_observations(
     metadata: Mapping[str, object],
 ) -> list[dict[str, object]]:
     """Project normalized Amass DNS facts into semantic observations."""
-    facts = _collect_normalized_facts(metadata)
+    facts = collect_amass_facts(metadata)
     observations: list[dict[str, object]] = []
 
     for name in facts.names:
@@ -56,7 +59,7 @@ def build_amass_observations(
             payload["result_scope"] = result_scope
         if addresses:
             payload["record_types"] = sorted(
-                {_record_type(address) for address in addresses}
+                {dns_record_type(address) for address in addresses}
             )
         observations.append(
             {
@@ -76,7 +79,7 @@ def build_amass_observations(
                 "payload": {
                     "tool_source": AMASS_TOOL_SOURCE,
                     "address": address,
-                    "record_type": _record_type(address),
+                    "record_type": dns_record_type(address),
                 },
             }
         )
@@ -100,7 +103,7 @@ def build_amass_observations(
                         "relationship_type": AMASS_RELATIONSHIP_TYPE_RESOLVES_TO,
                         "target_subject_type": AMASS_SUBJECT_TYPE_IP,
                         "target_subject_key": target_key,
-                        "record_type": _record_type(address),
+                        "record_type": dns_record_type(address),
                         "tool_source": AMASS_TOOL_SOURCE,
                     },
                 }
@@ -206,143 +209,6 @@ def build_amass_evidence(
         )
 
     return evidence[:AMASS_EVIDENCE_LIMIT]
-
-
-class _AmassFacts:
-    def __init__(
-        self,
-        *,
-        names: tuple[str, ...],
-        ips: tuple[str, ...],
-        addresses_by_name: dict[str, tuple[str, ...]],
-        roles_by_name: dict[str, str],
-        result_scope_by_name: dict[str, str],
-    ) -> None:
-        self.names = names
-        self.ips = ips
-        self.addresses_by_name = addresses_by_name
-        self.roles_by_name = roles_by_name
-        self.result_scope_by_name = result_scope_by_name
-
-
-def _collect_normalized_facts(metadata: Mapping[str, object]) -> _AmassFacts:
-    metadata_dict = dict(metadata) if isinstance(metadata, Mapping) else {}
-    names: set[str] = set()
-    addresses_by_name: dict[str, set[str]] = {}
-    ips: set[str] = set()
-
-    for row in _as_list(metadata_dict.get("subdomains")):
-        item = _as_mapping(row)
-        name = _normalize_dns_candidate(item.get("subdomain"))
-        if name is None:
-            continue
-        names.add(name)
-        address_set = addresses_by_name.setdefault(name, set())
-        for address in _normalize_ip_values(item.get("ip")):
-            address_set.add(address)
-            ips.add(address)
-
-    for row in _as_list(metadata_dict.get("hosts")):
-        item = _as_mapping(row)
-        name = _normalize_dns_candidate(item.get("hostname"))
-        if name is None:
-            continue
-        names.add(name)
-        address_set = addresses_by_name.setdefault(name, set())
-        for address in _normalize_ip_values(item.get("ip")):
-            address_set.add(address)
-            ips.add(address)
-
-    for address in _normalize_ip_values(metadata_dict.get("ips")):
-        ips.add(address)
-
-    ordered_names = tuple(sorted(names))
-    ordered_ips = tuple(_sort_ip_addresses(ips))
-    ordered_addresses_by_name = {
-        name: tuple(_sort_ip_addresses(addresses_by_name.get(name, set())))
-        for name in ordered_names
-    }
-    roles_by_name = _roles_by_name(metadata_dict, ordered_names)
-    result_scope_by_name = _result_scope_by_name(metadata_dict, ordered_names)
-    return _AmassFacts(
-        names=ordered_names,
-        ips=ordered_ips,
-        addresses_by_name=ordered_addresses_by_name,
-        roles_by_name=roles_by_name,
-        result_scope_by_name=result_scope_by_name,
-    )
-
-
-def _roles_by_name(
-    metadata_dict: Mapping[str, object],
-    names: tuple[str, ...],
-) -> dict[str, str]:
-    roles: dict[str, str] = {}
-    for row in _as_list(metadata_dict.get("subdomains")):
-        item = _as_mapping(row)
-        name = _normalize_dns_candidate(item.get("subdomain"))
-        role = str(item.get("discovery_role") or "").strip()
-        if name in names and role in {
-            "scope_seed",
-            "prior_known",
-            "newly_discovered",
-        }:
-            roles[name] = role
-    return roles
-
-
-def _result_scope_by_name(
-    metadata_dict: Mapping[str, object],
-    names: tuple[str, ...],
-) -> dict[str, str]:
-    scopes: dict[str, str] = {}
-    for row in _as_list(metadata_dict.get("subdomains")):
-        item = _as_mapping(row)
-        name = _normalize_dns_candidate(item.get("subdomain"))
-        scope = str(item.get("result_scope") or "").strip()
-        if name in names and scope:
-            scopes[name] = scope
-    return scopes
-
-
-def _as_mapping(value: object) -> Mapping[str, object]:
-    return value if isinstance(value, Mapping) else {}
-
-
-def _as_list(value: object) -> list[object]:
-    return value if isinstance(value, list) else []
-
-
-def _normalize_dns_candidate(value: object) -> str | None:
-    try:
-        key = build_host_dns_key(value)
-    except ValueError:
-        return None
-    return key.removeprefix("host.dns:")
-
-
-def _normalize_ip_values(value: object) -> set[str]:
-    candidates = value if isinstance(value, list) else [value]
-    normalized: set[str] = set()
-    for candidate in candidates:
-        try:
-            key = build_host_ip_key(candidate)
-        except ValueError:
-            continue
-        normalized.add(key.removeprefix("host.ip:"))
-    return normalized
-
-
-def _sort_ip_addresses(values: set[str]) -> list[str]:
-    parsed = {ipaddress.ip_address(value) for value in values}
-    return [
-        str(address)
-        for address in sorted(parsed, key=lambda item: (item.version, int(item)))
-    ]
-
-
-def _record_type(address: str) -> str:
-    return "A" if ipaddress.ip_address(address).version == 4 else "AAAA"
 
 
 def _safe_int(value: object) -> int:
