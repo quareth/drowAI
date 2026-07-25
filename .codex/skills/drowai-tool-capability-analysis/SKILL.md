@@ -1,14 +1,14 @@
 ---
 name: drowai-tool-capability-analysis
-description: Analyze one DrowAI pentesting tool through its real registered, Kali-installed, official CLI, and LLM-visible paths before implementation. Use when evaluating a milestone tool, proving its executable exists in the task Kali runtime, reconciling old tool definitions with current official documentation, comparing it with the Amass reference, or identifying the exact foundation work required before an implementation guide is created.
+description: Analyze one DrowAI pentesting tool through repository-discovered mature references and its real registered, Kali-installed, official CLI, and LLM-visible paths before implementation. Use when evaluating a milestone tool, choosing proven in-repo wiring patterns such as Nmap for network-scanning responsibilities, proving the executable exists in the task Kali runtime, reconciling old definitions with current official documentation, or identifying the exact foundation work required before an implementation guide is created.
 ---
 
 # DrowAI Tool Capability Analysis
 
 Evaluate exactly one candidate tool and prepare only obvious CLI-contract
-corrections before guide creation. Wired code, the installed Kali executable,
-and version-matched official tool documentation are the authorities for their
-respective contracts.
+corrections before guide creation. Mature wired repository paths define DrowAI
+integration patterns, while the installed Kali executable and version-matched
+official tool documentation define the candidate's CLI contract.
 
 ## Required inputs
 
@@ -39,8 +39,15 @@ state is ignored and must never be staged.
   visibility, or modify unrelated files during drift correction.
 - Do not create a separate drift agent, guide, or review workflow.
 - Never infer suitability from a module existing on disk. Confirm a wired path.
-- Use Amass as a reference, not a template. In particular, never copy its
-  inactivity or wall-clock timeout policy without candidate-specific evidence.
+- Discover mature active reference tools from current code instead of using a
+  fixed universal reference; confirm their registry, production callers, and
+  LLM visibility before relying on them.
+- Select references per responsibility and use the closest proven analogue;
+  Nmap is the first candidate for network-scanning responsibilities, not a
+  universal template.
+- Amass is not the architecture baseline. Its only mandatory reusable element
+  is the shared `budget_rendered_items` helper; never copy Amass-specific
+  timeout, inactivity, command, parsing, or semantic policy.
 - Reuse `budget_rendered_items` from
   `agent/graph/compression/deterministic/budget.py`; do not duplicate its
   accounting.
@@ -50,10 +57,24 @@ state is ignored and must never be staged.
 ## Workflow
 
 1. Reset the live state from its committed example and record the exact tool ID.
-2. As the main agent, trace only far enough through the selected registry entry,
+2. Discover the current reference surface from wired code:
+   - enumerate registered tools through `available_tools()` and LLM-visible
+     tools through `visible_available_tools()`;
+   - confirm imports, registry metadata, production call sites, and active
+     visibility instead of trusting filenames or stale documentation;
+   - identify mature analogues in the candidate's family and adjacent families.
+3. Record a responsibility-specific reference matrix for tool/schema,
+   command/runtime, result contract/artifacts, semantics, compression/PTR,
+   knowledge, and visibility, with evidence and selection rationale for each;
+   use Nmap as the first network-scanning candidate and replace it where another
+   verified mature tool is a closer match.
+4. Record Amass separately only as provenance for the mandatory shared
+   `agent/graph/compression/deterministic/budget.py::budget_rendered_items`
+   helper, never as the default tool reference.
+5. As the main agent, trace only far enough through the selected registry entry,
    tool class, command builder, and args model to identify the executable,
    documented version command, and existing function/definition files.
-3. Prove the executable is installed in a real task Kali runtime:
+6. Prove the executable is installed in a real task Kali runtime:
    - derive one executable token from the selected tool's wired command builder,
      never from issue text or other untrusted input;
    - reject shell metacharacters and quote the token before command execution;
@@ -64,7 +85,7 @@ state is ignored and must never be staged.
      `command -v -- <executable>`, then the tool's documented version command;
    - record the resolved container path, installed version, and secret-safe
      evidence, then delete the task/runtime.
-4. Review upstream CLI drift before guide creation:
+7. Review upstream CLI drift before guide creation:
    - inspect the installed version's local help or man page;
    - consult only primary official project documentation, versioned manuals,
      release notes, or the upstream source repository;
@@ -73,7 +94,7 @@ state is ignored and must never be staged.
    - compare subcommands, flags, required arguments, defaults, enums, output
      modes, and exit behavior with the existing args model, tool function
      schema/description, registry definition, and command builder.
-5. Fix only obvious, bounded mismatches directly on the current branch, such as
+8. Fix only obvious, bounded mismatches directly on the current branch, such as
    a renamed flag, missing required subcommand, invalid default, stale enum, or
    incorrect function-schema description:
    - edit only existing selected-tool function/definition files;
@@ -85,49 +106,55 @@ state is ignored and must never be staged.
    - route ambiguous, architectural, parser, compression, knowledge, or
      multi-component work into the implementation guide instead of expanding
      this correction.
-6. Spawn `drowai-tool-capability-analyzer` after any direct correction commit;
+9. Spawn `drowai-tool-capability-analyzer` after any direct correction commit;
    it must trace the exact post-correction ID through the current registry,
    tool class, planner schema, executor/runtime dispatch, visibility policy,
-   compression, semantic, and knowledge paths.
-7. Require the analyzer and main agent to complete
+   compression, semantic, and knowledge paths and verify every selected
+   reference through its own active wired path.
+10. Require the analyzer and main agent to complete
    [references/capability-checklist.md](references/capability-checklist.md) and
    write evidence paths into the live state.
-8. Route from state:
+11. Route from state:
    - `SUITABLE`: create the per-tool implementation guide.
    - `NEEDS_FOUNDATION`: guide the recorded missing mechanics before exposure.
    - `DEFERRED`: record the concrete dependency or prerequisite and stop.
    - `NOT_PLANNED`: prepare a documented decision; do not implement.
    - `NEEDS_CLARIFICATION`: ask only for the unresolved tool/scope decision.
-9. Return the decision, installed executable/version, official-documentation
-   evidence, corrections, decisive wired evidence, blockers, and next route.
+12. Return the decision, responsibility-specific reference matrix, installed
+   executable/version, official-documentation evidence, corrections, decisive
+   wired evidence, blockers, and next route.
 
 ## Required evidence matrix
 
 Assess each dimension separately:
 
 1. Registry identity and concrete `BaseTool` class.
-2. Installed Kali executable path and version from a real task runtime.
-3. Version-matched official CLI contract and recorded documentation sources.
-4. Execution args schema, required fields, defaults, validators, and safe target
+2. Current registered/visible repository inventory and mature reference matrix.
+3. Installed Kali executable path and version from a real task runtime.
+4. Version-matched official CLI contract and recorded documentation sources.
+5. Execution args schema, required fields, defaults, validators, and safe target
    needs.
-5. Planner/function schema and parameter preservation.
-6. Executor/runtime command construction and runtime-provider dispatch.
-7. Output parsing, success/empty/partial/failure semantics, and artifacts.
-8. Semantic observations/evidence.
-9. Deterministic compression and exact `total` / `shown` / `omitted`
+6. Planner/function schema and parameter preservation.
+7. Executor/runtime command construction and runtime-provider dispatch.
+8. Output parsing, success/empty/partial/failure semantics, and artifacts.
+9. Semantic observations/evidence.
+10. Deterministic compression and exact `total` / `shown` / `omitted`
    accounting.
-10. Post-tool-reasoning projection.
-11. Knowledge adapter and useful engagement facts.
-12. Focused tests and canonical docs.
-13. LLM catalog visibility and selected-category reachability, checked last.
+11. Post-tool-reasoning projection.
+12. Knowledge adapter and useful engagement facts.
+13. Focused tests and canonical docs.
+14. LLM catalog visibility and selected-category reachability, checked last.
 
 `registered` and `llm_visible` are never interchangeable.
 
 ## Decision rules
 
-- `SUITABLE` requires a proven installed executable, completed official CLI
-  review, resolved obvious definition drift, and an implementation-ready
-  bounded gap list; it does not require the tool to be visible yet.
+- `SUITABLE` requires a repository-discovered reference matrix, proven
+  installed executable, completed official CLI review, resolved obvious
+  definition drift, and an implementation-ready bounded gap list; it does not
+  require the candidate tool to be visible yet.
+- A fixed reference chosen without current wired-path evidence blocks
+  `SUITABLE`.
 - A missing executable cannot advance to guide creation; record `DEFERRED` with
   the Kali image/runtime prerequisite and return to tool selection.
 - Failure to identify the installed version or a trustworthy matching contract

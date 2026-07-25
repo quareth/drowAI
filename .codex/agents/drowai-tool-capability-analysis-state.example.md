@@ -17,7 +17,26 @@ source_issue: "#NN"
 milestone: "Phase 01 milestone"
 base_ref: "origin/main"
 branch: "codex/feat/<tool-slug>-full-wiring"
-reference_tool_id: "information_gathering.dns.amass"
+repository_references:
+  status: unknown
+  registered_tool_ids: []
+  visible_tool_ids: []
+  mature_candidates: []
+  selected_by_responsibility:
+    tool_schema: ""
+    command_runtime: ""
+    result_contract_artifacts: ""
+    semantics: ""
+    compression_ptr: ""
+    knowledge: ""
+    visibility: ""
+  rationale: {}
+  evidence: []
+budget_reference:
+  source_tool_id: "information_gathering.dns.amass"
+  helper: "agent/graph/compression/deterministic/budget.py::budget_rendered_items"
+  reuse_required: true
+  status: unknown
 analysis:
   registry:
     status: unknown

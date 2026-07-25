@@ -49,6 +49,11 @@ only to the recorded `resume_status` after the condition is resolved.
 
 - Running an agent before the tool branch exists.
 - Reviewing or modifying a different branch, base, issue, or tool.
+- Creating the implementation guide before current registered/visible tools
+  are discovered and mature references are selected per responsibility.
+- Using Amass or any other fixed tool as a universal implementation reference.
+- Duplicating Amass budgeting instead of reusing
+  `budget_rendered_items`, or copying its unrelated tool-specific behavior.
 - Creating the implementation guide before the real Kali installation and
   official CLI-contract gates pass.
 - Treating a host package, image manifest, or repository wrapper as proof that
@@ -71,6 +76,7 @@ only to the recorded `resume_status` after the condition is resolved.
 
 | Gate | Authority | Failure route |
 |---|---|---|
+| Repository references | capability state plus current wired registry/visibility evidence | rediscover and select per responsibility |
 | Kali installation | capability state plus provider-mediated task-runtime evidence | defer and return to selection |
 | Official CLI contract | versioned primary sources plus installed help/manual | direct obvious correction or guide gap |
 | Capability | capability-analysis state | decision or clarification |

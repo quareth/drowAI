@@ -35,6 +35,11 @@ child_states:
   quality: ".codex/agents/implementation-quality-review-state.md"
 phase_commits: []
 preimplementation:
+  repository_references:
+    status: pending
+    selected_by_responsibility: {}
+    evidence: []
+  budget_helper: "agent/graph/compression/deterministic/budget.py::budget_rendered_items"
   executable: ""
   resolved_path: ""
   installed_version: ""
@@ -45,6 +50,7 @@ preimplementation:
   deferred_drift: []
   temporary_task_cleaned: false
 gates:
+  repository_reference_discovery: pending
   kali_installation: pending
   official_cli_contract: pending
   capability: pending

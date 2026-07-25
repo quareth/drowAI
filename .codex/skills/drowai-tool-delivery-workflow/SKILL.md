@@ -1,6 +1,6 @@
 ---
 name: drowai-tool-delivery-workflow
-description: Deliver exactly one DrowAI milestone pentesting tool on one Codex branch from its attached evaluation issue through real-Kali installation proof, official CLI drift correction, wired-path analysis, reviewed implementation guide, phase-reviewed commits, safe Kali and GUI mechanics, branch-scoped quality work, push, and pull request. Use when starting or continuing one Phase 01 tool contribution; never batch multiple tools into one branch or PR.
+description: Deliver exactly one DrowAI milestone pentesting tool on one Codex branch from its attached evaluation issue through repository-discovered mature wiring references, real-Kali installation proof, official CLI drift correction, reviewed implementation guide, phase-reviewed commits, safe Kali and GUI mechanics, branch-scoped quality work, push, and pull request. Use when starting or continuing one Phase 01 tool contribution; never batch multiple tools into one branch or PR.
 ---
 
 # DrowAI Tool Delivery Workflow
@@ -40,6 +40,11 @@ ledger, initialized from its committed example.
 
 Run `$drowai-tool-capability-analysis` on the current branch.
 
+- Discover the current registered and LLM-visible tool surfaces from active
+  code, then select the closest mature reference separately for schema/runtime,
+  results/artifacts, semantics, compression/PTR, knowledge, and visibility.
+- Inspect Nmap first for network-scanning responsibilities, but require wired
+  evidence and choose a closer mature analogue when appropriate.
 - Do not create the guide until a disposable real Kali task proves the selected
   executable is installed and records its path and version.
 - Compare the installed version's local CLI contract with primary official
@@ -57,16 +62,18 @@ Run `$drowai-tool-capability-analysis` on the current branch.
   decision, clean this run's state, and stop without implementation.
 - `NEEDS_CLARIFICATION` stops for the exact unresolved tool or scope decision.
 
-Use Amass as the completed reference and reuse
-`budget_rendered_items`; do not copy Amass-specific timeout policy.
+Do not use Amass as the universal implementation reference; reuse only
+`agent/graph/compression/deterministic/budget.py::budget_rendered_items` as the
+mandatory shared budget authority and do not copy other Amass-specific policy.
 
 ## 3. Create and review the implementation guide
 
 1. Require the Kali-installation and official-contract gates to be passed and
-   any direct drift-correction commit to be recorded.
+   require the repository reference matrix and any direct drift-correction
+   commit to be recorded.
 2. Run `implementation-guide-creator` with the branch, tool ID, issue,
-   capability evidence, installed version, official documentation sources, and
-   deferred non-obvious drift.
+   capability evidence, responsibility-specific mature references, installed
+   version, official documentation sources, and deferred non-obvious drift.
 3. Write the ignored guide under `docs/devdocs/plan/`.
 4. Run `$implementation-guide-review-loop` until its state is `COMPLETE`.
 5. Initialize schema-2 implementation state with the reviewed guide and full
