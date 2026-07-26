@@ -314,6 +314,7 @@ backend/tests/architecture/test_deploy_compose_boundary.py,pytest,backend,backen
 backend/tests/architecture/test_deployment_aware_llm_docs.py,pytest,backend,backend/architecture,architecture,,untriaged,,
 backend/tests/architecture/test_execution_plane_packaging_boundary.py,pytest,backend,backend/architecture,architecture,,untriaged,,
 backend/tests/architecture/test_execution_site_package.py,pytest,backend,backend/architecture,architecture,,untriaged,,
+backend/tests/architecture/test_pentest_fact_boundaries.py,pytest,backend,backend/architecture,architecture,,untriaged,,
 backend/tests/architecture/test_runner_control_boundary.py,pytest,backend,backend/architecture,architecture,,untriaged,,
 backend/tests/architecture/test_runtime_path_consolidation.py,pytest,backend,backend/architecture,architecture,,untriaged,,
 backend/tests/architecture/test_runtime_provider_boundary.py,pytest,backend,backend/architecture,architecture,,untriaged,,
