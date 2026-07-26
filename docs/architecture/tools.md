@@ -405,8 +405,27 @@ entrypoint. The deterministic compression adapter layer is defined by
 `agent/graph/compression/deterministic/utility.py`, and
 `agent/graph/compression/deterministic/web_discovery.py`. These adapters are
 pure transformations of raw result/metadata; they do not execute tools, call
-LLMs, import backend knowledge adapters, or use Docker, runner, or
+LLMs, import backend Knowledge services, or use Docker, runner, or
 runtime-provider services.
+
+## Semantic Knowledge Boundary
+
+Tools that produce durable deterministic Knowledge facts own the tool-specific
+work up to native parsing, semantic observation emission, and semantic evidence
+emission. They should emit final canonical semantic rows from parsed native
+results when the fact is supported by the tool's evidence and policy.
+
+Backend Knowledge does not own tool-specific parsing or recovery. Runtime and
+replay ingestion consume the existing semantic input envelope through
+`KnowledgeIngestionService`, `runtime_shared/semantic/pentest_facts/*`, and
+`backend/services/knowledge/pentest_facts/bridge.py`. New or updated tools
+should not add per-tool Knowledge adapters, Knowledge-side metadata parsers,
+artifact-content fallbacks, compatibility shims, or tool-id branches in the
+compiler or bridge.
+
+This semantic boundary is separate from compact output. Deterministic
+compression remains under `agent/graph/compression/deterministic/*` and is not
+used as a source of Knowledge facts.
 
 ## Current Tool Completion Reference
 
@@ -513,8 +532,10 @@ Use this sequence when graduating a tool from wrapper/backlog to finished:
 3. Implement one parser authority in or near the tool module. `parse_output`
    should produce bounded structured metadata, not prose-only summaries.
 4. Add semantic observations/evidence only for facts that should enter durable
-   task memory or post-tool reasoning. Do not infer services, findings, or
-   credentials beyond parser evidence.
+   task memory or post-tool reasoning. Tool-specific Knowledge facts must end
+   at producer-owned semantic rows; do not infer services, findings, or
+   credentials beyond parser evidence, and do not add backend Knowledge
+   adapters or Knowledge-side parsing for the tool.
 5. Add a deterministic compression adapter under
    `agent/graph/compression/deterministic/`, register it at import time, and
    import the module from `agent/graph/compression/compressor.py`.
