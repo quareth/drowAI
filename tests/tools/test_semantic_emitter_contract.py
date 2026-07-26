@@ -513,7 +513,13 @@ def test_pty_result_artifact_only_tool_preserves_existing_behavior() -> None:
 @pytest.mark.asyncio
 async def test_direct_route_attaches_semantic_observations(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("agent.tools.tool_registry.get_tool", lambda _tool_id: _EmitterTool)
-    config = SimpleNamespace(task_id=7, workspace_path=str(tmp_path), tool_execution_timeout=60, nmap_timeout=60)
+    config = SimpleNamespace(
+        task_id=7,
+        workspace_path=str(tmp_path),
+        tool_execution_timeout=60,
+        nmap_timeout=60,
+        runtime_placement_mode="local",
+    )
 
     result = await execute_single_tool_with_fallback(
         tool_id="knowledge.cve_lookup",

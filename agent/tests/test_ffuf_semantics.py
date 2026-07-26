@@ -217,6 +217,8 @@ def test_ffuf_prompt_regression_from_design_doc() -> None:
         llm_client=llm,
         logger=logging.getLogger("test.ffuf.prompt.regression"),
     )
+    processor._LLM_BYPASS_MAX_CHARS = 0
+    processor._LLM_BYPASS_MAX_LINES = 0
     tool = FuzzerTool()
     args = FuzzerArgs(
         target="http://10.10.11.242/FUZZ",

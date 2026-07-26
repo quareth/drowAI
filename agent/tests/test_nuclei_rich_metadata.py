@@ -748,6 +748,8 @@ def test_nuclei_prompt_baseline_frozen_v4_with_evidence():
         llm_client=llm,
         logger=logging.getLogger("test.nuclei.prompt.baseline.pre_v4"),
     )
+    processor._LLM_BYPASS_MAX_CHARS = 0
+    processor._LLM_BYPASS_MAX_LINES = 0
     tool = NucleiTool()
     stdout = _make_jsonl(RICH_JSONL_ROW)
     args = NucleiArgs(target="http://example.com")
@@ -784,22 +786,20 @@ def test_nuclei_prompt_baseline_frozen_v4_with_evidence():
     )
 
     assert llm.last_prompt is not None
-    # Rebaselined 2026-04-21 after centralizing evidence normalization through
-    # validate_semantic_evidence_entries so extract_runtime_semantic_inputs no
-    # longer bypasses the validator. The canonical detail={} field now reaches
-    # the prompt for all emitter-produced evidence.
-    assert len(llm.last_prompt) == 10966
+    # Refreshed 2026-07-26 to the current v4 prompt text while preserving the
+    # production renderer and semantic payload.
+    assert len(llm.last_prompt) == 12005
     assert (
         hashlib.sha256(llm.last_prompt.encode("utf-8")).hexdigest()
-        == "adbcc239ed00bf3dea32dec1a541289b63e53a3047e4081ce388791dce814b98"
+        == "2720ef20557094b48b5844d9236f3de102954a72db906b9f1f8f0313d38c081c"
     )
     assert "finding.vulnerability_detected" in llm.last_prompt
     assert '"result_summary":[' in llm.last_prompt
 
-    assert result.summary == "prompt-sha256:adbcc239ed00bf3dea32dec1a541289b63e53a3047e4081ce388791dce814b98"
-    assert result.key_findings == ["prompt-len:10966"]
+    assert result.summary == "prompt-sha256:2720ef20557094b48b5844d9236f3de102954a72db906b9f1f8f0313d38c081c"
+    assert result.key_findings == ["prompt-len:12005"]
     assert result.structured_signals == []
-    assert result.decision_evidence == ["adbcc239ed00bf3d"]
+    assert result.decision_evidence == ["2720ef20557094b4"]
     assert result.lossiness_risk == "low"
 
 
