@@ -24,6 +24,7 @@ from agent.tools.sniffing_spoofing.network_sniffers.tshark_parsing.security impo
     weak_secret_exposure_diagnostic,
 )
 from runtime_shared.durable_secret_masking import mask_durable_secrets
+from runtime_shared.semantic.canonical_keys import build_host_ip_key
 from runtime_shared.semantic.service_identity import (
     build_service_socket_key,
     infer_transport_from_application_protocol,
@@ -405,10 +406,10 @@ def _as_mapping(value: Any) -> Mapping[str, Any]:
 
 
 def _host_subject_key(value: Any) -> str | None:
-    host = str(value or "").strip().lower()
-    if not host or " " in host:
+    try:
+        return build_host_ip_key(value)
+    except ValueError:
         return None
-    return f"host.ip:{host}"
 
 
 __all__ = (

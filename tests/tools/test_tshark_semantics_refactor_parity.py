@@ -802,6 +802,14 @@ def test_refactored_security_secret_exposure_diagnostics_and_findings() -> None:
     assert finding is not None
     assert finding["observation_type"] == "finding.vulnerability_detected"
     assert finding["payload"]["finding_subtype"] == "credential_exposure_detected"
+    assert finding["payload"]["detector_family"] == (
+        "tshark/credential_exposure_detected/http.authorization"
+    )
+    assert finding["payload"]["detector_id"] == finding["subject_key"].rsplit(":", 1)[-1]
+    assert finding["payload"]["exposure_proof_id"] == (
+        "sha|2|7|http.authorization|Bearer <DURABLE_SECRET_MASK:token>"
+    )
+    assert ":secret-exposure/tshark/" in finding["subject_key"]
     assert security.build_secret_exposure_finding(metadata["secret_exposure"][1], base) is None
 
     assert security.service_subject_from_secret_exposure(
@@ -970,6 +978,7 @@ def test_refactored_semantic_observation_helpers() -> None:
         {"dst": "203.0.113.20", "dst_port": "80", "protocol": "http"},
         {"dst": "203.0.113.53", "dst_port": "53", "protocol": "dns"},
         {"dst": "bad host", "dst_port": "80", "protocol": "tcp"},
+        {"dst": "example.test", "dst_port": "80", "protocol": "tcp"},
         {"dst": "203.0.113.20", "dst_port": "bad", "protocol": "tcp"},
     ]
     assert [
@@ -979,6 +988,7 @@ def test_refactored_semantic_observation_helpers() -> None:
         ("service.socket:203.0.113.20/tcp/80", "203.0.113.20", "tcp", 80, None),
         ("service.socket:203.0.113.20/tcp/80", "203.0.113.20", "tcp", 80, "http"),
         ("service.socket:203.0.113.53/udp/53", "203.0.113.53", "udp", 53, "dns"),
+        None,
         None,
         None,
     ]
@@ -3159,17 +3169,20 @@ def test_facade_snapshot_semantic_observations_and_evidence_are_masked() -> None
         "host.ip:192.0.2.10",
         "host.ip:198.51.100.53",
         "host.ip:203.0.113.20",
-        "host.ip:203.0.113.443",
         "service.socket:198.51.100.53/udp/53",
         "service.socket:203.0.113.20/tcp/80",
         (
             "finding.vulnerability:service.socket:203.0.113.20/tcp/80:"
-            "tshark/credential_exposure_detected/http.authorization"
+            "secret-exposure/tshark/credential_exposure_detected/http.authorization/"
+            "http/authorization_header/tcp-192.0.2.10-49152--203.0.113.20-80/"
+            "sha-2-7-http.authorization-bearer-durable_secret_mask-token"
         ),
         "service.socket:203.0.113.20/tcp/80",
         (
             "finding.vulnerability:service.socket:203.0.113.20/tcp/80:"
-            "tshark/credential_exposure_detected/http.cookie"
+            "secret-exposure/tshark/credential_exposure_detected/http.cookie/"
+            "http/cookie/tcp-192.0.2.10-49152--203.0.113.20-80/"
+            "sha-2-7-http.cookie-durable_secret_mask-secret"
         ),
     ]
     assert [item["payload"]["proof_excerpt"] for item in findings] == [

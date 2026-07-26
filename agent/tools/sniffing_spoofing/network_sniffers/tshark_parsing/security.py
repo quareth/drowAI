@@ -27,7 +27,11 @@ from agent.tools.sniffing_spoofing.network_sniffers.tshark_parsing.common import
     _safe_int,
 )
 from runtime_shared.durable_secret_masking import mask_durable_secrets
-from runtime_shared.semantic.canonical_keys import build_finding_vulnerability_key
+from runtime_shared.semantic.canonical_keys import (
+    build_finding_vulnerability_key,
+    build_host_ip_key,
+    sanitize_finding_token,
+)
 from runtime_shared.semantic.service_identity import (
     build_service_socket_key,
     infer_transport_from_application_protocol,
@@ -544,14 +548,29 @@ def build_secret_exposure_finding(
         if kind in _CREDENTIAL_SECRET_KINDS
         else "secret_exposure_detected"
     )
-    detector_id = f"tshark/{finding_kind}/{field or kind}"
-    finding_key = build_finding_vulnerability_key(
-        subject_key=affected_subject_key,
-        detector_id=detector_id,
+    detector_leaf = field or kind
+    detector_family = f"tshark/{finding_kind}/{detector_leaf}"
+    proof_id = secret_exposure_proof_id(exposure)
+    if not proof_id:
+        return None
+    detector_id = final_secret_exposure_detector_id(
+        detector_id=detector_family,
+        protocol=protocol or "unknown",
+        kind=kind,
+        proof_id=proof_id,
+        flow_key=str(exposure.get("flow_key") or ""),
     )
+    try:
+        finding_key = build_finding_vulnerability_key(
+            subject_key=affected_subject_key,
+            detector_id=detector_id,
+        )
+    except ValueError:
+        return None
     payload: dict[str, Any] = {
         **base_payload,
         "detector_id": detector_id,
+        "detector_family": detector_family,
         "finding_subtype": finding_kind,
         "title": (
             "Credential material exposed in packet capture"
@@ -564,6 +583,7 @@ def build_secret_exposure_finding(
         "protocol": protocol,
         "field": field,
         "kind": kind,
+        "exposure_proof_id": proof_id,
     }
     for key in (
         "frame",
@@ -614,6 +634,53 @@ def secret_exposure_specificity_gap(exposure: Mapping[str, Any]) -> str | None:
     if not (field or proof_excerpt):
         return "missing_proof_excerpt_or_field"
     return None
+
+
+def secret_exposure_proof_id(exposure: Mapping[str, Any]) -> str:
+    """Return a durable, non-secret proof identity for a secret exposure."""
+
+    fingerprint = str(exposure.get("fingerprint") or "").strip()
+    if fingerprint.startswith("hmac-sha256:"):
+        return fingerprint
+
+    for key in ("exposure_proof_id", "proof_id"):
+        value = str(exposure.get(key) or "").strip()
+        if value.startswith("hmac-sha256:"):
+            return value
+
+    proof_parts = [
+        str(exposure.get("pcap_artifact_sha256") or "").strip(),
+        str(exposure.get("frame") or "").strip(),
+        str(exposure.get("stream") or "").strip(),
+        str(exposure.get("extraction_filter") or exposure.get("field") or "").strip(),
+    ]
+    masked_excerpt = durable_mask_secret_exposure_proof_excerpt(exposure)
+    if masked_excerpt:
+        proof_parts.append(masked_excerpt)
+    return "|".join(part for part in proof_parts if part)
+
+
+def final_secret_exposure_detector_id(
+    *,
+    detector_id: str,
+    protocol: str,
+    kind: str,
+    proof_id: str,
+    flow_key: str = "",
+) -> str:
+    """Build the final redaction-safe detector identity for one exposure proof."""
+
+    detector_parts = [
+        "secret-exposure",
+        sanitize_finding_token(detector_id),
+        sanitize_finding_token(protocol),
+        sanitize_finding_token(kind),
+    ]
+    normalized_flow = sanitize_finding_token(flow_key)
+    if normalized_flow:
+        detector_parts.append(normalized_flow)
+    detector_parts.append(sanitize_finding_token(proof_id))
+    return "/".join(part for part in detector_parts if part)
 
 
 def weak_secret_exposure_diagnostic(exposure: Mapping[str, Any]) -> dict[str, Any]:
@@ -754,10 +821,10 @@ def _parse_flow_key(value: Any) -> tuple[str, str, int, str | None] | None:
 
 
 def _host_subject_key(value: Any) -> str | None:
-    host = str(value or "").strip().lower()
-    if not host or " " in host:
+    try:
+        return build_host_ip_key(value)
+    except ValueError:
         return None
-    return f"host.ip:{host}"
 
 
 def _bounded_text(value: Any, max_len: int) -> str:

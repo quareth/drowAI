@@ -25,6 +25,7 @@ from agent.tools.sniffing_spoofing.network_sniffers.tshark import (
     TSharkPlannerArgs,
     TSharkTool,
 )
+from runtime_shared.semantic.pentest_facts import SemanticFactEnvelope, compile_facts
 from tests.tools.validation.command_validator import CommandValidator
 
 
@@ -1005,6 +1006,7 @@ def test_tshark_emits_safe_semantic_observations(
         "finding.vulnerability_detected",
     }.issubset(types)
     assert any(item["subject_key"] == "host.ip:192.0.2.10" for item in observations)
+    assert any(item["subject_key"] == "host.ip:203.0.113.20" for item in observations)
     assert any(
         item["subject_key"] == "service.socket:203.0.113.20/tcp/80"
         for item in observations
@@ -1024,17 +1026,131 @@ def test_tshark_emits_safe_semantic_observations(
     )
     assert finding["subject_type"] == "finding.vulnerability"
     assert finding["subject_key"].startswith(
-        "finding.vulnerability:service.socket:203.0.113.20/tcp/80:tshark/"
+        "finding.vulnerability:service.socket:203.0.113.20/tcp/80:"
+        "secret-exposure/tshark/"
+    )
+    assert finding["payload"]["detector_id"] == finding["subject_key"].rsplit(":", 1)[-1]
+    assert finding["payload"]["detector_family"] == (
+        "tshark/credential_exposure_detected/http.authorization"
     )
     assert finding["payload"]["finding_subtype"] == "credential_exposure_detected"
     assert finding["payload"]["frame"] == "2"
     assert finding["payload"]["stream"] == "7"
     assert finding["payload"]["proof_excerpt"].startswith("Bearer <DURABLE_SECRET_MASK:token>")
+    assert finding["payload"]["exposure_proof_id"] == (
+        "synthetic-pcap-sha256|2|7|http.authorization|"
+        "Bearer <DURABLE_SECRET_MASK:token>"
+    )
     assert finding["payload"]["pcap_artifact_sha256"] == "synthetic-pcap-sha256"
+
+    compiled = compile_facts(
+        SemanticFactEnvelope(
+            semantic_schema_version="tshark.v1",
+            capability_family="packet_analysis",
+            observations=tuple(observations),
+            evidence=(),
+        )
+    )
+    assert compiled.accepted_count == len(observations)
+    assert compiled.rejected_count == 0
+    assert compiled.duplicate_count == 0
+    assert compiled.diagnostics == ()
 
     serialized = str(observations)
     assert raw_secret not in serialized
     assert "<DURABLE_SECRET_MASK:token>" in serialized
+
+
+def test_tshark_semantic_observations_fail_closed_for_unsafe_partial_and_duplicate_rows() -> None:
+    metadata = {
+        "analysis_mode": "secret_exposure",
+        "pcap": {"artifact_sha256": "pcap-sha"},
+        "hosts": ["192.0.2.20", "not an ip", "192.0.2.20"],
+        "conversations": [
+            {
+                "protocol": "tcp",
+                "src": "198.51.100.10",
+                "dst": "192.0.2.20",
+                "dst_port": "443",
+                "flow_key": "tcp:198.51.100.10:49152->192.0.2.20:443",
+            },
+            {
+                "protocol": "tcp",
+                "src": "198.51.100.10",
+                "dst": "192.0.2.20",
+                "dst_port": "443",
+                "flow_key": "tcp:198.51.100.10:49152->192.0.2.20:443",
+            },
+            {"protocol": "tcp", "dst": "not an ip", "dst_port": "443"},
+            {"protocol": "tcp", "dst": "192.0.2.21", "dst_port": "0"},
+            {"protocol": "unknown-app", "dst": "192.0.2.22", "dst_port": "8443"},
+        ],
+        "secret_exposure": [
+            {
+                "protocol": "http",
+                "field": "http.authorization",
+                "kind": "authorization_header",
+                "frame": "7",
+                "stream": "2",
+                "src": "198.51.100.10",
+                "dst": "192.0.2.20",
+                "flow_key": "tcp:198.51.100.10:49152->192.0.2.20:443",
+                "extraction_filter": "http.authorization",
+                "proof_mode": "proof_excerpt",
+                "proof_excerpt": "Bearer unsafe-partial-token",
+            },
+            {
+                "protocol": "http",
+                "field": "http.cookie",
+                "dst": "192.0.2.20",
+                "proof_mode": "proof_excerpt",
+                "proof_excerpt": "session=missing-frame",
+            },
+        ],
+    }
+
+    observations = tshark_semantics.build_tshark_semantic_observations(
+        metadata,
+        args=None,
+    )
+    compiled = compile_facts(
+        SemanticFactEnvelope(
+            semantic_schema_version="tshark.v1",
+            capability_family="packet_analysis",
+            observations=tuple(observations),
+            evidence=(),
+        )
+    )
+
+    assert [item["observation_type"] for item in observations] == [
+        "network.host_discovered",
+        "network.service_observed",
+        "finding.vulnerability_detected",
+        "network.service_detected",
+    ]
+    assert observations[0]["subject_key"] == "host.ip:192.0.2.20"
+    assert observations[1]["subject_key"] == "service.socket:192.0.2.20/tcp/443"
+    assert observations[2]["subject_key"].startswith(
+        "finding.vulnerability:service.socket:192.0.2.20/tcp/443:"
+        "secret-exposure/tshark/"
+    )
+    assert compiled.accepted_count == len(observations)
+    assert compiled.rejected_count == 0
+    assert compiled.duplicate_count == 0
+    assert metadata["semantic_observation_diagnostics"] == [
+        {
+            "reason": "missing_frame_or_stream",
+            "field": "http.cookie",
+            "protocol": "http",
+            "frame": "",
+            "stream": "",
+            "source": "tshark",
+        }
+    ]
+    serialized = str([observations, compiled, metadata["semantic_observation_diagnostics"]])
+    assert "unsafe-partial-token" not in serialized
+    assert "missing-frame" not in serialized
+    assert "<DURABLE_SECRET_MASK" in serialized
 
 
 def test_tshark_masks_bare_protocol_auth_proof_in_durable_semantics() -> None:
