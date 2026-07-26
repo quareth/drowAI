@@ -13,6 +13,7 @@ from agent.semantic.evidence_vocabulary import SemanticEvidenceType
 from agent.tool_runtime.result_enrichment import merge_semantic_emitter_metadata
 from agent.tools.web_applications._ffuf_semantics import (
     build_ffuf_semantic_evidence,
+    build_ffuf_semantic_observations,
     detect_ffuf_variant,
 )
 from agent.tools.web_applications.web_application_fuzzers.ffuf import (
@@ -23,6 +24,7 @@ from agent.tools.web_applications.web_crawlers.ffuf import (
     FfufArgs as CrawlerArgs,
     FfufTool as CrawlerTool,
 )
+from runtime_shared.semantic.pentest_facts import SemanticFactEnvelope, compile_facts
 
 class _EvidenceAwarePromptLLM:
     """Deterministic fake LLM that checks evidence presence in prompt bytes."""
@@ -182,6 +184,75 @@ def test_ffuf_crawler_emits_path_discovered_when_results_present() -> None:
     assert observation["payload"]["path"] == "/admin"
 
 
+def test_ffuf_variants_emit_same_web_path_contract_for_equivalent_results() -> None:
+    result_row = {
+        "url": "HTTPS://Example.com:443//admin?debug=1#fragment",
+        "status": 301,
+        "length": 512,
+        "words": 22,
+        "lines": 7,
+        "redirectlocation": "https://example.com/login",
+        "content-type": "text/html; charset=utf-8",
+    }
+    crawler_metadata = {
+        "ffuf_variant": "crawler",
+        "config": {"url": "https://example.com/FUZZ"},
+        "results": [result_row],
+    }
+    fuzzer_metadata = {
+        "ffuf_variant": "fuzzer",
+        "config": {"url": "https://example.com/FUZZ"},
+        "results": [result_row],
+    }
+
+    crawler_observations = build_ffuf_semantic_observations(
+        crawler_metadata,
+        CrawlerArgs(target="https://example.com/FUZZ", inline_wordlist=["admin"]),
+    )
+    fuzzer_observations = build_ffuf_semantic_observations(
+        fuzzer_metadata,
+        FuzzerArgs(target="https://example.com/FUZZ", inline_wordlist=["admin"]),
+    )
+
+    assert len(crawler_observations) == 1
+    assert len(fuzzer_observations) == 1
+    crawler_payload = dict(crawler_observations[0]["payload"])
+    fuzzer_payload = dict(fuzzer_observations[0]["payload"])
+    assert crawler_payload.pop("source") == "web_applications.web_crawlers.ffuf"
+    assert fuzzer_payload.pop("source") == "web_applications.web_application_fuzzers.ffuf"
+    assert crawler_payload == fuzzer_payload == {
+        "url": "https://example.com/admin",
+        "path": "/admin",
+        "target_url": "https://example.com/FUZZ",
+        "status_code": 301,
+        "response_size": 512,
+    }
+    assert crawler_observations[0]["subject_key"] == "web.path:https://example.com/admin"
+    assert fuzzer_observations[0]["subject_key"] == "web.path:https://example.com/admin"
+
+
+def test_ffuf_fuzzer_emits_web_path_discovered_when_results_present() -> None:
+    tool = FuzzerTool()
+    args = FuzzerArgs(target="https://example.com/FUZZ", inline_wordlist=["admin"])
+    metadata = {
+        "config": {"url": "https://example.com/FUZZ"},
+        "results": [
+            {"url": "https://example.com/admin", "status": 200, "length": 321},
+        ],
+    }
+
+    observations = tool.emit_semantic_observations(
+        stdout="",
+        stderr="",
+        exit_code=0,
+        args=args,
+        metadata=metadata,
+    )
+
+    assert len(observations) == 1
+    assert observations[0]["payload"]["source"] == "web_applications.web_application_fuzzers.ffuf"
+
+
 def test_ffuf_fuzzer_empty_run_emits_no_observations() -> None:
     tool = FuzzerTool()
     args = FuzzerArgs(
@@ -202,6 +273,100 @@ def test_ffuf_fuzzer_empty_run_emits_no_observations() -> None:
     )
 
     assert observations == []
+
+
+def test_ffuf_semantic_observations_match_filter_cap_duplicate_and_calibration_behavior() -> None:
+    metadata = {
+        "ffuf_variant": "crawler",
+        "config": {
+            "url": "https://example.com/FUZZ",
+            "matchers": {
+                "IsCalibrated": True,
+                "Filters": {"status": "200", "size": "123", "words": "9", "lines": "3"},
+            },
+        },
+        "results": [
+            {"url": "https://example.com/soft-404", "status": 404, "length": 120},
+            {"url": "https://example.com/calibrated", "status": 200, "length": 123, "words": 9, "lines": 3},
+            {"url": "https://example.com/redirect", "status": 302, "length": 512, "redirect": "/login"},
+            {"url": "https://example.com/dup", "status": 403, "length": 42},
+            {"url": "https://example.com/dup", "status": 403, "length": 42},
+        ],
+    }
+
+    observations = build_ffuf_semantic_observations(
+        metadata,
+        CrawlerArgs(target="https://example.com/FUZZ", inline_wordlist=["admin"]),
+    )
+    subject_keys = [item["subject_key"] for item in observations]
+    payloads = {item["subject_key"]: item["payload"] for item in observations}
+
+    assert "web.path:https://example.com/soft-404" not in subject_keys
+    assert subject_keys.count("web.path:https://example.com/dup") == 1
+    assert payloads["web.path:https://example.com/calibrated"]["calibrated"] is True
+    assert "calibration_filters" not in payloads["web.path:https://example.com/calibrated"]
+    assert "redirect_url" not in payloads["web.path:https://example.com/redirect"]
+
+
+def test_ffuf_semantic_observations_respect_per_origin_cap_order() -> None:
+    results = [{"url": "https://example.com/important", "status": 200, "length": 1}]
+    results.extend(
+        {"url": f"https://example.com/p{index:03d}", "status": 500, "length": index}
+        for index in range(205)
+    )
+    observations = build_ffuf_semantic_observations(
+        {
+            "ffuf_variant": "fuzzer",
+            "config": {"url": "https://example.com/FUZZ"},
+            "results": results,
+        },
+        FuzzerArgs(target="https://example.com/FUZZ", inline_wordlist=["admin"]),
+    )
+    subject_keys = {item["subject_key"] for item in observations}
+
+    assert len(observations) == 200
+    assert "web.path:https://example.com/important" in subject_keys
+    assert "web.path:https://example.com/p204" not in subject_keys
+
+
+def test_ffuf_semantic_observations_compile_directly_as_supported_web_path_facts() -> None:
+    observations = build_ffuf_semantic_observations(
+        {
+            "ffuf_variant": "crawler",
+            "config": {"url": "https://example.com/FUZZ"},
+            "results": [
+                {
+                    "url": "https://example.com/admin",
+                    "status": 200,
+                    "length": 512,
+                    "words": 22,
+                    "lines": 7,
+                    "redirectlocation": "https://example.com/login",
+                    "content-type": "text/html",
+                }
+            ],
+        },
+        CrawlerArgs(target="https://example.com/FUZZ", inline_wordlist=["admin"]),
+    )
+    compiled = compile_facts(
+        SemanticFactEnvelope(
+            semantic_schema_version="ffuf.v1",
+            capability_family="web_discovery",
+            observations=tuple(observations),
+            evidence=(),
+        )
+    )
+
+    assert compiled.accepted_count == 1
+    assert compiled.rejected_count == 0
+    assert compiled.diagnostics == ()
+    assert compiled.facts[0].payload == {
+        "source": "web_applications.web_crawlers.ffuf",
+        "path": "/admin",
+        "target_url": "https://example.com/FUZZ",
+        "status_code": 200,
+        "response_size": 512,
+    }
 
 
 def test_ffuf_prompt_regression_from_design_doc() -> None:
