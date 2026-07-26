@@ -296,6 +296,71 @@ def test_build_replay_execution_metadata_from_snapshot_maps_supported_fields_onl
     }
 
 
+def test_historical_strict_admission_blocker_snapshots_round_trip_for_replay() -> None:
+    blocker_rows = [
+        {
+            "observation_type": "network.host_discovered",
+            "subject_type": "host.ip",
+            "subject_key": "host.ip:not-an-ip",
+            "payload": {"source": "nmap"},
+        },
+        {
+            "observation_type": "finding.vulnerability_detected",
+            "subject_type": "finding.instance",
+            "subject_key": "finding.instance:nuclei/cve-2026-0001:https://example.test/admin:body",
+            "payload": {
+                "source": "nuclei",
+                "detector_id": "nuclei/cve-2026-0001",
+                "target_url": "https://example.test/admin",
+                "evidence_refs": [],
+            },
+        },
+        {
+            "observation_type": "finding.vulnerability_detected",
+            "subject_type": "finding.instance",
+            "subject_key": "finding.instance:nuclei/cve-2026-0002:https://example.test/admin:body",
+            "payload": {
+                "source": "nuclei",
+                "detector_id": "nuclei/cve-2026-0002",
+                "target_url": "https://example.test/admin",
+                "evidence_refs": {"evidence_archive_id": "archive-invalid"},
+            },
+        },
+        {
+            "observation_type": "relationship.resolves_to",
+            "subject_type": "relationship.edge",
+            "subject_key": (
+                "relationship.edge:host.dns:api.example.test:"
+                "resolves_to:host.ip:192.0.2.20"
+            ),
+            "payload": {
+                "source_subject_key": "host.dns:api.example.test",
+                "relationship_type": "resolves_to",
+                "target_subject_key": "host.ip:198.51.100.7",
+            },
+        },
+    ]
+    snapshot = build_semantic_input_snapshot(
+        execution={
+            "tool_name": "historical.strict-admission.fixture",
+            "execution_metadata": {
+                "semantic_schema_version": "historical.v1",
+                "capability_family": "knowledge_historical_replay",
+                "semantic_observations": blocker_rows,
+            },
+        },
+        artifacts=[],
+    )
+
+    replay_metadata = build_replay_execution_metadata_from_snapshot(snapshot)
+
+    assert snapshot["semantic_observations"] == blocker_rows
+    assert replay_metadata["semantic_observations"] == blocker_rows
+    assert replay_metadata["semantic_schema_version"] == "historical.v1"
+    assert replay_metadata["capability_family"] == "knowledge_historical_replay"
+    assert "compact_output_hint" not in replay_metadata
+
+
 def test_candidate_extractor_schema_is_strict_and_rejects_extra_properties() -> None:
     schema = GENERIC_CANDIDATE_EXTRACTOR_STRUCTURED_OUTPUT.schema
     assert schema["additionalProperties"] is False

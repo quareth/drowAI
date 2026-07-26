@@ -12,6 +12,7 @@ from backend.database import Base
 from backend.models.core import Engagement, Task, User
 from backend.models.knowledge import KnowledgeIngestionRun, KnowledgeObservation
 from backend.models.provenance import ExecutionArtifact, ToolExecution
+from backend.models.tenant import Tenant, TenantMembership
 from backend.services.knowledge.ingestion_service import KnowledgeIngestionService
 from backend.services.knowledge.replay_service import KnowledgeReplayService
 
@@ -29,10 +30,28 @@ def _seed_user_engagement_task(db):
     user = User(username=f"execution-plane-semantic-user-{uuid_lib.uuid4()}", password="secret")
     db.add(user)
     db.flush()
-    engagement = Engagement(user_id=user.id, name="Execution Plane Semantic Engagement", status="active")
+    tenant = Tenant(
+        slug=f"execution-plane-semantic-{uuid_lib.uuid4()}",
+        name="Execution Plane Semantic Tenant",
+    )
+    db.add(tenant)
+    db.flush()
+    db.add(TenantMembership(tenant_id=tenant.id, user_id=user.id, role="owner"))
+    db.flush()
+    engagement = Engagement(
+        user_id=user.id,
+        tenant_id=tenant.id,
+        name="Execution Plane Semantic Engagement",
+        status="active",
+    )
     db.add(engagement)
     db.flush()
-    task = Task(user_id=user.id, engagement_id=engagement.id, name="Execution Plane Semantic Task")
+    task = Task(
+        user_id=user.id,
+        tenant_id=tenant.id,
+        engagement_id=engagement.id,
+        name="Execution Plane Semantic Task",
+    )
     db.add(task)
     db.flush()
     return engagement, task
@@ -47,8 +66,12 @@ def _seed_execution(
     execution_metadata: dict | None = None,
     stdout: str = "",
 ) -> str:
+    tenant_id = db.query(Task.tenant_id).filter(Task.id == int(task_id)).scalar()
+    if tenant_id is None:
+        raise ValueError(f"Task {task_id} has no tenant_id")
     execution = ToolExecution(
         id=uuid_lib.uuid4(),
+        tenant_id=int(tenant_id),
         task_id=task_id,
         tool_name=tool_name,
         tool_arguments=tool_arguments,
@@ -65,6 +88,7 @@ def _seed_execution(
             ExecutionArtifact(
                 id=uuid_lib.uuid4(),
                 execution_id=execution.id,
+                tenant_id=int(tenant_id),
                 task_id=task_id,
                 artifact_kind="stdout",
                 content_text=stdout,

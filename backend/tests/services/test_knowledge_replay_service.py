@@ -74,6 +74,44 @@ class _FakeCandidateExtractionService:
         )
 
 
+class _RecordingIngestionService:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def ingest_execution_payload(self, **kwargs):
+        self.calls.append(dict(kwargs))
+        return {
+            "ok": True,
+            "status": "succeeded",
+            "projection_status": "succeeded",
+            "ingestion_run_id": None,
+        }
+
+
+class _StaticReplaySourceResolver:
+    def __init__(self, *, source_kind: str) -> None:
+        self.source_kind = source_kind
+
+    def resolve_source(self, *, source_execution_id: str, task_id: int | None):
+        return {
+            "source_kind": self.source_kind,
+            "engagement_id": 101,
+            "task_id": task_id,
+            "execution_payload": {
+                "execution": {
+                    "execution_id": source_execution_id,
+                    "tool_name": "historical.strict-admission.fixture",
+                    "execution_metadata": {
+                        "semantic_observations": [],
+                        "semantic_evidence": [],
+                    },
+                },
+                "artifacts": [],
+            },
+            "compact_output_hint": None,
+        }
+
+
 def _build_session():
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
@@ -229,6 +267,43 @@ def test_replay_execution_creates_new_run_with_explicit_target_version() -> None
     finally:
         db.close()
         engine.dispose()
+
+
+def test_runtime_and_durable_replay_enter_the_same_ingestion_payload_boundary() -> None:
+    source_execution_ids = {
+        "runtime": "00000000-0000-4000-8000-000000000201",
+        "durable_archive": "00000000-0000-4000-8000-000000000202",
+    }
+    for source_kind, source_execution_id in source_execution_ids.items():
+        engine, db = _build_session()
+        try:
+            ingestion_service = _RecordingIngestionService()
+            replay_service = KnowledgeReplayService(
+                db,
+                ingestion_service=ingestion_service,
+                replay_source_resolver=_StaticReplaySourceResolver(source_kind=source_kind),
+            )
+
+            replay = replay_service.replay_execution(
+                task_id=202,
+                source_execution_id=source_execution_id,
+                extractor_family="runtime.ingestion",
+                target_extractor_version=f"{source_kind}.target",
+            )
+
+            assert replay["ok"] is True
+            assert replay["replay_source_type"] == source_kind
+            assert len(ingestion_service.calls) == 1
+            call = ingestion_service.calls[0]
+            assert call["engagement_id"] == 101
+            assert call["task_id"] == 202
+            assert call["source_execution_id"] == source_execution_id
+            assert call["replay_source_type"] == source_kind
+            assert call["reuse_existing_archive_rows"] is True
+            assert call["raise_on_error"] is True
+        finally:
+            db.close()
+            engine.dispose()
 
 
 def test_replay_execution_autogenerates_new_replay_version_without_task_rerun() -> None:

@@ -90,8 +90,8 @@ def test_web_surface_origins_endpoint_uses_service_key_query(monkeypatch) -> Non
     monkeypatch.setattr(engagement_routes, "_query_service", lambda _db: fake_service)
     monkeypatch.setattr(
         engagement_routes,
-        "get_engagement_in_tenant_or_404",
-        lambda db, engagement_id, tenant_id: SimpleNamespace(id=engagement_id, tenant_id=tenant_id),
+        "get_owned_engagement_or_404",
+        lambda *, db, engagement_id, user_id, tenant_id: SimpleNamespace(id=engagement_id, tenant_id=tenant_id),
     )
 
     client = TestClient(app)
@@ -130,8 +130,8 @@ def test_web_surface_origins_endpoint_normalizes_include_noisy_string(monkeypatc
     monkeypatch.setattr(engagement_routes, "_query_service", lambda _db: fake_service)
     monkeypatch.setattr(
         engagement_routes,
-        "get_engagement_in_tenant_or_404",
-        lambda db, engagement_id, tenant_id: SimpleNamespace(id=engagement_id, tenant_id=tenant_id),
+        "get_owned_engagement_or_404",
+        lambda *, db, engagement_id, user_id, tenant_id: SimpleNamespace(id=engagement_id, tenant_id=tenant_id),
     )
 
     client = TestClient(app)
@@ -156,8 +156,8 @@ def test_web_surface_paths_endpoint_uses_service_key_and_origin_query(monkeypatc
     monkeypatch.setattr(engagement_routes, "_query_service", lambda _db: fake_service)
     monkeypatch.setattr(
         engagement_routes,
-        "get_engagement_in_tenant_or_404",
-        lambda db, engagement_id, tenant_id: SimpleNamespace(id=engagement_id, tenant_id=tenant_id),
+        "get_owned_engagement_or_404",
+        lambda *, db, engagement_id, user_id, tenant_id: SimpleNamespace(id=engagement_id, tenant_id=tenant_id),
     )
 
     client = TestClient(app)
@@ -188,8 +188,8 @@ def test_web_surface_paths_endpoint_normalizes_pagination_before_query_service(m
     monkeypatch.setattr(engagement_routes, "_query_service", lambda _db: fake_service)
     monkeypatch.setattr(
         engagement_routes,
-        "get_engagement_in_tenant_or_404",
-        lambda db, engagement_id, tenant_id: SimpleNamespace(id=engagement_id, tenant_id=tenant_id),
+        "get_owned_engagement_or_404",
+        lambda *, db, engagement_id, user_id, tenant_id: SimpleNamespace(id=engagement_id, tenant_id=tenant_id),
     )
 
     client = TestClient(app)

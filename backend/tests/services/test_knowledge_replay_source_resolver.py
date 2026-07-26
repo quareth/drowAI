@@ -17,6 +17,65 @@ from backend.models.provenance import ExecutionArtifact, ToolExecution
 from backend.services.knowledge.ingestion_service import KnowledgeIngestionService
 from backend.services.knowledge.replay_source_resolver import KnowledgeReplaySourceResolver
 
+SUPPORTED_DURABLE_SNAPSHOT_AUDIT = {
+    "scope": "repo-supported durable replay corpus available in this branch",
+    "durable_sources_checked": (
+        "KnowledgeIngestionRun.run_metadata.semantic_input_snapshot",
+        "KnowledgeEvidenceArchive rows keyed by source_execution_id",
+        "ToolExecution.execution_metadata semantic fields",
+        "checked-in repository fixtures, seed data, migrations, and tests",
+    ),
+    "evidence": (
+        "Repository search found the strict-admission blocker shapes only in "
+        "tests that intentionally model malformed replay fixtures.",
+        "No checked-in database dump, seed file, or durable Knowledge archive "
+        "fixture contains audited persisted executions for these blocker shapes.",
+        "Synthetic replay fixture UUIDs remain test-only regression inputs and "
+        "are not selected migration repair executions.",
+    ),
+    "synthetic_fixture_execution_ids": (
+        "12345678-1234-4abc-8abc-123456789101",
+    ),
+}
+
+HISTORICAL_SEMANTIC_INPUT_BLOCKER_DISPOSITIONS = {
+    "malformed_nmap_host_ip": {
+        "tool_name": "information_gathering.network_discovery.nmap",
+        "outcome": "no_supported_persisted_input_contains_blocker",
+        "reason": (
+            "No available repo-supported durable replay source contains "
+            "host.ip:not-an-ip outside strict-admission regression fixtures."
+        ),
+        "selected_source_execution_ids": (),
+        "rerun_verification_plan": None,
+        "audit_evidence": SUPPORTED_DURABLE_SNAPSHOT_AUDIT["evidence"],
+    },
+    "nuclei_malformed_or_empty_evidence_refs": {
+        "tool_name": "web_applications.web_vulnerability_scanners.nuclei",
+        "outcome": "no_supported_persisted_input_contains_blocker",
+        "reason": (
+            "No available repo-supported durable replay source contains empty "
+            "or malformed Nuclei evidence_refs outside strict-admission "
+            "regression fixtures."
+        ),
+        "selected_source_execution_ids": (),
+        "rerun_verification_plan": None,
+        "audit_evidence": SUPPORTED_DURABLE_SNAPSHOT_AUDIT["evidence"],
+    },
+    "amass_relationship_payload_subject_mismatch": {
+        "tool_name": "information_gathering.dns.amass",
+        "outcome": "no_supported_persisted_input_contains_blocker",
+        "reason": (
+            "No available repo-supported durable replay source contains an "
+            "Amass relationship subject_key/payload target mismatch outside "
+            "strict-admission regression fixtures."
+        ),
+        "selected_source_execution_ids": (),
+        "rerun_verification_plan": None,
+        "audit_evidence": SUPPORTED_DURABLE_SNAPSHOT_AUDIT["evidence"],
+    },
+}
+
 
 def _build_session():
     engine = create_engine("sqlite:///:memory:")
@@ -93,6 +152,52 @@ def _seed_execution_with_stdout_artifact(
     )
     db.flush()
     return str(execution.id)
+
+
+def _historical_blocker_rows() -> list[dict]:
+    return [
+        {
+            "observation_type": "network.host_discovered",
+            "subject_type": "host.ip",
+            "subject_key": "host.ip:not-an-ip",
+            "payload": {"source": "nmap"},
+        },
+        {
+            "observation_type": "finding.vulnerability_detected",
+            "subject_type": "finding.instance",
+            "subject_key": "finding.instance:nuclei/cve-2026-0001:https://example.test/admin:body",
+            "payload": {
+                "source": "nuclei",
+                "detector_id": "nuclei/cve-2026-0001",
+                "target_url": "https://example.test/admin",
+                "evidence_refs": [],
+            },
+        },
+        {
+            "observation_type": "finding.vulnerability_detected",
+            "subject_type": "finding.instance",
+            "subject_key": "finding.instance:nuclei/cve-2026-0002:https://example.test/admin:body",
+            "payload": {
+                "source": "nuclei",
+                "detector_id": "nuclei/cve-2026-0002",
+                "target_url": "https://example.test/admin",
+                "evidence_refs": {"evidence_archive_id": "archive-invalid"},
+            },
+        },
+        {
+            "observation_type": "relationship.resolves_to",
+            "subject_type": "relationship.edge",
+            "subject_key": (
+                "relationship.edge:host.dns:api.example.test:"
+                "resolves_to:host.ip:192.0.2.20"
+            ),
+            "payload": {
+                "source_subject_key": "host.dns:api.example.test",
+                "relationship_type": "resolves_to",
+                "target_subject_key": "host.ip:198.51.100.7",
+            },
+        },
+    ]
 
 
 def test_resolver_prefers_runtime_payload_when_task_and_execution_exist() -> None:
@@ -180,6 +285,95 @@ def test_resolver_falls_back_to_durable_rows_when_runtime_is_gone() -> None:
             == "shell.exec.parse_output"
         )
         assert resolved["semantic_input_snapshot"]["snapshot_schema_version"] == "1.0"
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_historical_semantic_input_blockers_have_evidence_backed_dispositions() -> None:
+    assert set(HISTORICAL_SEMANTIC_INPUT_BLOCKER_DISPOSITIONS) == {
+        "malformed_nmap_host_ip",
+        "nuclei_malformed_or_empty_evidence_refs",
+        "amass_relationship_payload_subject_mismatch",
+    }
+    assert SUPPORTED_DURABLE_SNAPSHOT_AUDIT["scope"] == (
+        "repo-supported durable replay corpus available in this branch"
+    )
+    for disposition in HISTORICAL_SEMANTIC_INPUT_BLOCKER_DISPOSITIONS.values():
+        assert disposition["outcome"] == "no_supported_persisted_input_contains_blocker"
+        assert disposition["selected_source_execution_ids"] == ()
+        assert "source_execution_id" not in disposition
+        assert disposition["rerun_verification_plan"] is None
+        assert "repo-supported durable replay source" in disposition["reason"]
+        assert disposition["audit_evidence"] == SUPPORTED_DURABLE_SNAPSHOT_AUDIT["evidence"]
+        assert "silently" not in disposition["outcome"]
+        assert "12345678-1234-4abc-8abc-123456789101" not in str(disposition)
+
+
+def test_durable_replay_source_preserves_synthetic_historical_blocker_fixture() -> None:
+    engine, db = _build_session()
+    try:
+        user, engagement, task = _seed_user_engagement_task(db)
+        source_execution_id = uuid_lib.UUID("12345678-1234-4abc-8abc-123456789101")
+        semantic_rows = _historical_blocker_rows()
+        run = KnowledgeIngestionRun(
+            id=uuid_lib.uuid4(),
+            tenant_id=int(task.tenant_id),
+            user_id=int(user.id),
+            engagement_id=int(engagement.id),
+            task_id=int(task.id),
+            source_execution_id=source_execution_id,
+            extractor_family="runtime.ingestion",
+            extractor_version="historical-baseline",
+            status="succeeded",
+            run_metadata={
+                "source_tool_name": "historical.strict-admission.fixture",
+                "semantic_input_snapshot": {
+                    "snapshot_schema_version": "1.0",
+                    "source_tool_name": "historical.strict-admission.fixture",
+                    "semantic_schema_version": "historical.v1",
+                    "capability_family": "knowledge_historical_replay",
+                    "tool_metadata": {},
+                    "semantic_observations": semantic_rows,
+                    "semantic_evidence": [],
+                    "artifact_refs": [{"artifact_id": "artifact-historical-blocker"}],
+                },
+            },
+        )
+        db.add(run)
+        db.add(
+            KnowledgeEvidenceArchive(
+                id=uuid_lib.uuid4(),
+                tenant_id=int(task.tenant_id),
+                user_id=int(user.id),
+                engagement_id=int(engagement.id),
+                task_id=int(task.id),
+                source_execution_id=source_execution_id,
+                storage_mode="inline_excerpt",
+                inline_excerpt="historical strict-admission blocker fixture",
+                content_sha256="a" * 64,
+                byte_size=45,
+                mime_type="text/plain",
+                lineage_snapshot={"artifact_kind": "stdout"},
+            )
+        )
+        db.flush()
+
+        db.execute(text("DELETE FROM tasks WHERE id = :task_id"), {"task_id": task.id})
+        db.flush()
+
+        resolver = KnowledgeReplaySourceResolver(db)
+        resolved = resolver.resolve_source(
+            source_execution_id=str(source_execution_id),
+            task_id=task.id,
+        )
+
+        replay_metadata = resolved["execution_payload"]["execution"]["execution_metadata"]
+        assert resolved["source_kind"] == "durable_archive"
+        assert replay_metadata["semantic_observations"] == semantic_rows
+        assert replay_metadata["semantic_schema_version"] == "historical.v1"
+        assert replay_metadata["capability_family"] == "knowledge_historical_replay"
+        assert resolved["semantic_input_snapshot"]["semantic_observations"] == semantic_rows
     finally:
         db.close()
         engine.dispose()

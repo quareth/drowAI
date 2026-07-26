@@ -34,6 +34,93 @@ from backend.services.knowledge.ingestion_service import KnowledgeIngestionServi
 
 IngestionRunCreate = partial(_IngestionRunCreate, user_id=1)
 ObservationCreate = partial(_ObservationCreate, user_id=1)
+REPO_ROOT = Path(__file__).resolve().parents[3]
+PRODUCTION_SCAN_ROOTS = (
+    REPO_ROOT / "backend",
+    REPO_ROOT / "agent",
+    REPO_ROOT / "client",
+    REPO_ROOT / "core",
+)
+
+STATISTICS_DISPOSITION_INVENTORY = {
+    "preserve_run_result": (
+        "observation_inserted_count",
+        "observation_duplicate_count",
+        "projection_status",
+        "asset_upsert_count",
+        "service_upsert_count",
+        "finding_upsert_count",
+        "relationship_upsert_count",
+        "web_path_upsert_count",
+    ),
+    "preserve_run_metadata": (
+        "source_tool_name",
+        "artifact_count",
+        "archive_count",
+        "semantic_status",
+        "semantic_metrics",
+        "projection_upsert_count_by_model",
+        "projection_contradiction_count",
+        "projection_contradiction_count_by_domain",
+    ),
+    "preserve_candidate_policy": (
+        "deterministic_observation_count",
+        "observation_count_finding_total",
+        "observation_count_finding_authoritative",
+        "observation_count_non_finding_total",
+    ),
+    "adapter_dispatch_only": (
+        "resolved_adapter_count",
+        "resolved_adapters",
+        "adapter_dispatch_count_by_tool",
+        "adapter_dispatch_count_by_family",
+        "adapter_observation_count",
+        "legacy_extractor_count",
+        "legacy_observation_count",
+    ),
+    "safe_failure_metadata": (
+        "semantic_failure_stage",
+        "semantic_failure_reason",
+        "semantic_failure_error_class",
+        "semantic_failure_fingerprint",
+        "semantic_failure_redacted",
+        "projection_error",
+        "projection_error_class",
+        "projection_error_fingerprint",
+        "projection_error_redacted",
+    ),
+}
+
+EXPECTED_NON_TEST_STATISTICS_CONSUMERS = {
+    "adapter_stats": ("backend/services/knowledge/ingestion_service.py",),
+    "semantic_metrics": ("backend/services/knowledge/ingestion_service.py",),
+    "deterministic_observation_count": (
+        "backend/services/knowledge/candidate_extraction/contracts.py",
+        "backend/services/knowledge/candidate_extraction/policy.py",
+        "backend/services/knowledge/candidate_extraction/service.py",
+    ),
+    "semantic_failure_reason": ("backend/services/knowledge/ingestion_service.py",),
+}
+
+EXPECTED_EXTRACTOR_AND_REGISTRY_CONSUMERS = {
+    "ExecutionExtractor": ("backend/services/knowledge/ingestion_service.py",),
+    "register_extractor(": ("backend/services/knowledge/ingestion_service.py",),
+    "extractors: Iterable[ExecutionExtractor] | None = None": (
+        "backend/services/knowledge/ingestion_service.py",
+    ),
+    "adapter_registry:": ("backend/services/knowledge/ingestion_service.py",),
+    "KnowledgeAdapterRegistryService(": ("backend/services/knowledge/ingestion_service.py",),
+    "from .adapter_registry import KnowledgeAdapterRegistryService": (
+        "backend/services/knowledge/__init__.py",
+        "backend/services/knowledge/ingestion_service.py",
+    ),
+    '"KnowledgeAdapterRegistryService",': ("backend/services/knowledge/__init__.py",),
+}
+
+EXPECTED_DIRECT_ADAPTER_IMPORT_CONSUMERS = (
+    "backend/services/knowledge/adapter_registry.py",
+    "backend/services/knowledge/adapters/__init__.py",
+)
 
 
 class _FailingAdapter:
@@ -94,6 +181,26 @@ def _build_session():
     db = session_factory()
     db.execute(text("PRAGMA foreign_keys=ON"))
     return engine, db
+
+
+def _production_python_files() -> list[Path]:
+    files: list[Path] = []
+    for root in PRODUCTION_SCAN_ROOTS:
+        files.extend(
+            path
+            for path in root.rglob("*.py")
+            if "__pycache__" not in path.parts
+            and "tests" not in path.relative_to(REPO_ROOT).parts
+        )
+    return sorted(files)
+
+
+def _production_paths_containing(pattern: str) -> tuple[str, ...]:
+    matches: list[str] = []
+    for path in _production_python_files():
+        if pattern in path.read_text(encoding="utf-8"):
+            matches.append(path.relative_to(REPO_ROOT).as_posix())
+    return tuple(sorted(matches))
 
 
 def _seed_user_engagement_task(db, *, tenant_id: int = 1):
@@ -225,6 +332,97 @@ def _seed_succeeded_ingestion_run(
         )
     )
     db.flush()
+
+
+def test_statistics_extractor_and_adapter_consumer_inventory_is_locked() -> None:
+    for field_name, expected_paths in EXPECTED_NON_TEST_STATISTICS_CONSUMERS.items():
+        assert _production_paths_containing(field_name) == expected_paths
+
+    for pattern, expected_paths in EXPECTED_EXTRACTOR_AND_REGISTRY_CONSUMERS.items():
+        assert _production_paths_containing(pattern) == expected_paths
+
+    direct_adapter_import_paths = sorted(
+        set(_production_paths_containing("from .adapters import ("))
+        | {
+            path
+            for path in _production_paths_containing("from .amass_adapter import")
+            if path == "backend/services/knowledge/adapters/__init__.py"
+        }
+    )
+    assert tuple(direct_adapter_import_paths) == EXPECTED_DIRECT_ADAPTER_IMPORT_CONSUMERS
+
+
+def test_statistics_field_disposition_preserves_product_metrics_only() -> None:
+    extraction_stats = {
+        "source_tool_name": "shell.exec",
+        "resolved_adapter_count": 1,
+        "adapter_dispatch_count_by_tool": {"shell.exec": 1},
+        "adapter_dispatch_count_by_family": {"shell": 1},
+        "zero_observation_run_count": 0,
+        "zero_observation_by_tool": {"shell.exec": 0},
+        "observation_count_total": 2,
+        "observation_count_finding_total": 1,
+        "observation_count_finding_authoritative": 1,
+        "observation_count_non_finding_total": 1,
+    }
+    projection_metadata = {
+        "asset_upsert_count": 1,
+        "service_upsert_count": 1,
+        "finding_upsert_count": 1,
+        "relationship_upsert_count": 0,
+        "web_path_upsert_count": 0,
+        "projection_contradiction_count": 1,
+        "projection_contradiction_count_by_domain": {"service": 1},
+    }
+
+    metrics = KnowledgeIngestionService._build_semantic_metrics(
+        extraction_stats=extraction_stats,
+        projection_metadata=projection_metadata,
+    )
+
+    assert set(STATISTICS_DISPOSITION_INVENTORY) == {
+        "preserve_run_result",
+        "preserve_run_metadata",
+        "preserve_candidate_policy",
+        "adapter_dispatch_only",
+        "safe_failure_metadata",
+    }
+    assert metrics == {
+        "adapter_dispatch_count_total": 1,
+        "adapter_dispatch_count_by_tool": {"shell.exec": 1},
+        "adapter_dispatch_count_by_family": {"shell": 1},
+        "zero_observation_run_count": 0,
+        "zero_observation_by_tool": {"shell.exec": 0},
+        "projection_upsert_count_by_model": {
+            "asset": 1,
+            "service": 1,
+            "finding": 1,
+            "relationship": 0,
+            "web_path": 0,
+        },
+        "projection_contradiction_count": 1,
+        "projection_contradiction_count_by_domain": {"service": 1},
+    }
+    assert "resolved_adapters" not in metrics
+    assert "legacy_extractor_count" not in metrics
+
+
+def test_candidate_extraction_boundary_uses_tool_name_and_deterministic_counts() -> None:
+    candidate_service = (
+        REPO_ROOT / "backend/services/knowledge/candidate_extraction/service.py"
+    ).read_text(encoding="utf-8")
+    policy_service = (
+        REPO_ROOT / "backend/services/knowledge/candidate_extraction/policy.py"
+    ).read_text(encoding="utf-8")
+
+    assert "or extraction_stats.get(\"source_tool_name\")" in candidate_service
+    assert "deterministic_observation_count=len(deterministic_observations)" in candidate_service
+    assert (
+        "\"deterministic_observation_count\": request.deterministic_observation_count"
+        in policy_service
+    )
+    assert "KnowledgeAdapterRegistryService" not in candidate_service
+    assert "backend.services.knowledge.adapters" not in candidate_service
 
 
 def test_create_or_get_ingestion_run_is_idempotent() -> None:
