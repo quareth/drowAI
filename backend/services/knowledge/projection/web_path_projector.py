@@ -15,9 +15,9 @@ from sqlalchemy.orm import Session
 
 from ....models import KnowledgeAsset, KnowledgeService, KnowledgeWebPath
 from runtime_shared.semantic.service_identity import build_service_socket_key
-from ..adapters.web_common import build_web_origin_key
 from ..contracts import ObservationCreate
 from ..evidence_refs import normalize_canonical_evidence_refs
+from ..web_common import build_web_origin_key
 
 """Noise weights tuned at projection-time.
 

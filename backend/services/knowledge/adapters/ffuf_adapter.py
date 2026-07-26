@@ -12,9 +12,9 @@ from typing import Any, Mapping, Sequence
 from urllib.parse import urlsplit
 
 from ..contracts import ObservationCreate
+from ..web_common import build_web_origin_key
 from .base import AdapterContext
 from .web_common import (
-    build_web_origin_key,
     build_web_path_subject_key,
     collect_artifact_text_blobs,
     dedupe_observations,

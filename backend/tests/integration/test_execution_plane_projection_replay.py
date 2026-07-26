@@ -79,19 +79,11 @@ def _seed_nmap_execution(
         status="success",
         started_at=datetime.now(timezone.utc),
         finished_at=datetime.now(timezone.utc),
-        execution_metadata={
-            "tool_metadata": {
-                "hosts": [
-                    {
-                        "ip": target_ip,
-                        "ports": [
-                            {"port": port, "protocol": "tcp", "service": service_name},
-                        ],
-                    }
-                ]
-            },
-            "capability_family": "network_discovery",
-        },
+        execution_metadata=_nmap_semantic_metadata(
+            target_ip=target_ip,
+            port=port,
+            service_name=service_name,
+        ),
     )
     db.add(execution)
     db.flush()
@@ -112,6 +104,34 @@ def _seed_nmap_execution(
     )
     db.flush()
     return str(execution.id)
+
+
+def _nmap_semantic_metadata(*, target_ip: str, port: int, service_name: str) -> dict[str, object]:
+    return {
+        "semantic_observations": [
+            {
+                "observation_type": "network.host_discovered",
+                "subject_type": "host.ip",
+                "subject_key": f"host.ip:{target_ip}",
+                "payload": {"ip": target_ip, "source": "projection-replay-test"},
+            },
+            {
+                "observation_type": "network.open_port",
+                "subject_type": "service.socket",
+                "subject_key": f"service.socket:{target_ip}/tcp/{port}",
+                "payload": {
+                    "ip": target_ip,
+                    "protocol": "tcp",
+                    "port": port,
+                    "service_name": service_name,
+                    "source": "projection-replay-test",
+                },
+            },
+        ],
+        "semantic_evidence": [],
+        "semantic_schema_version": "nmap.v1",
+        "capability_family": "network_discovery",
+    }
 
 
 def _semantic_snapshot(db):

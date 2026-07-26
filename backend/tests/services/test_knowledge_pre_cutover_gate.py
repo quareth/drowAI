@@ -1,7 +1,7 @@
-"""Phase 5 pre-cutover gate for canonical Knowledge migration readiness.
+"""Phase 6 direct-cutover gate for canonical Knowledge production authority.
 
 This module aggregates existing test-owned inventories without moving the
-production ingestion authority or duplicating the focused parity assertions.
+production ingestion authority or duplicating focused parity assertions.
 """
 
 from __future__ import annotations
@@ -26,19 +26,20 @@ from backend.tests.services.test_knowledge_replay_source_resolver import (
 )
 
 
-PHASE5_PRE_CUTOVER_CRITERIA = (
+PHASE6_DIRECT_CUTOVER_CRITERIA = (
     "producer_readiness_fact_complete",
     "historical_audit_backfill_green",
     "differential_comparisons_green",
     "candidate_extraction_separate",
-    "statistics_final_mapping_approved",
-    "no_production_dual_authority",
+    "statistics_fact_mapping_approved",
+    "direct_canonical_production_authority",
+    "adapter_registry_has_no_production_consumers",
 )
 
 
-def _blocked_pre_cutover_criteria(criteria: Mapping[str, bool]) -> tuple[str, ...]:
-    assert tuple(criteria) == PHASE5_PRE_CUTOVER_CRITERIA
-    return tuple(name for name in PHASE5_PRE_CUTOVER_CRITERIA if not criteria[name])
+def _blocked_cutover_criteria(criteria: Mapping[str, bool]) -> tuple[str, ...]:
+    assert tuple(criteria) == PHASE6_DIRECT_CUTOVER_CRITERIA
+    return tuple(name for name in PHASE6_DIRECT_CUTOVER_CRITERIA if not criteria[name])
 
 
 def _task5_differential_comparisons_green() -> bool:
@@ -49,7 +50,7 @@ def _task5_differential_comparisons_green() -> bool:
     return True
 
 
-def _phase5_pre_cutover_criteria() -> dict[str, bool]:
+def _phase6_direct_cutover_criteria() -> dict[str, bool]:
     readiness_entries = _producer_readiness_entries()
     historical_dispositions = HISTORICAL_SEMANTIC_INPUT_BLOCKER_DISPOSITIONS
     build_observation_consumers = _production_paths_containing(
@@ -87,40 +88,42 @@ def _phase5_pre_cutover_criteria() -> dict[str, bool]:
             "candidate_extraction" not in path
             for path in registry_consumers
         ),
-        "statistics_final_mapping_approved": set(STATISTICS_DISPOSITION_INVENTORY)
+        "statistics_fact_mapping_approved": set(STATISTICS_DISPOSITION_INVENTORY)
         == {
             "preserve_run_result",
             "preserve_run_metadata",
             "preserve_candidate_policy",
-            "adapter_dispatch_only",
+            "retire_dispatch_only",
             "safe_failure_metadata",
         }
         and all(
             _production_paths_containing(field_name) == expected_paths
             for field_name, expected_paths in EXPECTED_NON_TEST_STATISTICS_CONSUMERS.items()
         ),
-        "no_production_dual_authority": build_observation_consumers
+        "direct_canonical_production_authority": build_observation_consumers
         == (
+            "backend/services/knowledge/ingestion_service.py",
             "backend/services/knowledge/pentest_facts/__init__.py",
             "backend/services/knowledge/pentest_facts/bridge.py",
         )
-        and "backend/services/knowledge/ingestion_service.py" not in build_observation_consumers
-        and "backend/services/knowledge/ingestion_service.py" in registry_consumers,
+        and registry_consumers == ("backend/services/knowledge/adapter_registry.py",),
+        "adapter_registry_has_no_production_consumers": "backend/services/knowledge/ingestion_service.py"
+        not in registry_consumers,
     }
 
 
-def test_phase5_pre_cutover_gate_is_green_before_ingestion_cutover() -> None:
-    criteria = _phase5_pre_cutover_criteria()
+def test_phase6_direct_cutover_gate_is_green_after_ingestion_cutover() -> None:
+    criteria = _phase6_direct_cutover_criteria()
 
-    assert tuple(criteria) == PHASE5_PRE_CUTOVER_CRITERIA
-    assert _blocked_pre_cutover_criteria(criteria) == ()
+    assert tuple(criteria) == PHASE6_DIRECT_CUTOVER_CRITERIA
+    assert _blocked_cutover_criteria(criteria) == ()
 
 
-@pytest.mark.parametrize("failed_criterion", PHASE5_PRE_CUTOVER_CRITERIA)
-def test_phase5_pre_cutover_gate_fails_closed_for_any_failed_criterion(
+@pytest.mark.parametrize("failed_criterion", PHASE6_DIRECT_CUTOVER_CRITERIA)
+def test_phase6_direct_cutover_gate_fails_closed_for_any_failed_criterion(
     failed_criterion: str,
 ) -> None:
-    criteria = {name: True for name in PHASE5_PRE_CUTOVER_CRITERIA}
+    criteria = {name: True for name in PHASE6_DIRECT_CUTOVER_CRITERIA}
     criteria[failed_criterion] = False
 
-    assert _blocked_pre_cutover_criteria(criteria) == (failed_criterion,)
+    assert _blocked_cutover_criteria(criteria) == (failed_criterion,)

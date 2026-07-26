@@ -30,7 +30,11 @@ from backend.services.knowledge.contracts import (
     IngestionRunStatus,
     ObservationCreate as _ObservationCreate,
 )
+from backend.services.knowledge import ingestion_service as ingestion_module
 from backend.services.knowledge.ingestion_service import KnowledgeIngestionService
+from agent.tools.sniffing_spoofing.network_sniffers.tshark_semantics import (
+    build_tshark_semantic_observations,
+)
 
 IngestionRunCreate = partial(_IngestionRunCreate, user_id=1)
 ObservationCreate = partial(_ObservationCreate, user_id=1)
@@ -69,7 +73,7 @@ STATISTICS_DISPOSITION_INVENTORY = {
         "observation_count_finding_authoritative",
         "observation_count_non_finding_total",
     ),
-    "adapter_dispatch_only": (
+    "retire_dispatch_only": (
         "resolved_adapter_count",
         "resolved_adapters",
         "adapter_dispatch_count_by_tool",
@@ -92,7 +96,11 @@ STATISTICS_DISPOSITION_INVENTORY = {
 }
 
 EXPECTED_NON_TEST_STATISTICS_CONSUMERS = {
-    "adapter_stats": ("backend/services/knowledge/ingestion_service.py",),
+    "fact_stats": (
+        "backend/services/knowledge/candidate_extraction/service.py",
+        "backend/services/knowledge/ingestion_service.py",
+    ),
+    "adapter_stats": (),
     "semantic_metrics": ("backend/services/knowledge/ingestion_service.py",),
     "deterministic_observation_count": (
         "backend/services/knowledge/candidate_extraction/contracts.py",
@@ -103,75 +111,19 @@ EXPECTED_NON_TEST_STATISTICS_CONSUMERS = {
 }
 
 EXPECTED_EXTRACTOR_AND_REGISTRY_CONSUMERS = {
-    "ExecutionExtractor": ("backend/services/knowledge/ingestion_service.py",),
-    "register_extractor(": ("backend/services/knowledge/ingestion_service.py",),
-    "extractors: Iterable[ExecutionExtractor] | None = None": (
-        "backend/services/knowledge/ingestion_service.py",
-    ),
-    "adapter_registry:": ("backend/services/knowledge/ingestion_service.py",),
-    "KnowledgeAdapterRegistryService(": ("backend/services/knowledge/ingestion_service.py",),
-    "from .adapter_registry import KnowledgeAdapterRegistryService": (
-        "backend/services/knowledge/__init__.py",
-        "backend/services/knowledge/ingestion_service.py",
-    ),
-    '"KnowledgeAdapterRegistryService",': ("backend/services/knowledge/__init__.py",),
+    "ExecutionExtractor": (),
+    "register_extractor(": (),
+    "extractors: Iterable[ExecutionExtractor] | None = None": (),
+    "adapter_registry:": (),
+    "KnowledgeAdapterRegistryService(": (),
+    "from .adapter_registry import KnowledgeAdapterRegistryService": (),
+    '"KnowledgeAdapterRegistryService",': (),
 }
 
 EXPECTED_DIRECT_ADAPTER_IMPORT_CONSUMERS = (
     "backend/services/knowledge/adapter_registry.py",
     "backend/services/knowledge/adapters/__init__.py",
 )
-
-
-class _FailingAdapter:
-    tool_names = ("shell.exec",)
-    capability_families = ()
-
-    def extract(self, context):
-        raise RuntimeError("adapter extraction failed")
-
-
-class _LeakyFailingAdapter:
-    tool_names = ("shell.exec",)
-    capability_families = ()
-
-    def extract(self, context):
-        raise RuntimeError(
-            "adapter extraction failed token=sk-live-123456789 bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.x.y"  # gitleaks:allow
-        )
-
-
-class _FailingAdapterRegistry:
-    def build_context(
-        self,
-        *,
-        user_id,
-        engagement_id,
-        task_id,
-        source_execution_id,
-        ingestion_run_id,
-        execution_payload,
-        tenant_id=None,
-        compact_output_hint=None,
-        artifact_reader=None,
-    ):
-        class _Context:
-            def source_tool_name(self_inner):
-                execution = execution_payload.get("execution") or {}
-                return str(execution.get("tool_name") or "")
-
-            def select_authoritative_input_source(self_inner):
-                return "tool_metadata"
-
-        return _Context()
-
-    def resolve_adapters(self, context):
-        return [_FailingAdapter()]
-
-
-class _LeakyFailingAdapterRegistry(_FailingAdapterRegistry):
-    def resolve_adapters(self, context):
-        return [_LeakyFailingAdapter()]
 
 
 def _build_session():
@@ -269,6 +221,83 @@ def _seed_execution_with_artifact(
     return str(execution.id)
 
 
+def _semantic_metadata(
+    rows: list[dict[str, Any]],
+    *,
+    capability_family: str = "network_discovery",
+    schema_version: str = "ingestion-test.v1",
+) -> dict[str, Any]:
+    return {
+        "semantic_observations": rows,
+        "semantic_evidence": [],
+        "semantic_schema_version": schema_version,
+        "capability_family": capability_family,
+    }
+
+
+def _host_discovered_row(ip: str) -> dict[str, Any]:
+    return {
+        "observation_type": "network.host_discovered",
+        "subject_type": "host.ip",
+        "subject_key": f"host.ip:{ip}",
+        "payload": {"ip": ip, "source": "ingestion-test"},
+    }
+
+
+def _open_port_row(ip: str, port: int, *, service_name: str = "http") -> dict[str, Any]:
+    return {
+        "observation_type": "network.open_port",
+        "subject_type": "service.socket",
+        "subject_key": f"service.socket:{ip}/tcp/{port}",
+        "payload": {
+            "ip": ip,
+            "protocol": "tcp",
+            "port": port,
+            "service_name": service_name,
+            "source": "ingestion-test",
+        },
+    }
+
+
+def _service_detected_row(
+    ip: str,
+    port: int,
+    *,
+    service_name: str,
+) -> dict[str, Any]:
+    return {
+        "observation_type": "network.service_detected",
+        "subject_type": "service.socket",
+        "subject_key": f"service.socket:{ip}/tcp/{port}",
+        "payload": {
+            "ip": ip,
+            "protocol": "tcp",
+            "port": port,
+            "service_name": service_name,
+            "source": "ingestion-test",
+        },
+    }
+
+
+def _finding_row(
+    *,
+    detector_id: str,
+    service_key: str,
+    severity: str = "medium",
+) -> dict[str, Any]:
+    return {
+        "observation_type": "finding.vulnerability_detected",
+        "subject_type": "finding.vulnerability",
+        "subject_key": f"finding.vulnerability:{service_key}:{detector_id}",
+        "payload": {
+            "detector_id": detector_id,
+            "subject_key": service_key,
+            "severity": severity,
+            "source": "ingestion-test",
+        },
+    }
+
+
 def _tshark_secret_exposure_metadata() -> dict[str, Any]:
     return {
         "schema_version": "tshark.v1",
@@ -353,11 +382,8 @@ def test_statistics_extractor_and_adapter_consumer_inventory_is_locked() -> None
 
 
 def test_statistics_field_disposition_preserves_product_metrics_only() -> None:
-    extraction_stats = {
+    fact_stats = {
         "source_tool_name": "shell.exec",
-        "resolved_adapter_count": 1,
-        "adapter_dispatch_count_by_tool": {"shell.exec": 1},
-        "adapter_dispatch_count_by_family": {"shell": 1},
         "zero_observation_run_count": 0,
         "zero_observation_by_tool": {"shell.exec": 0},
         "observation_count_total": 2,
@@ -376,7 +402,7 @@ def test_statistics_field_disposition_preserves_product_metrics_only() -> None:
     }
 
     metrics = KnowledgeIngestionService._build_semantic_metrics(
-        extraction_stats=extraction_stats,
+        fact_stats=fact_stats,
         projection_metadata=projection_metadata,
     )
 
@@ -384,13 +410,10 @@ def test_statistics_field_disposition_preserves_product_metrics_only() -> None:
         "preserve_run_result",
         "preserve_run_metadata",
         "preserve_candidate_policy",
-        "adapter_dispatch_only",
+        "retire_dispatch_only",
         "safe_failure_metadata",
     }
     assert metrics == {
-        "adapter_dispatch_count_total": 1,
-        "adapter_dispatch_count_by_tool": {"shell.exec": 1},
-        "adapter_dispatch_count_by_family": {"shell": 1},
         "zero_observation_run_count": 0,
         "zero_observation_by_tool": {"shell.exec": 0},
         "projection_upsert_count_by_model": {
@@ -403,6 +426,9 @@ def test_statistics_field_disposition_preserves_product_metrics_only() -> None:
         "projection_contradiction_count": 1,
         "projection_contradiction_count_by_domain": {"service": 1},
     }
+    assert "adapter_dispatch_count_total" not in metrics
+    assert "adapter_dispatch_count_by_tool" not in metrics
+    assert "adapter_dispatch_count_by_family" not in metrics
     assert "resolved_adapters" not in metrics
     assert "legacy_extractor_count" not in metrics
 
@@ -415,7 +441,8 @@ def test_candidate_extraction_boundary_uses_tool_name_and_deterministic_counts()
         REPO_ROOT / "backend/services/knowledge/candidate_extraction/policy.py"
     ).read_text(encoding="utf-8")
 
-    assert "or extraction_stats.get(\"source_tool_name\")" in candidate_service
+    assert "or fact_stats.get(\"source_tool_name\")" in candidate_service
+    assert "extraction_stats" not in candidate_service
     assert "deterministic_observation_count=len(deterministic_observations)" in candidate_service
     assert (
         "\"deterministic_observation_count\": request.deterministic_observation_count"
@@ -819,7 +846,11 @@ def test_ingest_execution_archives_and_projects_tshark_masked_secret_exposure() 
             content_text=json.dumps(tshark_metadata),
             is_text=True,
             byte_size=512,
-            execution_metadata={"tool_metadata": tshark_metadata},
+            execution_metadata=_semantic_metadata(
+                build_tshark_semantic_observations(tshark_metadata, args=None),
+                capability_family="packet_analysis",
+                schema_version="tshark.v1",
+            ),
         )
         service = KnowledgeIngestionService(db)
 
@@ -836,12 +867,12 @@ def test_ingest_execution_archives_and_projects_tshark_masked_secret_exposure() 
 
         assert first["ok"] is True
         assert first["archive_count"] == 1
-        assert first["observation_inserted_count"] == 3
+        assert first["observation_inserted_count"] == 4
         assert first["finding_upsert_count"] == 1
         assert second["ingestion_run_id"] == first["ingestion_run_id"]
         assert second["archive_count"] == 1
         assert second["observation_inserted_count"] == 0
-        assert second["observation_duplicate_count"] == 3
+        assert second["observation_duplicate_count"] == 4
 
         archive = (
             db.query(KnowledgeEvidenceArchive)
@@ -855,6 +886,7 @@ def test_ingest_execution_archives_and_projects_tshark_masked_secret_exposure() 
         )
         assert {item.observation_type for item in observations} == {
             "network.host_discovered",
+            "network.service_detected",
             "network.service_observed",
             "finding.vulnerability_detected",
         }
@@ -948,7 +980,7 @@ def test_ingest_execution_marks_run_failed_when_archive_step_raises(monkeypatch)
         engine.dispose()
 
 
-def test_ingest_execution_persists_observations_when_extractor_emits() -> None:
+def test_ingest_execution_persists_observations_from_canonical_facts() -> None:
     engine, db = _build_session()
     try:
         _user, engagement, task = _seed_user_engagement_task(db)
@@ -960,31 +992,12 @@ def test_ingest_execution_persists_observations_when_extractor_emits() -> None:
             content_text="http service on 10.0.0.5:80",
             is_text=True,
             byte_size=256,
+            execution_metadata=_semantic_metadata(
+                [_open_port_row("10.0.0.5", 80)],
+            ),
         )
 
-        def _extractor(
-            execution_payload,
-            ingestion_run_id,
-            engagement_id,
-            task_id,
-            compact_output_hint,
-        ):
-            return [
-                ObservationCreate(
-                    engagement_id=engagement_id,
-                    task_id=task_id,
-                    source_execution_id=str(execution_payload["execution"]["execution_id"]),
-                    ingestion_run_id=ingestion_run_id,
-                    observation_type="network.open_port",
-                    subject_type="host.ip",
-                    subject_key="host.ip:10.0.0.5",
-                    assertion_level="observed",
-                    payload={"port": 80, "protocol": "tcp"},
-                    observed_at=datetime.now(timezone.utc),
-                )
-            ]
-
-        service = KnowledgeIngestionService(db, extractors=[_extractor])
+        service = KnowledgeIngestionService(db)
         result = service.ingest_execution(
             task_id=task.id,
             source_execution_id=execution_id,
@@ -1000,6 +1013,101 @@ def test_ingest_execution_persists_observations_when_extractor_emits() -> None:
         )
         assert len(persisted) == 1
         assert persisted[0].observation_type == "network.open_port"
+        assert persisted[0].subject_key == "service.socket:10.0.0.5/tcp/80"
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_ingest_execution_payload_uses_backend_source_execution_id_when_payload_omits_or_disagrees() -> None:
+    engine, db = _build_session()
+    try:
+        user, engagement, _task = _seed_user_engagement_task(db)
+        service = KnowledgeIngestionService(db)
+        cases = (
+            ("omitted", {}, "10.0.0.91"),
+            ("mismatched", {"execution_id": str(uuid_lib.uuid4())}, "10.0.0.92"),
+        )
+
+        for label, payload_lineage, ip_address in cases:
+            backend_source_execution_id = str(uuid_lib.uuid4())
+            execution_payload = {
+                "execution": {
+                    **payload_lineage,
+                    "tool_name": f"shell.exec.{label}",
+                    "execution_metadata": _semantic_metadata([_host_discovered_row(ip_address)]),
+                },
+                "artifacts": [],
+            }
+
+            result = service.ingest_execution_payload(
+                user_id=user.id,
+                engagement_id=engagement.id,
+                tenant_id=engagement.tenant_id,
+                task_id=None,
+                source_execution_id=backend_source_execution_id,
+                execution_payload=execution_payload,
+                reuse_existing_archive_rows=True,
+                raise_on_error=True,
+            )
+
+            assert result["ok"] is True
+            run = (
+                db.query(KnowledgeIngestionRun)
+                .filter(KnowledgeIngestionRun.id == result["ingestion_run_id"])
+                .one()
+            )
+            persisted = (
+                db.query(KnowledgeObservation)
+                .filter(KnowledgeObservation.ingestion_run_id == run.id)
+                .one()
+            )
+            assert str(run.source_execution_id) == backend_source_execution_id
+            assert str(persisted.source_execution_id) == backend_source_execution_id
+            assert str(payload_lineage.get("execution_id") or "") != str(
+                persisted.source_execution_id
+            )
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_ingest_execution_calls_canonical_bridge_once(monkeypatch) -> None:
+    engine, db = _build_session()
+    bridge_calls = 0
+    original_bridge = ingestion_module.build_knowledge_observations
+    try:
+        _user, _engagement, task = _seed_user_engagement_task(db)
+        execution_id = _seed_execution_with_artifact(
+            db,
+            task_id=task.id,
+            tool_name="shell.exec",
+            artifact_kind="stdout",
+            content_text="canonical bridge call count",
+            is_text=True,
+            byte_size=128,
+            execution_metadata=_semantic_metadata([_host_discovered_row("10.0.0.8")]),
+        )
+
+        def _counting_bridge(*, envelope, context):
+            nonlocal bridge_calls
+            bridge_calls += 1
+            return original_bridge(envelope=envelope, context=context)
+
+        monkeypatch.setattr(
+            ingestion_module,
+            "build_knowledge_observations",
+            _counting_bridge,
+        )
+        service = KnowledgeIngestionService(db)
+        result = service.ingest_execution(
+            task_id=task.id,
+            source_execution_id=execution_id,
+            raise_on_error=True,
+        )
+
+        assert result["ok"] is True
+        assert bridge_calls == 1
     finally:
         db.close()
         engine.dispose()
@@ -1017,65 +1125,23 @@ def test_ingest_execution_run_metadata_includes_finding_level_extraction_counter
             content_text="finding-level extraction counters",
             is_text=True,
             byte_size=256,
+            execution_metadata=_semantic_metadata(
+                [
+                    _finding_row(
+                        detector_id="cve-2023-0001",
+                        service_key="service.socket:10.0.0.10/tcp/443",
+                    ),
+                    _finding_row(
+                        detector_id="cve-2023-0002",
+                        service_key="service.socket:10.0.0.10/tcp/443",
+                    ),
+                    _service_detected_row("10.0.0.10", 443, service_name="https"),
+                ],
+                capability_family="vulnerability_scanning",
+            ),
         )
 
-        def _extractor(
-            execution_payload,
-            ingestion_run_id,
-            engagement_id,
-            task_id,
-            compact_output_hint,
-        ):
-            source_execution_id = str(execution_payload["execution"]["execution_id"])
-            observed_at = datetime.now(timezone.utc)
-            return [
-                ObservationCreate(
-                    engagement_id=engagement_id,
-                    task_id=task_id,
-                    source_execution_id=source_execution_id,
-                    ingestion_run_id=ingestion_run_id,
-                    observation_type="finding.vulnerability_detected",
-                    subject_type="finding.instance",
-                    subject_key="finding.instance:cve-2023-0001:host-1",
-                    assertion_level="observed",
-                    payload={"title": "Authoritative finding"},
-                    observed_at=observed_at,
-                ),
-                ObservationCreate(
-                    engagement_id=engagement_id,
-                    task_id=task_id,
-                    source_execution_id=source_execution_id,
-                    ingestion_run_id=ingestion_run_id,
-                    observation_type="finding.vulnerability_detected",
-                    subject_type="finding.instance",
-                    subject_key="finding.instance:candidate:host-2",
-                    assertion_level="candidate",
-                    payload={
-                        "title": "Candidate finding",
-                        "evidence_refs": [
-                            {
-                                "evidence_archive_id": "archive-candidate-1",
-                                "excerpt": "candidate evidence excerpt",
-                            }
-                        ],
-                    },
-                    observed_at=observed_at,
-                ),
-                ObservationCreate(
-                    engagement_id=engagement_id,
-                    task_id=task_id,
-                    source_execution_id=source_execution_id,
-                    ingestion_run_id=ingestion_run_id,
-                    observation_type="network.service_detected",
-                    subject_type="service.socket",
-                    subject_key="service.socket:10.0.0.10/tcp/443",
-                    assertion_level="observed",
-                    payload={"service_name": "https"},
-                    observed_at=observed_at,
-                ),
-            ]
-
-        service = KnowledgeIngestionService(db, extractors=[_extractor])
+        service = KnowledgeIngestionService(db)
         result = service.ingest_execution(
             task_id=task.id,
             source_execution_id=execution_id,
@@ -1088,11 +1154,67 @@ def test_ingest_execution_run_metadata_includes_finding_level_extraction_counter
             .filter(KnowledgeIngestionRun.id == result["ingestion_run_id"])
             .one()
         )
-        adapter_stats = dict((run.run_metadata or {}).get("adapter_stats") or {})
-        assert int(adapter_stats.get("observation_count_total") or 0) == 3
-        assert int(adapter_stats.get("observation_count_finding_total") or 0) == 2
-        assert int(adapter_stats.get("observation_count_finding_authoritative") or 0) == 1
-        assert int(adapter_stats.get("observation_count_non_finding_total") or 0) == 1
+        fact_stats = dict((run.run_metadata or {}).get("fact_stats") or {})
+        assert "adapter_stats" not in dict(run.run_metadata or {})
+        assert int(fact_stats.get("observation_count_total") or 0) == 3
+        assert int(fact_stats.get("observation_count_finding_total") or 0) == 2
+        assert int(fact_stats.get("observation_count_finding_authoritative") or 0) == 2
+        assert int(fact_stats.get("observation_count_non_finding_total") or 0) == 1
+        assert int(fact_stats.get("fact_accepted_count") or 0) == 3
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_ingest_execution_fact_diagnostics_are_bounded_and_secret_safe() -> None:
+    engine, db = _build_session()
+    raw_secret = "sk-live-fact-secret-123"
+    try:
+        _user, _engagement, task = _seed_user_engagement_task(db)
+        execution_id = _seed_execution_with_artifact(
+            db,
+            task_id=task.id,
+            tool_name="shell.exec",
+            artifact_kind="stdout",
+            content_text="invalid canonical row",
+            is_text=True,
+            byte_size=128,
+            execution_metadata=_semantic_metadata(
+                [
+                    {
+                        "observation_type": "network.open_port",
+                        "subject_type": "service.socket",
+                        "subject_key": "service.socket:10.0.0.1/tcp/80",
+                        "payload": {
+                            "ip": "10.0.0.2",
+                            "protocol": "tcp",
+                            "port": 80,
+                            "token": raw_secret,
+                        },
+                    }
+                ],
+            ),
+        )
+
+        service = KnowledgeIngestionService(db)
+        result = service.ingest_execution(
+            task_id=task.id,
+            source_execution_id=execution_id,
+            raise_on_error=True,
+        )
+
+        assert result["ok"] is True
+        run = (
+            db.query(KnowledgeIngestionRun)
+            .filter(KnowledgeIngestionRun.id == result["ingestion_run_id"])
+            .one()
+        )
+        fact_stats = dict((run.run_metadata or {}).get("fact_stats") or {})
+        assert fact_stats["fact_input_count"] == 1
+        assert fact_stats["fact_accepted_count"] == 0
+        assert fact_stats["fact_rejected_count"] == 1
+        assert fact_stats["fact_diagnostic_count_by_code"] == {"invalid_fact_row": 1}
+        assert raw_secret not in json.dumps(fact_stats, sort_keys=True)
     finally:
         db.close()
         engine.dispose()
@@ -1140,30 +1262,15 @@ def test_ingest_execution_projects_from_persisted_deduped_observations() -> None
             content_text="duplicate host observation input",
             is_text=True,
             byte_size=128,
+            execution_metadata=_semantic_metadata(
+                [
+                    _host_discovered_row("10.0.0.55"),
+                    _host_discovered_row("10.0.0.55"),
+                ],
+            ),
         )
 
-        def _extractor(
-            execution_payload,
-            ingestion_run_id,
-            engagement_id,
-            task_id,
-            compact_output_hint,
-        ):
-            observation = ObservationCreate(
-                engagement_id=engagement_id,
-                task_id=task_id,
-                source_execution_id=str(execution_payload["execution"]["execution_id"]),
-                ingestion_run_id=ingestion_run_id,
-                observation_type="network.host_discovered",
-                subject_type="host.ip",
-                subject_key="host.ip:10.0.0.55",
-                assertion_level="observed",
-                payload={"host_status": "up"},
-                observed_at=datetime.now(timezone.utc),
-            )
-            return [observation, observation]
-
-        service = KnowledgeIngestionService(db, extractors=[_extractor])
+        service = KnowledgeIngestionService(db)
         result = service.ingest_execution(
             task_id=task.id,
             source_execution_id=execution_id,
@@ -1172,7 +1279,14 @@ def test_ingest_execution_projects_from_persisted_deduped_observations() -> None
 
         assert result["ok"] is True
         assert result["observation_inserted_count"] == 1
-        assert result["observation_duplicate_count"] == 1
+        assert result["observation_duplicate_count"] == 0
+        run = (
+            db.query(KnowledgeIngestionRun)
+            .filter(KnowledgeIngestionRun.id == result["ingestion_run_id"])
+            .one()
+        )
+        stats = dict((run.run_metadata or {}).get("fact_stats") or {})
+        assert int(stats.get("fact_duplicate_count") or 0) == 1
 
         asset = db.query(KnowledgeAsset).filter(
             KnowledgeAsset.engagement_id == task.engagement_id,
@@ -1533,7 +1647,9 @@ def test_delete_guard_blocks_object_ref_when_hash_mismatch(tmp_path: Path) -> No
         engine.dispose()
 
 
-def test_ingest_execution_writes_semantic_failure_metadata_for_adapter_errors() -> None:
+def test_ingest_execution_writes_semantic_failure_metadata_for_canonical_errors(
+    monkeypatch,
+) -> None:
     engine, db = _build_session()
     try:
         _user, engagement, task = _seed_user_engagement_task(db)
@@ -1546,7 +1662,16 @@ def test_ingest_execution_writes_semantic_failure_metadata_for_adapter_errors() 
             is_text=True,
             byte_size=64,
         )
-        service = KnowledgeIngestionService(db, adapter_registry=_FailingAdapterRegistry())
+
+        def _raise_bridge_error(*_args, **_kwargs):
+            raise RuntimeError("canonical fact extraction failed")
+
+        monkeypatch.setattr(
+            ingestion_module,
+            "build_knowledge_observations",
+            _raise_bridge_error,
+        )
+        service = KnowledgeIngestionService(db)
         result = service.ingest_execution(
             task_id=task.id,
             engagement_id=engagement.id,
@@ -1562,14 +1687,18 @@ def test_ingest_execution_writes_semantic_failure_metadata_for_adapter_errors() 
         )
         metadata = dict(run.run_metadata or {})
         assert metadata.get("semantic_status") == "failed"
-        assert metadata.get("semantic_failure_stage") == "adapter_extraction"
-        assert "adapter extraction failed" in str(metadata.get("semantic_failure_reason") or "")
+        assert metadata.get("semantic_failure_stage") == "canonical_fact_extraction"
+        assert "canonical fact extraction failed" in str(
+            metadata.get("semantic_failure_reason") or ""
+        )
     finally:
         db.close()
         engine.dispose()
 
 
-def test_ingest_execution_redacts_sensitive_values_in_failure_metadata_and_error_response() -> None:
+def test_ingest_execution_redacts_sensitive_values_in_failure_metadata_and_error_response(
+    monkeypatch,
+) -> None:
     engine, db = _build_session()
     try:
         _user, engagement, task = _seed_user_engagement_task(db)
@@ -1582,7 +1711,19 @@ def test_ingest_execution_redacts_sensitive_values_in_failure_metadata_and_error
             is_text=True,
             byte_size=64,
         )
-        service = KnowledgeIngestionService(db, adapter_registry=_LeakyFailingAdapterRegistry())
+
+        def _raise_leaky_bridge_error(*_args, **_kwargs):
+            raise RuntimeError(
+                "canonical extraction failed token=sk-live-123456789 "
+                "bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.x.y"  # gitleaks:allow
+            )
+
+        monkeypatch.setattr(
+            ingestion_module,
+            "build_knowledge_observations",
+            _raise_leaky_bridge_error,
+        )
+        service = KnowledgeIngestionService(db)
         result = service.ingest_execution(
             task_id=task.id,
             engagement_id=engagement.id,
@@ -1627,34 +1768,12 @@ def test_ingest_execution_redacts_sensitive_values_in_projection_failure_metadat
             content_text="projection secret redaction case",
             is_text=True,
             byte_size=64,
+            execution_metadata=_semantic_metadata([_host_discovered_row("10.0.0.99")]),
         )
-
-        def _extractor(
-            execution_payload,
-            ingestion_run_id,
-            engagement_id,
-            task_id,
-            compact_output_hint,
-        ):
-            return [
-                ObservationCreate(
-                    engagement_id=engagement_id,
-                    task_id=task_id,
-                    source_execution_id=str(execution_payload["execution"]["execution_id"]),
-                    ingestion_run_id=ingestion_run_id,
-                    observation_type="network.host_discovered",
-                    subject_type="host.ip",
-                    subject_key="host.ip:10.0.0.99",
-                    assertion_level="observed",
-                    payload={"host_status": "up"},
-                    observed_at=datetime.now(timezone.utc),
-                )
-            ]
 
         service = KnowledgeIngestionService(
             db,
             projection_service=_LeakyProjectionFailureService(),
-            extractors=[_extractor],
         )
         result = service.ingest_execution(
             task_id=task.id,
@@ -1711,7 +1830,7 @@ def test_ingest_execution_zero_observation_run_is_success_not_failure() -> None:
         semantic_metrics = dict(metadata.get("semantic_metrics") or {})
         assert metadata.get("semantic_status") == "succeeded"
         assert int(semantic_metrics.get("zero_observation_run_count") or 0) == 1
-        assert int(semantic_metrics.get("adapter_dispatch_count_total") or 0) == 0
+        assert "adapter_dispatch_count_total" not in semantic_metrics
     finally:
         db.close()
         engine.dispose()
@@ -1729,44 +1848,15 @@ def test_ingest_execution_records_projection_contradiction_metrics() -> None:
             content_text="contradiction metric case",
             is_text=True,
             byte_size=256,
+            execution_metadata=_semantic_metadata(
+                [
+                    _service_detected_row("10.20.30.40", 80, service_name="http"),
+                    _service_detected_row("10.20.30.40", 80, service_name="nginx"),
+                ],
+            ),
         )
 
-        def _extractor(
-            execution_payload,
-            ingestion_run_id,
-            engagement_id,
-            task_id,
-            compact_output_hint,
-        ):
-            observed_at = datetime.now(timezone.utc)
-            return [
-                ObservationCreate(
-                    engagement_id=engagement_id,
-                    task_id=task_id,
-                    source_execution_id=str(execution_payload["execution"]["execution_id"]),
-                    ingestion_run_id=ingestion_run_id,
-                    observation_type="network.service_detected",
-                    subject_type="service.socket",
-                    subject_key="service.socket:10.20.30.40/tcp/80",
-                    assertion_level="observed",
-                    payload={"service_name": "http"},
-                    observed_at=observed_at,
-                ),
-                ObservationCreate(
-                    engagement_id=engagement_id,
-                    task_id=task_id,
-                    source_execution_id=str(execution_payload["execution"]["execution_id"]),
-                    ingestion_run_id=ingestion_run_id,
-                    observation_type="network.service_detected",
-                    subject_type="service.socket",
-                    subject_key="service.socket:10.20.30.40/tcp/80",
-                    assertion_level="observed",
-                    payload={"service_name": "nginx"},
-                    observed_at=observed_at + timezone.utc.utcoffset(observed_at),
-                ),
-            ]
-
-        service = KnowledgeIngestionService(db, extractors=[_extractor])
+        service = KnowledgeIngestionService(db)
         result = service.ingest_execution(
             task_id=task.id,
             source_execution_id=execution_id,

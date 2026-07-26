@@ -14,11 +14,11 @@ Responsibilities:
 
 Boundary:
 - This service owns ingestion orchestration and persistence behavior.
-- Extractor logic is pluggable and intentionally small in."""
+- Deterministic facts enter through the canonical pentest fact bridge only."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
 import hashlib
 import re
@@ -37,16 +37,15 @@ from backend.models import (
     KnowledgeObservation,
     Task,
 )
-from backend.services.artifact.memory_service import ArtifactMemoryService
 from backend.services.artifact.provenance_query_service import ArtifactProvenanceQueryService
 from .archive_service import KnowledgeArchiveService
-from .adapter_registry import KnowledgeAdapterRegistryService
 from .contracts import (
     IngestionRunCreate,
     IngestionRunStatus,
     ObservationCreate,
     build_semantic_input_snapshot,
     normalize_observation_create,
+    parse_semantic_inputs_from_execution,
 )
 from .candidate_extraction import (
     build_candidate_run_metadata,
@@ -54,14 +53,10 @@ from .candidate_extraction import (
     record_candidate_usage_if_task_present,
 )
 from .delete_guard_service import KnowledgeDeleteGuardService
+from .pentest_facts import KnowledgeFactContext, build_knowledge_observations
 from .projection_service import KnowledgeProjectionService
 from backend.services.usage_tracking import UsageTrackingService
-
-
-ExecutionExtractor = Callable[
-    [dict[str, Any], str, int, int | None, Mapping[str, Any] | None],
-    list[ObservationCreate],
-]
+from runtime_shared.semantic.pentest_facts import SemanticFactEnvelope
 
 
 class KnowledgeIngestionService:
@@ -69,7 +64,6 @@ class KnowledgeIngestionService:
 
     DEFAULT_EXTRACTOR_FAMILY = "runtime.ingestion"
     DEFAULT_EXTRACTOR_VERSION = "1.0"
-    ADAPTER_ARTIFACT_READ_MAX_CHARS = 20_000
     CANDIDATE_EXTRACTION_EXTRACTOR_FAMILY = "llm.candidate_extraction"
     CANDIDATE_EXTRACTION_EXTRACTOR_VERSION = "1.0"
     CANDIDATE_EXTRACTION_MODE = "candidate_fallback"
@@ -89,35 +83,19 @@ class KnowledgeIngestionService:
         db: Session,
         *,
         query_service: ArtifactProvenanceQueryService | None = None,
-        artifact_memory_service: ArtifactMemoryService | None = None,
         archive_service: KnowledgeArchiveService | None = None,
-        adapter_registry: KnowledgeAdapterRegistryService | None = None,
         projection_service: KnowledgeProjectionService | None = None,
         candidate_extraction_service: Any | None = None,
-        extractors: Iterable[ExecutionExtractor] | None = None,
     ):
         self.db = db
         self.query_service = query_service or ArtifactProvenanceQueryService(db)
-        self.artifact_memory_service = artifact_memory_service or ArtifactMemoryService(
-            db,
-            query_service=self.query_service,
-        )
         self.archive_service = archive_service or KnowledgeArchiveService(db)
-        self.adapter_registry = adapter_registry or KnowledgeAdapterRegistryService()
         self.projection_service = projection_service or KnowledgeProjectionService(db)
-        # Deprecated: retained for backward-compatible construction only.
         self.candidate_extraction_service = candidate_extraction_service
-        # Keep extractor coverage intentionally small.
-        # Empty registry means unsupported tools still archive evidence and succeed with zero observations.
-        self.extractors = list(extractors or [])
         self.delete_guard_service = KnowledgeDeleteGuardService(
             db,
             ingest_execution=self.ingest_execution,
         )
-
-    def register_extractor(self, extractor: ExecutionExtractor) -> None:
-        """Register one focused extractor callable for ingestion orchestration."""
-        self.extractors.append(extractor)
 
     def create_or_get_ingestion_run(self, run: IngestionRunCreate) -> KnowledgeIngestionRun:
         """Idempotently return one run identity per execution+extractor tuple."""
@@ -354,15 +332,15 @@ class KnowledgeIngestionService:
                 delete_survival_required=delete_survival_required,
                 reuse_existing_archive_rows=reuse_existing_archive_rows,
             )
-            failure_stage = "adapter_extraction"
-            observations, extraction_stats = self._extract_observations(
+            failure_stage = "canonical_fact_extraction"
+            observations, fact_stats = self._extract_observations(
                 execution_payload=dict(execution_payload),
                 ingestion_run_id=str(run.id),
                 tenant_id=int(run.tenant_id),
                 user_id=resolved_user_id,
                 engagement_id=int(engagement_id),
                 task_id=task_id,
-                compact_output_hint=compact_output_hint,
+                source_execution_id=str(source_execution_id),
                 archived_rows=archived_rows,
             )
             candidate_started = time.perf_counter()
@@ -371,7 +349,7 @@ class KnowledgeIngestionService:
                 execution_payload=dict(execution_payload),
                 archived_rows=archived_rows,
                 deterministic_observations=observations,
-                extraction_stats=extraction_stats,
+                fact_stats=fact_stats,
                 post_tool_candidate_payload=post_tool_candidate_payload,
                 post_tool_candidate_usage=post_tool_candidate_usage,
                 candidate_extractor_family=self.CANDIDATE_EXTRACTION_EXTRACTOR_FAMILY,
@@ -394,7 +372,7 @@ class KnowledgeIngestionService:
                 observations=persisted_observations,
             )
             semantic_metrics = self._build_semantic_metrics(
-                extraction_stats=extraction_stats,
+                fact_stats=fact_stats,
                 projection_metadata=projection_metadata,
             )
             existing_run_metadata = dict(run.run_metadata or {})
@@ -437,7 +415,7 @@ class KnowledgeIngestionService:
                 "archive_count": len(archived_rows),
                 "observation_inserted_count": inserted_count,
                 "observation_duplicate_count": duplicate_count,
-                "adapter_stats": extraction_stats,
+                "fact_stats": fact_stats,
                 "semantic_status": "succeeded"
                 if projection_metadata.get("projection_status") == "succeeded"
                 else "failed",
@@ -671,17 +649,12 @@ class KnowledgeIngestionService:
     @staticmethod
     def _build_semantic_metrics(
         *,
-        extraction_stats: Mapping[str, Any],
+        fact_stats: Mapping[str, Any],
         projection_metadata: Mapping[str, Any],
     ) -> dict[str, Any]:
         return {
-            "adapter_dispatch_count_total": int(extraction_stats.get("resolved_adapter_count") or 0),
-            "adapter_dispatch_count_by_tool": dict(extraction_stats.get("adapter_dispatch_count_by_tool") or {}),
-            "adapter_dispatch_count_by_family": dict(
-                extraction_stats.get("adapter_dispatch_count_by_family") or {}
-            ),
-            "zero_observation_run_count": int(extraction_stats.get("zero_observation_run_count") or 0),
-            "zero_observation_by_tool": dict(extraction_stats.get("zero_observation_by_tool") or {}),
+            "zero_observation_run_count": int(fact_stats.get("zero_observation_run_count") or 0),
+            "zero_observation_by_tool": dict(fact_stats.get("zero_observation_by_tool") or {}),
             "projection_upsert_count_by_model": {
                 "asset": int(projection_metadata.get("asset_upsert_count") or 0),
                 "service": int(projection_metadata.get("service_upsert_count") or 0),
@@ -706,72 +679,105 @@ class KnowledgeIngestionService:
         user_id: int,
         engagement_id: int,
         task_id: int | None,
-        compact_output_hint: Mapping[str, Any] | None,
+        source_execution_id: str,
         archived_rows: Iterable[KnowledgeEvidenceArchive] | None = None,
     ) -> tuple[list[ObservationCreate], dict[str, Any]]:
-        """Delegate extraction to the adapter registry's extract_with_stats."""
-        extract_with_stats = getattr(self.adapter_registry, "extract_with_stats", None)
-        if callable(extract_with_stats):
-            try:
-                return extract_with_stats(
-                    execution_payload=execution_payload,
-                    ingestion_run_id=ingestion_run_id,
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    engagement_id=engagement_id,
-                    task_id=task_id,
-                    compact_output_hint=compact_output_hint,
-                    legacy_extractors=self.extractors,
-                    artifact_memory_service=self.artifact_memory_service,
-                    max_artifact_chars=self.ADAPTER_ARTIFACT_READ_MAX_CHARS,
-                    evidence_archives=archived_rows,
-                )
-            except TypeError:
-                return extract_with_stats(
-                    execution_payload=execution_payload,
-                    ingestion_run_id=ingestion_run_id,
-                    user_id=user_id,
-                    engagement_id=engagement_id,
-                    task_id=task_id,
-                    compact_output_hint=compact_output_hint,
-                    legacy_extractors=self.extractors,
-                    artifact_memory_service=self.artifact_memory_service,
-                    max_artifact_chars=self.ADAPTER_ARTIFACT_READ_MAX_CHARS,
-                )
+        """Build deterministic observations through the canonical fact bridge."""
         execution = execution_payload.get("execution")
         execution_dict = dict(execution) if isinstance(execution, Mapping) else {}
-        try:
-            context = self.adapter_registry.build_context(
-                user_id=user_id,
-                engagement_id=engagement_id,
-                task_id=task_id,
+        semantic_inputs = parse_semantic_inputs_from_execution(execution_dict)
+        envelope = SemanticFactEnvelope(
+            semantic_schema_version=semantic_inputs.get("semantic_schema_version"),
+            capability_family=semantic_inputs.get("capability_family"),
+            observations=tuple(semantic_inputs.get("semantic_observations") or ()),
+            evidence=tuple(semantic_inputs.get("semantic_evidence") or ()),
+        )
+        bridge_result = build_knowledge_observations(
+            envelope=envelope,
+            context=KnowledgeFactContext(
                 tenant_id=tenant_id,
-                source_execution_id=str(execution_dict.get("execution_id") or ""),
-                ingestion_run_id=ingestion_run_id,
-                execution_payload=execution_payload,
-                compact_output_hint=compact_output_hint,
-                evidence_archives=archived_rows,
-            )
-        except TypeError:
-            context = self.adapter_registry.build_context(
                 user_id=user_id,
                 engagement_id=engagement_id,
                 task_id=task_id,
-                source_execution_id=str(execution_dict.get("execution_id") or ""),
+                source_execution_id=str(source_execution_id),
                 ingestion_run_id=ingestion_run_id,
-                execution_payload=execution_payload,
-                compact_output_hint=compact_output_hint,
-            )
-        resolved_adapters = self.adapter_registry.resolve_adapters(context)
-        adapter_observations: list[ObservationCreate] = []
-        for adapter in resolved_adapters:
-            adapter_observations.extend(adapter.extract(context))
-        legacy_observations: list[ObservationCreate] = []
-        for extractor in self.extractors:
-            legacy_observations.extend(
-                extractor(execution_payload, ingestion_run_id, engagement_id, task_id, compact_output_hint)
-            )
-        return [*adapter_observations, *legacy_observations], {}
+                observed_at=None,
+                artifact_summaries=tuple(
+                    dict(item)
+                    for item in execution_payload.get("artifacts", [])
+                    if isinstance(item, Mapping)
+                ),
+                evidence_archives=tuple(archived_rows or ()),
+            ),
+        )
+        observations = list(bridge_result.observations)
+        return observations, self._build_fact_extraction_stats(
+            source_tool_name=str(execution_dict.get("tool_name") or "").strip(),
+            authoritative_input_source=(
+                "semantic_observations"
+                if semantic_inputs.get("semantic_observations")
+                else "none"
+            ),
+            observations=observations,
+            input_count=bridge_result.compiled.input_count,
+            accepted_count=bridge_result.compiled.accepted_count,
+            duplicate_count=bridge_result.compiled.duplicate_count,
+            rejected_count=bridge_result.compiled.rejected_count,
+            diagnostic_codes=tuple(
+                str(diagnostic.code) for diagnostic in bridge_result.compiled.diagnostics
+            ),
+        )
+
+    @staticmethod
+    def _build_fact_extraction_stats(
+        *,
+        source_tool_name: str,
+        authoritative_input_source: str,
+        observations: list[ObservationCreate],
+        input_count: int,
+        accepted_count: int,
+        duplicate_count: int,
+        rejected_count: int,
+        diagnostic_codes: tuple[str, ...],
+    ) -> dict[str, Any]:
+        by_type: dict[str, int] = {}
+        finding_total = 0
+        finding_authoritative = 0
+        for item in observations:
+            observation_type = str(item.observation_type)
+            by_type[observation_type] = int(by_type.get(observation_type, 0)) + 1
+            if observation_type.startswith("finding."):
+                finding_total += 1
+                if str(item.assertion_level).strip().lower() in {
+                    "observed",
+                    "confirmed",
+                    "exploited",
+                }:
+                    finding_authoritative += 1
+
+        zero_observation = len(observations) == 0
+        diagnostic_counts: dict[str, int] = {}
+        for code in diagnostic_codes:
+            diagnostic_counts[code] = int(diagnostic_counts.get(code, 0)) + 1
+
+        return {
+            "source_tool_name": source_tool_name,
+            "authoritative_input_source": authoritative_input_source,
+            "fact_input_count": int(input_count),
+            "fact_accepted_count": int(accepted_count),
+            "fact_duplicate_count": int(duplicate_count),
+            "fact_rejected_count": int(rejected_count),
+            "fact_diagnostic_count_by_code": diagnostic_counts,
+            "observation_count_total": len(observations),
+            "observation_count_finding_total": finding_total,
+            "observation_count_finding_authoritative": finding_authoritative,
+            "observation_count_non_finding_total": len(observations) - finding_total,
+            "observation_count_by_type": by_type,
+            "zero_observation_run_count": 1 if zero_observation else 0,
+            "zero_observation_by_tool": {source_tool_name: 1 if zero_observation else 0}
+            if source_tool_name
+            else {},
+        }
 
     def _run_projection(
         self,
@@ -905,7 +911,6 @@ class KnowledgeIngestionService:
         safe_error = self._build_safe_error_details(stage=failure_stage, error=exc)
         existing_metadata = dict(run.run_metadata or {})
         existing_semantic_metrics = dict(existing_metadata.get("semantic_metrics") or {})
-        existing_semantic_metrics.setdefault("adapter_dispatch_count_total", 0)
         existing_semantic_metrics.setdefault("zero_observation_run_count", 0)
         existing_semantic_metrics.setdefault("projection_contradiction_count", 0)
         existing_semantic_metrics.setdefault("projection_contradiction_count_by_domain", {})

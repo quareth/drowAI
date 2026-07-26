@@ -275,7 +275,7 @@ def maybe_run_candidate_extraction(
     execution_payload: dict[str, Any],
     archived_rows: list[KnowledgeEvidenceArchive],
     deterministic_observations: list,
-    extraction_stats: Mapping[str, Any],
+    fact_stats: Mapping[str, Any],
     post_tool_candidate_payload: Mapping[str, Any] | None,
     post_tool_candidate_usage: Mapping[str, Any] | None,
     candidate_extractor_family: str,
@@ -371,7 +371,7 @@ def maybe_run_candidate_extraction(
         extraction_mode=extraction_mode,
         tool_name=str(
             execution_dict.get("tool_name")
-            or extraction_stats.get("source_tool_name")
+            or fact_stats.get("source_tool_name")
             or ""
         ),
         capability_family=capability_family,

@@ -73,6 +73,7 @@ def _seed_execution_with_stdout_artifact(
     content_text: str,
     tool_name: str = "shell.exec",
     command: str = "echo candidate-replay",
+    execution_metadata: dict[str, object] | None = None,
 ) -> tuple[str, str]:
     execution = ToolExecution(
         id=uuid_lib.uuid4(),
@@ -84,6 +85,7 @@ def _seed_execution_with_stdout_artifact(
         status="success",
         started_at=datetime.now(timezone.utc),
         finished_at=datetime.now(timezone.utc),
+        execution_metadata=execution_metadata,
     )
     db.add(execution)
     db.flush()
@@ -115,6 +117,28 @@ def _nmap_service_stdout() -> str:
             "",
         ]
     )
+
+
+def _nmap_service_metadata() -> dict[str, object]:
+    return {
+        "semantic_observations": [
+            {
+                "observation_type": "network.open_port",
+                "subject_type": "service.socket",
+                "subject_key": "service.socket:10.0.0.21/tcp/443",
+                "payload": {
+                    "ip": "10.0.0.21",
+                    "protocol": "tcp",
+                    "port": 443,
+                    "service_name": "https",
+                    "source": "remote-candidate-test",
+                },
+            }
+        ],
+        "semantic_evidence": [],
+        "semantic_schema_version": "nmap.v1",
+        "capability_family": "network_discovery",
+    }
 
 
 def _build_post_tool_payload(
@@ -162,6 +186,7 @@ def test_remote_runtime_nmap_candidate_above_threshold_projects_candidate_findin
             content_text=_nmap_service_stdout(),
             tool_name="information_gathering.network_discovery.nmap",
             command="nmap -sV 10.0.0.21",
+            execution_metadata=_nmap_service_metadata(),
         )
         ingestion = KnowledgeIngestionService(db)
         ingest_result = ingestion.ingest_execution(
@@ -188,12 +213,13 @@ def test_remote_runtime_nmap_candidate_above_threshold_projects_candidate_findin
             .one()
         )
         run_metadata = dict(run.run_metadata or {})
-        adapter_stats = dict(run_metadata.get("adapter_stats") or {})
+        fact_stats = dict(run_metadata.get("fact_stats") or {})
+        assert "adapter_stats" not in run_metadata
         assert run_metadata.get("candidate_extraction_status") == "ran"
         assert run_metadata.get("candidate_extraction_reason") == "candidates_extracted"
-        assert int(adapter_stats.get("observation_count_non_finding_total") or 0) >= 1
-        assert int(adapter_stats.get("observation_count_finding_total") or 0) == 0
-        assert int(adapter_stats.get("observation_count_finding_authoritative") or 0) == 0
+        assert int(fact_stats.get("observation_count_non_finding_total") or 0) >= 1
+        assert int(fact_stats.get("observation_count_finding_total") or 0) == 0
+        assert int(fact_stats.get("observation_count_finding_authoritative") or 0) == 0
         assert run_metadata.get("candidate_usage_summary") == {
             "input_tokens": 200,
             "output_tokens": 140,
@@ -261,6 +287,7 @@ def test_remote_runtime_nmap_candidate_below_threshold_does_not_create_candidate
             content_text=_nmap_service_stdout(),
             tool_name="information_gathering.network_discovery.nmap",
             command="nmap -sV 10.0.0.21",
+            execution_metadata=_nmap_service_metadata(),
         )
         ingestion = KnowledgeIngestionService(db)
         ingest_result = ingestion.ingest_execution(
@@ -352,6 +379,7 @@ def test_remote_runtime_cve_lookup_candidate_flow_persists_candidate_only_and_hi
             content_text=_nmap_service_stdout(),
             tool_name="information_gathering.network_discovery.nmap",
             command="nmap -sV 10.0.0.21",
+            execution_metadata=_nmap_service_metadata(),
         )
         ingestion = KnowledgeIngestionService(db)
         discovery_result = ingestion.ingest_execution(
@@ -400,11 +428,12 @@ def test_remote_runtime_cve_lookup_candidate_flow_persists_candidate_only_and_hi
             .one()
         )
         run_metadata = dict(lookup_run.run_metadata or {})
-        adapter_stats = dict(run_metadata.get("adapter_stats") or {})
+        fact_stats = dict(run_metadata.get("fact_stats") or {})
+        assert "adapter_stats" not in run_metadata
         assert run_metadata.get("source_tool_name") == "knowledge.cve_lookup"
         assert run_metadata.get("candidate_extraction_status") == "ran"
         assert run_metadata.get("candidate_extraction_reason") == "candidates_extracted"
-        assert int(adapter_stats.get("observation_count_finding_authoritative") or 0) == 0
+        assert int(fact_stats.get("observation_count_finding_authoritative") or 0) == 0
 
         candidate_observation = (
             db.query(KnowledgeObservation)

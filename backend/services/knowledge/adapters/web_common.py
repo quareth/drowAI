@@ -6,7 +6,7 @@ helpers used by gobuster, nuclei, and sqlmap adapters."""
 from __future__ import annotations
 
 from typing import Any, Mapping, Sequence
-from urllib.parse import urljoin, urlsplit
+from urllib.parse import urljoin
 
 from ..contracts import ObservationCreate
 from ..evidence_refs import resolve_refs_from_artifact_summaries
@@ -74,17 +74,6 @@ def build_web_path_subject_key(
         return build_web_path_subject_key(url=joined_url)
     normalized = normalize_url(path)
     return f"web.path:{normalized}"
-
-
-def build_web_origin_key(url: Any) -> str:
-    """Return canonical web origin key derived from URL input."""
-    normalized = normalize_url(url)
-    if not normalized:
-        return ""
-    parts = urlsplit(normalized)
-    if not parts.scheme or not parts.netloc:
-        return ""
-    return f"{parts.scheme}://{parts.netloc}"
 
 
 def resolve_evidence_refs(context: AdapterContext) -> list[dict[str, Any]]:

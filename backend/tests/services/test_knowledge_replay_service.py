@@ -232,6 +232,60 @@ def _seed_execution_with_artifact_payload(
     return str(execution.id)
 
 
+def _semantic_metadata(
+    rows: list[dict[str, object]],
+    *,
+    capability_family: str,
+    schema_version: str,
+) -> dict[str, object]:
+    return {
+        "semantic_observations": rows,
+        "semantic_evidence": [],
+        "semantic_schema_version": schema_version,
+        "capability_family": capability_family,
+    }
+
+
+def _host_discovered_row(ip: str) -> dict[str, object]:
+    return {
+        "observation_type": "network.host_discovered",
+        "subject_type": "host.ip",
+        "subject_key": f"host.ip:{ip}",
+        "payload": {"ip": ip, "source": "replay-test"},
+    }
+
+
+def _open_port_row(ip: str, port: int, *, service_name: str) -> dict[str, object]:
+    return {
+        "observation_type": "network.open_port",
+        "subject_type": "service.socket",
+        "subject_key": f"service.socket:{ip}/tcp/{port}",
+        "payload": {
+            "ip": ip,
+            "protocol": "tcp",
+            "port": port,
+            "service_name": service_name,
+            "source": "replay-test",
+        },
+    }
+
+
+def _web_path_row(target_url: str, path: str, *, status_code: int) -> dict[str, object]:
+    url = f"{target_url.rstrip('/')}/{path.lstrip('/')}"
+    return {
+        "observation_type": "web.path_discovered",
+        "subject_type": "web.path",
+        "subject_key": f"web.path:{url}",
+        "payload": {
+            "url": url,
+            "target_url": target_url,
+            "path": f"/{path.lstrip('/')}",
+            "status_code": status_code,
+            "source": "replay-test",
+        },
+    }
+
+
 def _supported_historical_semantic_cases() -> tuple[dict[str, object], ...]:
     dns_key = build_host_dns_key("api.example.test")
     ip_key = build_host_ip_key("192.0.2.20")
@@ -915,7 +969,7 @@ def test_replay_execution_uses_durable_fallback_after_task_deletion() -> None:
         engine.dispose()
 
 
-def test_replay_execution_reads_archived_file_when_inline_excerpt_missing() -> None:
+def test_replay_execution_reads_archived_file_snapshot_when_inline_excerpt_missing() -> None:
     engine, db = _build_session()
     try:
         _user, _engagement, task = _seed_user_engagement_task(db)
@@ -932,7 +986,14 @@ def test_replay_execution_reads_archived_file_when_inline_excerpt_missing() -> N
             tool_name="information_gathering.network_discovery.nmap",
             tool_arguments={"target": "10.10.10.9"},
             content_text=(nmap_output + "\n" + ("x" * 20000)),
-            execution_metadata={"tool_metadata": {}},
+            execution_metadata=_semantic_metadata(
+                [
+                    _host_discovered_row("10.10.10.9"),
+                    _open_port_row("10.10.10.9", 22, service_name="ssh"),
+                ],
+                capability_family="network_discovery",
+                schema_version="nmap.v1",
+            ),
         )
         ingestion_service = KnowledgeIngestionService(db)
         initial = ingestion_service.ingest_execution(
@@ -1065,7 +1126,7 @@ def test_replay_execution_uses_object_backed_rows_without_provider_file_reads(
         engine.dispose()
 
 
-def test_replay_execution_preserves_artifact_text_adapter_observations_from_object_ref(
+def test_replay_execution_preserves_canonical_web_path_observations_from_object_ref(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -1085,7 +1146,14 @@ def test_replay_execution_preserves_artifact_text_adapter_observations_from_obje
             tool_name="web_applications.web_crawlers.gobuster",
             tool_arguments={"target": "http://example.test"},
             content_text=gobuster_output + ("\n" + ("x" * 20000)),
-            execution_metadata={"tool_metadata": {}},
+            execution_metadata=_semantic_metadata(
+                [
+                    _web_path_row("http://example.test", "/admin", status_code=403),
+                    _web_path_row("http://example.test", "/login", status_code=200),
+                ],
+                capability_family="web_discovery",
+                schema_version="gobuster.v1",
+            ),
         )
         ingestion_service = KnowledgeIngestionService(db)
         initial = ingestion_service.ingest_execution(

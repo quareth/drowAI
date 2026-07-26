@@ -6,7 +6,6 @@ identity, projection, candidate_extraction, query.
 """
 
 from . import candidate_extraction, query
-from .adapter_registry import KnowledgeAdapterRegistryService
 from .archive_service import KnowledgeArchiveService
 from .contracts import IngestionRunCreate, IngestionRunStatus, ObservationCreate
 from .delete_guard_service import KnowledgeDeleteGuardService
@@ -31,7 +30,6 @@ __all__ = [
     "IngestionRunCreate",
     "IngestionRunStatus",
     "ObservationCreate",
-    "KnowledgeAdapterRegistryService",
     "KnowledgeArchiveService",
     "KnowledgeDeleteGuardService",
     "EvidenceStorageService",
