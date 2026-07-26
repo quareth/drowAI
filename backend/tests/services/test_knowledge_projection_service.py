@@ -28,17 +28,20 @@ from backend.services.knowledge.candidate_extraction import (
     CandidateExtractionUsageSummary,
 )
 from backend.services.knowledge.candidate_extraction.mapping import map_structured_payload
-from backend.services.knowledge.adapters.base import AdapterContext
-from backend.services.knowledge.adapters.tshark_adapter import TsharkKnowledgeAdapter
 from backend.services.knowledge.identity.canonical_keys import (
     build_finding_vulnerability_key,
     build_relationship_edge_key,
     build_secret_exposure_finding_key,
 )
+from backend.services.knowledge.pentest_facts import (
+    KnowledgeFactContext,
+    build_knowledge_observations,
+)
 from backend.services.knowledge.projection.relationship_projector import RelationshipProjector
 from backend.services.knowledge.contracts import ObservationCreate as _ObservationCreate
 from backend.services.knowledge.projection_service import KnowledgeProjectionService
 from backend.services.knowledge.query_service import KnowledgeQueryService
+from runtime_shared.semantic.pentest_facts import SemanticFactEnvelope
 
 ObservationCreate = partial(_ObservationCreate, user_id=1)
 
@@ -70,15 +73,17 @@ def _seed_engagement(db, *, tenant_id: int = 1):
 
 
 def _tshark_semantic_secret_exposure(*, fingerprint: str) -> dict:
+    detector_id = (
+        "secret-exposure/tshark/secret_exposure/http.authorization/"
+        + fingerprint.replace(":", "-")
+    )
     return {
         "observation_type": "finding.vulnerability_detected",
         "subject_type": "finding.vulnerability",
-        "subject_key": (
-            "finding.vulnerability:service.socket:203.0.113.20/tcp/80:"
-            "tshark/credential_exposure_detected/http.authorization"
-        ),
+        "subject_key": f"finding.vulnerability:service.socket:203.0.113.20/tcp/80:{detector_id}",
         "payload": {
-            "detector_id": "tshark/credential_exposure_detected/http.authorization",
+            "detector_id": detector_id,
+            "detector_family": "tshark/credential_exposure_detected/http.authorization",
             "finding_subtype": "credential_exposure_detected",
             "title": "Credential material exposed in packet capture",
             "severity": "medium",
@@ -100,53 +105,32 @@ def _tshark_semantic_secret_exposure(*, fingerprint: str) -> dict:
     }
 
 
-def test_tshark_adapter_masks_bare_ftp_protocol_auth_proof_from_metadata() -> None:
-    raw_secret = "synthetic-ftp-password"
-    metadata = {
-        "schema_version": "tshark.v1",
-        "analysis_mode": "secret_exposure",
-        "pcap": {"artifact_sha256": "pcap-sha256"},
-        "secret_exposure": [
-            {
-                "frame": "3",
-                "stream": "9",
-                "protocol": "ftp",
-                "src": "192.0.2.20",
-                "dst": "203.0.113.21",
-                "field": "ftp.request.command_parameter",
-                "flow_key": "tcp:192.0.2.20:49154->203.0.113.21:21",
-                "extraction_filter": "ftp.request.command == PASS",
-                "kind": "protocol_auth_argument",
-                "proof_mode": "proof_excerpt",
-                "proof_excerpt": raw_secret,
-                "pcap_artifact_sha256": "pcap-sha256",
-            }
-        ],
-    }
-    context = AdapterContext(
-        user_id=1,
-        engagement_id=2,
-        task_id=None,
-        source_execution_id="exec-tshark-ftp-proof",
-        ingestion_run_id="run-tshark-ftp-proof",
-        execution_payload={
-            "execution": {"tool_name": "sniffing_spoofing.network_sniffers.tshark"}
-        },
-        tool_metadata=metadata,
+def _observations_from_tshark_semantic_rows(
+    *,
+    user_id: int,
+    engagement_id: int,
+    rows: list[dict],
+) -> tuple[_ObservationCreate, ...]:
+    result = build_knowledge_observations(
+        envelope=SemanticFactEnvelope(
+            semantic_schema_version="tshark.v1",
+            capability_family="packet_analysis",
+            observations=tuple(rows),
+            evidence=(),
+        ),
+        context=KnowledgeFactContext(
+            tenant_id=1,
+            user_id=int(user_id),
+            engagement_id=int(engagement_id),
+            task_id=None,
+            source_execution_id="exec-tshark-semantic-exposure-1",
+            ingestion_run_id="run-tshark-semantic-exposure-1",
+            observed_at=None,
+            artifact_summaries=(),
+            evidence_archives=(),
+        ),
     )
-
-    observations = TsharkKnowledgeAdapter().extract(context)
-    finding = next(
-        item
-        for item in observations
-        if item.observation_type == "finding.vulnerability_detected"
-    )
-
-    assert finding.payload["proof_excerpt"] == "<DURABLE_SECRET_MASK:secret>"
-    assert finding.payload["exposure_proof_id"].endswith("<DURABLE_SECRET_MASK:secret>")
-    assert "ftp.request.command_parameter" in finding.payload["field"]
-    assert raw_secret not in str([item.payload for item in observations])
-    assert raw_secret not in finding.subject_key
+    return result.observations
 
 
 def test_projection_service_upserts_all_execution_plane_read_models() -> None:
@@ -539,21 +523,11 @@ def test_projection_service_keeps_semantic_tshark_secret_proofs_distinct_without
             _tshark_semantic_secret_exposure(fingerprint="hmac-sha256:bearer_token:def456"),
             _tshark_semantic_secret_exposure(fingerprint="hmac-sha256:bearer_token:abc123"),
         ]
-        adapter_context = AdapterContext(
+        observations = _observations_from_tshark_semantic_rows(
             user_id=engagement.user_id,
             engagement_id=engagement.id,
-            task_id=None,
-            source_execution_id="exec-tshark-semantic-exposure-1",
-            ingestion_run_id="run-tshark-semantic-exposure-1",
-            execution_payload={
-                "execution": {
-                    "tool_name": "sniffing_spoofing.network_sniffers.tshark",
-                    "execution_metadata": {"semantic_observations": semantic_rows},
-                }
-            },
-            semantic_observations=semantic_rows,
+            rows=semantic_rows,
         )
-        observations = TsharkKnowledgeAdapter().extract(adapter_context)
         findings = [
             item for item in observations if item.observation_type == "finding.vulnerability_detected"
         ]

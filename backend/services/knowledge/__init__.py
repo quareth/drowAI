@@ -1,8 +1,8 @@
 """Knowledge domain services package.
 
-Consolidates ingestion, projection, query, evidence, identity, retention, and
-replay services under one canonical namespace. Sub-packages: adapters,
-identity, projection, candidate_extraction, query.
+Consolidates ingestion, projection, query, evidence, identity, retention,
+and replay services under one canonical namespace. Sub-packages: identity,
+projection, candidate_extraction, query.
 """
 
 from . import candidate_extraction, query

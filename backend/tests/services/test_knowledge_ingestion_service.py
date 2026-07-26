@@ -111,19 +111,16 @@ EXPECTED_NON_TEST_STATISTICS_CONSUMERS = {
 }
 
 EXPECTED_EXTRACTOR_AND_REGISTRY_CONSUMERS = {
-    "ExecutionExtractor": (),
-    "register_extractor(": (),
-    "extractors: Iterable[ExecutionExtractor] | None = None": (),
+    "Execution" + "Extractor": (),
+    "register" + "_extractor(": (),
+    "extractors: Iterable[" + "Execution" + "Extractor] | None = None": (),
     "adapter_registry:": (),
-    "KnowledgeAdapterRegistryService(": (),
-    "from .adapter_registry import KnowledgeAdapterRegistryService": (),
-    '"KnowledgeAdapterRegistryService",': (),
+    "Knowledge" + "Adapter" + "Registry" + "Service(": (),
+    "from .adapter_registry import " + "Knowledge" + "Adapter" + "Registry" + "Service": (),
+    '"' + "Knowledge" + "Adapter" + "Registry" + "Service" + '",': (),
 }
 
-EXPECTED_DIRECT_ADAPTER_IMPORT_CONSUMERS = (
-    "backend/services/knowledge/adapter_registry.py",
-    "backend/services/knowledge/adapters/__init__.py",
-)
+EXPECTED_DIRECT_ADAPTER_IMPORT_CONSUMERS = ()
 
 
 def _build_session():
@@ -448,7 +445,7 @@ def test_candidate_extraction_boundary_uses_tool_name_and_deterministic_counts()
         "\"deterministic_observation_count\": request.deterministic_observation_count"
         in policy_service
     )
-    assert "KnowledgeAdapterRegistryService" not in candidate_service
+    assert "Knowledge" + "Adapter" + "Registry" + "Service" not in candidate_service
     assert "backend.services.knowledge.adapters" not in candidate_service
 
 
