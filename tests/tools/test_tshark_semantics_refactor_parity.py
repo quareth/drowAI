@@ -3173,14 +3173,14 @@ def test_facade_snapshot_semantic_observations_and_evidence_are_masked() -> None
         "service.socket:203.0.113.20/tcp/80",
         (
             "finding.vulnerability:service.socket:203.0.113.20/tcp/80:"
-            "secret-exposure/tshark/credential_exposure_detected/http.authorization/"
+            "secret-exposure/tshark/secret_exposure/http.authorization/"
             "http/authorization_header/tcp-192.0.2.10-49152--203.0.113.20-80/"
             "sha-2-7-http.authorization-bearer-durable_secret_mask-token"
         ),
         "service.socket:203.0.113.20/tcp/80",
         (
             "finding.vulnerability:service.socket:203.0.113.20/tcp/80:"
-            "secret-exposure/tshark/credential_exposure_detected/http.cookie/"
+            "secret-exposure/tshark/secret_exposure/http.cookie/"
             "http/cookie/tcp-192.0.2.10-49152--203.0.113.20-80/"
             "sha-2-7-http.cookie-durable_secret_mask-secret"
         ),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 from pathlib import Path
 import uuid as uuid_lib
 
@@ -13,7 +14,17 @@ from sqlalchemy.orm import sessionmaker
 
 from backend.database import Base
 from backend.models.core import Engagement, Task, User
-from backend.models.knowledge import KnowledgeEvidenceArchive, KnowledgeIngestionRun, KnowledgeObservation
+from backend.models.knowledge import (
+    EngagementWebPathLink,
+    KnowledgeAsset,
+    KnowledgeEvidenceArchive,
+    KnowledgeFinding,
+    KnowledgeIngestionRun,
+    KnowledgeObservation,
+    KnowledgeRelationship,
+    KnowledgeService,
+    KnowledgeWebPath,
+)
 from backend.models.provenance import ExecutionArtifact, ToolExecution
 from backend.models.tenant import Tenant, TenantMembership
 from backend.services.data_plane.local_object_store import LocalObjectStore
@@ -21,10 +32,27 @@ from backend.services.knowledge.candidate_extraction import (
     CandidateExtractionResult,
     CandidateExtractionUsageSummary,
 )
-from backend.services.knowledge.contracts import ObservationCreate
+from backend.services.knowledge.contracts import (
+    ObservationCreate,
+    parse_semantic_inputs_from_execution,
+)
+from backend.services.knowledge.historical_backfill_service import (
+    KnowledgeHistoricalBackfillService,
+)
 from backend.services.knowledge.ingestion_service import KnowledgeIngestionService
+from backend.services.knowledge.pentest_facts import (
+    KnowledgeFactContext,
+    build_knowledge_observations,
+)
 from backend.services.knowledge.replay_source_resolver import KnowledgeReplaySourceResolver
 from backend.services.knowledge.replay_service import KnowledgeReplayService
+from runtime_shared.semantic.canonical_keys import (
+    build_host_dns_key,
+    build_host_ip_key,
+    build_relationship_edge_key,
+)
+from runtime_shared.semantic.pentest_facts import SemanticFactEnvelope
+from runtime_shared.semantic.web_common import build_finding_subject_key
 
 
 class _FakeCandidateExtractionService:
@@ -204,6 +232,256 @@ def _seed_execution_with_artifact_payload(
     return str(execution.id)
 
 
+def _supported_historical_semantic_cases() -> tuple[dict[str, object], ...]:
+    dns_key = build_host_dns_key("api.example.test")
+    ip_key = build_host_ip_key("192.0.2.20")
+    relationship_key = build_relationship_edge_key(
+        source_subject_key=dns_key,
+        relationship_type="resolves_to",
+        target_subject_key=ip_key,
+    )
+    nuclei_url = "https://example.test/admin"
+    return (
+        {
+            "name": "nmap",
+            "tool_name": "information_gathering.network_discovery.nmap",
+            "tool_arguments": {"target": "192.0.2.20"},
+            "capability_family": "network_discovery",
+            "semantic_schema_version": "nmap.v1",
+            "rows": [
+                {
+                    "observation_type": "network.host_discovered",
+                    "subject_type": "host.ip",
+                    "subject_key": ip_key,
+                    "payload": {"source": "nmap", "host_status": "up"},
+                }
+            ],
+        },
+        {
+            "name": "nuclei",
+            "tool_name": "web_applications.web_vulnerability_scanners.nuclei",
+            "tool_arguments": {"target": nuclei_url},
+            "capability_family": "vulnerability_scanning",
+            "semantic_schema_version": "nuclei.v1",
+            "rows": [
+                {
+                    "observation_type": "finding.vulnerability_detected",
+                    "subject_type": "finding.instance",
+                    "subject_key": build_finding_subject_key(
+                        detector_id="nuclei/cve-2026-0001",
+                        target_url=nuclei_url,
+                        variant_id="admin-panel",
+                    ),
+                    "payload": {
+                        "source": "nuclei",
+                        "detector_id": "nuclei/cve-2026-0001",
+                        "target_url": nuclei_url,
+                        "matcher_id": "admin-panel",
+                        "severity": "high",
+                    },
+                },
+            ],
+        },
+        {
+            "name": "amass",
+            "tool_name": "information_gathering.dns.amass",
+            "tool_arguments": {"domain": "example.test"},
+            "capability_family": "dns_enumeration",
+            "semantic_schema_version": "amass.v1",
+            "rows": [
+                {
+                    "observation_type": "dns.name_discovered",
+                    "subject_type": "host.dns",
+                    "subject_key": dns_key,
+                    "payload": {"dns_name": "api.example.test", "tool_source": "amass"},
+                },
+                {
+                    "observation_type": "dns.address_resolved",
+                    "subject_type": "host.ip",
+                    "subject_key": ip_key,
+                    "payload": {
+                        "address": "192.0.2.20",
+                        "record_type": "A",
+                        "tool_source": "amass",
+                    },
+                },
+                {
+                    "observation_type": "relationship.resolves_to",
+                    "subject_type": "relationship.edge",
+                    "subject_key": relationship_key,
+                    "payload": {
+                        "source_subject_type": "host.dns",
+                        "source_subject_key": dns_key,
+                        "relationship_type": "resolves_to",
+                        "target_subject_type": "host.ip",
+                        "target_subject_key": ip_key,
+                        "record_type": "A",
+                        "tool_source": "amass",
+                    },
+                },
+            ],
+        },
+    )
+
+
+def _canonical_snapshot_from_resolved_source(
+    db,
+    *,
+    resolved_source: dict[str, object],
+    tenant_id: int,
+    user_id: int,
+    source_execution_id: str,
+) -> list[dict[str, object]]:
+    execution_payload = dict(resolved_source["execution_payload"])
+    execution = dict(execution_payload["execution"])
+    semantic_inputs = parse_semantic_inputs_from_execution(execution)
+    envelope = SemanticFactEnvelope(
+        semantic_schema_version=semantic_inputs.get("semantic_schema_version"),
+        capability_family=semantic_inputs.get("capability_family"),
+        observations=tuple(semantic_inputs.get("semantic_observations") or ()),
+        evidence=tuple(semantic_inputs.get("semantic_evidence") or ()),
+    )
+    archives = (
+        db.query(KnowledgeEvidenceArchive)
+        .filter(KnowledgeEvidenceArchive.source_execution_id == source_execution_id)
+        .order_by(KnowledgeEvidenceArchive.created_at.asc(), KnowledgeEvidenceArchive.id.asc())
+        .all()
+    )
+    result = build_knowledge_observations(
+        envelope=envelope,
+        context=KnowledgeFactContext(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            engagement_id=int(resolved_source["engagement_id"]),
+            task_id=resolved_source.get("task_id"),
+            source_execution_id=source_execution_id,
+            ingestion_run_id="canonical-reference",
+            observed_at=None,
+            artifact_summaries=tuple(
+                dict(item) for item in execution_payload.get("artifacts", [])
+            ),
+            evidence_archives=tuple(archives),
+        ),
+    )
+    assert result.compiled.input_count == len(envelope.observations)
+    assert result.compiled.accepted_count == len(envelope.observations)
+    assert result.compiled.rejected_count == 0
+    assert result.compiled.diagnostics == ()
+    return _observation_snapshot(result.observations, include_run_id=False)
+
+
+def _run_observation_snapshot(db, *, ingestion_run_id: object) -> list[dict[str, object]]:
+    rows = (
+        db.query(KnowledgeObservation)
+        .filter(KnowledgeObservation.ingestion_run_id == ingestion_run_id)
+        .order_by(KnowledgeObservation.created_at.asc(), KnowledgeObservation.id.asc())
+        .all()
+    )
+    return _observation_snapshot(rows, include_run_id=False)
+
+
+def _observation_snapshot(
+    observations: list[object] | tuple[object, ...],
+    *,
+    include_run_id: bool,
+) -> list[dict[str, object]]:
+    snapshot: list[dict[str, object]] = []
+    for item in observations:
+        entry = {
+            "observation_type": str(item.observation_type),
+            "subject_type": str(item.subject_type),
+            "subject_key": str(item.subject_key),
+            "assertion_level": str(item.assertion_level),
+            "payload": dict(item.payload or {}),
+            "observation_metadata": dict(item.observation_metadata or {}),
+            "lineage": {
+                "user_id": int(item.user_id),
+                "engagement_id": int(item.engagement_id),
+                "task_id": item.task_id,
+                "source_execution_id": str(item.source_execution_id),
+            },
+            "dedupe_key": str(item.dedupe_key),
+        }
+        if include_run_id:
+            entry["lineage"]["ingestion_run_id"] = str(item.ingestion_run_id)
+        snapshot.append(entry)
+    snapshot.sort(
+        key=lambda item: (
+            str(item["observation_type"]),
+            str(item["subject_type"]),
+            str(item["subject_key"]),
+            json.dumps(item["payload"], sort_keys=True, separators=(",", ":")),
+        )
+    )
+    return snapshot
+
+
+def _projection_snapshot(db, *, engagement_id: int) -> dict[str, object]:
+    return {
+        "assets": [
+            {
+                "asset_key": row.asset_key,
+                "asset_type": row.asset_type,
+                "ip_address": row.ip_address,
+                "hostname": row.hostname,
+            }
+            for row in db.query(KnowledgeAsset)
+            .filter(KnowledgeAsset.engagement_id == engagement_id)
+            .order_by(KnowledgeAsset.asset_key.asc())
+            .all()
+        ],
+        "services": [
+            {
+                "service_key": row.service_key,
+                "protocol": row.protocol,
+                "port": row.port,
+                "service_name": row.service_name,
+            }
+            for row in db.query(KnowledgeService)
+            .filter(KnowledgeService.engagement_id == engagement_id)
+            .order_by(KnowledgeService.service_key.asc())
+            .all()
+        ],
+        "findings": [
+            {
+                "finding_key": row.finding_key,
+                "finding_type": row.finding_type,
+                "subject_key": row.subject_key,
+                "severity": row.severity,
+                "assertion_level": row.assertion_level,
+            }
+            for row in db.query(KnowledgeFinding)
+            .filter(KnowledgeFinding.engagement_id == engagement_id)
+            .order_by(KnowledgeFinding.finding_key.asc())
+            .all()
+        ],
+        "relationships": [
+            {
+                "relationship_key": row.relationship_key,
+                "source_subject_key": row.source_subject_key,
+                "relationship_type": row.relationship_type,
+                "target_subject_key": row.target_subject_key,
+            }
+            for row in db.query(KnowledgeRelationship)
+            .filter(KnowledgeRelationship.engagement_id == engagement_id)
+            .order_by(KnowledgeRelationship.relationship_key.asc())
+            .all()
+        ],
+        "web_paths": [
+            {
+                "canonical_url": row.canonical_url,
+                "path": row.path,
+                "last_status_code": row.last_status_code,
+            }
+            for row in db.query(KnowledgeWebPath)
+            .join(EngagementWebPathLink, EngagementWebPathLink.web_path_id == KnowledgeWebPath.id)
+            .filter(EngagementWebPathLink.engagement_id == engagement_id)
+            .order_by(KnowledgeWebPath.canonical_url.asc())
+            .all()
+        ],
+    }
+
+
 def test_replay_execution_creates_new_run_with_explicit_target_version() -> None:
     engine, db = _build_session()
     try:
@@ -301,6 +579,144 @@ def test_runtime_and_durable_replay_enter_the_same_ingestion_payload_boundary() 
             assert call["replay_source_type"] == source_kind
             assert call["reuse_existing_archive_rows"] is True
             assert call["raise_on_error"] is True
+        finally:
+            db.close()
+            engine.dispose()
+
+
+def test_supported_historical_snapshots_replay_with_canonical_parity() -> None:
+    for case in _supported_historical_semantic_cases():
+        engine, db = _build_session()
+        try:
+            user, engagement, task = _seed_user_engagement_task(db)
+            rows = list(case["rows"])
+            execution_metadata = {
+                "semantic_observations": rows,
+                "semantic_evidence": [],
+                "semantic_schema_version": case["semantic_schema_version"],
+                "capability_family": case["capability_family"],
+            }
+            execution_id = _seed_execution_with_artifact_payload(
+                db,
+                task_id=task.id,
+                tenant_id=task.tenant_id,
+                tool_name=str(case["tool_name"]),
+                tool_arguments=dict(case["tool_arguments"]),
+                content_text=f"canonical historical replay fixture: {case['name']}",
+                execution_metadata=execution_metadata,
+            )
+            ingestion_service = KnowledgeIngestionService(db)
+            replay_service = KnowledgeReplayService(
+                db,
+                ingestion_service=ingestion_service,
+            )
+            initial = ingestion_service.ingest_execution(
+                task_id=task.id,
+                source_execution_id=execution_id,
+                extractor_family="runtime.ingestion",
+                extractor_version=f"{case['name']}.baseline",
+                delete_survival_required=True,
+                raise_on_error=True,
+            )
+            assert initial["ok"] is True
+
+            before_replay_count = (
+                db.query(KnowledgeObservation)
+                .filter(KnowledgeObservation.source_execution_id == execution_id)
+                .count()
+            )
+            runtime_resolved = replay_service.replay_source_resolver.resolve_source(
+                source_execution_id=execution_id,
+                task_id=task.id,
+            )
+            runtime_canonical = _canonical_snapshot_from_resolved_source(
+                db,
+                resolved_source=runtime_resolved,
+                tenant_id=int(task.tenant_id),
+                user_id=int(user.id),
+                source_execution_id=execution_id,
+            )
+            runtime_replay = replay_service.replay_execution(
+                task_id=task.id,
+                source_execution_id=execution_id,
+                extractor_family="runtime.ingestion",
+                target_extractor_version=f"{case['name']}.runtime-replay",
+            )
+            runtime_snapshot = _run_observation_snapshot(
+                db,
+                ingestion_run_id=runtime_replay["ingestion_run_id"],
+            )
+            runtime_projection = _projection_snapshot(db, engagement_id=engagement.id)
+
+            durable_resolved = replay_service.replay_source_resolver.resolve_source(
+                source_execution_id=execution_id,
+                task_id=None,
+            )
+            durable_canonical = _canonical_snapshot_from_resolved_source(
+                db,
+                resolved_source=durable_resolved,
+                tenant_id=int(task.tenant_id),
+                user_id=int(user.id),
+                source_execution_id=execution_id,
+            )
+            durable_replay = replay_service.replay_execution(
+                task_id=None,
+                source_execution_id=execution_id,
+                extractor_family="runtime.ingestion",
+                target_extractor_version=f"{case['name']}.durable-replay",
+            )
+            durable_snapshot = _run_observation_snapshot(
+                db,
+                ingestion_run_id=durable_replay["ingestion_run_id"],
+            )
+            durable_projection = _projection_snapshot(db, engagement_id=engagement.id)
+            after_replay_count = (
+                db.query(KnowledgeObservation)
+                .filter(KnowledgeObservation.source_execution_id == execution_id)
+                .count()
+            )
+            backfill_gate = KnowledgeHistoricalBackfillService(
+                db
+            ).verify_after_replay_backfill(
+                target_engagement_ids=[engagement.id],
+                verify_idempotent_rerun=True,
+                replay_extractor_family="runtime.ingestion",
+                replay_extractor_version=f"{case['name']}.durable-replay",
+                require_replay_runs=True,
+            )
+
+            assert runtime_resolved["source_kind"] == "runtime"
+            assert durable_resolved["source_kind"] == "durable_archive"
+            assert runtime_canonical == durable_canonical
+            assert runtime_snapshot == runtime_canonical
+            assert durable_snapshot == durable_canonical
+            assert runtime_projection == durable_projection
+            assert after_replay_count == before_replay_count + (2 * len(rows))
+            assert all(
+                item["lineage"]["source_execution_id"] == execution_id
+                for item in runtime_snapshot
+            )
+            assert all(
+                item["lineage"]["source_execution_id"] == execution_id
+                for item in durable_snapshot
+            )
+            persisted_replay_tenants = {
+                row.tenant_id
+                for row in db.query(KnowledgeObservation)
+                .filter(
+                    KnowledgeObservation.ingestion_run_id.in_(
+                        [
+                            runtime_replay["ingestion_run_id"],
+                            durable_replay["ingestion_run_id"],
+                        ]
+                    )
+                )
+                .all()
+            }
+            assert persisted_replay_tenants == {task.tenant_id}
+            assert backfill_gate["completion_gate_passed"] is True
+            assert backfill_gate["failed_engagement_count"] == 0
+            assert backfill_gate["engagement_statuses"][0]["idempotent_rerun"]["ok"] is True
         finally:
             db.close()
             engine.dispose()

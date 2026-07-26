@@ -228,7 +228,13 @@ def test_masscan_parser_shape_stays_reference_only_for_hidden_tool() -> None:
         }
     ]
     assert metadata["open_ports"] == [
-        {"port": 8080, "protocol": "tcp", "status": "open", "service": "http"}
+        {
+            "ip": "10.0.0.9",
+            "port": 8080,
+            "protocol": "tcp",
+            "status": "open",
+            "service": "http",
+        }
     ]
     assert MASSCAN_REFERENCE_TOOL_ID not in registered_network_discovery_tool_ids()
     assert get_adapter(MASSCAN_REFERENCE_TOOL_ID) is None

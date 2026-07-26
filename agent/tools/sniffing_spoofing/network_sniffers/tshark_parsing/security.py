@@ -550,11 +550,12 @@ def build_secret_exposure_finding(
     )
     detector_leaf = field or kind
     detector_family = f"tshark/{finding_kind}/{detector_leaf}"
+    detector_base_id = f"tshark/secret_exposure/{detector_leaf}"
     proof_id = secret_exposure_proof_id(exposure)
     if not proof_id:
         return None
     detector_id = final_secret_exposure_detector_id(
-        detector_id=detector_family,
+        detector_id=detector_base_id,
         protocol=protocol or "unknown",
         kind=kind,
         proof_id=proof_id,

@@ -15,7 +15,12 @@ from backend.models.tenant import Tenant, TenantMembership
 from backend.models.knowledge import KnowledgeEvidenceArchive, KnowledgeIngestionRun
 from backend.models.provenance import ExecutionArtifact, ToolExecution
 from backend.services.knowledge.ingestion_service import KnowledgeIngestionService
+from backend.services.knowledge.pentest_facts import (
+    KnowledgeFactContext,
+    build_knowledge_observations,
+)
 from backend.services.knowledge.replay_source_resolver import KnowledgeReplaySourceResolver
+from runtime_shared.semantic.pentest_facts import SemanticFactEnvelope, compile_facts
 
 SUPPORTED_DURABLE_SNAPSHOT_AUDIT = {
     "scope": "repo-supported durable replay corpus available in this branch",
@@ -341,22 +346,21 @@ def test_durable_replay_source_preserves_synthetic_historical_blocker_fixture() 
             },
         )
         db.add(run)
-        db.add(
-            KnowledgeEvidenceArchive(
-                id=uuid_lib.uuid4(),
-                tenant_id=int(task.tenant_id),
-                user_id=int(user.id),
-                engagement_id=int(engagement.id),
-                task_id=int(task.id),
-                source_execution_id=source_execution_id,
-                storage_mode="inline_excerpt",
-                inline_excerpt="historical strict-admission blocker fixture",
-                content_sha256="a" * 64,
-                byte_size=45,
-                mime_type="text/plain",
-                lineage_snapshot={"artifact_kind": "stdout"},
-            )
+        archive = KnowledgeEvidenceArchive(
+            id=uuid_lib.uuid4(),
+            tenant_id=int(task.tenant_id),
+            user_id=int(user.id),
+            engagement_id=int(engagement.id),
+            task_id=int(task.id),
+            source_execution_id=source_execution_id,
+            storage_mode="inline_excerpt",
+            inline_excerpt="historical strict-admission blocker fixture",
+            content_sha256="a" * 64,
+            byte_size=45,
+            mime_type="text/plain",
+            lineage_snapshot={"artifact_kind": "stdout"},
         )
+        db.add(archive)
         db.flush()
 
         db.execute(text("DELETE FROM tasks WHERE id = :task_id"), {"task_id": task.id})
@@ -374,6 +378,39 @@ def test_durable_replay_source_preserves_synthetic_historical_blocker_fixture() 
         assert replay_metadata["semantic_schema_version"] == "historical.v1"
         assert replay_metadata["capability_family"] == "knowledge_historical_replay"
         assert resolved["semantic_input_snapshot"]["semantic_observations"] == semantic_rows
+        envelope = SemanticFactEnvelope(
+            semantic_schema_version=replay_metadata["semantic_schema_version"],
+            capability_family=replay_metadata["capability_family"],
+            observations=tuple(replay_metadata["semantic_observations"]),
+            evidence=tuple(replay_metadata.get("semantic_evidence") or ()),
+        )
+        compiled = compile_facts(envelope)
+        bridge_result = build_knowledge_observations(
+            envelope=envelope,
+            context=KnowledgeFactContext(
+                tenant_id=int(task.tenant_id),
+                user_id=int(user.id),
+                engagement_id=int(engagement.id),
+                task_id=int(task.id),
+                source_execution_id=str(source_execution_id),
+                ingestion_run_id="historical-blocker-canonical-proof",
+                observed_at=None,
+                artifact_summaries=tuple(
+                    dict(item)
+                    for item in resolved["execution_payload"].get("artifacts", [])
+                ),
+                evidence_archives=(archive,),
+            ),
+        )
+        assert compiled.accepted_count == 0
+        assert compiled.rejected_count == len(semantic_rows)
+        assert [diagnostic.code for diagnostic in compiled.diagnostics] == [
+            "invalid_fact_row",
+            "invalid_fact_row",
+            "invalid_fact_row",
+            "invalid_fact_row",
+        ]
+        assert bridge_result.observations == ()
     finally:
         db.close()
         engine.dispose()
