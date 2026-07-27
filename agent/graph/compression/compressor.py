@@ -24,13 +24,11 @@ from .deterministic.common import (
     dedupe_string_list,
     extract_token_usage,
 )
-from .deterministic.contracts import CompressionInput, DeterministicCompressionResult
 from .deterministic.envelope import (
     derive_compact_errors,
     extract_artifact_refs,
     merge_decision_evidence,
 )
-from .deterministic.registry import compress_deterministically
 from .pentest_facts import CompactFactContext, project_compact_facts
 from .schema import (
     CompactToolOutput,
@@ -129,30 +127,6 @@ def _sanitize_processor_metadata_value(value: Any) -> Any:
     if isinstance(value, tuple):
         return tuple(_sanitize_processor_metadata_value(item) for item in value)
     return value
-
-
-def _call_deterministic_registry(
-    *,
-    tool_name: str,
-    raw_result: Mapping[str, Any],
-    artifact_path: Optional[str],
-    execution_id: Optional[str],
-) -> DeterministicCompressionResult:
-    """Run the deterministic registry, preserving generic fallback on failures."""
-
-    try:
-        return compress_deterministically(
-            CompressionInput(
-                tool_name=tool_name,
-                raw_result=raw_result,
-                artifact_path=artifact_path,
-                execution_id=execution_id,
-            )
-        )
-    except Exception:
-        return DeterministicCompressionResult.none(
-            fallback_reason="deterministic_registry_error"
-        )
 
 
 def _build_canonical_pentest_fact_projection(
@@ -312,26 +286,6 @@ def _deterministic_catalog_role_skip_reason(tool_name: str) -> Optional[str]:
     return "catalog_role_resolution_error"
 
 
-def _uses_deterministic_fields(result: DeterministicCompressionResult) -> bool:
-    """Return whether adapter fields should participate in compact output."""
-
-    return result.completeness in ("complete", "partial")
-
-
-def _deterministic_fallback_reason(
-    result: DeterministicCompressionResult,
-) -> Optional[str]:
-    """Return the fallback reason implied by deterministic adapter coverage."""
-
-    if result.fallback_reason:
-        return result.fallback_reason
-    if result.completeness == "partial":
-        return "deterministic_adapter_partial"
-    if result.completeness == "none":
-        return "deterministic_adapter_none"
-    return None
-
-
 def _processed_analysis_source(processed: Any) -> str:
     """Return normalized processor analysis source metadata."""
 
@@ -344,7 +298,7 @@ def _processed_analysis_reason(processed: Any) -> str:
     return str(getattr(processed, "analysis_reason", "") or "").strip()
 
 
-def _build_deterministic_compact_output(
+def _build_metadata_compact_output(
     *,
     tool_name: str,
     raw_result: Mapping[str, Any],
@@ -353,40 +307,25 @@ def _build_deterministic_compact_output(
     status: str,
     success: bool,
     exit_code: Optional[int],
-    deterministic: DeterministicCompressionResult,
-    deterministic_enabled: bool,
 ) -> Optional[CompactToolOutput]:
-    """Build the independent deterministic compact lane when facts exist."""
+    """Build generic metadata-only compact output after adapter retirement."""
 
-    use_deterministic_fields = _uses_deterministic_fields(deterministic)
     metadata_summary = _metadata_compact_summary(raw_result)
-    deterministic_summary = (
-        str(deterministic.summary or "").strip() if use_deterministic_fields else ""
-    )
-    summary = metadata_summary or deterministic_summary
+    summary = metadata_summary
 
     metadata_key_findings = _metadata_compact_key_findings(raw_result)
-    deterministic_key_findings = (
-        list(deterministic.key_findings) if use_deterministic_fields else []
-    )
-    key_findings = metadata_key_findings or deterministic_key_findings
+    key_findings = metadata_key_findings
 
     metadata_structured_signals = _metadata_compact_structured_signals(raw_result)
-    deterministic_structured_signals = (
-        list(deterministic.structured_signals) if use_deterministic_fields else []
-    )
-    structured_signals = metadata_structured_signals or deterministic_structured_signals
+    structured_signals = metadata_structured_signals
 
-    deterministic_decision_evidence = (
-        list(deterministic.decision_evidence) if use_deterministic_fields else []
-    )
     decision_evidence = merge_decision_evidence(
         raw_result=raw_result,
-        processed_evidence=deterministic_decision_evidence,
+        processed_evidence=(),
         limit=5,
     )
 
-    errors = list(deterministic.errors) if use_deterministic_fields else []
+    errors: List[str] = []
     has_deterministic_payload = bool(
         summary
         or key_findings
@@ -396,12 +335,6 @@ def _build_deterministic_compact_output(
     )
     if not has_deterministic_payload:
         return None
-
-    lossiness_risk = (
-        deterministic.lossiness_risk if use_deterministic_fields else "medium"
-    )
-    if lossiness_risk not in {"low", "medium", "high"}:
-        lossiness_risk = "medium"
 
     return CompactToolOutput(
         tool=tool_name,
@@ -414,7 +347,7 @@ def _build_deterministic_compact_output(
         report_recommendations=[],
         structured_signals=structured_signals,
         decision_evidence=decision_evidence,
-        lossiness_risk=lossiness_risk,
+        lossiness_risk="medium",
         artifact_refs=extract_artifact_refs(
             artifact_path=artifact_path,
             raw_result=raw_result,
@@ -424,11 +357,7 @@ def _build_deterministic_compact_output(
             source="deterministic",
             model=None,
             token_usage=None,
-            fallback_reason=(
-                _deterministic_fallback_reason(deterministic)
-                if deterministic_enabled
-                else "deterministic_adapter_skipped"
-            ),
+            fallback_reason="deterministic_adapter_retired",
         ),
     )
 
@@ -563,7 +492,7 @@ async def compress_tool_output(
             exit_code=exit_code,
         )
     else:
-        deterministic_compact_output = _build_deterministic_compact_output(
+        deterministic_compact_output = _build_metadata_compact_output(
             tool_name=tool_name,
             raw_result=raw_result,
             artifact_path=artifact_path,
@@ -571,8 +500,6 @@ async def compress_tool_output(
             status=status,
             success=success,
             exit_code=exit_code,
-            deterministic=DeterministicCompressionResult.none(),
-            deterministic_enabled=False,
         )
     usage_record = (
         build_usage_record(getattr(processed, "usage", None))

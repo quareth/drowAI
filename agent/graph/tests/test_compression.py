@@ -19,17 +19,12 @@ from agent.graph.compression.compressor import (
 )
 from agent.graph.compression.pentest_facts import CompactFactContext
 from agent.providers.llm.core.exceptions import LLMRefusalError, LLMRefusalOutcome
-from agent.graph.compression.deterministic import registry as deterministic_registry
-from agent.graph.compression.deterministic.contracts import (
-    CompressionInput,
-    DeterministicCompressionResult,
-)
-from agent.graph.compression.deterministic.http import HTTP_REQUEST_TOOL_ID
-from agent.graph.compression.deterministic.network_discovery import NMAP_TOOL_ID
-from agent.graph.compression.deterministic.registry import register_adapter
-from agent.graph.compression.deterministic.credential_attack import HYDRA_TOOL_ID
 from agent.graph.compression.schema import CompactToolOutput, CompressionMetadata
 from runtime_shared.semantic.pentest_facts.contracts import CompiledFactSet
+
+HTTP_REQUEST_TOOL_ID = "information_gathering.web_enumeration.http_request"
+HYDRA_TOOL_ID = "password_attacks.online_attacks.hydra"
+NMAP_TOOL_ID = "information_gathering.network_discovery.nmap"
 
 
 class _PromptCapturingLLMClient:
@@ -304,18 +299,8 @@ async def test_compress_tool_output_merges_partial_metadata_evidence_before_cano
     ]
 
 
-def test_canonical_projection_helper_invalid_semantics_do_not_use_registry(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_canonical_projection_helper_invalid_semantics_do_not_emit_secondary() -> None:
     """Invalid canonical input is non-crashing and cannot revive legacy parsing."""
-
-    def _registry_stub(*args: Any, **kwargs: Any) -> None:  # noqa: ARG001
-        raise AssertionError("legacy deterministic registry was invoked")
-
-    monkeypatch.setattr(
-        "agent.graph.compression.compressor.compress_deterministically",
-        _registry_stub,
-    )
 
     compact = _build_canonical_pentest_fact_projection(
         tool_name="information_gathering.network_discovery.nmap",
@@ -688,20 +673,6 @@ async def test_compress_tool_output_metadata_overrides_replace_adapter_fields_an
     long_summary = "s" * (COMPACT_SUMMARY_MAX_CHARS + 10)
     max_key_finding = "k" * COMPACT_KEY_FINDINGS_TOTAL_MAX_CHARS
 
-    def _adapter(input_data: CompressionInput) -> DeterministicCompressionResult:
-        return DeterministicCompressionResult(
-            summary="Adapter summary should be replaced.",
-            key_findings=("Adapter finding should be replaced.",),
-            structured_signals=({"type": "service", "port": 8080, "service": "http"},),
-            decision_evidence=(
-                "Adapter evidence follows metadata.",
-                "Adapter evidence fills the fifth slot.",
-                "Adapter evidence hidden by the five item limit.",
-            ),
-            lossiness_risk="low",
-            completeness="complete",
-        )
-
     async def _process_output_stub(
         self: object,
         tool_name: str,
@@ -719,11 +690,6 @@ async def test_compress_tool_output_metadata_overrides_replace_adapter_fields_an
             usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
         )
 
-    monkeypatch.setitem(
-        deterministic_registry._ADAPTERS,
-        "registry_wiring_tests.override_adapter",
-        _adapter,
-    )
     monkeypatch.setattr(
         "agent.graph.compression.compressor.UniversalToolProcessor.process_output",
         _process_output_stub,
@@ -779,7 +745,6 @@ async def test_compress_tool_output_metadata_overrides_replace_adapter_fields_an
     assert deterministic is not None
     assert result.compact_output.summary == "Processor summary remains primary."
     assert deterministic.summary == long_summary[:COMPACT_SUMMARY_MAX_CHARS]
-    assert deterministic.summary != "Adapter summary should be replaced."
     assert deterministic.key_findings == [
         "finding-1",
         "finding-2",
@@ -1445,9 +1410,6 @@ async def test_compress_tool_output_pentest_uses_canonical_projection_not_regist
     processor_calls: list[str] = []
     captured_metadata: list[Dict[str, Any]] = []
 
-    def _registry_should_not_run(*args: Any, **kwargs: Any) -> None:  # noqa: ARG001
-        raise AssertionError("pentest compression must not call the registry")
-
     async def _process_output_stub(
         self,
         tool_name: str,
@@ -1472,10 +1434,6 @@ async def test_compress_tool_output_pentest_uses_canonical_projection_not_regist
             },
         )
 
-    monkeypatch.setattr(
-        "agent.graph.compression.compressor.compress_deterministically",
-        _registry_should_not_run,
-    )
     monkeypatch.setattr(
         "agent.graph.compression.compressor.UniversalToolProcessor.process_output",
         _process_output_stub,
@@ -1578,16 +1536,12 @@ Content-Type: text/html; charset=utf-8
 
 
 @pytest.mark.asyncio
-async def test_compress_tool_output_utility_catalog_role_skips_deterministic_registry(
+async def test_compress_tool_output_utility_catalog_role_uses_processor_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Utility-role tools should use the processor path even with a registered adapter."""
+    """Utility-role tools should use the processor path without registry dispatch."""
     service_access_tool_id = "service_access.ftp_login"
     calls: list[str] = []
-
-    def _deterministic_should_not_run(input_data: CompressionInput) -> DeterministicCompressionResult:
-        calls.append(f"adapter:{input_data.tool_name}")
-        raise AssertionError("utility tools must skip the deterministic registry")
 
     async def _process_output_stub(self, tool_name: str, raw_output: str, metadata: Dict[str, Any]):  # noqa: ANN001
         calls.append(f"processor:{tool_name}")
@@ -1607,10 +1561,6 @@ async def test_compress_tool_output_utility_catalog_role_skips_deterministic_reg
             },
         )
 
-    monkeypatch.setattr(
-        "agent.graph.compression.compressor.compress_deterministically",
-        _deterministic_should_not_run,
-    )
     monkeypatch.setattr(
         "agent.graph.compression.compressor.UniversalToolProcessor.process_output",
         _process_output_stub,
@@ -1660,17 +1610,6 @@ async def test_compress_tool_output_complete_adapter_augments_processor_and_keep
     calls: list[str] = []
     captured_metadata: Dict[str, Any] = {}
 
-    def _adapter(input_data: CompressionInput) -> DeterministicCompressionResult:
-        calls.append(f"adapter:{input_data.tool_name}")
-        return DeterministicCompressionResult(
-            summary="Adapter summary is available.",
-            key_findings=("Adapter finding is available.",),
-            structured_signals=({"type": "service", "port": 8080, "service": "http"},),
-            decision_evidence=("Adapter evidence is available.",),
-            lossiness_risk="high",
-            completeness="complete",
-        )
-
     async def _process_output_stub(self, tool_name: str, raw_output: str, metadata: Dict[str, Any]):  # noqa: ANN001
         calls.append(f"processor:{tool_name}")
         captured_metadata.update(metadata)
@@ -1690,7 +1629,6 @@ async def test_compress_tool_output_complete_adapter_augments_processor_and_keep
             },
         )
 
-    register_adapter("registry_wiring_tests.complete_adapter", _adapter)
     monkeypatch.setattr(
         "agent.graph.compression.compressor.UniversalToolProcessor.process_output",
         _process_output_stub,
@@ -1744,17 +1682,6 @@ async def test_compress_tool_output_deterministic_partial_adapter_augments_proce
     calls: list[str] = []
     captured_metadata: Dict[str, Any] = {}
 
-    def _adapter(input_data: CompressionInput) -> DeterministicCompressionResult:
-        calls.append(f"adapter:{input_data.tool_name}")
-        return DeterministicCompressionResult(
-            summary="Deterministic summary wins.",
-            key_findings=("Deterministic finding wins.",),
-            structured_signals=({"type": "service", "port": 8080, "service": "http"},),
-            decision_evidence=("Deterministic evidence stays before fill-ins.",),
-            lossiness_risk="high",
-            completeness="partial",
-        )
-
     async def _process_output_stub(self, tool_name: str, raw_output: str, metadata: Dict[str, Any]):  # noqa: ANN001
         calls.append(f"processor:{tool_name}")
         captured_metadata.update(metadata)
@@ -1773,7 +1700,6 @@ async def test_compress_tool_output_deterministic_partial_adapter_augments_proce
             },
         )
 
-    register_adapter("registry_wiring_tests.partial_adapter", _adapter)
     monkeypatch.setattr(
         "agent.graph.compression.compressor.UniversalToolProcessor.process_output",
         _process_output_stub,
@@ -1819,20 +1745,6 @@ async def test_compress_tool_output_partial_adapter_keeps_llm_output_authoritati
 ) -> None:
     """LLM-backed primary output remains authoritative after pentest cutover."""
     calls: list[str] = []
-    deterministic_evidence = tuple(
-        f"Deterministic evidence {index} wins." for index in range(1, 6)
-    )
-
-    def _adapter(input_data: CompressionInput) -> DeterministicCompressionResult:
-        calls.append(f"adapter:{input_data.tool_name}")
-        return DeterministicCompressionResult(
-            summary="Deterministic summary wins all visible slots.",
-            key_findings=("Deterministic finding wins all visible slots.",),
-            structured_signals=({"type": "service", "port": 8080, "service": "http"},),
-            decision_evidence=deterministic_evidence,
-            lossiness_risk="high",
-            completeness="partial",
-        )
 
     async def _process_output_stub(self, tool_name: str, raw_output: str, metadata: Dict[str, Any]):  # noqa: ANN001
         calls.append(f"processor:{tool_name}")
@@ -1852,7 +1764,6 @@ async def test_compress_tool_output_partial_adapter_keeps_llm_output_authoritati
             },
         )
 
-    register_adapter("registry_wiring_tests.partial_hidden_llm_adapter", _adapter)
     monkeypatch.setattr(
         "agent.graph.compression.compressor.UniversalToolProcessor.process_output",
         _process_output_stub,
@@ -1894,10 +1805,7 @@ async def test_compress_tool_output_partial_adapter_keeps_llm_output_authoritati
 async def test_compress_tool_output_none_adapter_marks_fallback_reason(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Adapter none results should keep processor output and explain fallback."""
-
-    def _adapter(input_data: CompressionInput) -> DeterministicCompressionResult:
-        return DeterministicCompressionResult(completeness="none")
+    """Missing secondary metadata should keep processor output authoritative."""
 
     async def _process_output_stub(self, tool_name: str, raw_output: str, metadata: Dict[str, Any]):  # noqa: ANN001
         return SimpleNamespace(
@@ -1915,7 +1823,6 @@ async def test_compress_tool_output_none_adapter_marks_fallback_reason(
             },
         )
 
-    register_adapter("registry_wiring_tests.none_adapter", _adapter)
     monkeypatch.setattr(
         "agent.graph.compression.compressor.UniversalToolProcessor.process_output",
         _process_output_stub,

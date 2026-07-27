@@ -7,10 +7,6 @@ from core.prompts.constants import (
     COMPACT_SUMMARY_MAX_CHARS,
 )
 
-from agent.graph.compression.deterministic.contracts import (
-    CompressionInput,
-    DeterministicCompressionResult,
-)
 from agent.graph.compression.deterministic.common import (
     _metadata_compact_decision_evidence,
     _metadata_compact_key_findings,
@@ -21,11 +17,8 @@ from agent.graph.compression.deterministic.common import (
     compact_evidence_line,
     dedupe_string_list,
     extract_token_usage,
-    metadata_compact_adapter,
-    register_metadata_compact_adapter,
     sanitize_artifact_refs,
 )
-from agent.graph.compression.deterministic.registry import compress_deterministically
 
 
 def test_as_int_returns_none_for_absent_and_invalid_values() -> None:
@@ -237,58 +230,3 @@ def test_metadata_compact_decision_evidence_compacts_lines_and_dedupes() -> None
         {"metadata": {"compact_decision_evidence": "not-a-list"}}
     ) == []
     assert _metadata_compact_decision_evidence({"metadata": {}}) == []
-
-
-def test_metadata_compact_adapter_projects_tool_authored_metadata() -> None:
-    """Adapter exposes current metadata compact fields as partial facts."""
-    result = metadata_compact_adapter(
-        CompressionInput(
-            tool_name="metadata_compact_tests.tool",
-            raw_result={
-                "metadata": {
-                    "compact_summary": " summary ",
-                    "compact_key_findings": [" finding ", "finding", ""],
-                    "compact_decision_evidence": [
-                        " first line \n second line ",
-                        "first line \n second line",
-                    ],
-                }
-            },
-        )
-    )
-
-    assert result == DeterministicCompressionResult(
-        summary="summary",
-        key_findings=("finding",),
-        decision_evidence=("first line second line",),
-        completeness="partial",
-    )
-
-
-def test_metadata_compact_adapter_returns_none_without_metadata_fields() -> None:
-    """Missing compact metadata remains an explicit no-result adapter outcome."""
-    result = metadata_compact_adapter(
-        CompressionInput(
-            tool_name="metadata_compact_tests.empty",
-            raw_result={"metadata": {"other": "ignored"}},
-        )
-    )
-
-    assert result == DeterministicCompressionResult.none(
-        fallback_reason="no_compact_metadata",
-    )
-
-
-def test_register_metadata_compact_adapter_uses_existing_registry() -> None:
-    """Metadata compact registration returns partial adapter fields for a tool."""
-    register_metadata_compact_adapter("metadata_compact_tests.registered")
-
-    result = compress_deterministically(
-        CompressionInput(
-            tool_name="metadata_compact_tests.registered",
-            raw_result={"metadata": {"compact_summary": "registered summary"}},
-        )
-    )
-
-    assert result.summary == "registered summary"
-    assert result.completeness == "partial"

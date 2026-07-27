@@ -17,10 +17,8 @@ from core.prompts.constants import (
     COMPACT_SUMMARY_MAX_CHARS,
 )
 
-from .contracts import CompressionInput, DeterministicCompressionResult
 from ..schema import TOOL_OUTPUT_COMPRESSOR_USAGE_SOURCE, normalize_structured_signals
 
-_NO_METADATA_COMPACT_REASON = "no_compact_metadata"
 _ARTIFACT_REF_ALLOWED_KEYS = frozenset(
     {
         "path",
@@ -342,44 +340,3 @@ def _metadata_compact_structured_signals(raw_result: Mapping[str, Any]) -> List[
     if values is None:
         values = runtime_metadata.get("structured_signals")
     return normalize_structured_signals(values)
-
-
-def metadata_compact_adapter(
-    input_data: CompressionInput,
-) -> DeterministicCompressionResult:
-    """Project tool-authored compact metadata into a partial adapter result."""
-
-    summary = _metadata_compact_summary(input_data.raw_result) or None
-    key_findings = tuple(_metadata_compact_key_findings(input_data.raw_result))
-    structured_signals = tuple(
-        _metadata_compact_structured_signals(input_data.raw_result)
-    )
-    decision_evidence = tuple(
-        _metadata_compact_decision_evidence(input_data.raw_result)
-    )
-
-    if (
-        summary is None
-        and not key_findings
-        and not structured_signals
-        and not decision_evidence
-    ):
-        return DeterministicCompressionResult.none(
-            fallback_reason=_NO_METADATA_COMPACT_REASON,
-        )
-
-    return DeterministicCompressionResult(
-        summary=summary,
-        key_findings=key_findings,
-        structured_signals=structured_signals,
-        decision_evidence=decision_evidence,
-        completeness="partial",
-    )
-
-
-def register_metadata_compact_adapter(tool_id: str) -> None:
-    """Register the metadata compact adapter for an exact tool id or family."""
-
-    from .registry import register_adapter
-
-    register_adapter(tool_id, metadata_compact_adapter)
