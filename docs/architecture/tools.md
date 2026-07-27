@@ -408,6 +408,62 @@ pure transformations of raw result/metadata; they do not execute tools, call
 LLMs, import backend Knowledge services, or use Docker, runner, or
 runtime-provider services.
 
+### Compact Lane Authority and Consumer Inventory
+
+Current code has two compact lanes:
+
+- `compact_output` / `llm_compact_output`: the universal primary compact lane
+  returned by `compress_tool_output()`. `ToolOutputCompressionResult` keeps
+  `compact_output is llm_compact_output` when no separate LLM compact object is
+  supplied, and the compressor currently returns the same object for both
+  fields.
+- `deterministic_compact_output`: the optional secondary lane produced by the
+  deterministic registry for pentest catalog-role tools. It is persisted for
+  batch/cache replay and prompt context, but it is not the graph state's legacy
+  `last_tool_result_compact` value and is not forwarded to frontend streaming
+  metadata.
+
+Production authors and readers:
+
+| Surface | File | Lane role |
+| --- | --- | --- |
+| Compression result author | `agent/graph/compression/compressor.py` | Builds primary `compact_output`/`llm_compact_output` and optional secondary `deterministic_compact_output`. |
+| Compression result contract | `agent/graph/compression/schema.py` | Normalizes `ToolOutputCompressionResult`; preserves the primary object invariant when `llm_compact_output` is omitted. |
+| Interactive execution projection | `agent/graph/subgraphs/tool_execution_runtime/result_state_projection.py` | Calls `compress_tool_output()` and converts both lanes to dictionaries. |
+| Dispatch cache author | `agent/graph/subgraphs/tool_execution_runtime/approval_and_idempotency.py` | Stores primary under `last_tool_result_compact` and secondary under `last_tool_result_deterministic_compact`. |
+| Dispatch cache replay reader | `agent/graph/subgraphs/tool_execution_runtime/per_call_execution.py` | Reads both cache keys and restores per-call primary/secondary maps for idempotent replay. |
+| Batch metadata writer | `agent/graph/subgraphs/tool_execution_runtime/batch_runner.py` | Writes `last_tool_result_compact_batch` and legacy `last_tool_result_compact`; passes optional secondary rows to the batch aggregator. |
+| Batch row serializer | `agent/tool_runtime/batch/aggregator.py` | Serializes primary as `compact_tool_result` and optional secondary as `deterministic_compact_tool_result`. |
+| Post-tool prompt reader | `core/prompts/builders/post_tool/last_tool.py` | Reads batch evidence through `read_compact_evidence()` and renders secondary summaries/details as supplemental prompt context when present. This is the product-decision-adjacent secondary reader. |
+| Knowledge ingestion trigger | `agent/graph/nodes/post_tool_reasoning/node.py` | Enqueues ingestion with `last_tool_result_compact`; it does not read the secondary cache key. |
+| Backend streaming adapter | `backend/services/langgraph_chat/streaming/event_processors/tool_event_processor.py` | Persists and emits normalized `compact_tool_result`; it does not read `deterministic_compact_tool_result`. |
+| Runner promotion ingestion | `backend/services/runner_control/runtime_event_service.py` | Uses the runner result payload as a compact output hint; it does not consume the secondary deterministic lane. |
+
+Consumer classification:
+
+- Primary graph, prompt, memory, planner, stream, event, frontend, and
+  Knowledge-ingestion paths consume the universal primary lane through
+  `last_tool_result_compact`, `compact_tool_result`, or compact output hints.
+- The only code-verified secondary semantic consumer is the post-tool prompt
+  builder's supplemental deterministic rendering for batch evidence. Batch
+  rows and dispatch cache entries are also transport/replay evidence, not proof
+  by themselves that a specific secondary payload is product-required.
+- HTTP request category: blocking for cutover until the executable ledger
+  records parity or retirement from consumer evidence. It has supported tool
+  behavior and an existing secondary prompt surface only through the optional
+  batch deterministic row, but this inventory found no durable HTTP fact
+  authority to project from.
+- Metasploit search category: retirement-only candidate. Current code evidence
+  shows registered deterministic secondary behavior but no durable canonical
+  facts for the operation; retirement still requires ledger proof that universal
+  primary behavior and the post-tool prompt contract remain supported without
+  that specific secondary payload.
+- Metasploit inspection category: retirement-only candidate. Current code
+  evidence shows registered deterministic secondary behavior but no durable
+  canonical facts for the operation; retirement still requires ledger proof that
+  universal primary behavior and the post-tool prompt contract remain supported
+  without that specific secondary payload.
+
 ## Semantic Knowledge Boundary
 
 Tools that produce durable deterministic Knowledge facts own the tool-specific

@@ -88,6 +88,11 @@ def test_frontend_receives_compact_tool_result_on_tool_end() -> None:
     """Streaming adapter forwards compact payload in tool_end metadata."""
     adapter = LangGraphStreamingAdapter()
     compact_payload = _compact_payload()
+    deterministic_payload = {
+        **compact_payload,
+        "summary": "Deterministic secondary summary.",
+        "key_findings": ["secondary-only finding"],
+    }
     event = {
         "type": "tool_end",
         "tool": "nmap",
@@ -99,6 +104,7 @@ def test_frontend_receives_compact_tool_result_on_tool_end() -> None:
         "exit_code": 0,
         "summary": {"summary": "Scan finished with one open port."},
         "compact_tool_result": compact_payload,
+        "deterministic_compact_tool_result": deterministic_payload,
     }
 
     result = adapter.process_streaming_event(event)
@@ -108,3 +114,5 @@ def test_frontend_receives_compact_tool_result_on_tool_end() -> None:
     assert isinstance(compact, dict)
     assert compact["schema_version"] == "2.0"
     assert compact["summary"] == "Scan finished with one open port."
+    assert compact["key_findings"] == ["80/tcp open"]
+    assert "deterministic_compact_tool_result" not in result["metadata"]

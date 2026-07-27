@@ -7,6 +7,12 @@ from typing import Any, Dict
 
 import pytest
 
+from core.prompts.constants import (
+    COMPACT_DECISION_EVIDENCE_MAX_CHARS,
+    COMPACT_KEY_FINDINGS_MAX_ITEMS,
+    COMPACT_KEY_FINDINGS_TOTAL_MAX_CHARS,
+    COMPACT_SUMMARY_MAX_CHARS,
+)
 from agent.graph.compression.compressor import compress_tool_output
 from agent.providers.llm.core.exceptions import LLMRefusalError, LLMRefusalOutcome
 from agent.graph.compression.deterministic import registry as deterministic_registry
@@ -18,6 +24,7 @@ from agent.graph.compression.deterministic.http import HTTP_REQUEST_TOOL_ID
 from agent.graph.compression.deterministic.network_discovery import NMAP_TOOL_ID
 from agent.graph.compression.deterministic.registry import register_adapter
 from agent.graph.compression.deterministic.credential_attack import HYDRA_TOOL_ID
+from agent.graph.compression.schema import CompactToolOutput, CompressionMetadata
 
 
 class _PromptCapturingLLMClient:
@@ -398,6 +405,266 @@ async def test_compress_tool_output_preserves_current_merge_precedence(
     assert compact.report_recommendations == []
     assert compact.compression is not None
     assert compact.compression.source == "llm"
+
+
+@pytest.mark.asyncio
+async def test_compress_tool_output_metadata_overrides_replace_adapter_fields_and_lock_bounds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Generic metadata overrides own the deterministic lane with current bounds."""
+
+    long_evidence = "x" * (COMPACT_DECISION_EVIDENCE_MAX_CHARS + 10)
+    long_summary = "s" * (COMPACT_SUMMARY_MAX_CHARS + 10)
+    max_key_finding = "k" * COMPACT_KEY_FINDINGS_TOTAL_MAX_CHARS
+
+    def _adapter(input_data: CompressionInput) -> DeterministicCompressionResult:
+        return DeterministicCompressionResult(
+            summary="Adapter summary should be replaced.",
+            key_findings=("Adapter finding should be replaced.",),
+            structured_signals=({"type": "service", "port": 8080, "service": "http"},),
+            decision_evidence=(
+                "Adapter evidence follows metadata.",
+                "Adapter evidence fills the fifth slot.",
+                "Adapter evidence hidden by the five item limit.",
+            ),
+            lossiness_risk="low",
+            completeness="complete",
+        )
+
+    async def _process_output_stub(
+        self: object,
+        tool_name: str,
+        raw_output: str,
+        metadata: Dict[str, Any],
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            summary="Processor summary remains primary.",
+            key_findings=["Processor finding remains primary."],
+            next_actions=[],
+            structured_signals=[{"type": "service", "port": 443, "service": "https"}],
+            decision_evidence=["Processor evidence remains primary."],
+            lossiness_risk="medium",
+            analysis_source="llm",
+            usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        )
+
+    monkeypatch.setitem(
+        deterministic_registry._ADAPTERS,
+        "registry_wiring_tests.override_adapter",
+        _adapter,
+    )
+    monkeypatch.setattr(
+        "agent.graph.compression.compressor.UniversalToolProcessor.process_output",
+        _process_output_stub,
+    )
+
+    result = await compress_tool_output(
+        tool_name="registry_wiring_tests.override_adapter",
+        raw_result=_base_raw_result(
+            metadata={
+                "compact_summary": f" {long_summary} ",
+                "compact_key_findings": [
+                    " finding-1 ",
+                    "finding-2",
+                    "finding-3",
+                    "finding-4",
+                    "finding-5",
+                    "finding-6",
+                    "finding-2",
+                    *[
+                        f"finding-extra-{index}"
+                        for index in range(COMPACT_KEY_FINDINGS_MAX_ITEMS)
+                    ],
+                    max_key_finding,
+                    "",
+                ],
+                "compact_structured_signals": [
+                    {"type": "service", "port": 22, "service": "ssh"},
+                ],
+                "compact_decision_evidence": [
+                    " metadata first \n line ",
+                    "metadata first line",
+                    long_evidence,
+                ],
+                "fs_search_text": {
+                    "matches": [
+                        {
+                            "path": "artifacts/result.txt",
+                            "line": 9,
+                            "column": 1,
+                            "snippet": "service=ssh",
+                        }
+                    ],
+                    "truncated": False,
+                },
+            },
+        ),
+        artifact_path=None,
+        execution_id="exec-override-bounds",
+        llm_client=SimpleNamespace(model="gpt-4.1"),
+    )
+
+    deterministic = result.deterministic_compact_output
+    assert deterministic is not None
+    assert result.compact_output.summary == "Processor summary remains primary."
+    assert deterministic.summary == long_summary[:COMPACT_SUMMARY_MAX_CHARS]
+    assert deterministic.summary != "Adapter summary should be replaced."
+    assert deterministic.key_findings == [
+        "finding-1",
+        "finding-2",
+        "finding-3",
+        "finding-4",
+        "finding-5",
+        "finding-6",
+        *[
+            f"finding-extra-{index}"
+            for index in range(COMPACT_KEY_FINDINGS_MAX_ITEMS - 6)
+        ],
+    ]
+    assert len(deterministic.key_findings) == COMPACT_KEY_FINDINGS_MAX_ITEMS
+    assert (
+        sum(len(item) for item in deterministic.key_findings)
+        + len(deterministic.key_findings)
+        - 1
+    ) <= COMPACT_KEY_FINDINGS_TOTAL_MAX_CHARS
+    assert max_key_finding not in deterministic.key_findings
+    assert deterministic.structured_signals == [
+        {"type": "service", "port": 22, "service": "ssh"}
+    ]
+    assert deterministic.decision_evidence == [
+        "metadata first line",
+        long_evidence[: COMPACT_DECISION_EVIDENCE_MAX_CHARS - 3] + "...",
+        "artifacts/result.txt:9:service=ssh",
+        "Adapter evidence follows metadata.",
+        "Adapter evidence fills the fifth slot.",
+    ]
+    assert all(
+        len(item) <= COMPACT_DECISION_EVIDENCE_MAX_CHARS
+        for item in deterministic.decision_evidence
+    )
+
+
+@pytest.mark.asyncio
+async def test_compress_tool_output_normalizes_structured_signals_alias_only_in_secondary_lane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Current structured_signals alias is compressor metadata only."""
+
+    captured_metadata: Dict[str, Any] = {}
+    alias_signals = [{"type": "unsupported", "value": "drop"}] + [
+        {"type": "service", "port": index, "service": "ssh", "extra": "drop"}
+        for index in range(30)
+    ]
+
+    async def _process_output_stub(
+        self: object,
+        tool_name: str,
+        raw_output: str,
+        metadata: Dict[str, Any],
+    ) -> SimpleNamespace:
+        captured_metadata.update(metadata)
+        return SimpleNamespace(
+            summary="Processor primary summary.",
+            key_findings=[],
+            next_actions=[],
+            structured_signals=[],
+            decision_evidence=[],
+            lossiness_risk="low",
+            analysis_source="llm",
+            usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        )
+
+    monkeypatch.setattr(
+        "agent.graph.compression.compressor.UniversalToolProcessor.process_output",
+        _process_output_stub,
+    )
+
+    result = await compress_tool_output(
+        tool_name="registry_wiring_tests.structured_alias",
+        raw_result=_base_raw_result(
+            metadata={
+                "compact_summary": "Alias secondary summary.",
+                "structured_signals": alias_signals,
+            },
+        ),
+        artifact_path=None,
+        execution_id="exec-structured-alias",
+        llm_client=SimpleNamespace(model="gpt-4.1"),
+    )
+
+    deterministic = result.deterministic_compact_output
+    assert deterministic is not None
+    assert "structured_signals" not in captured_metadata
+    assert len(deterministic.structured_signals) == 25
+    assert deterministic.structured_signals[0] == {
+        "type": "service",
+        "port": 0,
+        "service": "ssh",
+    }
+    assert deterministic.structured_signals[-1] == {
+        "type": "service",
+        "port": 24,
+        "service": "ssh",
+    }
+    assert all("extra" not in signal for signal in deterministic.structured_signals)
+
+
+def test_compact_tool_output_to_dict_locks_schema_version_and_shape() -> None:
+    """CompactToolOutput serialization stays stable for primary and secondary lanes."""
+
+    compact = CompactToolOutput(
+        tool="registry_wiring_tests.schema",
+        status="success",
+        success=True,
+        exit_code=0,
+        summary="Schema lock summary.",
+        key_findings=["finding"],
+        structured_signals=[{"type": "service", "port": 443, "service": "https"}],
+        decision_evidence=["evidence"],
+        lossiness_risk="low",
+        compression=CompressionMetadata(source="deterministic"),
+    )
+
+    payload = compact.to_dict()
+
+    assert list(payload) == [
+        "schema_version",
+        "tool",
+        "status",
+        "success",
+        "exit_code",
+        "summary",
+        "key_findings",
+        "errors",
+        "report_recommendations",
+        "structured_signals",
+        "decision_evidence",
+        "lossiness_risk",
+        "artifact_refs",
+        "compression",
+    ]
+    assert payload == {
+        "schema_version": "2.0",
+        "tool": "registry_wiring_tests.schema",
+        "status": "success",
+        "success": True,
+        "exit_code": 0,
+        "summary": "Schema lock summary.",
+        "key_findings": ["finding"],
+        "errors": [],
+        "report_recommendations": [],
+        "structured_signals": [{"type": "service", "port": 443, "service": "https"}],
+        "decision_evidence": ["evidence"],
+        "lossiness_risk": "low",
+        "artifact_refs": [],
+        "compression": {
+            "source": "deterministic",
+            "model": None,
+            "token_usage": None,
+            "fallback_reason": None,
+        },
+    }
+    assert CompactToolOutput.from_dict(payload).to_dict() == payload
 
 
 @pytest.mark.asyncio

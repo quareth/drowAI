@@ -12,6 +12,8 @@ from urllib.parse import urlsplit
 
 from core.prompts.constants import (
     COMPACT_DECISION_EVIDENCE_MAX_CHARS,
+    COMPACT_KEY_FINDINGS_MAX_ITEMS,
+    COMPACT_KEY_FINDINGS_TOTAL_MAX_CHARS,
     COMPACT_SUMMARY_MAX_CHARS,
 )
 
@@ -89,6 +91,21 @@ def compact_evidence_line(value: Any) -> str:
     if len(text) <= COMPACT_DECISION_EVIDENCE_MAX_CHARS:
         return text
     return text[: max(COMPACT_DECISION_EVIDENCE_MAX_CHARS - 3, 0)].rstrip() + "..."
+
+
+def _budget_compact_key_findings(values: Iterable[Any]) -> List[str]:
+    """Return metadata compact findings bounded by the frozen secondary contract."""
+    result: List[str] = []
+    total_chars = 0
+    for text in dedupe_string_list(values, limit=COMPACT_KEY_FINDINGS_MAX_ITEMS):
+        projected_total = total_chars + len(text)
+        if result:
+            projected_total += 1
+        if projected_total > COMPACT_KEY_FINDINGS_TOTAL_MAX_CHARS:
+            break
+        result.append(text)
+        total_chars = projected_total
+    return result
 
 
 def extract_token_usage(usage: Optional[Dict[str, Any]]) -> Optional[Dict[str, int]]:
@@ -289,7 +306,9 @@ def _metadata_compact_summary(raw_result: Mapping[str, Any]) -> str:
     runtime_metadata = raw_result.get("metadata")
     if not isinstance(runtime_metadata, Mapping):
         return ""
-    return str(runtime_metadata.get("compact_summary") or "").strip()
+    return str(runtime_metadata.get("compact_summary") or "").strip()[
+        :COMPACT_SUMMARY_MAX_CHARS
+    ]
 
 
 def _metadata_compact_key_findings(raw_result: Mapping[str, Any]) -> List[str]:
@@ -300,7 +319,7 @@ def _metadata_compact_key_findings(raw_result: Mapping[str, Any]) -> List[str]:
     values = runtime_metadata.get("compact_key_findings")
     if not isinstance(values, Iterable) or isinstance(values, (str, bytes)):
         return []
-    return dedupe_string_list(values, limit=None)
+    return _budget_compact_key_findings(values)
 
 
 def _metadata_compact_decision_evidence(raw_result: Mapping[str, Any]) -> List[str]:
