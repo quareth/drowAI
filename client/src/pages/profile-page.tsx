@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { Building2, CheckCircle2, Shield, UserRound } from "lucide-react";
 import { useLocation } from "wouter";
 
+import { AccountPageHeader } from "@/components/layout/account-page-header";
 import { Navbar } from "@/components/layout/navbar";
 import { Sidebar } from "@/components/layout/sidebar";
 import { PasswordChangeForm } from "@/components/password-change-form";
@@ -18,6 +19,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuth } from "@/hooks/use-auth";
 import { useTenantContext } from "@/hooks/use-tenant-context";
 import { useUserTimezone } from "@/hooks/use-user-timezone";
+import { replaceAccountPageLocation } from "@/navigation/account-page-history";
 import { buildProfileTabPath, readAllowedQueryValue, ROUTE_QUERY_KEYS } from "@/navigation/routes";
 import {
   DEFAULT_PROFILE_TAB,
@@ -72,7 +74,7 @@ export default function ProfilePage() {
   const handleTabChange = (tabId: string) => {
     const nextTab = tabId as ProfileTabId;
     setActiveTab(nextTab);
-    setLocation(buildProfileTabPath(nextTab));
+    replaceAccountPageLocation(setLocation, buildProfileTabPath(nextTab));
   };
 
   const username = user?.username ?? "Account";
@@ -91,10 +93,10 @@ export default function ProfilePage() {
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
         <main className="flex-1 overflow-auto p-6">
-          <div className="mb-8">
-            <h1 className="mb-2 text-3xl font-bold text-white">Profile</h1>
-            <p className="text-gray-400">Manage account identity, access context, and security controls.</p>
-          </div>
+          <AccountPageHeader
+            title="Profile"
+            description="Manage account identity, access context, and security controls."
+          />
 
           <Tabs
             value={activeTab}

@@ -3,9 +3,13 @@
  */
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  type AppNavigate,
+  navigateToAccountPage,
+} from "@/navigation/account-page-history";
 import SettingsPage from "@/pages/settings-page";
 
 vi.mock("@/components/layout/navbar", () => ({
@@ -62,9 +66,17 @@ function renderPage() {
   );
 }
 
-describe("SettingsPage deep links", () => {
+const browserNavigate: AppNavigate = (target, options) => {
+  window.history[options?.replace ? "replaceState" : "pushState"](
+    options?.state ?? null,
+    "",
+    target,
+  );
+};
+
+describe("SettingsPage navigation", () => {
   beforeEach(() => {
-    window.history.pushState({}, "", "/settings");
+    window.history.replaceState(null, "", "/settings");
   });
 
   afterEach(() => {
@@ -72,7 +84,7 @@ describe("SettingsPage deep links", () => {
   });
 
   it("opens Display from the section query parameter", () => {
-    window.history.pushState({}, "", "/settings?section=display");
+    window.history.replaceState(null, "", "/settings?section=display");
 
     renderPage();
 
@@ -81,7 +93,7 @@ describe("SettingsPage deep links", () => {
   });
 
   it("falls back to API for invalid sections", () => {
-    window.history.pushState({}, "", "/settings?section=unknown");
+    window.history.replaceState(null, "", "/settings?section=unknown");
 
     renderPage();
 
@@ -98,5 +110,31 @@ describe("SettingsPage deep links", () => {
     expect(screen.getByTestId("display-settings-panel")).toBeTruthy();
     expect(window.location.pathname).toBe("/settings");
     expect(window.location.search).toBe("?section=display");
+  });
+
+  it("returns to the exact in-app origin after switching Settings sections", async () => {
+    window.history.replaceState(null, "", "/reports?tab=library&engagement_id=7");
+    navigateToAccountPage(browserNavigate, "/settings", "/reports");
+    renderPage();
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: /display/i }));
+    expect(window.location.pathname).toBe("/settings");
+    expect(window.location.search).toBe("?section=display");
+
+    fireEvent.click(screen.getByRole("button", { name: "Go back" }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/reports");
+      expect(window.location.search).toBe("?tab=library&engagement_id=7");
+    });
+  });
+
+  it("uses the app dashboard fallback for direct Settings entry", () => {
+    renderPage();
+
+    fireEvent.click(screen.getByRole("button", { name: "Go back" }));
+
+    expect(window.location.pathname).toBe("/");
+    expect(window.location.search).toBe("");
   });
 });

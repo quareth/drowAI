@@ -21,6 +21,9 @@ The format is based on
 
 ### Fixed
 
+- Profile and Settings now share an accessible contextual back control that
+  returns to the originating in-app page and safely falls back to Outpost for
+  direct entries.
 - Amass now reuses serialized task-scoped v5 state across enumeration and
   result queries, returns stored partial results after bounded enumeration,
   and distinguishes parser status, enumeration status, completeness, and
