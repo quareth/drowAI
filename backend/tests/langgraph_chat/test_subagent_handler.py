@@ -99,6 +99,19 @@ class _CompletingExecutor:
         if graph_name != GRAPH_NAME_SUBAGENT:
             final_state = copy.deepcopy(graph_input)
             final_state["trace"]["final_text"] = "Main agent finalized Pathfinder result."
+            final_state["trace"]["usage_records"] = [
+                {
+                    "source": "finalize_tool_results",
+                    "prompt_tokens": 21,
+                    "completion_tokens": 8,
+                    "total_tokens": 29,
+                    "provider": "openai",
+                    "model": "gpt-5.2-mini",
+                    "api_surface": "responses",
+                    "request_mode": "non_streaming",
+                    "cache_reporting": "reported",
+                }
+            ]
             return GraphExecutionResult(final_state=final_state)
 
         agent_run_id = graph_input["facts"]["metadata"]["agent_run_id"]
@@ -331,6 +344,14 @@ async def test_subagent_handler_waits_for_pathfinder_and_runs_parent_finalizer()
     completed_results = runtime_config.metadata[COMPLETED_AGENT_RESULTS_KEY]
     assert completed_results[0]["agent_id"] == "pathfinder"
     assert completed_results[0]["agent_run_id"] == assignment.agent_run_id
+    assert result.total_tokens == 29
+    assert result.usage is not None
+    assert len(result.usage) == 1
+    [usage_record] = result.usage
+    assert usage_record.usage.total_tokens == 29
+    assert usage_record.metadata.execution_branch == "subagent_parent_finalizer"
+    assert usage_record.metadata.role == "finalizer"
+    assert usage_record.metadata.node_name == "finalize_tool_results"
 
 
 @pytest.mark.asyncio
@@ -440,7 +461,16 @@ async def test_subagent_handler_default_launcher_runs_real_worker_to_completion(
     assert entries[0].result is not None
     assert entries[0].result.summary == "Pathfinder found HTTP."
     assert entries[0].result_consumed is True
+    assert [event["agent_run"]["status"] for event in events] == [
+        "queued",
+        "running",
+        "completed",
+    ]
     assert events[-1]["agent_run"]["status"] == "completed"
+    assert result.usage is not None
+    assert [record.metadata.execution_branch for record in result.usage] == [
+        "subagent_parent_finalizer"
+    ]
 
 
 @pytest.mark.asyncio

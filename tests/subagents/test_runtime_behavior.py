@@ -220,6 +220,25 @@ def test_runtime_model_prompt_matches_current_pathfinder_golden() -> None:
     assert_golden("subagent_tool_builder__system.txt", prompt)
 
 
+def test_runtime_model_user_prompt_matches_current_pathfinder_golden() -> None:
+    definition = _pathfinder_definition()
+    prompt = SubagentToolBuilderPromptBuilder(definition).build_user_prompt(
+        assignment=_assignment().model_dump(mode="json"),
+        tool_ids=_profile().tool_ids,
+        working_memory={
+            "findings": ["prior ping sweep found one host"],
+            "todos": ["confirm exposed services"],
+        },
+        previous_tool_summary={
+            "tool": FPING_TOOL_ID,
+            "summary": "10.0.0.10 responded",
+            "key_findings": ["host alive"],
+        },
+    )
+
+    assert_golden("subagent_tool_builder__user.txt", prompt)
+
+
 def test_runtime_model_prompt_identity_and_boundaries_come_from_definition() -> None:
     definition = replace(
         _pathfinder_definition(),
@@ -263,7 +282,7 @@ def test_runtime_model_prompt_identity_and_boundaries_come_from_definition() -> 
 
 
 @pytest.mark.asyncio
-async def test_runtime_model_builder_records_generic_action_metadata() -> None:
+async def test_runtime_model_builder_records_generic_action_metadata_and_call_topology() -> None:
     calls = [
         _native_call(
             FPING_TOOL_ID,
@@ -273,11 +292,14 @@ async def test_runtime_model_builder_records_generic_action_metadata() -> None:
         )
     ]
     llm = _FakeBuilderLLM(calls)
+    resolver_calls: list[dict[str, Any]] = []
 
     update = await choose_subagent_action(
         _pathfinder_definition(),
         _generic_state(),
-        llm_resolver=lambda *_args, **_kwargs: llm,
+        llm_resolver=lambda *args, **kwargs: (
+            resolver_calls.append({"args": args, "kwargs": kwargs}) or llm
+        ),
     )
 
     metadata = update["facts"]["metadata"]
@@ -291,9 +313,61 @@ async def test_runtime_model_builder_records_generic_action_metadata() -> None:
         "tool_call_id"
     ].startswith("subagent-call-")
     assert update["trace"]["usage_records"][0]["source"] == "subagent_tool_builder"
-    assert _request_projection(llm.requests[0])["tool_ids"] == [
+    assert len(resolver_calls) == 1
+    assert resolver_calls[0]["kwargs"]["role"] == "reasoning_main"
+    assert len(llm.requests) == 1
+    request = _request_projection(llm.requests[0])
+    assert request["tool_ids"] == [
         FPING_TOOL_ID,
         NMAP_TOOL_ID,
+    ]
+    assert request["kwargs"] == {
+        "tool_choice": "required",
+        "parallel_tool_calls": True,
+        "temperature": 0.1,
+        "max_tokens": 5000,
+    }
+    assert all(
+        SUBAGENT_EXECUTION_STRATEGY_KEY in required
+        for required in request["required"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_runtime_model_builder_appends_one_usage_record_after_existing() -> None:
+    calls = [
+        _native_call(
+            FPING_TOOL_ID,
+            parameters={"target": "10.0.0.10"},
+            strategy="sequential",
+            intent="Check whether the approved host responds.",
+        )
+    ]
+    llm = _FakeBuilderLLM(calls)
+    state = _generic_state()
+    existing_usage = {
+        "source": "pre_existing_parent_call",
+        "prompt_tokens": 1,
+        "completion_tokens": 2,
+        "total_tokens": 3,
+    }
+    state["trace"]["usage_records"] = [existing_usage]
+
+    update = await choose_subagent_action(
+        _pathfinder_definition(),
+        state,
+        llm_resolver=lambda *_args, **_kwargs: llm,
+    )
+
+    assert update["trace"]["usage_records"] == [
+        existing_usage,
+        {
+            "source": "subagent_tool_builder",
+            "prompt_tokens": 10,
+            "completion_tokens": 5,
+            "total_tokens": 15,
+            "request_mode": "non_streaming",
+        },
     ]
 
 
