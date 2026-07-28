@@ -1,9 +1,8 @@
-"""Equivalence tests for the generic subagent runtime extraction."""
+"""Behavior tests for the generic definition-configured subagent runtime."""
 
 from __future__ import annotations
 
 import ast
-import asyncio
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -19,33 +18,25 @@ from agent.subagents.contracts import AgentAssignment, AgentRuntimeIdentity
 from agent.subagents.definition import SubagentDefinition, load_subagent_definitions
 from agent.subagents.runtime.complete import complete_subagent_result
 from agent.subagents.runtime.model import (
+    SUBAGENT_ACTION_METADATA_KEY,
     SUBAGENT_EXECUTION_STRATEGY_KEY,
+    SUBAGENT_RESULT_METADATA_KEY,
     SubagentToolBuilderPromptBuilder,
     choose_subagent_action,
 )
 from agent.subagents.runtime import model as runtime_model
-from agent.subagents.runtime.profile import resolve_subagent_tool_profile
+from agent.subagents.runtime.profile import (
+    SubagentToolProfile,
+    SubagentToolSpec,
+    resolve_subagent_tool_profile,
+)
 from agent.subagents.runtime.state import (
+    SUBAGENT_METADATA_KEY,
     build_subagent_initial_state,
     subagent_state_from_graph_state,
 )
-from agent.subagents.scout.nodes.complete import complete_scout_result
-from agent.subagents.scout.nodes import choose_action as scout_choose_action
-from agent.subagents.scout.nodes.choose_action import (
-    SCOUT_EXECUTION_STRATEGY_KEY,
-    choose_scout_action,
-)
-from agent.subagents.scout.profile import (
-    ScoutToolProfile,
-    ScoutToolSpec,
-    resolve_scout_tool_profile,
-)
-from agent.subagents.scout.state import (
-    build_scout_initial_state,
-    scout_state_from_graph_state,
-)
 from agent.tools.tool_call_specs import make_function_name_for_tool
-from core.prompts.builders.scout_tool_builder import ScoutToolBuilderPromptBuilder
+from core.prompts.tests._golden import assert_golden
 
 
 FPING_TOOL_ID = "information_gathering.network_discovery.fping"
@@ -93,9 +84,10 @@ class _FakeBuilderLLM:
 
 
 def _pathfinder_definition() -> SubagentDefinition:
-    definitions = load_subagent_definitions()
     [pathfinder] = [
-        definition for definition in definitions if definition.id == "pathfinder"
+        definition
+        for definition in load_subagent_definitions()
+        if definition.id == "pathfinder"
     ]
     return pathfinder
 
@@ -139,28 +131,20 @@ def _assignment() -> AgentAssignment:
     )
 
 
-def _profile() -> ScoutToolProfile:
-    return ScoutToolProfile(
+def _profile() -> SubagentToolProfile:
+    return SubagentToolProfile(
         tools=(
-            ScoutToolSpec(
+            SubagentToolSpec(
                 tool_id=FPING_TOOL_ID,
                 display_name="fping",
-                scout_capabilities=("host_discovery",),
+                capabilities=("host_discovery",),
             ),
-            ScoutToolSpec(
+            SubagentToolSpec(
                 tool_id=NMAP_TOOL_ID,
                 display_name="nmap",
-                scout_capabilities=("port_scanning", "service_enumeration"),
+                capabilities=("port_scanning", "service_enumeration"),
             ),
         )
-    )
-
-
-def _legacy_state() -> dict[str, Any]:
-    return build_scout_initial_state(
-        assignment=_assignment(),
-        graph_thread_id="child-thread-1",
-        tool_profile=_profile(),
     )
 
 
@@ -193,57 +177,47 @@ def _native_call(
     )
 
 
-def test_runtime_profile_matches_current_scout_profile() -> None:
+def test_runtime_profile_resolves_definition_owned_tools() -> None:
     definition = _pathfinder_definition()
 
-    generic_profile = resolve_subagent_tool_profile(definition, definition.tool_ids)
-    scout_profile = resolve_scout_tool_profile(definition.tool_ids)
+    profile = resolve_subagent_tool_profile(definition, definition.tool_ids)
 
-    assert generic_profile.tool_ids == scout_profile.tool_ids
-    assert generic_profile.capabilities_for_tool(FPING_TOOL_ID) == (
-        scout_profile.capabilities_for_tool(FPING_TOOL_ID)
-    )
-    assert generic_profile.capabilities_for_tool(NMAP_TOOL_ID) == (
-        scout_profile.capabilities_for_tool(NMAP_TOOL_ID)
+    assert profile.tool_ids == definition.tool_ids
+    assert profile.capabilities_for_tool(FPING_TOOL_ID) == ("host_discovery",)
+    assert profile.capabilities_for_tool(NMAP_TOOL_ID) == (
+        "port_scanning",
+        "service_enumeration",
     )
 
 
-def test_runtime_initial_state_matches_current_scout_state() -> None:
-    generic_state = _generic_state()
-    scout_state = _legacy_state()
+def test_runtime_initial_state_uses_generic_metadata_key() -> None:
+    state = _generic_state()
+    metadata = state["facts"]["metadata"]
 
-    assert generic_state == scout_state
+    assert SUBAGENT_METADATA_KEY == "subagent"
+    assert set(metadata) >= {
+        "agent_id",
+        "agent_kind",
+        "agent_display_name",
+        "subagent",
+    }
+    assert "scout" not in metadata
     assert (
         subagent_state_from_graph_state(
-            generic_state,
+            state,
             definition=_pathfinder_definition(),
         ).model_dump(mode="json")
-        == scout_state_from_graph_state(scout_state).model_dump(mode="json")
+        == metadata["subagent"]
     )
 
 
-def test_runtime_model_prompts_match_current_scout_prompts() -> None:
+def test_runtime_model_prompt_matches_current_pathfinder_golden() -> None:
     definition = _pathfinder_definition()
-    generic_builder = SubagentToolBuilderPromptBuilder(definition)
-    scout_builder = ScoutToolBuilderPromptBuilder()
-    assignment = _assignment().model_dump(mode="json")
+    prompt = SubagentToolBuilderPromptBuilder(definition).build_system_prompt(
+        max_committed_tools_per_batch=AgentConfig().max_committed_tools_per_batch
+    )
 
-    assert generic_builder.build_system_prompt(
-        max_committed_tools_per_batch=AgentConfig().max_committed_tools_per_batch
-    ) == scout_builder.build_system_prompt(
-        max_committed_tools_per_batch=AgentConfig().max_committed_tools_per_batch
-    )
-    assert generic_builder.build_user_prompt(
-        assignment=assignment,
-        tool_ids=(FPING_TOOL_ID, NMAP_TOOL_ID),
-        working_memory={"prior": "none"},
-        previous_tool_summary={"summary": "no prior tools"},
-    ) == scout_builder.build_user_prompt(
-        assignment=assignment,
-        tool_ids=(FPING_TOOL_ID, NMAP_TOOL_ID),
-        working_memory={"prior": "none"},
-        previous_tool_summary={"summary": "no prior tools"},
-    )
+    assert_golden("subagent_tool_builder__system.txt", prompt)
 
 
 def test_runtime_model_prompt_identity_and_boundaries_come_from_definition() -> None:
@@ -289,9 +263,7 @@ def test_runtime_model_prompt_identity_and_boundaries_come_from_definition() -> 
 
 
 @pytest.mark.asyncio
-async def test_runtime_model_builder_matches_current_scout_action_node(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_runtime_model_builder_records_generic_action_metadata() -> None:
     calls = [
         _native_call(
             FPING_TOOL_ID,
@@ -300,28 +272,29 @@ async def test_runtime_model_builder_matches_current_scout_action_node(
             intent="Check whether the approved host responds.",
         )
     ]
-    generic_llm = _FakeBuilderLLM(calls)
-    scout_llm = _FakeBuilderLLM(calls)
+    llm = _FakeBuilderLLM(calls)
 
-    generic_update = await choose_subagent_action(
+    update = await choose_subagent_action(
         _pathfinder_definition(),
         _generic_state(),
-        llm_resolver=lambda *_args, **_kwargs: generic_llm,
+        llm_resolver=lambda *_args, **_kwargs: llm,
     )
 
-    monkeypatch.setattr(
-        "agent.subagents.scout.nodes.choose_action.resolve_llm_client",
-        lambda *_args, **_kwargs: scout_llm,
-    )
-    scout_update = await choose_scout_action(_legacy_state())
-
-    assert _normalize_dynamic_batch_ids(generic_update) == _normalize_dynamic_batch_ids(
-        scout_update
-    )
-    assert SCOUT_EXECUTION_STRATEGY_KEY == SUBAGENT_EXECUTION_STRATEGY_KEY
-    assert _request_projection(generic_llm.requests[0]) == _request_projection(
-        scout_llm.requests[0]
-    )
+    metadata = update["facts"]["metadata"]
+    action = metadata[SUBAGENT_ACTION_METADATA_KEY]
+    assert SUBAGENT_ACTION_METADATA_KEY == "subagent_action"
+    assert action["route"] == "tool"
+    assert action["agent_id"] == "pathfinder"
+    assert action["tool_ids"] == [FPING_TOOL_ID]
+    assert action["tool_batch_id"].startswith("subagent-batch-")
+    assert metadata["planner_plan"]["tool_batch"]["tool_calls"][0][
+        "tool_call_id"
+    ].startswith("subagent-call-")
+    assert update["trace"]["usage_records"][0]["source"] == "subagent_tool_builder"
+    assert _request_projection(llm.requests[0])["tool_ids"] == [
+        FPING_TOOL_ID,
+        NMAP_TOOL_ID,
+    ]
 
 
 @pytest.mark.asyncio
@@ -336,82 +309,58 @@ async def test_runtime_resolver_injection_avoids_global_cross_run_contamination(
             intent="Check whether the approved host responds.",
         )
     ]
-    generic_llm = _FakeBuilderLLM(calls)
-    scout_llm = _FakeBuilderLLM(calls)
+    llm = _FakeBuilderLLM(calls)
 
     def _poison_resolver(*_args: Any, **_kwargs: Any) -> Any:
         raise AssertionError("global runtime resolver leaked into injected run")
 
     monkeypatch.setattr(runtime_model, "resolve_llm_client", _poison_resolver)
-    monkeypatch.setattr(
-        scout_choose_action,
-        "resolve_llm_client",
-        lambda *_args, **_kwargs: scout_llm,
-    )
 
-    generic_update, scout_update = await asyncio.gather(
-        choose_subagent_action(
-            _pathfinder_definition(),
-            _generic_state(),
-            llm_resolver=lambda *_args, **_kwargs: generic_llm,
-        ),
-        choose_scout_action(_legacy_state()),
+    update = await choose_subagent_action(
+        _pathfinder_definition(),
+        _generic_state(),
+        llm_resolver=lambda *_args, **_kwargs: llm,
     )
 
     assert runtime_model.resolve_llm_client is _poison_resolver
-    assert len(generic_llm.requests) == 1
-    assert len(scout_llm.requests) == 1
-    assert _normalize_dynamic_batch_ids(generic_update) == _normalize_dynamic_batch_ids(
-        scout_update
+    assert len(llm.requests) == 1
+    assert update["facts"]["metadata"][SUBAGENT_ACTION_METADATA_KEY][
+        "tool_batch_id"
+    ].startswith("subagent-batch-")
+
+
+def test_runtime_completion_projects_generic_result_metadata() -> None:
+    interactive = InteractiveState.from_mapping(_generic_state())
+    interactive.facts.last_tool_result_compact = {
+        "tool": FPING_TOOL_ID,
+        "status": "success",
+        "success": True,
+        "summary": "fping found one live host.",
+        "key_findings": ["10.0.0.10 is alive."],
+        "report_recommendations": ["Run service enumeration next."],
+        "artifact_refs": [{"path": "/workspace/fping.json", "label": "fping"}],
+    }
+    interactive.facts.metadata["last_tool_result_compact"] = (
+        interactive.facts.last_tool_result_compact
+    )
+    interactive.facts.metadata["router_outcome"] = {"action": "finalize"}
+    interactive.trace.executed_tools.append(
+        ToolExecutionRecord(tool_id=FPING_TOOL_ID, status="success")
     )
 
-
-def test_runtime_completion_matches_current_scout_completion() -> None:
-    generic_interactive = InteractiveState.from_mapping(_generic_state())
-    scout_interactive = InteractiveState.from_mapping(_legacy_state())
-    for interactive in (generic_interactive, scout_interactive):
-        interactive.facts.last_tool_result_compact = {
-            "tool": FPING_TOOL_ID,
-            "status": "success",
-            "success": True,
-            "summary": "fping found one live host.",
-            "key_findings": ["10.0.0.10 is alive."],
-            "report_recommendations": ["Run service enumeration next."],
-            "artifact_refs": [{"path": "/workspace/fping.json", "label": "fping"}],
-        }
-        interactive.facts.metadata["last_tool_result_compact"] = (
-            interactive.facts.last_tool_result_compact
-        )
-        interactive.facts.metadata["router_outcome"] = {"action": "finalize"}
-        interactive.trace.executed_tools.append(
-            ToolExecutionRecord(tool_id=FPING_TOOL_ID, status="success")
-        )
-
-    assert complete_subagent_result(
+    update = complete_subagent_result(
         _pathfinder_definition(),
-        generic_interactive.as_graph_state(),
-    ) == complete_scout_result(scout_interactive.as_graph_state())
+        interactive.as_graph_state(),
+    )
 
-
-def test_current_scout_baseline_does_not_delegate_to_generic_runtime() -> None:
-    scout_paths = [
-        Path("agent/subagents/scout/state.py"),
-        Path("agent/subagents/scout/profile.py"),
-        Path("agent/subagents/scout/nodes/choose_action.py"),
-        Path("agent/subagents/scout/nodes/complete.py"),
-    ]
-    for path in scout_paths:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                assert all(
-                    not alias.name.startswith("agent.subagents.runtime")
-                    for alias in node.names
-                )
-            if isinstance(node, ast.ImportFrom):
-                assert node.module is None or not node.module.startswith(
-                    "agent.subagents.runtime"
-                )
+    metadata = update["facts"]["metadata"]
+    result = metadata[SUBAGENT_RESULT_METADATA_KEY]
+    assert SUBAGENT_RESULT_METADATA_KEY == "subagent_result"
+    assert result["agent_run_id"] == "run-1"
+    assert result["agent_id"] == "pathfinder"
+    assert result["agent_kind"] == "recon"
+    assert result["summary"] == "fping found one live host."
+    assert update["trace"]["history"][-1]["type"] == "subagent_result"
 
 
 def test_runtime_modules_do_not_import_backend_services() -> None:
@@ -434,23 +383,5 @@ def _request_projection(request: dict[str, Any]) -> dict[str, Any]:
         "user_prompt": request["user_prompt"],
         "kwargs": kwargs,
         "tool_ids": [tool.tool_id for tool in tools],
-        "required": [
-            tool.parameters_schema["required"]
-            for tool in tools
-        ],
+        "required": [tool.parameters_schema["required"] for tool in tools],
     }
-
-
-def _normalize_dynamic_batch_ids(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {
-            key: _normalize_dynamic_batch_ids(item)
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_normalize_dynamic_batch_ids(item) for item in value]
-    if isinstance(value, str) and value.startswith("scout-call-"):
-        return "<scout-call-id>"
-    if isinstance(value, str) and value.startswith("scout-batch-"):
-        return "<scout-batch-id>"
-    return value

@@ -94,7 +94,7 @@ class SubagentToolSpec:
 
     tool_id: str
     display_name: str
-    scout_capabilities: tuple[str, ...]
+    capabilities: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,7 +116,7 @@ class SubagentToolProfile:
         normalized = _normalize_tool_id(tool_id)
         for tool in self.tools:
             if tool.tool_id == normalized:
-                return tool.scout_capabilities
+                return tool.capabilities
         return ()
 
 
@@ -151,7 +151,7 @@ def resolve_subagent_tool_profile(
                 SubagentToolSpec(
                     tool_id=tool_id,
                     display_name=metadata.display_name,
-                    scout_capabilities=capabilities,
+                    capabilities=capabilities,
                 )
             )
 

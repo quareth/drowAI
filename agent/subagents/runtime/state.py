@@ -30,7 +30,7 @@ from agent.subagents.definition import SubagentDefinition
 from agent.subagents.runtime.profile import SubagentToolProfile
 
 
-SUBAGENT_METADATA_KEY = "scout"
+SUBAGENT_METADATA_KEY = "subagent"
 SUBAGENT_GRAPH_CAPABILITY = "simple_tool_execution"
 
 
@@ -41,19 +41,16 @@ class SubagentToolState(BaseModel):
 
     tool_id: str
     display_name: str
-    scout_capabilities: tuple[str, ...] = Field(default_factory=tuple)
+    capabilities: tuple[str, ...] = Field(default_factory=tuple)
 
     @classmethod
     def from_spec(cls, spec: Any) -> "SubagentToolState":
         """Create a checkpoint-safe projection from a resolved tool spec."""
 
-        capabilities = getattr(spec, "capabilities", None)
-        if capabilities is None:
-            capabilities = getattr(spec, "scout_capabilities", ())
         return cls(
             tool_id=spec.tool_id,
             display_name=spec.display_name,
-            scout_capabilities=tuple(capabilities),
+            capabilities=tuple(spec.capabilities),
         )
 
     @field_validator("tool_id", "display_name", mode="before")

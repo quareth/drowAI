@@ -79,7 +79,7 @@ def _profile() -> SubagentToolProfile:
             SubagentToolSpec(
                 tool_id=FPING_TOOL_ID,
                 display_name="fping",
-                scout_capabilities=("host_discovery",),
+                capabilities=("host_discovery",),
             ),
         ),
     )
@@ -155,7 +155,7 @@ def test_generic_initialize_preserves_assignment_and_tool_identity() -> None:
     )
 
     metadata = update["facts"]["metadata"]
-    subagent_metadata = metadata["scout"]
+    subagent_metadata = metadata["subagent"]
     assert metadata["agent_id"] == "pathfinder"
     assert metadata["agent_kind"] == "recon"
     assert metadata["graph_thread_id"] == "child-thread-1"
@@ -164,7 +164,7 @@ def test_generic_initialize_preserves_assignment_and_tool_identity() -> None:
     assert update["facts"]["tool_ids"] == [FPING_TOOL_ID]
     assert update["facts"]["tool_candidates"] == [FPING_TOOL_ID]
     assert update["trace"]["history"][-1] == {
-        "type": "scout_initialize",
+        "type": "subagent_initialize",
         "agent_run_id": "run-1",
         "agent_id": "pathfinder",
         "agent_kind": "recon",
@@ -247,4 +247,4 @@ def test_generic_graph_registry_uses_single_child_graph_type_name(
 
 
 def test_generic_graph_exposes_current_result_metadata_key() -> None:
-    assert SUBAGENT_RESULT_METADATA_KEY == "scout_result"
+    assert SUBAGENT_RESULT_METADATA_KEY == "subagent_result"

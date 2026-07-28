@@ -28,8 +28,8 @@ from agent.subagents.runtime.state import (
 )
 
 
-SUBAGENT_COMPLETION_METADATA_KEY = "scout_completion"
-SUBAGENT_RESULT_PROJECTION_METADATA_KEY = "scout_result_projection"
+SUBAGENT_COMPLETION_METADATA_KEY = "subagent_completion"
+SUBAGENT_RESULT_PROJECTION_METADATA_KEY = "subagent_result_projection"
 
 
 class SubagentCompletionError(ValueError):
@@ -68,7 +68,7 @@ def complete_subagent_result(
     interactive.trace.final_text = result.summary
     interactive.trace.history.append(
         {
-            "type": "scout_result",
+            "type": "subagent_result",
             "agent_run_id": result.agent_run_id,
             "agent_id": result.agent_id,
             "agent_kind": result.agent_kind,

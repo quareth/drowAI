@@ -98,7 +98,7 @@ def initialize_subagent_state(
     )
     updated.trace.history.append(
         {
-            "type": "scout_initialize",
+            "type": "subagent_initialize",
             "agent_run_id": refreshed.agent_run_id,
             "agent_id": refreshed.agent_id,
             "agent_kind": refreshed.agent_kind,

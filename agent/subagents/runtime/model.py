@@ -48,8 +48,8 @@ from core.runbooks.service import RunbookService
 
 logger = logging.getLogger(__name__)
 
-SUBAGENT_ACTION_METADATA_KEY = "scout_action"
-SUBAGENT_RESULT_METADATA_KEY = "scout_result"
+SUBAGENT_ACTION_METADATA_KEY = "subagent_action"
+SUBAGENT_RESULT_METADATA_KEY = "subagent_result"
 SUBAGENT_EXECUTION_STRATEGY_KEY = "_execution_strategy"
 
 _RUNBOOK_SERVICE = RunbookService()
@@ -180,7 +180,7 @@ async def choose_subagent_action(
     async with reasoning_section(
         writer,
         state=interactive,
-        step="scout_action_selection",
+        step="subagent_action_selection",
         label="Selecting reconnaissance tools and preparing the execution batch.",
         config=config,
         context=context,
@@ -207,7 +207,7 @@ async def choose_subagent_action(
                 max_tokens=NATIVE_BUILDER_MAX_OUTPUT_TOKENS,
             ),
             timeout_sec=LLM_TIMEOUT_PLANNER_PARAMETER_RESOLUTION_SEC,
-            component="SCOUT",
+            component="SUBAGENT",
             operation="native_tool_builder_llm_call",
             logger=logger,
             task_id=interactive.facts.task_id,
@@ -220,10 +220,16 @@ async def choose_subagent_action(
             subagent=subagent,
             function_to_tool_id=function_to_tool_id,
             max_committed_calls=max_committed_calls,
+            display_name=definition.display_name,
         )
         if emitter is not None:
             emitter.emit_reasoning_delta(batch.selection_rationale)
-    return _apply_subagent_tool_batch(interactive, subagent, batch)
+    return _apply_subagent_tool_batch(
+        interactive,
+        subagent,
+        batch,
+        display_name=definition.display_name,
+    )
 
 
 def _build_subagent_function_specs(
@@ -272,6 +278,7 @@ def _build_tool_batch_from_result(
     subagent: SubagentRuntimeState,
     function_to_tool_id: Mapping[str, str],
     max_committed_calls: int,
+    display_name: str,
 ) -> ToolBatch:
     """Parse, validate, and order native calls as one canonical batch."""
 
@@ -322,7 +329,7 @@ def _build_tool_batch_from_result(
         )
         committed_calls.append(
             ToolCall(
-                tool_call_id=f"scout-call-{uuid.uuid4().hex}",
+                tool_call_id=f"subagent-call-{uuid.uuid4().hex}",
                 tool_id=tool_id,
                 parameters=parameters,
                 intent=builder_intent.strip(),
@@ -338,10 +345,11 @@ def _build_tool_batch_from_result(
 
     rationale = "; ".join(call.intent for call in committed_calls if call.intent)
     return ToolBatch(
-        tool_batch_id=f"scout-batch-{uuid.uuid4().hex}",
+        tool_batch_id=f"subagent-batch-{uuid.uuid4().hex}",
         tool_calls=tuple(committed_calls),
         requested_execution_strategy=batch_strategy,
-        selection_rationale=rationale or "Scout committed bounded recon calls.",
+        selection_rationale=rationale
+        or f"{display_name} committed bounded tool calls.",
     )
 
 
@@ -438,6 +446,8 @@ def _apply_subagent_tool_batch(
     interactive: InteractiveState,
     subagent: SubagentRuntimeState,
     batch: ToolBatch,
+    *,
+    display_name: str,
 ) -> dict[str, Any]:
     """Project the canonical native-call batch into shared runtime metadata."""
 
@@ -469,8 +479,8 @@ def _apply_subagent_tool_batch(
     interactive.facts.selected_tool = first_call.tool_id
     interactive.facts.tool_parameters = dict(first_call.parameters)
     interactive.trace.reasoning.append(
-        "Scout committed "
-        f"{len(batch.tool_calls)} recon tool call(s) "
+        f"{display_name} committed "
+        f"{len(batch.tool_calls)} tool call(s) "
         f"for {batch.requested_execution_strategy.value} execution."
     )
     return interactive.as_graph_update()
@@ -501,7 +511,7 @@ def _append_usage(interactive: InteractiveState, result: ToolCallResult) -> None
 
     usage = _usage_to_dict(
         result.usage,
-        "scout_tool_builder",
+        "subagent_tool_builder",
         request_mode="non_streaming",
     )
     if usage is None:

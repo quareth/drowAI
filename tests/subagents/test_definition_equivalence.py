@@ -1,20 +1,16 @@
-"""Equivalence tests between the Pathfinder TOML definition and legacy Scout facts."""
+"""Contract tests for the built-in Pathfinder declarative subagent definition."""
 
 from __future__ import annotations
 
 from agent.config import AgentConfig
 from agent.subagents.definition import SubagentDefinition, load_subagent_definitions
-from agent.subagents.scout.profile import (
-    SCOUT_OWNED_CAPABILITIES,
-    SCOUT_RECON_TOOL_ID_CEILING,
-    resolve_scout_tool_profile,
-)
+from agent.subagents.runtime.model import SubagentToolBuilderPromptBuilder
+from agent.subagents.runtime.profile import resolve_subagent_tool_profile
 from backend.services.agent_runs.subagent_registry import PATHFINDER_SUBAGENT_SPEC
-from core.prompts.builders.scout_tool_builder import ScoutToolBuilderPromptBuilder
 from core.prompts.tests._golden import assert_golden
 
 
-_SUPPORTED_CATEGORY_TO_LEGACY_CAPABILITY = {
+_SUPPORTED_CATEGORY_TO_PROFILE_CAPABILITY = {
     "host_discovery": "host_discovery",
     "port_scanning": "port_scanning",
     "service_enumeration": "service_enumeration",
@@ -29,7 +25,7 @@ def _pathfinder_definition() -> SubagentDefinition:
     return pathfinder
 
 
-def test_pathfinder_definition_matches_legacy_scout_registry_metadata() -> None:
+def test_pathfinder_definition_matches_control_plane_registry_metadata() -> None:
     definition = _pathfinder_definition()
     legacy = PATHFINDER_SUBAGENT_SPEC
 
@@ -47,11 +43,14 @@ def test_pathfinder_definition_matches_legacy_scout_registry_metadata() -> None:
     assert definition.icon == "pathfinder"
 
 
-def test_pathfinder_definition_matches_current_scout_tool_profile() -> None:
+def test_pathfinder_definition_owns_current_tool_profile() -> None:
     definition = _pathfinder_definition()
-    profile = resolve_scout_tool_profile(definition.tool_ids)
+    profile = resolve_subagent_tool_profile(definition, definition.tool_ids)
 
-    assert set(definition.tool_ids) == SCOUT_RECON_TOOL_ID_CEILING
+    assert set(definition.tool_ids) == {
+        "information_gathering.network_discovery.fping",
+        "information_gathering.network_discovery.nmap",
+    }
     assert profile.tool_ids == definition.tool_ids
     assert profile.capabilities_for_tool(
         "information_gathering.network_discovery.fping"
@@ -60,12 +59,12 @@ def test_pathfinder_definition_matches_current_scout_tool_profile() -> None:
         "information_gathering.network_discovery.nmap"
     ) == ("port_scanning", "service_enumeration")
     assert {
-        _SUPPORTED_CATEGORY_TO_LEGACY_CAPABILITY[category]
+        _SUPPORTED_CATEGORY_TO_PROFILE_CAPABILITY[category]
         for category in definition.supported_task_categories
-    } == set(SCOUT_OWNED_CAPABILITIES)
+    } == {"host_discovery", "port_scanning", "service_enumeration"}
 
 
-def test_pathfinder_definition_matches_current_scout_runtime_limits() -> None:
+def test_pathfinder_definition_matches_current_runtime_limits() -> None:
     definition = _pathfinder_definition()
 
     assert (
@@ -79,14 +78,14 @@ def test_pathfinder_definition_matches_current_scout_runtime_limits() -> None:
     assert definition.max_iterations == 3
 
 
-def test_pathfinder_definition_matches_current_scout_prompt_sections() -> None:
+def test_pathfinder_definition_matches_current_prompt_sections() -> None:
     definition = _pathfinder_definition()
 
-    prompt = ScoutToolBuilderPromptBuilder().build_system_prompt(
+    prompt = SubagentToolBuilderPromptBuilder(definition).build_system_prompt(
         max_committed_tools_per_batch=definition.max_tool_calls_per_iteration,
     )
 
-    assert_golden("scout_tool_builder__system.txt", prompt)
+    assert_golden("subagent_tool_builder__system.txt", prompt)
     assert prompt.startswith(
         f"You are {definition.display_name}, a bounded recon subagent.\n"
         "Emit native tool calls only."

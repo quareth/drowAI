@@ -1,2 +1,1 @@
-"""Shared subagent package for pilot agent implementations."""
-
+"""Shared declarative subagent definitions and runtime helpers."""

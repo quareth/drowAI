@@ -420,7 +420,7 @@ class ToolPlanningPromptBuilder:
     ) -> str:
         """Return exact selector-independent guidance from the native builder.
 
-        The Scout subagent binds its complete bounded tool profile directly, so
+        A subagent binds its complete bounded tool profile directly, so
         it must not inherit the main planner's upstream-selector paragraph.
         This method keeps the reusable instructions single-sourced in the
         canonical parameter-builder prompt while returning only:

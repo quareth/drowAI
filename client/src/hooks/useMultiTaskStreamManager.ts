@@ -703,7 +703,7 @@ function shouldSuppressChildMainCompatibilityEvent(
   metadata: Record<string, unknown>,
   eventKind: string | null,
 ): boolean {
-  if (!isScoutAgentRunMetadata(metadata)) {
+  if (!isSubagentRunMetadata(metadata)) {
     return false;
   }
   return (
@@ -715,7 +715,7 @@ function shouldSuppressChildMainCompatibilityEvent(
   );
 }
 
-function isScoutAgentRunMetadata(metadata: Record<string, unknown>): boolean {
+function isSubagentRunMetadata(metadata: Record<string, unknown>): boolean {
   return (
     metadata.producer_type === "subagent" &&
     typeof metadata.agent_run_id === "string" &&
