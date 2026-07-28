@@ -12,6 +12,7 @@ import type { ChatMessage } from "./types";
 export interface TurnActivitySummary {
   thoughtCount: number;
   toolCount: number;
+  agentCount: number;
   observationCount: number;
 }
 
@@ -25,6 +26,7 @@ export interface TurnActivityBlock {
   type: "activity";
   key: string;
   turnKey: string;
+  isComplete: boolean;
   groups: MessageGroup[];
   summary: TurnActivitySummary;
 }
@@ -91,8 +93,34 @@ function hasSuccessfulFinalMessage(group: MessageGroup): boolean {
   return hasFinal && !hasOpenContentStream;
 }
 
+export function isAgentRunEventGroup(group: MessageGroup): boolean {
+  return group.messages.some((message) => {
+    const metadata = message.metadata ?? {};
+    const hasRunId =
+      typeof metadata.agent_run_id === "string" &&
+      metadata.agent_run_id.trim().length > 0;
+    if (!hasRunId) {
+      return false;
+    }
+    const isLifecycle =
+      message.content === "agent_run_lifecycle" ||
+      metadata.subtype === "agent_run_lifecycle";
+    if (isLifecycle) {
+      return true;
+    }
+    return (
+      metadata.producer_type !== "subagent" &&
+      typeof metadata.agent_kind === "string" &&
+      metadata.agent_kind.trim().length > 0 &&
+      typeof metadata.agent_display_name === "string" &&
+      metadata.agent_display_name.trim().length > 0
+    );
+  });
+}
+
 function isCollapsibleIntermediate(group: MessageGroup): boolean {
   return (
+    isAgentRunEventGroup(group) ||
     group.primaryType === "reasoning" ||
     group.primaryType === "tool" ||
     group.primaryType === "observation"
@@ -121,13 +149,27 @@ function collectToolIds(group: MessageGroup, ids: Set<string>): void {
   }
 }
 
+function collectAgentRunIds(group: MessageGroup, ids: Set<string>): void {
+  for (const message of group.messages) {
+    const agentRunId = message.metadata?.agent_run_id;
+    if (typeof agentRunId === "string" && agentRunId.trim().length > 0) {
+      ids.add(agentRunId.trim());
+    }
+  }
+}
+
 export function summarizeActivityGroups(groups: MessageGroup[]): TurnActivitySummary {
   const toolIds = new Set<string>();
+  const agentRunIds = new Set<string>();
   let toolGroupsWithoutIds = 0;
   let thoughtCount = 0;
   let observationCount = 0;
 
   for (const group of groups) {
+    if (isAgentRunEventGroup(group)) {
+      collectAgentRunIds(group, agentRunIds);
+      continue;
+    }
     if (group.primaryType === "reasoning") {
       thoughtCount += 1;
     } else if (group.primaryType === "observation") {
@@ -144,6 +186,7 @@ export function summarizeActivityGroups(groups: MessageGroup[]): TurnActivitySum
   return {
     thoughtCount,
     toolCount: toolIds.size + toolGroupsWithoutIds,
+    agentCount: agentRunIds.size,
     observationCount,
   };
 }
@@ -204,6 +247,7 @@ export function buildMessageRenderBlocks(groups: MessageGroup[]): MessageRenderB
       type: "activity",
       key: `activity-${pendingTurnKey}`,
       turnKey: pendingTurnKey,
+      isComplete: completedTurns.has(pendingTurnKey),
       groups: pendingGroups,
       summary: summarizeActivityGroups(pendingGroups),
     });
@@ -213,20 +257,16 @@ export function buildMessageRenderBlocks(groups: MessageGroup[]): MessageRenderB
 
   renderGroups.forEach((group, index) => {
     const turnKey = resolveTurnKey(group);
-    const canCollapse =
-      turnKey !== undefined &&
-      completedTurns.has(turnKey) &&
-      isCollapsibleIntermediate(group);
+    const canGroup = turnKey !== undefined && isCollapsibleIntermediate(group);
 
-    if (canCollapse) {
+    if (canGroup) {
       if (pendingTurnKey && pendingTurnKey !== turnKey) flushPending();
       pendingTurnKey = turnKey;
       pendingGroups.push(group);
       return;
     }
 
-    if (pendingTurnKey && pendingTurnKey !== turnKey) flushPending();
-    if (pendingTurnKey && group.primaryType === "message") flushPending();
+    if (pendingTurnKey) flushPending();
     blocks.push(normalBlock(group, index));
   });
 

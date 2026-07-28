@@ -195,15 +195,19 @@ export function MessageGroupRenderer({ group, taskId, onToggleExpand, onRetry, r
   if (primaryType === "message") {
     // For message groups, we need to accumulate deltas or use the final message
     let accumulatedContent = "";
-    let isStreaming = false;
+    let hasStreamingDelta = false;
     let finalMessage = messages[messages.length - 1]; // Use last message as base
+    const { hasStart, hasSectionEnd, isInProgress } = getPhaseState(messages, {
+      start: "message_start",
+      sectionEnd: "message_section_end",
+    });
     
     for (const msg of messages) {
       const stepType = getStepType(msg);
       if (stepType === "message_delta" || stepType === "assistant_delta") {
         accumulatedContent += msg.content || "";
         if (msg.isStreaming) {
-          isStreaming = true;
+          hasStreamingDelta = true;
         }
       } else if (stepType === "assistant_message" || stepType === "assistant_final" || !stepType) {
         // Final message or regular message
@@ -228,7 +232,12 @@ export function MessageGroupRenderer({ group, taskId, onToggleExpand, onRetry, r
     const mergedMessage = {
       ...finalMessage,
       content: resolvedContent,
-      isStreaming: isTerminalNotice ? false : isStreaming,
+      isStreaming:
+        isTerminalNotice || hasSectionEnd
+          ? false
+          : hasStart
+            ? isInProgress
+            : hasStreamingDelta,
     };
     
     return (

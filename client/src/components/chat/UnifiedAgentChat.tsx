@@ -113,6 +113,7 @@ interface UnifiedAgentChatProps {
   onChatModeChange?: (mode: ChatExperienceMode) => void;
   onTaskChange?: (taskId: number) => void;
   headerSlot?: ReactNode;
+  leadingHeaderSlot?: ReactNode;
 }
 
 export function UnifiedAgentChat({
@@ -121,6 +122,7 @@ export function UnifiedAgentChat({
   onChatModeChange,
   onTaskChange,
   headerSlot,
+  leadingHeaderSlot,
 }: UnifiedAgentChatProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -873,6 +875,18 @@ export function UnifiedAgentChat({
     return null;
   }, [pendingInterrupt]);
 
+  const agentRunApprovalControls = useMemo(() => {
+    if (!toolApprovalInterrupt) return undefined;
+    return {
+      interrupt: toolApprovalInterrupt,
+      onApprove: () => handleApproval("approve"),
+      onEdit: (params: Record<string, unknown>) => handleApproval("edit", params),
+      onSkip: () => handleApproval("skip"),
+      onBatchSubmit: handleBatchApproval,
+      isSubmitting: resumeMutation.isPending,
+    };
+  }, [handleApproval, handleBatchApproval, resumeMutation.isPending, toolApprovalInterrupt]);
+
   const clarifyRequestInterrupt = useMemo<ClarifyRequestInterruptDetail | null>(() => {
     if (!activeTaskId || !pendingInterrupt) return null;
     if (pendingInterrupt.taskId !== activeTaskId) return null;
@@ -987,6 +1001,7 @@ export function UnifiedAgentChat({
       runStates={runStates}
       onDownloadTranscript={handleDownloadTranscript}
       isTranscriptDownloadPending={isTranscriptExporting}
+      leadingSlot={leadingHeaderSlot}
     />
   );
 
@@ -1003,6 +1018,7 @@ export function UnifiedAgentChat({
         onMessageRetry={handleMessageRetry}
         resolveRetryState={resolveRetryStateForMessage}
         emptyState={emptyState}
+        agentRunApprovalControls={agentRunApprovalControls}
       />
 
       {toolApprovalInterrupt && (

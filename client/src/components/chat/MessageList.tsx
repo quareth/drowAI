@@ -1,3 +1,11 @@
+/**
+ * Scrollable chat transcript and subagent drawer integration.
+ *
+ * Responsibilities:
+ * - render grouped chat activity without leaking subagent internals
+ * - keep subagent drawer navigation behind explicit card/list/detail actions
+ * - preserve the existing chat transcript, retry, and scroll behavior
+ */
 import {
   useCallback,
   useEffect,
@@ -8,14 +16,40 @@ import {
 import type { ReactNode } from "react";
 import { ArrowDown, Loader2 } from "lucide-react";
 
+import { AgentRunCard } from "@/features/agent-runs/components/AgentRunCard";
+import {
+  AgentRunDrawer,
+  type AgentRunApprovalControls,
+} from "@/features/agent-runs/components/AgentRunDrawer";
+import {
+  useAgentRunPresentation,
+  useAgentRunLocalStatusHydration,
+  useAgentRuns,
+} from "@/features/agent-runs/hooks/use-agent-run";
+import {
+  closeAgentRunDrawer,
+  getAgentRunParentGroupingKey,
+  openAgentRunList,
+  type AgentRunRecord,
+} from "@/features/agent-runs/state/agent-stream-store";
+import { apiFetch } from "@/lib/api-config";
 import { cn } from "@/lib/utils";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
 
 import type { ChatMessage } from "./types";
 import { useMessageGrouping } from "@/hooks/useMessageGrouping";
+import type { MessageGroup } from "@/hooks/useMessageGrouping";
 import { MessageGroupRenderer } from "./MessageGroup";
 import type { MessageBubbleRetryState } from "./MessageBubble";
 import { TurnActivityCard } from "./TurnActivityCard";
-import { buildMessageRenderBlocks } from "./turnActivityBlocks";
+import {
+  buildMessageRenderBlocks,
+  isAgentRunEventGroup,
+} from "./turnActivityBlocks";
 
 export interface MessageListProps {
   messages: ChatMessage[];
@@ -37,9 +71,136 @@ export interface MessageListProps {
   autoScrollThreshold?: number;
   emptyState?: ReactNode;
   className?: string;
+  agentRunApprovalControls?: AgentRunApprovalControls;
 }
 
 const DEFAULT_AUTO_SCROLL_THRESHOLD = 96;
+const AGENT_RUN_LIFECYCLE_CONTENT = "agent_run_lifecycle";
+const AGENT_RUN_LIFECYCLE_SUBTYPE = "agent_run_lifecycle";
+
+function readString(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function isAgentRunLifecycleMessage(message: ChatMessage): boolean {
+  const metadata = message.metadata ?? {};
+  return (
+    readString(metadata.agent_run_id) !== null &&
+    (message.content === AGENT_RUN_LIFECYCLE_CONTENT ||
+      metadata.subtype === AGENT_RUN_LIFECYCLE_SUBTYPE)
+  );
+}
+
+function isAgentRunParentControlMessage(message: ChatMessage): boolean {
+  const metadata = message.metadata ?? {};
+  return (
+    readString(metadata.agent_run_id) !== null &&
+    readString(metadata.agent_kind) !== null &&
+    readString(metadata.agent_display_name) !== null &&
+    readString(metadata.status) !== null &&
+    metadata.producer_type !== "subagent"
+  );
+}
+
+function isAgentRunActivityMessage(message: ChatMessage): boolean {
+  const metadata = message.metadata ?? {};
+  const isLifecycle =
+    message.content === AGENT_RUN_LIFECYCLE_CONTENT ||
+    metadata.subtype === AGENT_RUN_LIFECYCLE_SUBTYPE;
+  return (
+    !isLifecycle &&
+    readString(metadata.agent_run_id) !== null &&
+    metadata.producer_type === "subagent"
+  );
+}
+
+function agentRunIdsForGroup(group: MessageGroup): Set<string> {
+  const ids = new Set<string>();
+  for (const message of group.messages) {
+    const agentRunId = readString(message.metadata?.agent_run_id);
+    if (agentRunId) {
+      ids.add(agentRunId);
+    }
+  }
+  return ids;
+}
+
+function matchingAgentRunsForGroup(
+  group: MessageGroup,
+  agentRuns: AgentRunRecord[],
+): AgentRunRecord[] {
+  const agentRunIds = agentRunIdsForGroup(group);
+  if (agentRunIds.size === 0) {
+    return [];
+  }
+  return agentRuns.filter((run) => agentRunIds.has(run.agentRunId));
+}
+
+function addMissingAgentRunMarkers(
+  messages: ChatMessage[],
+  agentRuns: AgentRunRecord[],
+): ChatMessage[] {
+  const existingRunIds = new Set<string>();
+  const messagesByTurnId = new Map<string, ChatMessage>();
+  for (const message of messages) {
+    const agentRunId = readString(message.metadata?.agent_run_id);
+    if (agentRunId && isAgentRunLifecycleMessage(message)) {
+      existingRunIds.add(agentRunId);
+    }
+    for (const value of [message.metadata?.id, message.metadata?.turn_id]) {
+      const turnId = readString(value);
+      if (turnId && !messagesByTurnId.has(turnId)) {
+        messagesByTurnId.set(turnId, message);
+      }
+    }
+  }
+
+  const markers: ChatMessage[] = [];
+  for (const run of agentRuns) {
+    if (existingRunIds.has(run.agentRunId)) {
+      continue;
+    }
+    const parentMessage =
+      messagesByTurnId.get(run.parentTurnId) ??
+      (run.parentRunId ? messagesByTurnId.get(run.parentRunId) : undefined);
+    if (!parentMessage) {
+      continue;
+    }
+    const isWorking = run.status === "running";
+    markers.push({
+      id: `agent-run-marker-${run.agentRunId}`,
+      type: "agent",
+      content: AGENT_RUN_LIFECYCLE_CONTENT,
+      timestamp: new Date(run.createdAt).toISOString(),
+      isStreaming: isWorking,
+      metadata: {
+        id: run.parentTurnId,
+        turn_id: run.parentTurnId,
+        turn_sequence: parentMessage.metadata?.turn_sequence,
+        sequence: run.firstSequence ?? undefined,
+        ind: 1,
+        step_type: "tool_start",
+        subtype: AGENT_RUN_LIFECYCLE_SUBTYPE,
+        producer_type: "subagent",
+        agent_run_id: run.agentRunId,
+        agent_kind: run.agentKind,
+        agent_display_name: run.agentDisplayName,
+        parent_turn_id: run.parentTurnId,
+        parent_run_id: run.parentRunId ?? undefined,
+        lifecycle_version: run.lifecycleVersion,
+        streaming: isWorking,
+        is_streaming: isWorking,
+        in_progress: isWorking,
+      },
+    });
+  }
+  const visibleMessages = messages.filter(
+    (message) => !isAgentRunParentControlMessage(message),
+  );
+  return markers.length > 0 ? [...visibleMessages, ...markers] : visibleMessages;
+}
 
 export function MessageList({
   messages,
@@ -54,6 +215,7 @@ export function MessageList({
   autoScrollThreshold = DEFAULT_AUTO_SCROLL_THRESHOLD,
   emptyState,
   className,
+  agentRunApprovalControls,
 }: MessageListProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const topSentinelRef = useRef<HTMLButtonElement | null>(null);
@@ -73,6 +235,33 @@ export function MessageList({
     (messageId: string) => onMessageRetry?.(messageId),
     [onMessageRetry],
   );
+
+  const handleOpenAgentRun = useCallback(
+    (run: AgentRunRecord) => {
+      if (typeof taskId !== "number") return;
+      openAgentRunList(taskId, getAgentRunParentGroupingKey(run));
+    },
+    [taskId],
+  );
+
+  const handleStopAgentRun = useCallback(
+    async (run: AgentRunRecord) => {
+      if (typeof taskId !== "number") return;
+      const response = await apiFetch(
+        `/api/tasks/${taskId}/agent-runs/${encodeURIComponent(run.agentRunId)}/cancel`,
+        { method: "POST" },
+      );
+      if (!response.ok) {
+        throw new Error("Failed to stop subagent run.");
+      }
+    },
+    [taskId],
+  );
+
+  const handleCollapseAgentRun = useCallback(() => {
+    if (typeof taskId !== "number") return;
+    closeAgentRunDrawer(taskId);
+  }, [taskId]);
 
   const scrollToBottom = useCallback(
     (behavior: ScrollBehavior = "smooth") => {
@@ -175,9 +364,44 @@ export function MessageList({
     return () => observer.disconnect();
   }, [hasMore, onLoadMore, handleLoadMore]);
 
-  // Group messages by `ind` field for proper rendering
-  const messageGroups = useMessageGrouping(messages);
+  useAgentRunLocalStatusHydration(taskId);
+  const agentRuns = useAgentRuns(taskId);
+  const agentRunPresentation = useAgentRunPresentation(taskId);
+
+  // Group messages by `ind` field for proper rendering.
+  const parentTranscriptMessages = useMemo(() => {
+    const parentMessages = messages.filter(
+      (message) => !isAgentRunActivityMessage(message),
+    );
+    return addMissingAgentRunMarkers(parentMessages, agentRuns);
+  }, [agentRuns, messages]);
+  const agentRunActivityMessages = useMemo(
+    () => messages.filter(isAgentRunActivityMessage),
+    [messages],
+  );
+  const messageGroups = useMessageGrouping(parentTranscriptMessages);
   const renderBlocks = useMemo(() => buildMessageRenderBlocks(messageGroups), [messageGroups]);
+
+  const renderActivityGroup = useCallback(
+    (group: MessageGroup): ReactNode | undefined => {
+      if (!isAgentRunEventGroup(group)) {
+        return undefined;
+      }
+      const matchingRuns = matchingAgentRunsForGroup(group, agentRuns);
+      return (
+        <div className="flex w-full flex-col gap-1">
+          {matchingRuns.map((run) => (
+            <AgentRunCard
+              key={run.agentRunId}
+              run={run}
+              onOpen={handleOpenAgentRun}
+            />
+          ))}
+        </div>
+      );
+    },
+    [agentRuns, handleOpenAgentRun],
+  );
   
   const renderedMessages = useMemo(
     () =>
@@ -197,12 +421,38 @@ export function MessageList({
                 taskId={taskId}
                 onGroupExpand={handleExpand}
                 onGroupRetry={handleRetry}
+                renderGroup={renderActivityGroup}
               />
             </li>
           );
         }
 
         const { group } = block;
+        if (isAgentRunEventGroup(group)) {
+          const matchingRuns = matchingAgentRunsForGroup(group, agentRuns);
+          if (matchingRuns.length === 0) {
+            return null;
+          }
+          return (
+            <li
+              key={block.key}
+              className="flex"
+              data-testid={`chat-message-${index}`}
+              data-group-type="agent-run"
+              data-turn-sequence={group.messages[0]?.metadata?.turn_sequence ?? ""}
+            >
+              <div className="flex w-full flex-col gap-1">
+                {matchingRuns.map((run) => (
+                  <AgentRunCard
+                    key={run.agentRunId}
+                    run={run}
+                    onOpen={handleOpenAgentRun}
+                  />
+                ))}
+              </div>
+            </li>
+          );
+        }
         // Use stable group key when available
         const firstMessage = group.messages[0];
         const key = block.key ?? firstMessage?.id ?? `group-${group.ind}-${index}`;
@@ -225,7 +475,16 @@ export function MessageList({
           </li>
         );
       }),
-    [renderBlocks, taskId, handleExpand, handleRetry, resolveRetryState],
+    [
+      agentRuns,
+      handleExpand,
+      handleOpenAgentRun,
+      handleRetry,
+      renderActivityGroup,
+      renderBlocks,
+      resolveRetryState,
+      taskId,
+    ],
   );
 
   const resolvedEmptyState = emptyState ?? (
@@ -249,14 +508,22 @@ export function MessageList({
         </span>
       </header>
 
-      <div
-        ref={containerRef}
-        role="log"
-        aria-live="polite"
-        aria-busy={isLoading}
-        data-testid="chat-message-list"
-        className="relative flex-1 overflow-y-auto overflow-x-hidden px-4 py-4"
-      >
+      <div className="relative min-h-0 flex-1">
+        <ResizablePanelGroup direction="horizontal" className="h-full min-h-0">
+          <ResizablePanel
+            id="conversation-panel"
+            order={1}
+            defaultSize={agentRunPresentation.isOpen ? 56 : 100}
+            minSize={56}
+          >
+            <div
+              ref={containerRef}
+              role="log"
+              aria-live="polite"
+              aria-busy={isLoading}
+              data-testid="chat-message-list"
+              className="relative h-full min-w-0 overflow-y-auto overflow-x-hidden px-4 py-4"
+            >
         {hasMore && (
           <div className="flex justify-center pb-2 text-xs" data-testid="message-list-load-more">
             <button
@@ -292,7 +559,37 @@ export function MessageList({
         )}
         </div>
 
-        <div ref={bottomAnchorRef} aria-hidden="true" />
+          <div ref={bottomAnchorRef} aria-hidden="true" />
+            </div>
+          </ResizablePanel>
+
+          {agentRunPresentation.isOpen ? (
+            <>
+              <ResizableHandle
+                aria-label="Resize subagents panel"
+                className="w-0.5 bg-slate-800/30 transition-colors hover:bg-emerald-500/30"
+              />
+              <ResizablePanel
+                id="subagents-panel"
+                order={2}
+                defaultSize={44}
+                minSize={36}
+                maxSize={44}
+                collapsible
+                collapsedSize={0}
+                onCollapse={handleCollapseAgentRun}
+                className="min-w-0 overflow-hidden"
+              >
+                <AgentRunDrawer
+                  taskId={taskId}
+                  activityMessages={agentRunActivityMessages}
+                  approvalControls={agentRunApprovalControls}
+                  onStopRun={handleStopAgentRun}
+                />
+              </ResizablePanel>
+            </>
+          ) : null}
+        </ResizablePanelGroup>
       </div>
 
       {unreadCount > 0 && (
@@ -310,6 +607,7 @@ export function MessageList({
           {unreadCount} unread
         </button>
       )}
+
     </section>
   );
 }

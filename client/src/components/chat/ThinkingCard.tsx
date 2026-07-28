@@ -5,8 +5,9 @@
  * progress timeline that keeps attention on the final answer bubble.
  */
 
-import { Brain, Loader2 } from "lucide-react";
+import { Brain } from "lucide-react";
 
+import { ActivityStatusIcon } from "@/components/chat/ActivityStatusIcon";
 import { useCardToggleState } from "@/hooks/useCardToggleState";
 
 interface ThinkingCardProps {
@@ -69,11 +70,11 @@ export function ThinkingCard({
         disabled={!hasContent}
         className="flex w-full min-w-0 items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-slate-900/60"
       >
-        {isInProgress ? (
-          <Loader2 className="w-3 h-3 text-slate-500 animate-spin flex-shrink-0" />
-        ) : (
-          <Brain className="w-3 h-3 text-slate-500 flex-shrink-0" />
-        )}
+        <ActivityStatusIcon
+          isInProgress={isInProgress}
+          icon={Brain}
+          className="h-3 w-3 shrink-0 text-slate-500"
+        />
         <span
           className={`inline-block text-xs font-medium ${
             isInProgress ? "llm-shimmer-text-slate" : "text-slate-400"
