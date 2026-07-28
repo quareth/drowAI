@@ -350,6 +350,7 @@ class KnowledgeIngestionService:
                 archived_rows=archived_rows,
                 deterministic_observations=observations,
                 fact_stats=fact_stats,
+                compact_output_hint=compact_output_hint,
                 post_tool_candidate_payload=post_tool_candidate_payload,
                 post_tool_candidate_usage=post_tool_candidate_usage,
                 candidate_extractor_family=self.CANDIDATE_EXTRACTION_EXTRACTOR_FAMILY,

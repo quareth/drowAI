@@ -115,4 +115,43 @@ def test_frontend_receives_compact_tool_result_on_tool_end() -> None:
     assert compact["schema_version"] == "2.0"
     assert compact["summary"] == "Scan finished with one open port."
     assert compact["key_findings"] == ["80/tcp open"]
+    assert "deterministic_compact_tool_result" not in result
     assert "deterministic_compact_tool_result" not in result["metadata"]
+
+
+def test_streaming_adapter_persists_primary_compact_only_when_secondary_present() -> None:
+    """State persistence remains primary-lane only when runtime emits secondary compact."""
+    adapter = LangGraphStreamingAdapter()
+    state_container = Mock()
+    state_container.get_tool_call_parameters.return_value = {"target": "127.0.0.1"}
+    state_container.add_tool_call.side_effect = lambda payload: payload
+    state_container.reserved_message_id = None
+    compact_payload = _compact_payload()
+    deterministic_payload = {
+        **compact_payload,
+        "summary": "Deterministic secondary summary.",
+        "key_findings": ["secondary-only finding"],
+    }
+    event = {
+        "type": "tool_end",
+        "tool": "nmap",
+        "tool_call_id": "call-1",
+        "conversation_id": "conv-1",
+        "turn_id": "turn-1",
+        "status": "success",
+        "duration": 1.1,
+        "exit_code": 0,
+        "summary": {"summary": "Scan finished with one open port."},
+        "compact_tool_result": compact_payload,
+        "deterministic_compact_tool_result": deterministic_payload,
+    }
+
+    result = adapter.process_streaming_event(event, state_container=state_container)
+
+    assert result is not None
+    persisted_payload = state_container.add_tool_call.call_args[0][0]["tool_result"]
+    assert persisted_payload["schema_version"] == compact_payload["schema_version"]
+    assert persisted_payload["summary"] == compact_payload["summary"]
+    assert persisted_payload["key_findings"] == compact_payload["key_findings"]
+    assert persisted_payload["structured_signals"] == compact_payload["structured_signals"]
+    assert "deterministic_compact_tool_result" not in persisted_payload

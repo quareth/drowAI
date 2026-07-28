@@ -117,8 +117,14 @@ class _RecordingIngestionService:
 
 
 class _StaticReplaySourceResolver:
-    def __init__(self, *, source_kind: str) -> None:
+    def __init__(
+        self,
+        *,
+        source_kind: str,
+        compact_output_hint: dict[str, object] | None = None,
+    ) -> None:
         self.source_kind = source_kind
+        self.compact_output_hint = compact_output_hint
 
     def resolve_source(self, *, source_execution_id: str, task_id: int | None):
         return {
@@ -136,7 +142,7 @@ class _StaticReplaySourceResolver:
                 },
                 "artifacts": [],
             },
-            "compact_output_hint": None,
+            "compact_output_hint": self.compact_output_hint,
         }
 
 
@@ -606,6 +612,10 @@ def test_runtime_and_durable_replay_enter_the_same_ingestion_payload_boundary() 
         "runtime": "00000000-0000-4000-8000-000000000201",
         "durable_archive": "00000000-0000-4000-8000-000000000202",
     }
+    primary_compact_hint = {
+        "summary": "primary compact replay hint",
+        "highlights": ["existing primary compact contract"],
+    }
     for source_kind, source_execution_id in source_execution_ids.items():
         engine, db = _build_session()
         try:
@@ -613,7 +623,10 @@ def test_runtime_and_durable_replay_enter_the_same_ingestion_payload_boundary() 
             replay_service = KnowledgeReplayService(
                 db,
                 ingestion_service=ingestion_service,
-                replay_source_resolver=_StaticReplaySourceResolver(source_kind=source_kind),
+                replay_source_resolver=_StaticReplaySourceResolver(
+                    source_kind=source_kind,
+                    compact_output_hint=primary_compact_hint,
+                ),
             )
 
             replay = replay_service.replay_execution(
@@ -633,6 +646,8 @@ def test_runtime_and_durable_replay_enter_the_same_ingestion_payload_boundary() 
             assert call["replay_source_type"] == source_kind
             assert call["reuse_existing_archive_rows"] is True
             assert call["raise_on_error"] is True
+            assert call["compact_output_hint"] == primary_compact_hint
+            assert "deterministic_compact_output" not in call
         finally:
             db.close()
             engine.dispose()

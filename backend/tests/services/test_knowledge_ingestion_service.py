@@ -25,6 +25,10 @@ from backend.models.knowledge import (
 from backend.models.provenance import ExecutionArtifact, ToolExecution
 from backend.services.data_plane.local_object_store import LocalObjectStore
 from backend.services.knowledge.delete_guard_service import KnowledgeDeleteGuardService
+from backend.services.knowledge.candidate_extraction import (
+    CandidateExtractionPolicyDecision,
+    CandidateExtractionPolicyRequest,
+)
 from backend.services.knowledge.contracts import (
     IngestionRunCreate as _IngestionRunCreate,
     IngestionRunStatus,
@@ -2068,6 +2072,73 @@ def test_candidate_extraction_maps_source_artifact_refs_and_persists_candidate(
             .one()
         )
         assert str(archive_row.source_artifact_id) == artifact_id
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_candidate_extraction_policy_receives_primary_compact_hint(monkeypatch) -> None:
+    monkeypatch.setenv("ENABLE_KNOWLEDGE_CANDIDATE_EXTRACTION", "true")
+    captured_requests: list[CandidateExtractionPolicyRequest] = []
+
+    def _capture_policy(
+        request: CandidateExtractionPolicyRequest,
+    ) -> CandidateExtractionPolicyDecision:
+        captured_requests.append(request)
+        return CandidateExtractionPolicyDecision(
+            action="run",
+            reason="eligible_for_candidate_extraction",
+            policy_metadata={"compact_hint_present": bool(request.compact_output_hint)},
+        )
+
+    monkeypatch.setattr(
+        "backend.services.knowledge.candidate_extraction.service."
+        "KnowledgeCandidateExtractionPolicy.evaluate",
+        _capture_policy,
+    )
+    engine, db = _build_session()
+    try:
+        _user, _engagement, task = _seed_user_engagement_task(db)
+        execution_id = _seed_execution_with_artifact(
+            db,
+            task_id=task.id,
+            tool_name="shell.exec",
+            artifact_kind="stdout",
+            content_text="postgresql 11.5 banner",
+            is_text=True,
+            byte_size=128,
+        )
+        artifact_id = str(
+            db.query(ExecutionArtifact)
+            .filter(ExecutionArtifact.execution_id == execution_id)
+            .one()
+            .id
+        )
+        compact_output_hint = {
+            "summary": "primary compact summary",
+            "highlights": ["existing primary compact hint"],
+        }
+
+        result = KnowledgeIngestionService(db).ingest_execution(
+            task_id=task.id,
+            source_execution_id=execution_id,
+            compact_output_hint=compact_output_hint,
+            post_tool_candidate_payload=_build_post_tool_candidate_payload(
+                source_artifact_id=artifact_id,
+                vulnerability_confidence=0.94,
+            ),
+            post_tool_candidate_usage={
+                "input_tokens": 42,
+                "output_tokens": 18,
+                "total_tokens": 60,
+                "estimated_cost_usd": 0.0,
+            },
+            raise_on_error=True,
+        )
+
+        assert result["ok"] is True
+        assert captured_requests
+        assert captured_requests[0].compact_output_hint == compact_output_hint
     finally:
         db.close()
         engine.dispose()

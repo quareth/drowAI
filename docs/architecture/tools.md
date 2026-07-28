@@ -391,22 +391,18 @@ tool output.
 
 Code-verified compression note: `compress_tool_output()` in
 `agent/graph/compression/compressor.py` remains the public graph compression
-entrypoint. The deterministic compression adapter layer is defined by
-`agent/graph/compression/deterministic/contracts.py`,
-`agent/graph/compression/deterministic/registry.py`,
-`agent/graph/compression/deterministic/common.py`,
-`agent/graph/compression/deterministic/envelope.py`,
-`agent/graph/compression/deterministic/filesystem.py`,
-`agent/graph/compression/deterministic/pcap.py`,
-`agent/graph/compression/deterministic/http.py`,
-`agent/graph/compression/deterministic/dns_discovery.py`,
-`agent/graph/compression/deterministic/network_discovery.py`,
-`agent/graph/compression/deterministic/credential_attack.py`,
-`agent/graph/compression/deterministic/utility.py`, and
-`agent/graph/compression/deterministic/web_discovery.py`. These adapters are
-pure transformations of raw result/metadata; they do not execute tools, call
-LLMs, import backend Knowledge services, or use Docker, runner, or
-runtime-provider services.
+entrypoint. The universal primary lane is still built by the
+`UniversalToolProcessor` path in that module. For pentest catalog-role tools,
+the optional secondary deterministic lane now compiles runtime semantic input
+with `runtime_shared/semantic/pentest_facts.compile_facts()` and projects the
+result through `agent/graph/compression/pentest_facts/project_compact_facts()`.
+The projection package accepts `CompiledFactSet` plus explicit presentation
+context; it does not parse raw tool output, read artifacts, dispatch by tool id,
+call Knowledge services, or use Docker, runner, or runtime-provider services.
+
+The remaining modules under `agent/graph/compression/deterministic/` are shared
+metadata and envelope helpers used by the compressor. They are not a per-tool
+pentest interpretation or registration surface.
 
 ### Compact Lane Authority and Consumer Inventory
 
@@ -417,9 +413,11 @@ Current code has two compact lanes:
   `compact_output is llm_compact_output` when no separate LLM compact object is
   supplied, and the compressor currently returns the same object for both
   fields.
-- `deterministic_compact_output`: the optional secondary lane produced by the
-  deterministic registry for pentest catalog-role tools. It is persisted for
-  batch/cache replay and prompt context, but it is not the graph state's legacy
+- `deterministic_compact_output`: the optional secondary lane. For pentest
+  catalog-role tools it is produced from compiled canonical pentest facts and
+  explicit presentation context. For non-pentest catalog roles it may be
+  produced from generic bounded metadata. It is persisted for batch/cache replay
+  and prompt context, but it is not the graph state's legacy
   `last_tool_result_compact` value and is not forwarded to frontend streaming
   metadata.
 
@@ -448,21 +446,6 @@ Consumer classification:
   builder's supplemental deterministic rendering for batch evidence. Batch
   rows and dispatch cache entries are also transport/replay evidence, not proof
   by themselves that a specific secondary payload is product-required.
-- HTTP request category: blocking for cutover until the executable ledger
-  records parity or retirement from consumer evidence. It has supported tool
-  behavior and an existing secondary prompt surface only through the optional
-  batch deterministic row, but this inventory found no durable HTTP fact
-  authority to project from.
-- Metasploit search category: retirement-only candidate. Current code evidence
-  shows registered deterministic secondary behavior but no durable canonical
-  facts for the operation; retirement still requires ledger proof that universal
-  primary behavior and the post-tool prompt contract remain supported without
-  that specific secondary payload.
-- Metasploit inspection category: retirement-only candidate. Current code
-  evidence shows registered deterministic secondary behavior but no durable
-  canonical facts for the operation; retirement still requires ledger proof that
-  universal primary behavior and the post-tool prompt contract remain supported
-  without that specific secondary payload.
 
 ## Semantic Knowledge Boundary
 
@@ -479,37 +462,26 @@ should not add per-tool Knowledge adapters, Knowledge-side metadata parsers,
 artifact-content fallbacks, compatibility shims, or tool-id branches in the
 compiler or bridge.
 
-This semantic boundary is separate from compact output. Deterministic
-compression remains under `agent/graph/compression/deterministic/*` and is not
-used as a source of Knowledge facts.
+The same compiled canonical fact set is the source for pentest deterministic
+compact projection. A tool that emits an already-supported fact family needs no
+Knowledge adapter, compact adapter, registry entry, or compressor import. If a
+new fact family is needed, extend the semantic contract, compiler policy,
+Knowledge bridge, and compact fact-family presentation directly rather than
+adding tool-specific downstream interpretation.
 
 ## Current Tool Completion Reference
 
-Code-verified on July 25, 2026.
+Code-verified on July 28, 2026.
 
 Completion means more than "the wrapper executes." A tool is treated as
 finished for the current tooling architecture when it has:
 
 - execution-facing Pydantic args and safe command construction;
 - a rich parser that converts raw CLI output into bounded structured metadata;
-- semantic observations/evidence when the output should update canonical task
-  knowledge;
-- deterministic compression wired through
-  `agent/graph/compression/deterministic/*` and imported by
-  `agent/graph/compression/compressor.py`;
+- supported semantic observations/evidence when the output should update
+  canonical task knowledge or pentest deterministic compact projection;
 - catalog policy that intentionally marks whether the tool is visible,
   hidden, utility, system, or internal-only.
-
-Current inventory:
-
-| Inventory slice | Count | Source of truth |
-| --- | ---: | --- |
-| Implemented `BaseTool` subclasses | 183 | `agent/tools/tool_registry.py` AST scan |
-| Visible planner tools | 30 | `agent/tools/catalog_visibility.py` |
-| Tools overriding `parse_output` | 145 | concrete tool classes |
-| Tools with semantic observations | 8 | `emit_semantic_observations` overrides |
-| Tools with semantic evidence | 6 | `emit_semantic_evidence` overrides |
-| Tools with declared capture contract | 12 | `_capture_contract` on tool classes |
 
 Functionally wired visible domain/runtime tools:
 
@@ -519,63 +491,39 @@ Tool-specific validation maturity is documented in
 
 | Tool | Wired scope |
 | --- | --- |
-| `information_gathering.dns.amass` | Runs graph-free Amass v5 DNS enumeration through a serialized task-local collector and task-scoped Amass database, queries stored results after bounded enumeration, distinguishes parser status, enumeration status, completeness, seed/prior/new names, emits DNS/IP/`resolves_to` semantic observations and evidence, projects into existing `host.dns`, `host.ip`, and relationship knowledge entities, and has a bounded DNS deterministic adapter with explicit omission accounting. It does not import or persist the Amass Open Asset Model graph. |
-| `information_gathering.network_discovery.nmap` | Forces XML capture with `-oX -`, parses hosts, ports, services, OS/script enrichment, emits semantic observations/evidence, and has a network-discovery deterministic adapter. |
-| `web_applications.web_crawlers.ffuf` | Uses a planner-facing schema and compiler, materializes inline wordlists, parses ffuf JSON/text into crawler metadata, emits semantic observations/evidence, and has a web-discovery deterministic adapter. |
-| `sniffing_spoofing.network_sniffers.tshark` | Uses bounded analysis modes, structured JSON capture, PCAP compaction, semantic observations/evidence, sanitized process rendering, and a PCAP deterministic adapter. |
-| `information_gathering.network_discovery.fping` | Parses liveness output into alive/unresponsive/diagnostic metadata, emits host-discovered observations, compacts noisy output, and has a network-discovery deterministic adapter. |
-| `information_gathering.web_enumeration.http_request` | Builds argv-only curl commands, parses status/headers/body metadata, redacts sensitive output, persists artifacts when needed, and has an HTTP deterministic adapter. |
-| `information_gathering.web_enumeration.http_download` | Enforces workspace-safe downloads, parses curl write-out metadata, validates runtime output files, verifies integrity fields, and has an HTTP deterministic adapter. |
-| `networking_utilities.network` | Exposes a finite non-shell utility surface, validates operation-specific args, parses bounded utility output, and has a utility deterministic adapter. |
-| `exploitation_tools.metasploit.search_modules` / `inspect_module` / `run_exploit` | Use the narrow msfconsole wrapper surface, parse msfconsole output into module/session/error metadata, and have Metasploit deterministic adapters. These are finished for the current narrow wrapper scope, not for full interactive session semantics. |
+| `information_gathering.dns.amass` | Runs graph-free Amass v5 DNS enumeration through a serialized task-local collector and task-scoped Amass database, queries stored results after bounded enumeration, distinguishes parser status, enumeration status, completeness, seed/prior/new names, emits DNS/IP/`resolves_to` semantic observations and evidence, and projects supported facts through Knowledge and compact fact-family consumers. It does not import or persist the Amass Open Asset Model graph. |
+| `information_gathering.network_discovery.nmap` | Forces XML capture with `-oX -`, parses hosts, ports, services, OS/script enrichment, emits semantic observations/evidence, and projects supported asset/service facts through the canonical fact pipeline. |
+| `web_applications.web_crawlers.ffuf` | Uses a planner-facing schema and compiler, materializes inline wordlists, parses ffuf JSON/text into crawler metadata, emits semantic observations/evidence, and projects supported web-path facts through the canonical fact pipeline. |
+| `sniffing_spoofing.network_sniffers.tshark` | Uses bounded analysis modes, structured JSON capture, PCAP compaction, semantic observations/evidence, sanitized process rendering, and projects supported packet-derived facts through the canonical fact pipeline. |
+| `information_gathering.network_discovery.fping` | Parses liveness output into alive/unresponsive/diagnostic metadata, emits host-discovered observations, and projects supported asset facts through the canonical fact pipeline. |
+| `information_gathering.web_enumeration.http_request` | Builds argv-only curl commands, parses status/headers/body metadata, redacts sensitive output, persists artifacts when needed, and contributes bounded metadata to compact output when no supported semantic fact family applies. |
+| `information_gathering.web_enumeration.http_download` | Enforces workspace-safe downloads, parses curl write-out metadata, validates runtime output files, verifies integrity fields, and contributes bounded metadata to compact output when no supported semantic fact family applies. |
+| `networking_utilities.network` | Exposes a finite non-shell utility surface, validates operation-specific args, parses bounded utility output, and uses generic metadata compact projection as a utility catalog-role tool. |
+| `exploitation_tools.metasploit.search_modules` / `inspect_module` / `run_exploit` | Use the narrow msfconsole wrapper surface and parse msfconsole output into module/session/error metadata. They are finished for the current narrow wrapper scope, not for full interactive session semantics. |
 
 Visible support tools with deterministic projection:
 
 | Tool family | Status |
 | --- | --- |
-| `filesystem.*` | Visible and deterministic for workspace file access. These are support tools rather than Kali CLI tools; most emit structured metadata consumed by the filesystem adapter. `read_head`, `read_tail`, and `grep` are convenience aliases without their own `parse_output` override, but deterministic coverage exists for their visible tool ids. |
+| `filesystem.*` | Visible and deterministic for workspace file access. These are support tools rather than Kali CLI tools; most emit structured metadata consumed by generic compact metadata helpers. `read_head`, `read_tail`, and `grep` are convenience aliases without their own `parse_output` override, but compact coverage exists for their visible tool ids. |
 
 Visible gaps:
 
 | Tool | Current state | Completion gap |
 | --- | --- | --- |
-| `service_access.ftp_login` | Visible, has `parse_output`, no deterministic adapter. | Add service-access deterministic adapter and tests, then verify compact output/provenance behavior. |
-| `service_access.ftp_list` | Visible, has `parse_output`, no deterministic adapter. | Same as above. |
-| `service_access.ftp_download` | Visible, has `parse_output` and `postprocess_execution`, no deterministic adapter. | Same as above, including artifact/download metadata projection. |
-| `service_access.ssh_login` | Visible, has `parse_output`, no deterministic adapter. | Same as above, with secret-safe credential reporting. |
+| `service_access.ftp_login` | Visible, has `parse_output`, and is a utility catalog-role tool. | Verify secret-safe metadata, generic compact output/provenance behavior, and whether supported credential/service facts should be emitted. |
+| `service_access.ftp_list` | Visible, has `parse_output`, and is a utility catalog-role tool. | Verify metadata bounds, generic compact output/provenance behavior, and whether supported service/file-list facts should be emitted. |
+| `service_access.ftp_download` | Visible, has `parse_output` and `postprocess_execution`, and is a utility catalog-role tool. | Verify artifact/download metadata projection and whether supported service/file facts should be emitted. |
+| `service_access.ssh_login` | Visible, has `parse_output`, and is a utility catalog-role tool. | Verify secret-safe metadata, generic compact output/provenance behavior, and whether supported credential/service facts should be emitted. |
 
 Hidden tools with partial completion work already present:
 
 | Tool | Current state | Promotion/completion requirement |
 | --- | --- | --- |
-| `password_attacks.online_attacks.hydra` | Hidden from catalog; has parser and semantic observations; deterministic credential-attack adapter is already wired. | Decide visibility policy, ensure planner schema/guidance is safe, add visible-catalog coverage tests before exposing. |
-| `web_applications.web_application_fuzzers.ffuf` | Hidden; has parser, postprocess hook, semantic observations/evidence, and capture contract. | Add a deterministic adapter for the fuzzer variant or intentionally reuse/extend web-discovery with variant gating; then decide visibility. |
-| `web_applications.web_vulnerability_scanners.nuclei` | Hidden; has JSONL capture, parser, semantic observations/evidence. | Add deterministic vulnerability-scanner adapter and visibility/runbook policy. |
-| `information_gathering.network_discovery.masscan` | Hidden; has structured JSON capture and parser. | Add deterministic adapter or intentionally keep as hidden reference; decide whether broad/high-speed scan behavior should be planner-visible. |
-
-Implemented backlog by top-level namespace:
-
-| Namespace | Implemented | Visible | Parse-output overrides | Hidden backlog |
-| --- | ---: | ---: | ---: | ---: |
-| `artifact` | 2 | 0 | 0 | 2 |
-| `database_assessment` | 3 | 0 | 3 | 3 |
-| `exploitation_tools` | 13 | 3 | 5 | 10 |
-| `filesystem` | 15 | 15 | 12 | 0 |
-| `forensics` | 12 | 0 | 10 | 12 |
-| `information_gathering` | 29 | 5 | 28 | 24 |
-| `knowledge` | 1 | 0 | 0 | 1 |
-| `maintaining_access` | 10 | 0 | 7 | 10 |
-| `networking_utilities` | 1 | 1 | 1 | 0 |
-| `password_attacks` | 14 | 0 | 13 | 14 |
-| `reporting_tools` | 3 | 0 | 1 | 3 |
-| `reverse_engineering` | 4 | 0 | 4 | 4 |
-| `service_access` | 4 | 4 | 4 | 0 |
-| `shell` | 2 | 0 | 2 | 2 |
-| `sniffing_spoofing` | 10 | 1 | 10 | 9 |
-| `stress_testing` | 6 | 0 | 0 | 6 |
-| `system_services` | 9 | 0 | 6 | 9 |
-| `vulnerability_analysis` | 21 | 0 | 20 | 21 |
-| `web_applications` | 24 | 1 | 19 | 23 |
+| `password_attacks.online_attacks.hydra` | Hidden from catalog; has parser and semantic observations. | Decide visibility policy, ensure planner schema/guidance is safe, add visible-catalog coverage tests before exposing, and verify supported credential facts compile through the canonical fact pipeline. |
+| `web_applications.web_application_fuzzers.ffuf` | Hidden; has parser, postprocess hook, semantic observations/evidence, and capture contract. | Decide visibility policy and verify its emitted fact families are supported by Knowledge and compact projection. |
+| `web_applications.web_vulnerability_scanners.nuclei` | Hidden; has JSONL capture, parser, semantic observations/evidence. | Decide visibility/runbook policy and verify supported finding facts compile through the canonical fact pipeline. |
+| `information_gathering.network_discovery.masscan` | Hidden; has structured JSON capture, parser, and semantic observations. | Decide whether broad/high-speed scan behavior should be planner-visible and verify supported asset/service facts compile through the canonical fact pipeline. |
 
 ## How To Finish Another Tool
 
@@ -592,19 +540,22 @@ Use this sequence when graduating a tool from wrapper/backlog to finished:
    at producer-owned semantic rows; do not infer services, findings, or
    credentials beyond parser evidence, and do not add backend Knowledge
    adapters or Knowledge-side parsing for the tool.
-5. Add a deterministic compression adapter under
-   `agent/graph/compression/deterministic/`, register it at import time, and
-   import the module from `agent/graph/compression/compressor.py`.
-6. Add deterministic adapter tests and visible-catalog coverage tests when the
-   tool is or becomes visible.
-7. Register enhanced metadata near the tool implementation and keep the first
+5. If the tool emits an existing supported pentest fact family, rely on
+   `compile_facts()` and compact fact projection; do not add a per-tool compact
+   adapter, registry entry, or compressor import.
+6. If the tool requires a new fact family, add that support at the semantic
+   contract/compiler boundary and the fact-family Knowledge and compact
+   presentation boundaries.
+7. Add semantic compiler/projection tests and visible-catalog coverage tests
+   when the tool is or becomes visible.
+8. Register enhanced metadata near the tool implementation and keep the first
    capability description selector-grade.
-8. Add the tool id to `catalog_visibility.py` only after parser, deterministic
-   projection, metadata, security policy, runtime compatibility, and tests are
-   complete.
-9. Update `capability_surface.py` only when the visible tool changes the
+9. Add the tool id to `catalog_visibility.py` only after parser, supported
+   semantic fact coverage or intentional utility metadata coverage, enhanced
+   metadata, security policy, runtime compatibility, and tests are complete.
+10. Update `capability_surface.py` only when the visible tool changes the
    advertised capability families.
-10. Verify product Runner behavior and explicit local-provider behavior through
+11. Verify product Runner behavior and explicit local-provider behavior through
     the shared command preparation and lane dispatch paths; do not bypass
     `agent/tool_runtime` or runtime-provider boundaries.
 

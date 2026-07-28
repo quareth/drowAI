@@ -16,6 +16,7 @@ from agent.graph.subgraphs.tool_execution_runtime.batch_runner import (
     write_compact_batch_metadata,
 )
 from agent.graph.subgraphs.tool_execution_runtime.approval_and_idempotency import (
+    apply_cached_dispatch_result,
     store_dispatch_cache_result,
 )
 from agent.graph.subgraphs.tool_execution_runtime.result_state_projection import (
@@ -396,6 +397,96 @@ def test_project_trace_history_masks_dispatch_cache_without_masking_runtime_even
     serialized_cache = str(cache_entry)
     assert sentinel not in serialized_cache
     assert "<DURABLE_SECRET_MASK:" in serialized_cache
+
+
+def test_project_trace_history_keeps_secondary_compact_in_cache_only() -> None:
+    facts = _Facts(metadata={})
+    interactive = SimpleNamespace(
+        trace=SimpleNamespace(reasoning=[], observations=[], executed_tools=[]),
+    )
+    emitted_events: list[Mapping[str, Any]] = []
+    compact_result = {
+        "schema_version": "2.0",
+        "tool": "information_gathering.network_discovery.nmap",
+        "status": "success",
+        "success": True,
+        "summary": "Primary compact summary.",
+        "key_findings": ["primary finding"],
+    }
+    deterministic_compact_result = {
+        "schema_version": "2.0",
+        "tool": "information_gathering.network_discovery.nmap",
+        "status": "success",
+        "success": True,
+        "summary": "Canonical deterministic secondary summary.",
+        "key_findings": ["secondary finding"],
+    }
+    outcome = SimpleNamespace(
+        tool_id="information_gathering.network_discovery.nmap",
+        parameters={"target": "127.0.0.1"},
+        result={"success": True, "exit_code": 0},
+        summary="runtime fallback summary",
+        reasoning=[],
+    )
+
+    project_trace_history_and_outbound_events(
+        interactive=interactive,
+        facts=facts,
+        outcome=outcome,
+        compact_result_dict=compact_result,
+        result_for_metadata={"status": "success", "success": True},
+        graph_metadata={"summary": "Primary compact summary."},
+        action_record={"parameters": {"target": "127.0.0.1"}},
+        approval_response=None,
+        tool_name="information_gathering.network_discovery.nmap",
+        tool_call_id="tc-secondary-cache",
+        tool_batch_id="tb-secondary-cache",
+        conversation_id="conv-1",
+        turn_id="turn-1",
+        turn_sequence=11,
+        sub_turn_index=0,
+        interrupt_id=None,
+        has_writer=True,
+        writer=emitted_events.append,
+        compact_observation_text_fn=lambda compact, fallback=None: str(
+            compact.get("summary") or fallback or ""
+        ),
+        tool_execution_record_cls=SimpleNamespace,
+        store_dispatch_cache_result_fn=store_dispatch_cache_result,
+        tool_dispatch_cache_key="tool_dispatch_cache",
+        diag_info_fn=lambda *_args, **_kwargs: None,
+        logger=SimpleNamespace(info=lambda *_args, **_kwargs: None),
+        deterministic_compact_result_dict=deterministic_compact_result,
+    )
+
+    tool_end = emitted_events[0]
+    assert tool_end["compact_tool_result"] == compact_result
+    assert "deterministic_compact_tool_result" not in tool_end
+
+    cache_entry = facts.metadata["tool_dispatch_cache"]["tc-secondary-cache"]
+    assert cache_entry["last_tool_result_compact"] == compact_result
+    assert (
+        cache_entry["last_tool_result_deterministic_compact"]
+        == deterministic_compact_result
+    )
+
+    replay_facts = _Facts(metadata={})
+    replay_facts.metadata_copy = lambda: dict(replay_facts.metadata)  # type: ignore[attr-defined]
+    replay_interactive = SimpleNamespace(
+        facts=replay_facts,
+        trace=SimpleNamespace(reasoning=[], observations=[], executed_tools=[]),
+        as_graph_update=lambda: {},
+    )
+    apply_cached_dispatch_result(
+        replay_interactive,
+        cache_entry,
+        "information_gathering.network_discovery.nmap",
+    )
+
+    replay_metadata = replay_interactive.facts.metadata
+    assert replay_metadata["last_tool_result_compact"] == compact_result
+    assert "last_tool_result_deterministic_compact" not in replay_metadata
+    assert replay_interactive.trace.observations == ["Primary compact summary."]
 
 
 def test_compact_batch_metadata_keeps_ptr_runtime_copy_raw_and_durable_copy_masked() -> None:
