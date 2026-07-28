@@ -55,6 +55,12 @@ Choose execution_strategy for the final committed batch:
 - The final batch may repeat the same selected tool with different concrete parameters when the active directive requires or benefits from separate runs.
 
 Prefer specialized tools over generic shell execution when both can accomplish the same immediate objective.
+Closed-world selection rule:
+- Select only tools that can directly perform the requested current action with the information already present in this prompt.
+- Do not select tools to discover, recover, infer, search for, or manufacture missing required inputs unless the Turn Execution Brief or explicit current directive asks for that discovery step.
+- If the requested current action requires missing information, unsupported capability, or a tool that is not available, return "unavailable_capability" as the only selected tool.
+- Do not choose adjacent tools just because they might help make the action possible later.
+
 If the current task or tool intent requires a capability that none of the Available Tools can satisfy, and no listed tool is a reasonable substitute, return "unavailable_capability" as the only selected tool.
 Do not use "unavailable_capability" for bad parameters, target/network failures, missing binaries after execution, or retryable tool errors.
 Return strict JSON with only this shape:

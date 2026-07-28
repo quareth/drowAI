@@ -186,6 +186,25 @@ def _extract_tool_ids(raw_tools: Sequence[Any]) -> List[str]:
     return resolved
 
 
+def _prompt_tool_id(tool: Any) -> str:
+    """Extract one prompt-facing tool id from a string/object/mapping entry."""
+    if isinstance(tool, str):
+        return tool.strip()
+    if isinstance(tool, Mapping):
+        return str(tool.get("id") or tool.get("tool_id") or "").strip()
+    return str(getattr(tool, "tool_id", "") or "").strip()
+
+
+def _without_internal_tool_entries(raw_tools: Sequence[Any]) -> List[Any]:
+    """Return caller-supplied tools minus internal artifact overlay tools."""
+    return [
+        tool
+        for tool in raw_tools
+        if _prompt_tool_id(tool)
+        not in {_ARTIFACT_SEARCH_TOOL_ID, _ARTIFACT_READ_TOOL_ID}
+    ]
+
+
 def _format_available_tools(
     resolved_tools: Sequence[Any],
     catalog: Sequence[Mapping[str, Any]],
@@ -515,26 +534,32 @@ class ToolPlanningPromptBuilder:
         visible_tool_ids = filter_visible_tool_ids(_extract_tool_ids(resolved_tools))
         if not visible_tool_ids:
             visible_tool_ids = filter_visible_tool_ids(_extract_tool_ids(catalog))
-        visible_tool_id_set = set(visible_tool_ids)
-        visible_catalog = [
-            entry
-            for entry in catalog
-            if str(entry.get("id") or entry.get("tool_id") or "").strip() in visible_tool_id_set
-        ]
-        visible_resolved_tools = [
-            tool
-            for tool in resolved_tools
-            if str(
+        if visible_tool_ids:
+            visible_tool_id_set = set(visible_tool_ids)
+            visible_catalog = [
+                entry
+                for entry in catalog
+                if str(entry.get("id") or entry.get("tool_id") or "").strip()
+                in visible_tool_id_set
+            ]
+            visible_resolved_tools = [
                 tool
-                if isinstance(tool, str)
-                else getattr(tool, "tool_id", "")
-                or (tool.get("id") if isinstance(tool, Mapping) else "")
-                or (tool.get("tool_id") if isinstance(tool, Mapping) else "")
-            ).strip()
-            in visible_tool_id_set
-        ]
-        if not visible_resolved_tools:
-            visible_resolved_tools = list(visible_tool_ids)
+                for tool in resolved_tools
+                if _prompt_tool_id(tool) in visible_tool_id_set
+            ]
+            if not visible_resolved_tools:
+                visible_resolved_tools = list(visible_tool_ids)
+        else:
+            visible_catalog = [
+                entry
+                for entry in catalog
+                if _prompt_tool_id(entry)
+                not in {_ARTIFACT_SEARCH_TOOL_ID, _ARTIFACT_READ_TOOL_ID}
+            ]
+            visible_resolved_tools = _without_internal_tool_entries(resolved_tools)
+            visible_tool_ids = _extract_tool_ids(
+                visible_resolved_tools
+            ) or _extract_tool_ids(visible_catalog)
         artifact_policy = _build_artifact_policy_text(visible_tool_ids)
         cve_lookup_policy = _build_cve_lookup_policy_text(visible_tool_ids)
         tool_runbooks = _build_tool_selection_runbooks_section(
