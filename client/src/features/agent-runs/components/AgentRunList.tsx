@@ -11,7 +11,7 @@ import { useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 
 import type { AgentRunRecord } from "../state/agent-stream-store";
-import { PathfinderIcon } from "./PathfinderIcon";
+import { AgentIdentityIcon } from "./AgentIdentityIcon";
 
 interface AgentRunListProps {
   runs: AgentRunRecord[];
@@ -74,7 +74,13 @@ function RunRow({
     >
       <span className="flex min-w-0 items-start gap-2.5">
         <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center">
-          <PathfinderIcon className="h-5 w-5" aria-hidden="true" />
+          <AgentIdentityIcon
+            agentId={run.agentId}
+            displayName={run.agentDisplayName}
+            iconKey={run.agentIconKey}
+            className="h-5 w-5"
+            aria-hidden="true"
+          />
         </span>
         <span className="min-w-0 flex-1">
           <span className="flex min-w-0 items-baseline gap-2">

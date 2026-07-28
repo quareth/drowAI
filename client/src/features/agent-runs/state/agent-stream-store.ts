@@ -17,7 +17,9 @@ import {
   readAgentRunLifecycleProjection,
   readStreamSequence,
   resolveAgentDisplayName,
+  resolveAgentIconKey,
   type AgentAssignment,
+  type AgentIconKey,
   type AgentId,
   type AgentKind,
   type AgentResultProjection,
@@ -45,6 +47,7 @@ export interface AgentRunRecord {
   agentId: AgentId;
   agentKind: AgentKind;
   agentDisplayName: string;
+  agentIconKey: AgentIconKey;
   status: AgentRunStatus;
   lifecycleVersion: number;
   conversationId: string;
@@ -193,6 +196,10 @@ export function applyAgentRunLifecycleUpdate(
         projection.agent_id,
         projection.agent_display_name,
       ),
+      agentIconKey: resolveAgentIconKey(
+        projection.agent_id,
+        projection.agent_icon_key,
+      ),
       status: projection.status,
       lifecycleVersion: projection.lifecycle_version,
       conversationId: projection.conversation_id,
@@ -267,6 +274,7 @@ export function applyAgentRunActivityPayload(
         identity.agentId,
         identity.agentDisplayName,
       ),
+      agentIconKey: resolveAgentIconKey(identity.agentId, identity.agentIconKey),
       parentRunId: identity.parentRunId ?? nextRun.parentRunId,
       firstSequence: minKnownSequence(nextRun.firstSequence, sequence),
       lastSequence: maxKnownSequence(nextRun.lastSequence, sequence),
@@ -478,6 +486,7 @@ function emptyRunFromActivity(identity: AgentRunActivityIdentity): AgentRunRecor
       identity.agentId,
       identity.agentDisplayName,
     ),
+    agentIconKey: resolveAgentIconKey(identity.agentId, identity.agentIconKey),
     status: "running",
     lifecycleVersion: identity.lifecycleVersion ?? 0,
     conversationId: "",
@@ -572,6 +581,7 @@ function sameRunRecord(a: AgentRunRecord, b: AgentRunRecord): boolean {
     a.agentId === b.agentId &&
     a.agentKind === b.agentKind &&
     a.agentDisplayName === b.agentDisplayName &&
+    a.agentIconKey === b.agentIconKey &&
     a.lifecycleVersion === b.lifecycleVersion &&
     a.parentRunId === b.parentRunId &&
     a.assignment === b.assignment &&

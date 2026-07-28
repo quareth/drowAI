@@ -9,7 +9,7 @@
 import { ActivityStatusIcon } from "@/components/chat/ActivityStatusIcon";
 
 import type { AgentRunRecord } from "../state/agent-stream-store";
-import { PathfinderIcon } from "./PathfinderIcon";
+import { AgentIdentityIcon } from "./AgentIdentityIcon";
 
 interface AgentRunCardProps {
   run: AgentRunRecord;
@@ -52,6 +52,15 @@ function buildAssignmentLine(run: AgentRunRecord): string {
 export function AgentRunCard({ run, onOpen }: AgentRunCardProps) {
   const assignmentLine = buildAssignmentLine(run);
   const isWorking = run.status === "running";
+  const IdentityIcon = ({ className }: { className?: string }) => (
+    <AgentIdentityIcon
+      agentId={run.agentId}
+      displayName={run.agentDisplayName}
+      iconKey={run.agentIconKey}
+      className={className}
+      aria-hidden="true"
+    />
+  );
 
   return (
     <div
@@ -67,7 +76,7 @@ export function AgentRunCard({ run, onOpen }: AgentRunCardProps) {
         <span className="inline-flex items-center gap-1.5 rounded-md bg-slate-900/70 px-2 py-1">
           <ActivityStatusIcon
             isInProgress={isWorking}
-            icon={PathfinderIcon}
+            icon={IdentityIcon}
             className="h-3.5 w-3.5 shrink-0 text-slate-500"
           />
           <span className="shrink-0 text-slate-300">{run.agentDisplayName}</span>

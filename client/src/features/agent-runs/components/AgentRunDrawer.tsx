@@ -24,8 +24,8 @@ import {
   type AgentRunRecord,
 } from "../state/agent-stream-store";
 import { AgentRunDetail, type AgentRunApprovalControls } from "./AgentRunDetail";
+import { AgentIdentityIcon } from "./AgentIdentityIcon";
 import { AgentRunList } from "./AgentRunList";
-import { PathfinderIcon } from "./PathfinderIcon";
 
 export type { AgentRunApprovalControls } from "./AgentRunDetail";
 
@@ -104,7 +104,13 @@ export function AgentRunDrawer({
           </Button>
         ) : null}
         {presentation.view === "detail" && selectedRun ? (
-          <PathfinderIcon className="h-4 w-4" aria-hidden="true" />
+          <AgentIdentityIcon
+            agentId={selectedRun.agentId}
+            displayName={selectedRun.agentDisplayName}
+            iconKey={selectedRun.agentIconKey}
+            className="h-4 w-4"
+            aria-hidden="true"
+          />
         ) : null}
         <span className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-200">
           {presentation.view === "detail" && selectedRun

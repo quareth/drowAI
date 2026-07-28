@@ -15,6 +15,7 @@ export const AGENT_RUN_PRODUCER_TYPE = "subagent";
 export type AgentKind = string;
 export type AgentId = string;
 export type AgentDisplayName = string;
+export type AgentIconKey = string;
 
 export type AgentRunStatus =
   | "queued"
@@ -103,6 +104,7 @@ export interface AgentRunLifecycleProjection {
   agent_id: AgentId;
   agent_kind: AgentKind;
   agent_display_name: AgentDisplayName;
+  agent_icon_key?: AgentIconKey | null;
   status: AgentRunLifecycleStatus;
   lifecycle_version: number;
   task_id: number;
@@ -156,6 +158,7 @@ export interface AgentRunActivityIdentity {
   agentId: AgentId;
   agentKind: AgentKind;
   agentDisplayName: string;
+  agentIconKey: AgentIconKey;
   parentTurnId: string | null;
   parentRunId: string | null;
   internalOnly: boolean;
@@ -182,7 +185,7 @@ export function readAgentRunLifecycleProjection(
   if (!projection) {
     return null;
   }
-  return normalizeAgentRunLifecycleProjection(projection);
+  return normalizeAgentRunLifecycleProjection(projection, metadata);
 }
 
 export function readAgentRunActivityIdentity(
@@ -218,6 +221,7 @@ export function readAgentRunActivityIdentity(
       agentId,
       readString(metadata.agent_display_name),
     ),
+    agentIconKey: resolveAgentIconKey(agentId, readAgentIconKey(metadata)),
     parentTurnId: readString(metadata.parent_turn_id),
     parentRunId: readString(metadata.parent_run_id),
     internalOnly: metadata.internal_only === true,
@@ -265,6 +269,7 @@ function readPacketMetadata(payload: unknown): Record<string, unknown> | null {
 
 function normalizeAgentRunLifecycleProjection(
   value: Record<string, unknown>,
+  metadata?: Record<string, unknown>,
 ): AgentRunLifecycleProjection | null {
   const agentRunId = readString(value.agent_run_id);
   const agentId = readString(value.agent_id);
@@ -284,11 +289,16 @@ function normalizeAgentRunLifecycleProjection(
     agentId,
     readString(value.agent_display_name),
   );
+  const agentIconKey = resolveAgentIconKey(
+    agentId,
+    readAgentIconKey(value) ?? readAgentIconKey(metadata),
+  );
   return {
     agent_run_id: agentRunId,
     agent_id: agentId,
     agent_kind: agentKind,
     agent_display_name: agentDisplayName,
+    agent_icon_key: agentIconKey,
     status,
     lifecycle_version: lifecycleVersion,
     task_id: taskId,
@@ -327,12 +337,34 @@ export function resolveAgentDisplayName(
   return reportedDisplayName?.trim() || formatAgentId(agentId);
 }
 
+export function resolveAgentIconKey(
+  agentId: AgentId,
+  reportedIconKey?: string | null,
+): AgentIconKey {
+  const normalizedIconKey = reportedIconKey?.trim();
+  if (normalizedIconKey) {
+    return normalizedIconKey;
+  }
+  return agentId.trim().toLowerCase() === "pathfinder" ? "pathfinder" : "generic";
+}
+
 function formatAgentId(agentId: string): string {
   return agentId
     .split(/[-_]/)
     .filter(Boolean)
     .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)
     .join(" ");
+}
+
+function readAgentIconKey(value: Record<string, unknown> | null | undefined): string | null {
+  if (!value) {
+    return null;
+  }
+  return (
+    readString(value.agent_icon_key) ??
+    readString(value.agent_icon) ??
+    readString(value.icon)
+  );
 }
 
 function readRecord(value: unknown): Record<string, unknown> | null {

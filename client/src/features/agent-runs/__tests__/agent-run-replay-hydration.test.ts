@@ -70,6 +70,7 @@ function lifecycle(
     agent_id: "pathfinder",
     agent_kind: "recon",
     agent_display_name: "Scout",
+    agent_icon_key: "pathfinder",
     status: "running",
     lifecycle_version: 1,
     task_id: TASK_ID,
@@ -96,12 +97,13 @@ function lifecyclePacket(
     metadata: {
       subtype: "agent_run_lifecycle",
       producer_type: "subagent",
-      agent_run_id: "scout-run-1",
-      agent_id: "pathfinder",
-      agent_kind: "recon",
-      agent_display_name: "Scout",
-      parent_turn_id: "turn-parent",
-      parent_run_id: "parent-run-1",
+      agent_run_id: projection.agent_run_id,
+      agent_id: projection.agent_id,
+      agent_kind: projection.agent_kind,
+      agent_display_name: projection.agent_display_name,
+      agent_icon_key: projection.agent_icon_key,
+      parent_turn_id: projection.parent_turn_id,
+      parent_run_id: projection.parent_run_id,
       internal_only: false,
       lifecycle_version: projection.lifecycle_version,
       sequence,
@@ -154,6 +156,7 @@ describe("agent-run replay hydration", () => {
     expect(result.lastSequence).toBe(12);
     expect(snapshot.runs).toHaveLength(1);
     expect(snapshot.runsById["scout-run-1"].activity).toHaveLength(1);
+    expect(snapshot.runsById["scout-run-1"].agentIconKey).toBe("pathfinder");
     expect(snapshot.presentation).toEqual({
       isOpen: false,
       parentRunId: null,
@@ -171,6 +174,25 @@ describe("agent-run replay hydration", () => {
       getTaskStreamSnapshot(TASK_ID).items.some(item => item.content === "internal Scout reasoning"),
     ).toBe(true);
     expect(getTaskStreamSnapshot(TASK_ID).lastSequence).toBe(12);
+  });
+
+  it("hydrates a synthetic second-agent icon key from lifecycle metadata", () => {
+    hydrateAgentRunStoreFromReplayItems(TASK_ID, [
+      lifecyclePacket(13, {
+        agent_run_id: "review-run-1",
+        agent_id: "reviewer",
+        agent_kind: "review",
+        agent_display_name: "Reviewer",
+        agent_icon_key: "reviewer",
+        assignment: null,
+      }),
+    ], 13);
+
+    expect(getAgentRunSnapshot(TASK_ID).runsById["review-run-1"]).toMatchObject({
+      agentId: "reviewer",
+      agentDisplayName: "Reviewer",
+      agentIconKey: "reviewer",
+    });
   });
 
   it("marks a replayed nonterminal Scout run interrupted when local status is empty", async () => {

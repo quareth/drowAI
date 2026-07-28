@@ -66,6 +66,7 @@ function lifecycle(
     agent_id: "pathfinder",
     agent_kind: "recon",
     agent_display_name: "Scout",
+    agent_icon_key: "pathfinder",
     status: "queued",
     lifecycle_version: 1,
     task_id: TASK_ID,
@@ -95,6 +96,7 @@ function lifecycleEvent(
       agent_id: projection.agent_id,
       agent_kind: "recon",
       agent_display_name: "Scout",
+      agent_icon_key: projection.agent_icon_key,
       parent_turn_id: projection.parent_turn_id,
       parent_run_id: projection.parent_run_id,
       lifecycle_version: projection.lifecycle_version,
@@ -117,6 +119,7 @@ function activityEvent(sequence: number, agentRunId = "run-1"): StreamEvent {
       agent_id: "pathfinder",
       agent_kind: "recon",
       agent_display_name: "Scout",
+      agent_icon_key: "pathfinder",
       parent_turn_id: "turn-1",
       parent_run_id: "parent-run-1",
       tool_call_id: `tool-${sequence}`,
@@ -262,6 +265,7 @@ describe("agent-stream-store lifecycle state", () => {
       agent_id: "reviewer",
       agent_kind: "review",
       agent_display_name: "Reviewer",
+      agent_icon_key: "reviewer",
     } as AgentRunLifecycleProjection;
     const event = lifecycleEvent(projection, 8);
     event.metadata = {
@@ -270,12 +274,14 @@ describe("agent-stream-store lifecycle state", () => {
       agent_id: projection.agent_id,
       agent_kind: projection.agent_kind,
       agent_display_name: projection.agent_display_name,
+      agent_icon_key: "reviewer",
     };
 
     expect(applyAgentRunLifecyclePayload(TASK_ID, event)).toBe(true);
     expect(getAgentRunSnapshot(TASK_ID).runsById["review-run-1"]).toMatchObject({
       agentKind: "review",
       agentDisplayName: "Reviewer",
+      agentIconKey: "reviewer",
       firstSequence: 8,
     });
   });
