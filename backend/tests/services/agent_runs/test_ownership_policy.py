@@ -1,4 +1,4 @@
-"""Tests for deterministic Scout ownership routing policy."""
+"""Tests for deterministic subagent ownership routing policy."""
 
 from __future__ import annotations
 

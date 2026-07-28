@@ -239,11 +239,11 @@ describe("buildMessageRenderBlocks", () => {
         ind: 0,
         sequence: 11,
       }),
-      makeMessage("scout", "tool_start", {
+      makeMessage("pathfinder", "tool_start", {
         ind: 1,
         sequence: 12,
         subtype: "agent_run_lifecycle",
-        agent_run_id: "scout-run-1",
+        agent_run_id: "pathfinder-run-1",
       }),
       makeMessage("final", "message_delta", {
         ind: 2,
@@ -256,7 +256,7 @@ describe("buildMessageRenderBlocks", () => {
     const activity = activityBlock(blocks);
     expect(activity.groups.map((group) => group.messages[0]?.id)).toEqual([
       "reasoning",
-      "scout",
+      "pathfinder",
     ]);
     expect(activity.summary).toEqual({
       thoughtCount: 1,

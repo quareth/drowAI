@@ -58,19 +58,19 @@ def test_process_message_delta():
 
 
 def test_process_message_delta_preserves_agent_attribution_metadata():
-    """Scout identity metadata should survive event-family processing."""
+    """Subagent identity metadata should survive event-family processing."""
     adapter = LangGraphStreamingAdapter()
 
     event = {
         "type": "message_delta",
-        "content": "Scout is checking the target",
+        "content": "Pathfinder is checking the target",
         "conversation_id": "conv1",
         "turn_id": "turn1",
         "metadata": {
             "producer_type": "subagent",
-            "agent_run_id": "scout-run-1",
+            "agent_run_id": "pathfinder-run-1",
             "agent_kind": "recon",
-            "agent_display_name": "Scout",
+            "agent_display_name": "Pathfinder",
             "parent_turn_id": "parent-turn-1",
             "parent_run_id": "parent-run-1",
             "internal_only": False,
@@ -85,9 +85,9 @@ def test_process_message_delta_preserves_agent_attribution_metadata():
     assert processed is not None
     metadata = processed["metadata"]
     assert metadata["producer_type"] == "subagent"
-    assert metadata["agent_run_id"] == "scout-run-1"
+    assert metadata["agent_run_id"] == "pathfinder-run-1"
     assert metadata["agent_kind"] == "recon"
-    assert metadata["agent_display_name"] == "Scout"
+    assert metadata["agent_display_name"] == "Pathfinder"
     assert metadata["parent_turn_id"] == "parent-turn-1"
     assert metadata["parent_run_id"] == "parent-run-1"
     assert metadata["internal_only"] is False
@@ -96,8 +96,8 @@ def test_process_message_delta_preserves_agent_attribution_metadata():
     assert "chain_of_thought" not in metadata
 
 
-def test_scout_emitter_stamps_agent_attribution_before_adapter_projection():
-    """Scout graph context should stamp emitted events before adapter processing."""
+def test_subagent_emitter_stamps_agent_attribution_before_adapter_projection():
+    """Subagent graph context should stamp emitted events before adapter processing."""
     adapter = LangGraphStreamingAdapter()
     raw_events = []
     state = InteractiveState(
@@ -108,7 +108,7 @@ def test_scout_emitter_stamps_agent_attribution_before_adapter_projection():
             capability="simple_tool_execution",
             metadata={
                 "producer_type": "subagent",
-                "agent_run_id": "scout-run-1",
+                "agent_run_id": "pathfinder-run-1",
                 "agent_id": "pathfinder",
                 "agent_kind": "recon",
                 "parent_turn_id": "parent-turn-1",
@@ -127,7 +127,7 @@ def test_scout_emitter_stamps_agent_attribution_before_adapter_projection():
     }
     emitter = EventEmitterFactory.create(raw_events.append, state, config, None)
 
-    emitter.emit_message_delta("Scout is checking the target")
+    emitter.emit_message_delta("Pathfinder is checking the target")
 
     raw_event = raw_events[0]
     assert raw_event["type"] == "message_delta"
@@ -136,7 +136,7 @@ def test_scout_emitter_stamps_agent_attribution_before_adapter_projection():
     assert processed is not None
     metadata = processed["metadata"]
     assert metadata["producer_type"] == "subagent"
-    assert metadata["agent_run_id"] == "scout-run-1"
+    assert metadata["agent_run_id"] == "pathfinder-run-1"
     assert metadata["agent_id"] == "pathfinder"
     assert metadata["agent_kind"] == "recon"
     assert metadata["agent_display_name"] == "Pathfinder"

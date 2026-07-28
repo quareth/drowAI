@@ -28,9 +28,11 @@ from agent.graph.context.builder import (
     build_conversation_context_bundle,
 )
 from agent.graph.context.projections import (
+    project_for_planner,
+)
+from agent.graph.context.serialization import (
     SECTION_RECENT_TRANSCRIPT,
     SECTION_RUNTIME_STATE,
-    project_for_planner,
     serialize_projection_to_prompt_sections,
 )
 from agent.graph.context.runtime_state import refresh_bundle_from_working_memory

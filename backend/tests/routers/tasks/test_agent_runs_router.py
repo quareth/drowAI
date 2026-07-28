@@ -1,4 +1,4 @@
-"""Router tests for process-local Scout agent-run status/cancel endpoints."""
+"""Router tests for process-local subagent-run status/cancel endpoints."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def _assignment(
     *,
     tenant_id: int = 7,
     task_id: int = 42,
-    agent_run_id: str = "scout-run-1",
+    agent_run_id: str = "pathfinder-run-1",
 ) -> AgentAssignment:
     return AgentAssignment(
         assignment_id=f"assignment-{agent_run_id}",
@@ -130,10 +130,10 @@ def test_composed_tasks_router_registers_agent_run_endpoints() -> None:
             composed_task_routes.router.url_path_for(
                 "cancel_local_agent_run",
                 task_id=42,
-                agent_run_id="scout-run-1",
+                agent_run_id="pathfinder-run-1",
             )
         )
-        == "/42/agent-runs/scout-run-1/cancel"
+        == "/42/agent-runs/pathfinder-run-1/cancel"
     )
 
 
@@ -155,7 +155,7 @@ async def test_list_local_agent_runs_reports_only_authorized_task_scope(
     assert payload["process_local"] is True
     assert payload["task_id"] == 42
     assert task_lookups == [(7, 42)]
-    assert [run["agent_run_id"] for run in payload["agent_runs"]] == ["scout-run-1"]
+    assert [run["agent_run_id"] for run in payload["agent_runs"]] == ["pathfinder-run-1"]
     run = payload["agent_runs"][0]
     assert run["agent_display_name"] == "Pathfinder"
     assert run["status"] == "queued"
@@ -171,19 +171,19 @@ async def test_cancel_local_agent_run_uses_scoped_launcher_and_sets_flag(
 ) -> None:
     client, registry, launcher, _task_lookups, _app = agent_run_client
     await registry.register(_assignment(), graph_thread_id="child-thread-1")
-    await registry.mark_running(tenant_id=7, task_id=42, agent_run_id="scout-run-1")
+    await registry.mark_running(tenant_id=7, task_id=42, agent_run_id="pathfinder-run-1")
 
-    response = client.post("/api/tasks/42/agent-runs/scout-run-1/cancel")
+    response = client.post("/api/tasks/42/agent-runs/pathfinder-run-1/cancel")
 
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["process_local"] is True
     assert payload["cancelled"] is True
-    assert payload["agent_run"]["agent_run_id"] == "scout-run-1"
+    assert payload["agent_run"]["agent_run_id"] == "pathfinder-run-1"
     assert payload["agent_run"]["status"] == "running"
     assert payload["agent_run"]["cancel_requested"] is True
-    assert launcher.calls == [(7, 42, "scout-run-1")]
-    stored = await registry.get(tenant_id=7, task_id=42, agent_run_id="scout-run-1")
+    assert launcher.calls == [(7, 42, "pathfinder-run-1")]
+    stored = await registry.get(tenant_id=7, task_id=42, agent_run_id="pathfinder-run-1")
     assert stored is not None
     assert stored.cancel_requested is True
 
@@ -197,18 +197,18 @@ async def test_cancel_waiting_agent_run_returns_terminal_cancelled_projection(
     await registry.mark_waiting_for_approval(
         tenant_id=7,
         task_id=42,
-        agent_run_id="scout-run-1",
+        agent_run_id="pathfinder-run-1",
     )
 
-    response = client.post("/api/tasks/42/agent-runs/scout-run-1/cancel")
+    response = client.post("/api/tasks/42/agent-runs/pathfinder-run-1/cancel")
 
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload["cancelled"] is True
     assert payload["agent_run"]["status"] == "cancelled"
     assert payload["agent_run"]["cancel_requested"] is True
-    assert launcher.calls == [(7, 42, "scout-run-1")]
-    stored = await registry.get(tenant_id=7, task_id=42, agent_run_id="scout-run-1")
+    assert launcher.calls == [(7, 42, "pathfinder-run-1")]
+    stored = await registry.get(tenant_id=7, task_id=42, agent_run_id="pathfinder-run-1")
     assert stored is not None
     assert stored.status == "cancelled"
     assert stored.task_handle is None
@@ -233,9 +233,9 @@ async def test_cancel_terminal_process_local_run_returns_not_active_conflict(
 ) -> None:
     client, registry, launcher, _task_lookups, _app = agent_run_client
     await registry.register(_assignment(), graph_thread_id="child-thread-1")
-    await registry.mark_cancelled(tenant_id=7, task_id=42, agent_run_id="scout-run-1")
+    await registry.mark_cancelled(tenant_id=7, task_id=42, agent_run_id="pathfinder-run-1")
 
-    response = client.post("/api/tasks/42/agent-runs/scout-run-1/cancel")
+    response = client.post("/api/tasks/42/agent-runs/pathfinder-run-1/cancel")
 
     assert response.status_code == 409, response.text
     assert response.json()["detail"]["reason_code"] == "agent_run_not_active"

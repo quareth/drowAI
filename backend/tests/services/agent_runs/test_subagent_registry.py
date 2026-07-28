@@ -12,17 +12,17 @@ from backend.services.agent_runs.subagent_registry import (
 from core.prompts.builders.intent_classifier import build_classifier_system_prompt
 
 
-def test_default_registry_exposes_scout_as_the_only_available_subagent() -> None:
+def test_default_registry_exposes_pathfinder_as_the_only_available_subagent() -> None:
     registry = get_subagent_registry()
 
     assert registry.names() == ("pathfinder",)
-    scout = registry.require("pathfinder")
-    assert scout.agent_id == "pathfinder"
-    assert scout.agent_kind == "recon"
-    assert scout.dispatch_branch == "subagent"
-    assert scout.requires_resolved_target is True
-    assert scout.max_active_runs_per_task == 1
-    assert scout.supported_task_categories == (
+    pathfinder = registry.require("pathfinder")
+    assert pathfinder.agent_id == "pathfinder"
+    assert pathfinder.agent_kind == "recon"
+    assert pathfinder.dispatch_branch == "subagent"
+    assert pathfinder.requires_resolved_target is True
+    assert pathfinder.max_active_runs_per_task == 1
+    assert pathfinder.supported_task_categories == (
         "host_discovery",
         "port_scanning",
         "service_enumeration",
@@ -74,9 +74,9 @@ def test_registry_rejects_duplicate_names() -> None:
 
 def test_disabled_specs_are_not_projected_to_classifier() -> None:
     disabled = SubagentSpec(
-        name="disabled_scout",
-        agent_id="disabled_scout",
-        display_name="Disabled Scout",
+        name="disabled_pathfinder",
+        agent_id="disabled_pathfinder",
+        display_name="Disabled Pathfinder",
         agent_kind="recon",
         dispatch_branch="subagent",
         purpose="Unavailable test agent.",
@@ -90,7 +90,7 @@ def test_disabled_specs_are_not_projected_to_classifier() -> None:
     registry = SubagentRegistry((disabled,))
 
     assert registry.names() == ()
-    assert registry.get("disabled_scout") is None
+    assert registry.get("disabled_pathfinder") is None
     assert registry.classifier_catalog() == ()
 
 

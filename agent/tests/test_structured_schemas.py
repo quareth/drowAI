@@ -165,7 +165,7 @@ def test_intent_classifier_turn_interpretation_requires_goal_and_task_seed() -> 
 
 
 def test_intent_classifier_subagent_enum_is_registry_scoped() -> None:
-    spec = build_intent_classifier_structured_output(("scout", "analyst"))
+    spec = build_intent_classifier_structured_output(("pathfinder", "analyst"))
     subagent_schema = spec.schema["properties"]["agent_handoffs"]["items"][
         "properties"
     ]["subagent"]
@@ -173,7 +173,7 @@ def test_intent_classifier_subagent_enum_is_registry_scoped() -> None:
     assert subagent_schema == {
         "type": "string",
         "minLength": 1,
-        "enum": ["scout", "analyst"],
+        "enum": ["pathfinder", "analyst"],
     }
     validate_openai_strict_schema(spec)
 

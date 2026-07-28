@@ -18,7 +18,6 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 AgentKind: TypeAlias = Literal["recon"]
 AgentId: TypeAlias = str
 AgentCapability: TypeAlias = str
-ReconCapability: TypeAlias = AgentCapability
 AgentRunStatus: TypeAlias = Literal[
     "queued",
     "running",
@@ -558,7 +557,6 @@ __all__ = [
     "AgentRunStatus",
     "AgentRuntimeIdentity",
     "JsonValue",
-    "ReconCapability",
     "agent_display_name",
     "agent_icon_key",
 ]

@@ -156,10 +156,6 @@ class SubagentRegistry:
         return active_runs_for_task < spec.max_active_runs_per_task
 
 
-PATHFINDER_SUBAGENT_SPEC = SubagentSpec.from_definition(
-    get_definition_registry().require("pathfinder")
-)
-
 _SUBAGENT_REGISTRY = SubagentRegistry(
     SubagentSpec.from_definition(definition)
     for definition in get_definition_registry().definitions()
@@ -172,7 +168,6 @@ def get_subagent_registry() -> SubagentRegistry:
 
 
 __all__ = [
-    "PATHFINDER_SUBAGENT_SPEC",
     "SubagentRegistry",
     "SubagentSpec",
     "get_subagent_registry",

@@ -69,7 +69,7 @@ def _assignment(
 ) -> AgentAssignment:
     return AgentAssignment(
         assignment_id="assignment-1",
-        agent_run_id="scout-run-1",
+        agent_run_id="pathfinder-run-1",
         agent_id="pathfinder",
         agent_kind="recon",
         task_id=42,
@@ -157,7 +157,7 @@ async def test_child_execution_config_inherits_runner_identity_without_live_obje
     )
     assert configurable["graph_name"] == GRAPH_NAME_SUBAGENT
     assert configurable["producer_type"] == "subagent"
-    assert configurable["agent_run_id"] == "scout-run-1"
+    assert configurable["agent_run_id"] == "pathfinder-run-1"
     assert configurable["agent_kind"] == "recon"
     assert configurable["agent_display_name"] == "Pathfinder"
     assert configurable["parent_turn_id"] == "turn-42"
@@ -172,7 +172,7 @@ async def test_child_execution_config_inherits_runner_identity_without_live_obje
     assert projection["runner_id"] == "runner-1"
     assert projection["execution_site_id"] == "site-1"
     assert projection["workspace_id"] == "task-42"
-    assert projection["agent_run_id"] == "scout-run-1"
+    assert projection["agent_run_id"] == "pathfinder-run-1"
     assert projection["parent_run_id"] == "run-42"
     assert projection["credential_ref"] == {
         "provider": "openai",

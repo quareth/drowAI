@@ -239,8 +239,8 @@ class TestGraphExecutorStreaming:
             assert call_args[1]["event"]["type"] == "processed"
 
     @pytest.mark.asyncio
-    async def test_graph_executor_stamps_scout_attribution_on_custom_events(self):
-        """Scout child config stamps raw custom events outside tool runtime internals."""
+    async def test_graph_executor_stamps_subagent_attribution_on_custom_events(self):
+        """Pathfinder child config stamps raw custom events outside tool runtime internals."""
         mock_adapter = MagicMock()
         mock_adapter.process_streaming_event.return_value = {
             "type": "processed",
@@ -276,7 +276,7 @@ class TestGraphExecutorStreaming:
                 config={
                     "configurable": {
                         "thread_id": "graph-child",
-                        "agent_run_id": "scout-run-1",
+                        "agent_run_id": "pathfinder-run-1",
                         "agent_id": "pathfinder",
                         "agent_kind": "recon",
                         "parent_turn_id": "parent-turn-1",
@@ -291,7 +291,7 @@ class TestGraphExecutorStreaming:
         raw_event = mock_adapter.process_streaming_event.call_args.args[0]
         assert raw_event["type"] == "tool_end"
         assert raw_event["producer_type"] == "subagent"
-        assert raw_event["agent_run_id"] == "scout-run-1"
+        assert raw_event["agent_run_id"] == "pathfinder-run-1"
         assert raw_event["agent_id"] == "pathfinder"
         assert raw_event["agent_kind"] == "recon"
         assert raw_event["agent_display_name"] == "Pathfinder"

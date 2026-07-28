@@ -12,7 +12,9 @@ from agent.subagents.registry import (
     get_subagent_registry,
     load_subagent_registry,
 )
-from backend.services.agent_runs.subagent_registry import PATHFINDER_SUBAGENT_SPEC
+from backend.services.agent_runs.subagent_registry import (
+    get_subagent_registry as get_control_plane_subagent_registry,
+)
 
 
 def _pathfinder_definition() -> SubagentDefinition:
@@ -31,10 +33,14 @@ def test_default_registry_loads_enabled_pathfinder_from_toml() -> None:
 
 def test_classifier_catalog_is_definition_backed_and_matches_legacy_metadata() -> None:
     registry = load_subagent_registry()
-    legacy_projection = dict(PATHFINDER_SUBAGENT_SPEC.classifier_projection())
+    control_plane_projection = dict(
+        get_control_plane_subagent_registry()
+        .require("pathfinder")
+        .classifier_projection()
+    )
     [catalog_projection] = [dict(entry) for entry in registry.classifier_catalog()]
 
-    assert legacy_projection["name"] == "pathfinder"
+    assert control_plane_projection["name"] == "pathfinder"
     assert catalog_projection["name"] == "pathfinder"
     assert catalog_projection["agent_id"] == "pathfinder"
     for key in (
@@ -46,7 +52,7 @@ def test_classifier_catalog_is_definition_backed_and_matches_legacy_metadata() -
         "max_active_runs_per_task",
         "requires_resolved_target",
     ):
-        assert catalog_projection[key] == legacy_projection[key]
+        assert catalog_projection[key] == control_plane_projection[key]
 
 
 def test_display_tool_and_limit_metadata_are_definition_projections() -> None:

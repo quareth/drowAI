@@ -68,7 +68,7 @@ describe("chat-stream-store persistence contracts", () => {
         subtype: "assistant_final",
         streaming: false,
         producer_type: "subagent",
-        agent_run_id: "scout-1",
+        agent_run_id: "pathfinder-1",
       },
     });
 
@@ -92,8 +92,8 @@ describe("chat-stream-store persistence contracts", () => {
       },
     });
 
-    applyStreamMessage(TASK_ID, messageDelta("scout-a", "first answer"));
-    applyStreamMessage(TASK_ID, messageDelta("scout-b", "second answer"));
+    applyStreamMessage(TASK_ID, messageDelta("pathfinder-a", "first answer"));
+    applyStreamMessage(TASK_ID, messageDelta("pathfinder-b", "second answer"));
     applyStreamMessage(TASK_ID, {
       type: "section_end",
       content: "",
@@ -103,21 +103,21 @@ describe("chat-stream-store persistence contracts", () => {
         step_type: "message_section_end",
         streaming: false,
         producer_type: "subagent",
-        agent_run_id: "scout-a",
+        agent_run_id: "pathfinder-a",
         agent_id: "pathfinder",
         agent_kind: "recon",
       },
     });
 
     let snapshot = getTaskStreamSnapshot(TASK_ID);
-    const scoutA = snapshot.items.find(
-      (item) => item.metadata?.agent_run_id === "scout-a" && item.type === "message_delta",
+    const pathfinderA = snapshot.items.find(
+      (item) => item.metadata?.agent_run_id === "pathfinder-a" && item.type === "message_delta",
     );
-    const scoutB = snapshot.items.find(
-      (item) => item.metadata?.agent_run_id === "scout-b" && item.type === "message_delta",
+    const pathfinderB = snapshot.items.find(
+      (item) => item.metadata?.agent_run_id === "pathfinder-b" && item.type === "message_delta",
     );
-    expect(scoutA?.isStreaming).toBe(false);
-    expect(scoutB?.isStreaming).toBe(true);
+    expect(pathfinderA?.isStreaming).toBe(false);
+    expect(pathfinderB?.isStreaming).toBe(true);
     expect(snapshot.hasStreaming).toBe(true);
 
     applyStreamMessage(TASK_ID, {
@@ -133,7 +133,7 @@ describe("chat-stream-store persistence contracts", () => {
     snapshot = getTaskStreamSnapshot(TASK_ID);
     expect(
       snapshot.items.find(
-        (item) => item.metadata?.agent_run_id === "scout-b" && item.type === "message_delta",
+        (item) => item.metadata?.agent_run_id === "pathfinder-b" && item.type === "message_delta",
       )?.isStreaming,
     ).toBe(true);
 
@@ -146,7 +146,7 @@ describe("chat-stream-store persistence contracts", () => {
         step_type: "message_section_end",
         streaming: false,
         producer_type: "subagent",
-        agent_run_id: "scout-b",
+        agent_run_id: "pathfinder-b",
         agent_id: "pathfinder",
         agent_kind: "recon",
       },
@@ -181,43 +181,43 @@ describe("chat-stream-store persistence contracts", () => {
 
     applyStreamMessage(
       TASK_ID,
-      subagentStep("scout-a", "reasoning_delta", "a reasoning", {
+      subagentStep("pathfinder-a", "reasoning_delta", "a reasoning", {
         ind: 0,
-        reasoning_section_id: "scout-a:reasoning:0",
+        reasoning_section_id: "pathfinder-a:reasoning:0",
       }),
     );
     applyStreamMessage(
       TASK_ID,
-      subagentStep("scout-a", "message_delta", "a answer", { ind: 2 }),
+      subagentStep("pathfinder-a", "message_delta", "a answer", { ind: 2 }),
     );
     applyStreamMessage(
       TASK_ID,
-      subagentStep("scout-b", "observation_delta", "b observation", { ind: 3 }),
+      subagentStep("pathfinder-b", "observation_delta", "b observation", { ind: 3 }),
     );
 
-    terminalizeAgentRunStreams(TASK_ID, "scout-a", 30);
+    terminalizeAgentRunStreams(TASK_ID, "pathfinder-a", 30);
 
     const snapshot = getTaskStreamSnapshot(TASK_ID);
-    const scoutAItems = snapshot.items.filter(
-      item => item.metadata?.agent_run_id === "scout-a",
+    const pathfinderAItems = snapshot.items.filter(
+      item => item.metadata?.agent_run_id === "pathfinder-a",
     );
-    const scoutBObservation = snapshot.items.find(
-      item => item.metadata?.agent_run_id === "scout-b",
+    const pathfinderBObservation = snapshot.items.find(
+      item => item.metadata?.agent_run_id === "pathfinder-b",
     );
-    expect(scoutAItems.every(item => item.isStreaming !== true)).toBe(true);
+    expect(pathfinderAItems.every(item => item.isStreaming !== true)).toBe(true);
     expect(
-      scoutAItems.some(
+      pathfinderAItems.some(
         item => item.metadata?.step_type === "reasoning_section_end" &&
           item.metadata?.terminalized_by_agent_run_lifecycle === true,
       ),
     ).toBe(true);
     expect(
-      scoutAItems.some(
+      pathfinderAItems.some(
         item => item.metadata?.step_type === "message_section_end" &&
           item.metadata?.terminalized_by_agent_run_lifecycle === true,
       ),
     ).toBe(true);
-    expect(scoutBObservation?.isStreaming).toBe(true);
+    expect(pathfinderBObservation?.isStreaming).toBe(true);
     expect(snapshot.hasStreaming).toBe(true);
   });
 

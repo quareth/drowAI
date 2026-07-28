@@ -28,11 +28,13 @@ from agent.graph.context.builder import (
     build_conversation_context_bundle,
 )
 from agent.graph.context.projections import (
-    SECTION_RECENT_TRANSCRIPT,
     project_for_intent_classifier,
-    serialize_projection_to_prompt_sections,
 )
-from agent.graph.context.serialization import serialize_projection_to_section_map
+from agent.graph.context.serialization import (
+    SECTION_RECENT_TRANSCRIPT,
+    serialize_projection_to_prompt_sections,
+    serialize_projection_to_section_map,
+)
 from backend.services.langgraph_chat.contracts import (
     ChatInputs,
     ExecutionMode,

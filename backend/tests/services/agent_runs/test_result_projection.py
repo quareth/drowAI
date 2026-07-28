@@ -1,4 +1,4 @@
-"""Tests for best-effort Scout result projection into main context."""
+"""Tests for best-effort subagent result projection into main context."""
 
 from __future__ import annotations
 
@@ -65,7 +65,11 @@ def _assignment(
     )
 
 
-def _result(agent_run_id: str = "run-1", *, summary: str = "Scout found HTTP.") -> AgentResult:
+def _result(
+    agent_run_id: str = "run-1",
+    *,
+    summary: str = "Pathfinder found HTTP.",
+) -> AgentResult:
     return AgentResult(
         agent_run_id=agent_run_id,
         agent_id="pathfinder",
@@ -101,7 +105,7 @@ async def test_collect_projects_completed_unconsumed_results_for_conversation() 
         agent_run_id="run-1",
         result=_result(
             "run-1",
-            summary="Scout found HTTP with api_key=secret-value-that-must-not-leak",
+            summary="Pathfinder found HTTP with api_key=secret-value-that-must-not-leak",
         ),
     )
     await registry.register(
@@ -133,7 +137,7 @@ async def test_collect_projects_completed_unconsumed_results_for_conversation() 
     projected = handoff.results[0]
     assert projected["agent_id"] == "pathfinder"
     assert projected["agent_display_name"] == "Pathfinder"
-    assert projected["summary"] == "Scout found HTTP with <REDACTED>"
+    assert projected["summary"] == "Pathfinder found HTTP with <REDACTED>"
     assert projected["key_findings"] == [
         "HTTP on 80",
         "SSH on 22 <REDACTED>",
@@ -182,7 +186,7 @@ def test_attach_completed_agent_results_updates_metadata_and_context_bundle() ->
         turn_id="turn-2",
         turn_sequence=2,
         messages=[],
-        current_message="summarize scout",
+        current_message="summarize pathfinder",
     )
     metadata = {METADATA_CONTEXT_BUNDLE_KEY: bundle}
     handoff = type(
@@ -194,7 +198,7 @@ def test_attach_completed_agent_results_updates_metadata_and_context_bundle() ->
                     "agent_run_id": "run-1",
                     "agent_id": "pathfinder",
                     "agent_kind": "recon",
-                    "agent_display_name": "Scout",
+                    "agent_display_name": "Pathfinder",
                     "outcome": "completed",
                     "summary": "HTTP exposed",
                 },

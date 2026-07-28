@@ -16,7 +16,7 @@ function runWithStatus(
     taskId: 7,
     agentRunId: "run-1",
     agentId: "pathfinder",
-    agentKind: "scout",
+    agentKind: "recon",
     agentDisplayName: "Pathfinder",
     agentIconKey: "pathfinder",
     status,

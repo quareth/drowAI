@@ -1,4 +1,4 @@
-"""Facade tests for same-process Scout result projection acceptance."""
+"""Facade tests for same-process subagent result projection acceptance."""
 
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ def _result() -> AgentResult:
         agent_id="pathfinder",
         agent_kind="recon",
         outcome="completed",
-        summary="Scout found HTTP.",
+        summary="Pathfinder found HTTP.",
         key_findings=["HTTP on 80"],
         evidence_refs=[
             {
@@ -150,7 +150,7 @@ async def test_facade_marks_projected_result_consumed_after_handler_accepts() ->
     chat_inputs = ChatInputs(
         task_id=42,
         user_id=3,
-        message="Use Scout results",
+        message="Use Pathfinder results",
         conversation_id="conversation-1",
         history=[],
         requested_mode=ExecutionMode.SIMPLE_TOOL,
@@ -159,7 +159,7 @@ async def test_facade_marks_projected_result_consumed_after_handler_accepts() ->
     await facade.handle_turn(chat_inputs)
 
     assert capture["metadata"]["completed_agent_results"][0]["summary"] == (
-        "Scout found HTTP."
+        "Pathfinder found HTTP."
     )
     assert capture["bundle"]["completed_agent_results"][0]["agent_run_id"] == "run-1"
     assert await registry.consume_result(
@@ -194,7 +194,7 @@ async def test_facade_does_not_consume_projected_result_when_handler_fails() -> 
     chat_inputs = ChatInputs(
         task_id=42,
         user_id=3,
-        message="Use Scout results",
+        message="Use Pathfinder results",
         conversation_id="conversation-1",
         history=[],
         requested_mode=ExecutionMode.SIMPLE_TOOL,

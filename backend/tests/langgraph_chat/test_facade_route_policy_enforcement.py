@@ -192,8 +192,8 @@ async def test_chat_with_classifier_plan_executor_lands_on_normal_chat(
 
 
 @pytest.mark.asyncio
-async def test_recon_candidate_routes_to_scout_by_default() -> None:
-    """Scout-eligible classifier output delegates without an environment gate."""
+async def test_recon_candidate_routes_to_pathfinder_by_default() -> None:
+    """Pathfinder-eligible classifier output delegates without an environment gate."""
     facade, capture = _build_facade_with_branch_capture(
         intent_classifier=_stub_recon_classifier(),
     )

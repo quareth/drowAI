@@ -51,7 +51,7 @@ def _runtime_identity() -> AgentRuntimeIdentity:
 def _assignment() -> AgentAssignment:
     return AgentAssignment(
         assignment_id="assignment-1",
-        agent_run_id="scout-run-1",
+        agent_run_id="pathfinder-run-1",
         agent_id="pathfinder",
         agent_kind="recon",
         task_id=42,
@@ -78,7 +78,7 @@ async def test_prepare_subagent_resume_uses_ticket_thread_and_updates_status(
     await registry.mark_waiting_for_approval(
         tenant_id=7,
         task_id=42,
-        agent_run_id="scout-run-1",
+        agent_run_id="pathfinder-run-1",
     )
 
     monkeypatch.setattr(
@@ -104,12 +104,12 @@ async def test_prepare_subagent_resume_uses_ticket_thread_and_updates_status(
     assert context.graph_thread_id == child_thread
     assert context.checkpoint_id == "cp-ticket"
     await mark_subagent_running(registry=registry, context=context)
-    running = await registry.get(tenant_id=7, task_id=42, agent_run_id="scout-run-1")
+    running = await registry.get(tenant_id=7, task_id=42, agent_run_id="pathfinder-run-1")
     assert running is not None
     assert running.status == "running"
 
     await mark_subagent_waiting_for_approval(registry=registry, context=context)
-    waiting = await registry.get(tenant_id=7, task_id=42, agent_run_id="scout-run-1")
+    waiting = await registry.get(tenant_id=7, task_id=42, agent_run_id="pathfinder-run-1")
     assert waiting is not None
     assert waiting.status == "waiting_for_approval"
 
@@ -125,7 +125,7 @@ async def test_prepare_subagent_resume_rejects_legacy_scout_ticket_identity(
     await registry.mark_waiting_for_approval(
         tenant_id=7,
         task_id=42,
-        agent_run_id="scout-run-1",
+        agent_run_id="pathfinder-run-1",
     )
 
     monkeypatch.setattr(
@@ -188,9 +188,9 @@ async def test_prepare_subagent_resume_matches_registered_thread_without_recon_k
     waiting = await registry.mark_waiting_for_approval(
         tenant_id=7,
         task_id=42,
-        agent_run_id="scout-run-1",
+        agent_run_id="pathfinder-run-1",
     )
-    registry._runs[(7, 42, "scout-run-1")] = replace(
+    registry._runs[(7, 42, "pathfinder-run-1")] = replace(
         waiting,
         agent_id="cartographer",
         agent_kind="asset_mapper",  # type: ignore[arg-type]
@@ -275,7 +275,7 @@ async def test_resume_from_interrupt_keeps_subagent_waiting_after_next_interrupt
     await registry.mark_waiting_for_approval(
         tenant_id=7,
         task_id=42,
-        agent_run_id="scout-run-1",
+        agent_run_id="pathfinder-run-1",
     )
     monkeypatch.setattr(
         continuation,
@@ -310,7 +310,7 @@ async def test_resume_from_interrupt_keeps_subagent_waiting_after_next_interrupt
     entry = await registry.get(
         tenant_id=7,
         task_id=42,
-        agent_run_id="scout-run-1",
+        agent_run_id="pathfinder-run-1",
     )
     assert entry is not None
     assert entry.status == "waiting_for_approval"
@@ -327,7 +327,7 @@ async def test_resume_from_interrupt_marks_subagent_completed_on_success(
     await registry.mark_waiting_for_approval(
         tenant_id=7,
         task_id=42,
-        agent_run_id="scout-run-1",
+        agent_run_id="pathfinder-run-1",
     )
     monkeypatch.setattr(
         continuation,
@@ -343,11 +343,11 @@ async def test_resume_from_interrupt_marks_subagent_completed_on_success(
         final_state=_interactive_state(
             metadata={
                 SUBAGENT_RESULT_METADATA_KEY: {
-                    "agent_run_id": "scout-run-1",
+                    "agent_run_id": "pathfinder-run-1",
                     "agent_id": "pathfinder",
                     "agent_kind": "recon",
                     "outcome": "completed",
-                    "summary": "Scout found HTTP on port 80.",
+                    "summary": "Pathfinder found HTTP on port 80.",
                     "key_findings": ["HTTP exposed on 80"],
                     "evidence_refs": [
                         {"kind": "artifact", "path": "/workspace/nmap.xml"}
@@ -358,7 +358,7 @@ async def test_resume_from_interrupt_marks_subagent_completed_on_success(
                     "final_checkpoint_id": "cp-final",
                 }
             },
-            final_text="Scout found HTTP on port 80.",
+            final_text="Pathfinder found HTTP on port 80.",
         ),
         interrupted=False,
     )
@@ -377,16 +377,16 @@ async def test_resume_from_interrupt_marks_subagent_completed_on_success(
         response={"approved": True},
     )
 
-    assert result.final_text == "Scout found HTTP on port 80."
+    assert result.final_text == "Pathfinder found HTTP on port 80."
     entry = await registry.get(
         tenant_id=7,
         task_id=42,
-        agent_run_id="scout-run-1",
+        agent_run_id="pathfinder-run-1",
     )
     assert entry is not None
     assert entry.status == "completed"
     assert entry.result is not None
-    assert entry.result.agent_run_id == "scout-run-1"
+    assert entry.result.agent_run_id == "pathfinder-run-1"
     assert entry.result.final_checkpoint_id == "cp-final"
 
 

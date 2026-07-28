@@ -286,7 +286,7 @@ async def test_finalize_results_selects_subagent_handoff_prompt(monkeypatch):
             conversation_id="conv-xyz",
             metadata={
                 "producer_type": "subagent",
-                "agent_run_id": "scout-run-1",
+                "agent_run_id": "pathfinder-run-1",
                 "agent_kind": "recon",
                 "synthesized_output": {
                     "tool": "nmap",
@@ -330,7 +330,7 @@ async def test_finalize_results_closes_subagent_message_section_on_stream_failur
             conversation_id="conv-xyz",
             metadata={
                 "producer_type": "subagent",
-                "agent_run_id": "scout-run-1",
+                "agent_run_id": "pathfinder-run-1",
                 "agent_kind": "recon",
                 "synthesized_output": {
                     "tool": "nmap",
@@ -362,7 +362,7 @@ async def test_finalize_results_closes_subagent_message_section_on_stream_failur
     assert "message_section_end" in step_types
     terminal_event = dummy_writer.events[-1]
     assert terminal_event["step_type"] == "message_section_end"
-    assert terminal_event["agent_run_id"] == "scout-run-1"
+    assert terminal_event["agent_run_id"] == "pathfinder-run-1"
 
 
 @pytest.mark.asyncio

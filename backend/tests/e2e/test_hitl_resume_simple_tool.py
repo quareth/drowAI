@@ -292,30 +292,30 @@ def test_subagent_router_resume_uses_canonical_child_ticket(monkeypatch) -> None
     try:
         user, task, _parent_thread = _create_task_fixture(
             db,
-            username="scout_owner",
-            email="scout@example.com",
-            tenant_slug="scout-hitl",
-            task_name="scout-hitl",
+            username="pathfinder_owner",
+            email="pathfinder@example.com",
+            tenant_slug="pathfinder-hitl",
+            task_name="pathfinder-hitl",
         )
 
-        interrupt_id = "subagent:checkpoint:cp-scout-1"
+        interrupt_id = "subagent:checkpoint:cp-pathfinder-1"
         ticket = InterruptTicket(
             interrupt_id=interrupt_id,
             task_id=task.id,
             tenant_id=task.tenant_id,
             graph_name=GRAPH_NAME_SUBAGENT,
             interrupt_type="tool_approval",
-            checkpoint_id="cp-scout-1",
+            checkpoint_id="cp-pathfinder-1",
             thread_id=format_graph_thread_id(child_thread_id, task_id=task.id),
-            turn_id=f"task-{task.id}-turn-scout-1",
+            turn_id=f"task-{task.id}-turn-pathfinder-1",
             turn_sequence=1,
             state=InterruptTicketState.PENDING,
             payload_snapshot={
                 "type": "tool_approval",
-                "turn_id": f"task-{task.id}-turn-scout-1",
+                "turn_id": f"task-{task.id}-turn-pathfinder-1",
                 "turn_sequence": 1,
                 "reserved_message_id": 991,
-                "conversation_id": "conv-scout",
+                "conversation_id": "conv-pathfinder",
                 "tool_id": "information_gathering.network_discovery.nmap",
                 "tool_name": "nmap",
                 "parameters": {"target": "10.0.0.10"},
@@ -352,7 +352,7 @@ def test_subagent_router_resume_uses_canonical_child_ticket(monkeypatch) -> None
                 "thread_id": format_graph_thread_id(child_thread_id, task_id=task_id),
                 "graph_name": GRAPH_NAME_SUBAGENT,
                 "interrupt_id": interrupt_id,
-                "checkpoint_id": "cp-scout-1",
+                "checkpoint_id": "cp-pathfinder-1",
                 "interrupt_type": "tool_approval",
                 "payload": {
                     "type": "tool_approval",
@@ -417,7 +417,7 @@ def test_subagent_router_resume_uses_canonical_child_ticket(monkeypatch) -> None
         task_id=task_id,
     )
     assert captured["resume_kwargs"]["graph_name"] == GRAPH_NAME_SUBAGENT
-    assert captured["resume_kwargs"]["checkpoint_id"] == "cp-scout-1"
+    assert captured["resume_kwargs"]["checkpoint_id"] == "cp-pathfinder-1"
     assert captured["resume_kwargs"]["interrupt_id"] == interrupt_id
 
     verify = SessionFactory()
@@ -436,7 +436,7 @@ def test_subagent_router_resume_uses_canonical_child_ticket(monkeypatch) -> None
         )
         assert workflow.state == "RESUMED"
         assert workflow.graph_name == GRAPH_NAME_SUBAGENT
-        assert workflow.resume_key == "cp-scout-1"
+        assert workflow.resume_key == "cp-pathfinder-1"
     finally:
         verify.close()
         engine.dispose()

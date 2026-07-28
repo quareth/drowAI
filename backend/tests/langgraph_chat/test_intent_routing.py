@@ -41,10 +41,10 @@ def test_select_branch_simple_tool() -> None:
     assert select_branch(_runtime_config(ExecutionMode.SIMPLE_TOOL)) is ChatBranch.SIMPLE_TOOL
 
 
-def test_resolve_branch_routes_scout_owned_direct_executor_by_default() -> None:
+def test_resolve_branch_routes_pathfinder_owned_direct_executor_by_default() -> None:
     registry = get_subagent_registry()
-    scout_name = registry.classifier_catalog()[0]["name"]
-    assert scout_name == "pathfinder"
+    pathfinder_name = registry.classifier_catalog()[0]["name"]
+    assert pathfinder_name == "pathfinder"
 
     config = _runtime_config(ExecutionMode.SIMPLE_TOOL)
     config.metadata.update(
@@ -55,7 +55,7 @@ def test_resolve_branch_routes_scout_owned_direct_executor_by_default() -> None:
                 "agent_handoffs": [
                     {
                         "agent_handoff": "required",
-                        "subagent": scout_name,
+                        "subagent": pathfinder_name,
                         "objective": "Scan ports and enumerate services on 10.0.0.10.",
                     }
                 ],
@@ -119,7 +119,7 @@ def test_resolve_branch_uses_handoff_instead_of_capability_vocabulary() -> None:
     assert config.metadata["subagent_routing"]["reason"] == "pathfinder_owned"
 
 
-def test_resolve_branch_rejects_active_local_scout_run() -> None:
+def test_resolve_branch_rejects_active_local_pathfinder_run() -> None:
     config = _runtime_config(ExecutionMode.SIMPLE_TOOL)
     config.metadata.update(
         {

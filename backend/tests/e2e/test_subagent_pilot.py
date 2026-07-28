@@ -1,7 +1,7 @@
-"""End-to-end pilot checks for process-local Scout recon orchestration.
+"""End-to-end pilot checks for process-local subagent orchestration.
 
-These tests prove the migration-free Scout pilot through deterministic doubles
-at the active service seams. They keep external runtime execution out of scope
+These tests prove the generic subagent path through deterministic doubles at
+the active service seams. They keep external runtime execution out of scope
 while exercising facade routing, async launch, process-local lifecycle,
 attribution events, cancellation/restart limitations, and same-process result
 handoff.
@@ -139,7 +139,7 @@ class _NoopPriorTurnReferenceMaterializer:
         return None
 
 
-class _DelayedScoutWorker:
+class _DelayedSubagentWorker:
     def __init__(self) -> None:
         self.started = asyncio.Event()
         self.release = asyncio.Event()
@@ -168,7 +168,7 @@ class _DelayedScoutWorker:
             agent_id="pathfinder",
             agent_kind="recon",
             outcome="completed",
-            summary="Scout found HTTPS on 443.",
+            summary="Pathfinder found HTTPS on 443.",
             key_findings=["HTTPS exposed on 443"],
             evidence_refs=[
                 {
@@ -180,7 +180,7 @@ class _DelayedScoutWorker:
             tools_used=["information_gathering.network_discovery.nmap"],
             limitations=["Single approved target only."],
             recommended_next_steps=["Review the HTTPS service banner."],
-            final_checkpoint_id="cp-scout-final",
+            final_checkpoint_id="cp-pathfinder-final",
         )
 
 
@@ -207,7 +207,7 @@ class _ParentFinalizerExecutor:
         )
         final_state = copy.deepcopy(graph_input)
         final_state["trace"]["final_text"] = (
-            "The Scout scan found HTTPS exposed on port 443."
+            "The Pathfinder scan found HTTPS exposed on port 443."
         )
         return GraphExecutionResult(final_state=final_state)
 
@@ -231,7 +231,7 @@ def _chat_inputs(message: str) -> ChatInputs:
 async def test_subagent_pilot_hands_result_back_to_original_parent_turn(
 ) -> None:
     registry = ProcessLocalAgentRunRegistry()
-    worker = _DelayedScoutWorker()
+    worker = _DelayedSubagentWorker()
     parent_executor = _ParentFinalizerExecutor()
     lifecycle_events: list[dict[str, Any]] = []
 
@@ -281,7 +281,7 @@ async def test_subagent_pilot_hands_result_back_to_original_parent_turn(
     worker.release.set()
     result = await asyncio.wait_for(parent_turn, timeout=1)
 
-    assert result.final_text == "The Scout scan found HTTPS exposed on port 443."
+    assert result.final_text == "The Pathfinder scan found HTTPS exposed on port 443."
     assert result.metadata["branch"] == "subagent"
     assert result.metadata["status"] == "completed"
     assert result.metadata["handoff_agent_run_id"] == assignment.agent_run_id
@@ -295,7 +295,7 @@ async def test_subagent_pilot_hands_result_back_to_original_parent_turn(
         METADATA_CONTEXT_BUNDLE_KEY
     ]["completed_agent_results"]
     assert parent_results[0]["agent_run_id"] == assignment.agent_run_id
-    assert parent_results[0]["summary"] == "Scout found HTTPS on 443."
+    assert parent_results[0]["summary"] == "Pathfinder found HTTPS on 443."
     assert parent_results[0]["tools_used"] == [
         "information_gathering.network_discovery.nmap"
     ]
@@ -318,7 +318,7 @@ async def test_subagent_pilot_hands_result_back_to_original_parent_turn(
     ) is None
 
 
-def test_scout_pilot_does_not_add_durable_schema_paths() -> None:
+def test_subagent_pilot_does_not_add_durable_schema_paths() -> None:
     repo_root = os.getcwd()
     absent_paths = [
         "backend/models/agent_run.py",
@@ -332,4 +332,4 @@ def test_scout_pilot_does_not_add_durable_schema_paths() -> None:
     versions_dir = os.path.join(repo_root, "backend/migrations/versions")
     if os.path.isdir(versions_dir):
         migration_names = os.listdir(versions_dir)
-        assert not any("scout" in name or "agent_run" in name for name in migration_names)
+        assert not any("subagent" in name or "agent_run" in name for name in migration_names)

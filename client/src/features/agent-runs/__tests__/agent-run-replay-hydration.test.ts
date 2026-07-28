@@ -1,5 +1,5 @@
 /**
- * Regression tests for Scout agent-run replay hydration.
+ * Regression tests for Pathfinder agent-run replay hydration.
  *
  * Covers bounded task replay filtering, cursor advancement, main-card
  * reconstruction, and stale process-local run reconciliation.
@@ -37,13 +37,13 @@ afterEach(() => {
 
 function assignment(): AgentAssignment {
   return {
-    assignment_id: "assign-scout-1",
-    agent_run_id: "scout-run-1",
+    assignment_id: "assign-pathfinder-1",
+    agent_run_id: "pathfinder-run-1",
     agent_id: "pathfinder",
     agent_kind: "recon",
     task_id: TASK_ID,
     tenant_id: 7,
-    conversation_id: "conv-scout",
+    conversation_id: "conv-pathfinder",
     parent_turn_id: "turn-parent",
     parent_graph_thread_id: "thread-parent",
     objective: "Enumerate exposed services",
@@ -66,15 +66,15 @@ function lifecycle(
   overrides: Partial<AgentRunLifecycleProjection> = {},
 ): AgentRunLifecycleProjection {
   return {
-    agent_run_id: "scout-run-1",
+    agent_run_id: "pathfinder-run-1",
     agent_id: "pathfinder",
     agent_kind: "recon",
-    agent_display_name: "Scout",
+    agent_display_name: "Pathfinder",
     agent_icon_key: "pathfinder",
     status: "running",
     lifecycle_version: 1,
     task_id: TASK_ID,
-    conversation_id: "conv-scout",
+    conversation_id: "conv-pathfinder",
     parent_turn_id: "turn-parent",
     parent_run_id: "parent-run-1",
     assignment: assignment(),
@@ -115,7 +115,7 @@ function lifecyclePacket(
 function activityPacket(sequence: number): StreamEvent {
   return {
     type: "reasoning_delta",
-    content: "internal Scout reasoning",
+    content: "internal Pathfinder reasoning",
     task_id: TASK_ID,
     sequence,
     metadata: {
@@ -125,10 +125,10 @@ function activityPacket(sequence: number): StreamEvent {
       reasoning_section_id: "child-turn:reasoning:0",
       turn_sequence: 1,
       producer_type: "subagent",
-      agent_run_id: "scout-run-1",
+      agent_run_id: "pathfinder-run-1",
       agent_id: "pathfinder",
       agent_kind: "recon",
-      agent_display_name: "Scout",
+      agent_display_name: "Pathfinder",
       parent_turn_id: "turn-parent",
       parent_run_id: "parent-run-1",
       internal_only: false,
@@ -138,7 +138,7 @@ function activityPacket(sequence: number): StreamEvent {
 }
 
 describe("agent-run replay hydration", () => {
-  it("hydrates only Scout replay packets and keeps the drawer closed", () => {
+  it("hydrates only Pathfinder replay packets and keeps the drawer closed", () => {
     const result = hydrateAgentRunStoreFromReplayItems(TASK_ID, [
       {
         type: "assistant_message",
@@ -155,8 +155,8 @@ describe("agent-run replay hydration", () => {
     expect(result.replayedPackets).toBe(2);
     expect(result.lastSequence).toBe(12);
     expect(snapshot.runs).toHaveLength(1);
-    expect(snapshot.runsById["scout-run-1"].activity).toHaveLength(1);
-    expect(snapshot.runsById["scout-run-1"].agentIconKey).toBe("pathfinder");
+    expect(snapshot.runsById["pathfinder-run-1"].activity).toHaveLength(1);
+    expect(snapshot.runsById["pathfinder-run-1"].agentIconKey).toBe("pathfinder");
     expect(snapshot.presentation).toEqual({
       isOpen: false,
       parentRunId: null,
@@ -171,7 +171,7 @@ describe("agent-run replay hydration", () => {
       ),
     ).toBe(true);
     expect(
-      getTaskStreamSnapshot(TASK_ID).items.some(item => item.content === "internal Scout reasoning"),
+      getTaskStreamSnapshot(TASK_ID).items.some(item => item.content === "internal Pathfinder reasoning"),
     ).toBe(true);
     expect(getTaskStreamSnapshot(TASK_ID).lastSequence).toBe(12);
   });
@@ -195,7 +195,7 @@ describe("agent-run replay hydration", () => {
     });
   });
 
-  it("marks a replayed nonterminal Scout run interrupted when local status is empty", async () => {
+  it("marks a replayed nonterminal Pathfinder run interrupted when local status is empty", async () => {
     closeAgentRunDrawer(TASK_ID);
     mocked.apiFetch
       .mockResolvedValueOnce(
@@ -237,8 +237,8 @@ describe("agent-run replay hydration", () => {
     });
 
     const snapshot = getAgentRunSnapshot(TASK_ID);
-    expect(snapshot.runsById["scout-run-1"].status).toBe("interrupted");
-    expect(snapshot.runsById["scout-run-1"].safeError).toContain(
+    expect(snapshot.runsById["pathfinder-run-1"].status).toBe("interrupted");
+    expect(snapshot.runsById["pathfinder-run-1"].safeError).toContain(
       "current backend process no longer owns it",
     );
     expect(snapshot.presentation.isOpen).toBe(false);
@@ -278,10 +278,10 @@ describe("agent-run replay hydration", () => {
                 lifecycle_version: 2,
                 assignment: null,
                 result: {
-                  agent_run_id: "scout-run-1",
+                  agent_run_id: "pathfinder-run-1",
                   agent_id: "pathfinder",
                   agent_kind: "recon",
-                  agent_display_name: "Scout",
+                  agent_display_name: "Pathfinder",
                   outcome: "completed",
                   summary: "Ports mapped.",
                   key_findings: ["80/tcp open"],
@@ -326,10 +326,10 @@ describe("agent-run replay hydration", () => {
       lastSequence: 221,
     });
 
-    const run = getAgentRunSnapshot(TASK_ID).runsById["scout-run-1"];
+    const run = getAgentRunSnapshot(TASK_ID).runsById["pathfinder-run-1"];
     expect(run.status).toBe("completed");
     expect(run.activity.map(entry => entry.sequence)).toEqual([22]);
-    expect(getTaskStreamSnapshot(TASK_ID).items.some(item => item.content === "internal Scout reasoning")).toBe(true);
+    expect(getTaskStreamSnapshot(TASK_ID).items.some(item => item.content === "internal Pathfinder reasoning")).toBe(true);
     expect(getTaskStreamSnapshot(TASK_ID).lastSequence).toBe(221);
   });
 });

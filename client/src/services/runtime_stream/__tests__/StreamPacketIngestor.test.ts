@@ -151,7 +151,7 @@ describe("StreamPacketIngestor", () => {
     expect(getLastSequence(TASK_ID)).toBe(42);
   });
 
-  it("hydrates Scout lifecycle into the agent store and leaves a main-card event", () => {
+  it("hydrates Pathfinder lifecycle into the agent store and leaves a main-card event", () => {
     const ingestor = new StreamPacketIngestor();
 
     const ok = ingestor.ingestEnvelope(
@@ -163,20 +163,20 @@ describe("StreamPacketIngestor", () => {
           metadata: {
             subtype: "agent_run_lifecycle",
             producer_type: "subagent",
-            agent_run_id: "scout-run-1",
+            agent_run_id: "pathfinder-run-1",
             agent_id: "pathfinder",
             agent_kind: "recon",
-            agent_display_name: "Scout",
+            agent_display_name: "Pathfinder",
             parent_turn_id: "turn-parent",
             parent_run_id: "parent-run-1",
             lifecycle_version: 1,
             internal_only: false,
           },
           agent_run: {
-            agent_run_id: "scout-run-1",
+            agent_run_id: "pathfinder-run-1",
             agent_id: "pathfinder",
             agent_kind: "recon",
-            agent_display_name: "Scout",
+            agent_display_name: "Pathfinder",
             status: "running",
             lifecycle_version: 1,
             task_id: TASK_ID,
@@ -193,7 +193,7 @@ describe("StreamPacketIngestor", () => {
     );
 
     expect(ok).toBe(true);
-    const run = getAgentRunSnapshot(TASK_ID).runsById["scout-run-1"];
+    const run = getAgentRunSnapshot(TASK_ID).runsById["pathfinder-run-1"];
     expect(run.status).toBe("running");
     expect(run.lifecycleVersion).toBe(1);
     expect(getAgentRunSnapshot(TASK_ID).presentation.isOpen).toBe(false);
@@ -201,7 +201,7 @@ describe("StreamPacketIngestor", () => {
     expect(getLastSequence(TASK_ID)).toBe(43);
   });
 
-  it("normalizes Scout activity through chat state while retaining agent attribution", () => {
+  it("normalizes Pathfinder activity through chat state while retaining agent attribution", () => {
     const ingestor = new StreamPacketIngestor();
 
     const ok = ingestor.ingestEnvelope(
@@ -216,10 +216,10 @@ describe("StreamPacketIngestor", () => {
               ind: 1,
               step_type: "tool_start",
               producer_type: "subagent",
-              agent_run_id: "scout-run-1",
+              agent_run_id: "pathfinder-run-1",
               agent_id: "pathfinder",
               agent_kind: "recon",
-              agent_display_name: "Scout",
+              agent_display_name: "Pathfinder",
               parent_turn_id: "turn-parent",
               parent_run_id: "parent-run-1",
               tool_call_id: "tool-1",
@@ -233,7 +233,7 @@ describe("StreamPacketIngestor", () => {
     );
 
     expect(ok).toBe(true);
-    const run = getAgentRunSnapshot(TASK_ID).runsById["scout-run-1"];
+    const run = getAgentRunSnapshot(TASK_ID).runsById["pathfinder-run-1"];
     expect(run.activity).toHaveLength(1);
     expect(run.activity[0].sequence).toBe(44);
     expect(getTaskStreamSnapshot(TASK_ID).items.map((item) => item.type)).toContain(
@@ -242,7 +242,7 @@ describe("StreamPacketIngestor", () => {
     expect(getLastSequence(TASK_ID)).toBe(44);
   });
 
-  it("does not suppress malformed Scout attribution from the main transcript", () => {
+  it("does not suppress malformed Pathfinder attribution from the main transcript", () => {
     const ingestor = new StreamPacketIngestor();
 
     const ok = ingestor.ingestEnvelope(
@@ -258,7 +258,7 @@ describe("StreamPacketIngestor", () => {
               step_type: "tool_start",
               producer_type: "subagent",
               agent_kind: "recon",
-              agent_display_name: "Scout",
+              agent_display_name: "Pathfinder",
               tool_call_id: "tool-malformed",
             },
           },

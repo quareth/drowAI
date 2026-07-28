@@ -6,7 +6,7 @@ from agent.config import AgentConfig
 from agent.subagents.definition import SubagentDefinition, load_subagent_definitions
 from agent.subagents.runtime.model import SubagentToolBuilderPromptBuilder
 from agent.subagents.runtime.profile import resolve_subagent_tool_profile
-from backend.services.agent_runs.subagent_registry import PATHFINDER_SUBAGENT_SPEC
+from backend.services.agent_runs.subagent_registry import get_subagent_registry
 from core.prompts.tests._golden import assert_golden
 
 
@@ -27,19 +27,19 @@ def _pathfinder_definition() -> SubagentDefinition:
 
 def test_pathfinder_definition_matches_control_plane_registry_metadata() -> None:
     definition = _pathfinder_definition()
-    legacy = PATHFINDER_SUBAGENT_SPEC
+    spec = get_subagent_registry().require("pathfinder")
 
     assert definition.id == "pathfinder"
-    assert legacy.name == "pathfinder"
-    assert definition.display_name == legacy.display_name
-    assert definition.kind == legacy.agent_kind
-    assert definition.description == legacy.purpose
-    assert definition.ownership_boundary == legacy.ownership_boundary
-    assert definition.supported_task_categories == legacy.supported_task_categories
-    assert definition.excluded_task_categories == legacy.excluded_task_categories
-    assert definition.enabled == legacy.enabled
-    assert definition.max_active_runs_per_task == legacy.max_active_runs_per_task
-    assert definition.requires_resolved_target == legacy.requires_resolved_target
+    assert spec.name == "pathfinder"
+    assert definition.display_name == spec.display_name
+    assert definition.kind == spec.agent_kind
+    assert definition.description == spec.purpose
+    assert definition.ownership_boundary == spec.ownership_boundary
+    assert definition.supported_task_categories == spec.supported_task_categories
+    assert definition.excluded_task_categories == spec.excluded_task_categories
+    assert definition.enabled == spec.enabled
+    assert definition.max_active_runs_per_task == spec.max_active_runs_per_task
+    assert definition.requires_resolved_target == spec.requires_resolved_target
     assert definition.icon == "pathfinder"
 
 
@@ -69,7 +69,7 @@ def test_pathfinder_definition_matches_current_runtime_limits() -> None:
 
     assert (
         definition.max_active_runs_per_task
-        == PATHFINDER_SUBAGENT_SPEC.max_active_runs_per_task
+        == get_subagent_registry().require("pathfinder").max_active_runs_per_task
     )
     assert (
         definition.max_tool_calls_per_iteration

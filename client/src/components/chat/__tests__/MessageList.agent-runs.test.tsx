@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 /**
- * Main-chat integration tests for compact Scout agent-run cards.
+ * Main-chat integration tests for compact Pathfinder agent-run cards.
  *
  * Responsibilities:
  * - verify lifecycle packets render as first-class activity cards
@@ -107,7 +107,7 @@ afterEach(() => {
 function assignment(overrides: Partial<AgentAssignment> = {}): AgentAssignment {
   return {
     assignment_id: "assignment-run-1",
-    agent_run_id: "scout-run-1",
+    agent_run_id: "pathfinder-run-1",
     agent_id: "pathfinder",
     agent_kind: "recon",
     task_id: TASK_ID,
@@ -137,10 +137,10 @@ function lifecycle(
   overrides: Partial<AgentRunLifecycleProjection> = {},
 ): AgentRunLifecycleProjection {
   return {
-    agent_run_id: "scout-run-1",
+    agent_run_id: "pathfinder-run-1",
     agent_id: "pathfinder",
     agent_kind: "recon",
-    agent_display_name: "Scout",
+    agent_display_name: "Pathfinder",
     status: "running",
     lifecycle_version: 1,
     task_id: TASK_ID,
@@ -158,18 +158,18 @@ function completedResult(
   overrides: Partial<AgentResultProjection> = {},
 ): AgentResultProjection {
   return {
-    agent_run_id: "scout-run-1",
+    agent_run_id: "pathfinder-run-1",
     agent_id: "pathfinder",
     agent_kind: "recon",
-    agent_display_name: "Scout",
+    agent_display_name: "Pathfinder",
     outcome: "completed",
-    summary: "Scout found HTTPS on 443.",
+    summary: "Pathfinder found HTTPS on 443.",
     key_findings: ["HTTPS exposed on 443"],
     evidence_refs: [{ path: "/workspace/task-42/nmap.xml" }],
     tools_used: ["information_gathering.network_discovery.nmap"],
     limitations: ["Single approved target only."],
     recommended_next_steps: ["Review the HTTPS service banner."],
-    final_checkpoint_id: "cp-scout-final",
+    final_checkpoint_id: "cp-pathfinder-final",
     ...overrides,
   };
 }
@@ -185,7 +185,7 @@ function lifecycleMessage(): ChatMessage {
       id: "turn-parent",
       subtype: "agent_run_lifecycle",
       producer_type: "subagent",
-      agent_run_id: "scout-run-1",
+      agent_run_id: "pathfinder-run-1",
       agent_id: "pathfinder",
       agent_kind: "recon",
       parent_turn_id: "turn-parent",
@@ -200,18 +200,18 @@ function reconParentAcknowledgementMessage(): ChatMessage {
   return {
     id: "turn-parent",
     type: "agent",
-    content: "Scout has started a recon run and will hand off findings when it finishes.",
+    content: "Pathfinder has started a recon run and will hand off findings when it finishes.",
     timestamp: "2026-01-01T00:00:00Z",
     isStreaming: false,
     metadata: {
       id: "turn-parent",
       role: "assistant",
       branch: "subagent",
-      agent_run_id: "scout-run-1",
+      agent_run_id: "pathfinder-run-1",
       agent_id: "pathfinder",
       agent_kind: "recon",
-      agent_display_name: "Scout",
-      graph_thread_id: "thread-scout",
+      agent_display_name: "Pathfinder",
+      graph_thread_id: "thread-pathfinder",
       status: "running",
       turn_sequence: 1,
       ind: -1,
@@ -219,14 +219,14 @@ function reconParentAcknowledgementMessage(): ChatMessage {
   };
 }
 
-function scoutActivityMessage(
+function pathfinderActivityMessage(
   type: string,
   content: string,
   sequence: number,
   metadata: Record<string, unknown> = {},
 ): ChatMessage {
   return {
-    id: `scout-activity-${sequence}`,
+    id: `pathfinder-activity-${sequence}`,
     type: "agent",
     content,
     timestamp: "2026-01-01T00:00:00Z",
@@ -234,10 +234,10 @@ function scoutActivityMessage(
     metadata: {
       id: "child-turn",
       producer_type: "subagent",
-      agent_run_id: "scout-run-1",
+      agent_run_id: "pathfinder-run-1",
       agent_id: "pathfinder",
       agent_kind: "recon",
-      agent_display_name: "Scout",
+      agent_display_name: "Pathfinder",
       parent_turn_id: "turn-parent",
       parent_run_id: "parent-run-1",
       step_type: type,
@@ -281,10 +281,10 @@ function lifecycleReplayPacket(sequence: number): Record<string, unknown> {
     metadata: {
       subtype: "agent_run_lifecycle",
       producer_type: "subagent",
-      agent_run_id: "scout-run-1",
+      agent_run_id: "pathfinder-run-1",
       agent_id: "pathfinder",
       agent_kind: "recon",
-      agent_display_name: "Scout",
+      agent_display_name: "Pathfinder",
       parent_turn_id: "turn-parent",
       parent_run_id: "parent-run-1",
       internal_only: false,
@@ -295,26 +295,26 @@ function lifecycleReplayPacket(sequence: number): Record<string, unknown> {
   };
 }
 
-function scoutApprovalInterrupt(): ToolApprovalInterruptDetail {
+function pathfinderApprovalInterrupt(): ToolApprovalInterruptDetail {
   return {
     taskId: TASK_ID,
-    threadId: "thread-scout",
-    interruptId: "approval-scout-1",
-    checkpointId: "checkpoint-scout-1",
+    threadId: "thread-pathfinder",
+    interruptId: "approval-pathfinder-1",
+    checkpointId: "checkpoint-pathfinder-1",
     interruptType: "tool_approval",
     graphName: "subagent",
     payload: {
       type: "tool_approval",
-      interrupt_id: "approval-scout-1",
+      interrupt_id: "approval-pathfinder-1",
       tool_id: "network.nmap",
       tool_name: "network.nmap",
       parameters: { target: "10.0.0.10", ports: "22,443" },
       description: "Run a scoped service discovery scan.",
       risk_level: "medium",
-      tool_batch_id: "batch-scout-1",
+      tool_batch_id: "batch-pathfinder-1",
       items: [
         {
-          tool_call_id: "tool-call-scout-1",
+          tool_call_id: "tool-call-pathfinder-1",
           tool_id: "network.nmap",
           tool_name: "network.nmap",
           parameters: { target: "10.0.0.10", ports: "22,443" },
@@ -326,8 +326,8 @@ function scoutApprovalInterrupt(): ToolApprovalInterruptDetail {
   };
 }
 
-describe("MessageList Scout agent-run cards", () => {
-  it("renders a stored Scout run after reasoning inside the parent activity group", () => {
+describe("MessageList Pathfinder agent-run cards", () => {
+  it("renders a stored Pathfinder run after reasoning inside the parent activity group", () => {
     applyAgentRunLifecycleUpdate(TASK_ID, lifecycle(), 12);
 
     render(
@@ -336,7 +336,7 @@ describe("MessageList Scout agent-run cards", () => {
           {
             id: "turn-parent",
             type: "user",
-            content: "Use Scout to map exposed services.",
+            content: "Use Pathfinder to map exposed services.",
             timestamp: "2026-01-01T00:00:00Z",
             isStreaming: false,
             metadata: {
@@ -399,7 +399,7 @@ describe("MessageList Scout agent-run cards", () => {
       />,
     );
 
-    expect(screen.queryByTestId("agent-run-card-scout-run-1")).toBeNull();
+    expect(screen.queryByTestId("agent-run-card-pathfinder-run-1")).toBeNull();
     fireEvent.click(
       screen.getByRole("button", { name: "1 thought, 1 agent" }),
     );
@@ -408,16 +408,16 @@ describe("MessageList Scout agent-run cards", () => {
     const reasoning = screen.getByTestId(
       "reasoning-step-0:reasoning-turn-parent:reasoning:0",
     );
-    const scout = screen.getByTestId("agent-run-card-scout-run-1");
+    const pathfinder = screen.getByTestId("agent-run-card-pathfinder-run-1");
     expect(activityDetails.contains(reasoning)).toBe(true);
-    expect(activityDetails.contains(scout)).toBe(true);
+    expect(activityDetails.contains(pathfinder)).toBe(true);
     expect(activityDetails.dataset.activityChain).toBe("true");
     expect(screen.getByTestId("turn-activity-details-turn-sequence:1-node-0")).toBeTruthy();
     expect(screen.getByTestId("turn-activity-details-turn-sequence:1-connector-0")).toBeTruthy();
     expect(
-      reasoning.compareDocumentPosition(scout) & Node.DOCUMENT_POSITION_FOLLOWING,
+      reasoning.compareDocumentPosition(pathfinder) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
-    expect(screen.getByTestId("agent-run-card-scout-run-1")).toBeTruthy();
+    expect(screen.getByTestId("agent-run-card-pathfinder-run-1")).toBeTruthy();
   });
 
   it("uses the shared connected activity chain before the parent turn completes", () => {
@@ -487,9 +487,9 @@ describe("MessageList Scout agent-run cards", () => {
     const reasoning = screen.getByTestId(
       "reasoning-step-0:reasoning-turn-parent:reasoning:0",
     );
-    const scout = screen.getByTestId("agent-run-card-scout-run-1");
+    const pathfinder = screen.getByTestId("agent-run-card-pathfinder-run-1");
     expect(activityDetails.contains(reasoning)).toBe(true);
-    expect(activityDetails.contains(scout)).toBe(true);
+    expect(activityDetails.contains(pathfinder)).toBe(true);
     expect(
       screen.getByTestId("turn-activity-details-turn-sequence:1-connector-0"),
     ).toBeTruthy();
@@ -635,7 +635,7 @@ describe("MessageList Scout agent-run cards", () => {
       lifecycleReplayPacket(31),
       {
         type: "reasoning_delta",
-        content: "replayed Scout reasoning",
+        content: "replayed Pathfinder reasoning",
         task_id: TASK_ID,
         sequence: 32,
         metadata: {
@@ -645,10 +645,10 @@ describe("MessageList Scout agent-run cards", () => {
           reasoning_section_id: "child-turn:reasoning:0",
           turn_sequence: 1,
           producer_type: "subagent",
-          agent_run_id: "scout-run-1",
+          agent_run_id: "pathfinder-run-1",
           agent_id: "pathfinder",
           agent_kind: "recon",
-          agent_display_name: "Scout",
+          agent_display_name: "Pathfinder",
           parent_turn_id: "turn-parent",
           parent_run_id: "parent-run-1",
           sequence: 32,
@@ -666,11 +666,11 @@ describe("MessageList Scout agent-run cards", () => {
       />,
     );
 
-    expect(screen.getByTestId("agent-run-card-scout-run-1")).toBeTruthy();
+    expect(screen.getByTestId("agent-run-card-pathfinder-run-1")).toBeTruthy();
     expect(
       screen.getByRole("button", { name: /open subagents for map exposed services/i }),
     ).toBeTruthy();
-    expect(screen.queryByText("replayed Scout reasoning")).toBeNull();
+    expect(screen.queryByText("replayed Pathfinder reasoning")).toBeNull();
     expect(getAgentRunSnapshot(TASK_ID).presentation).toMatchObject({
       isOpen: false,
       parentRunId: null,
@@ -692,12 +692,12 @@ describe("MessageList Scout agent-run cards", () => {
       />,
     );
 
-    expect(screen.getByTestId("agent-run-card-scout-run-1")).toBeTruthy();
+    expect(screen.getByTestId("agent-run-card-pathfinder-run-1")).toBeTruthy();
     expect(
       screen.getByRole("button", { name: /open subagents for map exposed services/i }),
     ).toBeTruthy();
     expect(
-      screen.queryByText("Scout has started a recon run and will hand off findings when it finishes."),
+      screen.queryByText("Pathfinder has started a recon run and will hand off findings when it finishes."),
     ).toBeNull();
     expect(getAgentRunSnapshot(TASK_ID).presentation).toMatchObject({
       isOpen: false,
@@ -735,7 +735,7 @@ describe("MessageList Scout agent-run cards", () => {
       parentRunId: "turn-parent",
       view: "list",
     });
-    expect(screen.getByTestId("agent-run-row-scout-run-1")).toBeTruthy();
+    expect(screen.getByTestId("agent-run-row-pathfinder-run-1")).toBeTruthy();
     expect(screen.queryByText("No subagent runs are available for this turn.")).toBeNull();
   });
 
@@ -748,10 +748,10 @@ describe("MessageList Scout agent-run cards", () => {
       task_id: TASK_ID,
       metadata: {
         producer_type: "subagent",
-        agent_run_id: "scout-run-1",
+        agent_run_id: "pathfinder-run-1",
         agent_id: "pathfinder",
         agent_kind: "recon",
-        agent_display_name: "Scout",
+        agent_display_name: "Pathfinder",
         parent_turn_id: "turn-parent",
         parent_run_id: "parent-run-1",
       },
@@ -766,8 +766,8 @@ describe("MessageList Scout agent-run cards", () => {
       />,
     );
 
-    expect(screen.getByTestId("agent-run-card-scout-run-1")).toBeTruthy();
-    expect(screen.getByText("Scout")).toBeTruthy();
+    expect(screen.getByTestId("agent-run-card-pathfinder-run-1")).toBeTruthy();
+    expect(screen.getByText("Pathfinder")).toBeTruthy();
     expect(screen.getByText("working")).toBeTruthy();
     expect(screen.queryByText("agent_run_lifecycle")).toBeNull();
     expect(screen.queryByText("internal chain of thought")).toBeNull();
@@ -779,24 +779,24 @@ describe("MessageList Scout agent-run cards", () => {
     });
   });
 
-  it("opens the contained subagent list before selecting the Scout thread", () => {
+  it("opens the contained subagent list before selecting the Pathfinder thread", () => {
     applyAgentRunLifecycleUpdate(TASK_ID, lifecycle(), 12);
 
     render(
       <MessageList
         messages={[
           lifecycleMessage(),
-          scoutActivityMessage("reasoning_start", "", 13, {
+          pathfinderActivityMessage("reasoning_start", "", 13, {
             ind: 0,
-            reasoning_section_id: "scout-reasoning-1",
+            reasoning_section_id: "pathfinder-reasoning-1",
           }),
-          scoutActivityMessage("reasoning_delta", "checking exposed services", 14, {
+          pathfinderActivityMessage("reasoning_delta", "checking exposed services", 14, {
             ind: 0,
-            reasoning_section_id: "scout-reasoning-1",
+            reasoning_section_id: "pathfinder-reasoning-1",
           }),
-          scoutActivityMessage("reasoning_section_end", "", 15, {
+          pathfinderActivityMessage("reasoning_section_end", "", 15, {
             ind: 0,
-            reasoning_section_id: "scout-reasoning-1",
+            reasoning_section_id: "pathfinder-reasoning-1",
           }),
         ]}
         taskId={TASK_ID}
@@ -820,33 +820,33 @@ describe("MessageList Scout agent-run cards", () => {
     expect(screen.getByTestId("agent-run-list")).toBeTruthy();
     expect(screen.getByText("Active · 1")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: /open scout thread/i }));
+    fireEvent.click(screen.getByRole("button", { name: /open pathfinder thread/i }));
 
     expect(screen.getByTestId("agent-run-detail")).toBeTruthy();
     expect(screen.getByTestId("agent-activity-timeline")).toBeTruthy();
     expect(getAgentRunSnapshot(TASK_ID).presentation).toMatchObject({
       view: "detail",
-      selectedAgentRunId: "scout-run-1",
+      selectedAgentRunId: "pathfinder-run-1",
     });
   });
 
-  it("lists repeated Scout invocations from separate turns in the same conversation", () => {
+  it("lists repeated Pathfinder invocations from separate turns in the same conversation", () => {
     applyAgentRunLifecycleUpdate(
       TASK_ID,
       lifecycle({
-        agent_run_id: "scout-run-port-80",
+        agent_run_id: "pathfinder-run-port-80",
         status: "completed",
         lifecycle_version: 2,
         parent_turn_id: "turn-port-80",
         parent_run_id: "parent-run-port-80",
         assignment: assignment({
           assignment_id: "assignment-port-80",
-          agent_run_id: "scout-run-port-80",
+          agent_run_id: "pathfinder-run-port-80",
           parent_turn_id: "turn-port-80",
           objective: "Scan port 80",
         }),
         result: completedResult({
-          agent_run_id: "scout-run-port-80",
+          agent_run_id: "pathfinder-run-port-80",
           summary: "Port 80 is closed.",
         }),
       }),
@@ -855,19 +855,19 @@ describe("MessageList Scout agent-run cards", () => {
     applyAgentRunLifecycleUpdate(
       TASK_ID,
       lifecycle({
-        agent_run_id: "scout-run-port-443",
+        agent_run_id: "pathfinder-run-port-443",
         status: "completed",
         lifecycle_version: 2,
         parent_turn_id: "turn-port-443",
         parent_run_id: "parent-run-port-443",
         assignment: assignment({
           assignment_id: "assignment-port-443",
-          agent_run_id: "scout-run-port-443",
+          agent_run_id: "pathfinder-run-port-443",
           parent_turn_id: "turn-port-443",
           objective: "Scan port 443",
         }),
         result: completedResult({
-          agent_run_id: "scout-run-port-443",
+          agent_run_id: "pathfinder-run-port-443",
           summary: "Port 443 is closed.",
         }),
       }),
@@ -876,7 +876,7 @@ describe("MessageList Scout agent-run cards", () => {
     applyAgentRunLifecycleUpdate(
       TASK_ID,
       lifecycle({
-        agent_run_id: "scout-run-other-conversation",
+        agent_run_id: "pathfinder-run-other-conversation",
         status: "completed",
         lifecycle_version: 2,
         conversation_id: "conv-other",
@@ -884,7 +884,7 @@ describe("MessageList Scout agent-run cards", () => {
         parent_run_id: "parent-run-other-conversation",
         assignment: assignment({
           assignment_id: "assignment-other-conversation",
-          agent_run_id: "scout-run-other-conversation",
+          agent_run_id: "pathfinder-run-other-conversation",
           conversation_id: "conv-other",
           parent_turn_id: "turn-other-conversation",
           objective: "Scan another conversation",
@@ -899,7 +899,7 @@ describe("MessageList Scout agent-run cards", () => {
       metadata: {
         ...lifecycleMessage().metadata,
         id: "turn-port-80",
-        agent_run_id: "scout-run-port-80",
+        agent_run_id: "pathfinder-run-port-80",
         parent_turn_id: "turn-port-80",
         parent_run_id: "parent-run-port-80",
         turn_sequence: 1,
@@ -912,30 +912,30 @@ describe("MessageList Scout agent-run cards", () => {
       metadata: {
         ...lifecycleMessage().metadata,
         id: "turn-port-443",
-        agent_run_id: "scout-run-port-443",
+        agent_run_id: "pathfinder-run-port-443",
         parent_turn_id: "turn-port-443",
         parent_run_id: "parent-run-port-443",
         turn_sequence: 2,
         sequence: 32,
       },
     };
-    const firstActivityMessage = scoutActivityMessage(
+    const firstActivityMessage = pathfinderActivityMessage(
       "reasoning_delta",
       "Reasoning for port 80",
       13,
       {
-        agent_run_id: "scout-run-port-80",
+        agent_run_id: "pathfinder-run-port-80",
         parent_turn_id: "turn-port-80",
         parent_run_id: "parent-run-port-80",
         reasoning_section_id: "port-80-reasoning",
       },
     );
-    const secondActivityMessage = scoutActivityMessage(
+    const secondActivityMessage = pathfinderActivityMessage(
       "reasoning_delta",
       "Reasoning for port 443",
       33,
       {
-        agent_run_id: "scout-run-port-443",
+        agent_run_id: "pathfinder-run-port-443",
         parent_turn_id: "turn-port-443",
         parent_run_id: "parent-run-port-443",
         reasoning_section_id: "port-443-reasoning",
@@ -961,29 +961,29 @@ describe("MessageList Scout agent-run cards", () => {
     );
 
     expect(screen.getByText("Done · 2")).toBeTruthy();
-    expect(screen.getByTestId("agent-run-row-scout-run-port-80")).toBeTruthy();
-    expect(screen.getByTestId("agent-run-row-scout-run-port-443")).toBeTruthy();
+    expect(screen.getByTestId("agent-run-row-pathfinder-run-port-80")).toBeTruthy();
+    expect(screen.getByTestId("agent-run-row-pathfinder-run-port-443")).toBeTruthy();
     expect(
-      screen.queryByTestId("agent-run-row-scout-run-other-conversation"),
+      screen.queryByTestId("agent-run-row-pathfinder-run-other-conversation"),
     ).toBeNull();
 
-    fireEvent.click(screen.getByTestId("agent-run-row-scout-run-port-80"));
+    fireEvent.click(screen.getByTestId("agent-run-row-pathfinder-run-port-80"));
     expect(getAgentRunSnapshot(TASK_ID).presentation.selectedAgentRunId).toBe(
-      "scout-run-port-80",
+      "pathfinder-run-port-80",
     );
     expect(screen.getByText("Reasoning for port 80")).toBeTruthy();
     expect(screen.queryByText("Reasoning for port 443")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Back to subagent list" }));
-    fireEvent.click(screen.getByTestId("agent-run-row-scout-run-port-443"));
+    fireEvent.click(screen.getByTestId("agent-run-row-pathfinder-run-port-443"));
     expect(getAgentRunSnapshot(TASK_ID).presentation.selectedAgentRunId).toBe(
-      "scout-run-port-443",
+      "pathfinder-run-port-443",
     );
     expect(screen.getByText("Reasoning for port 443")).toBeTruthy();
     expect(screen.queryByText("Reasoning for port 80")).toBeNull();
   });
 
-  it("limits Scout resizing and closes instead of keeping a narrow panel", async () => {
+  it("limits Pathfinder resizing and closes instead of keeping a narrow panel", async () => {
     applyAgentRunLifecycleUpdate(TASK_ID, lifecycle(), 12);
 
     render(
@@ -1014,7 +1014,7 @@ describe("MessageList Scout agent-run cards", () => {
     expect(screen.queryByRole("complementary", { name: /subagents/i })).toBeNull();
   });
 
-  it("shows Scout reasoning after selecting Scout from the subagent list", () => {
+  it("shows Pathfinder reasoning after selecting Pathfinder from the subagent list", () => {
     applyAgentRunLifecycleUpdate(TASK_ID, lifecycle(), 12);
     applyAgentRunActivityPayload(TASK_ID, {
       type: "reasoning_start",
@@ -1023,14 +1023,14 @@ describe("MessageList Scout agent-run cards", () => {
       task_id: TASK_ID,
       metadata: {
         producer_type: "subagent",
-        agent_run_id: "scout-run-1",
+        agent_run_id: "pathfinder-run-1",
         agent_id: "pathfinder",
         agent_kind: "recon",
-        agent_display_name: "Scout",
+        agent_display_name: "Pathfinder",
         parent_turn_id: "turn-parent",
         parent_run_id: "parent-run-1",
         step_type: "reasoning_start",
-        reasoning_section_id: "scout-reasoning-1",
+        reasoning_section_id: "pathfinder-reasoning-1",
         ind: 0,
       },
     });
@@ -1041,14 +1041,14 @@ describe("MessageList Scout agent-run cards", () => {
       task_id: TASK_ID,
       metadata: {
         producer_type: "subagent",
-        agent_run_id: "scout-run-1",
+        agent_run_id: "pathfinder-run-1",
         agent_id: "pathfinder",
         agent_kind: "recon",
-        agent_display_name: "Scout",
+        agent_display_name: "Pathfinder",
         parent_turn_id: "turn-parent",
         parent_run_id: "parent-run-1",
         step_type: "reasoning_delta",
-        reasoning_section_id: "scout-reasoning-1",
+        reasoning_section_id: "pathfinder-reasoning-1",
         ind: 0,
       },
     });
@@ -1059,14 +1059,14 @@ describe("MessageList Scout agent-run cards", () => {
       task_id: TASK_ID,
       metadata: {
         producer_type: "subagent",
-        agent_run_id: "scout-run-1",
+        agent_run_id: "pathfinder-run-1",
         agent_id: "pathfinder",
         agent_kind: "recon",
-        agent_display_name: "Scout",
+        agent_display_name: "Pathfinder",
         parent_turn_id: "turn-parent",
         parent_run_id: "parent-run-1",
         step_type: "reasoning_section_end",
-        reasoning_section_id: "scout-reasoning-1",
+        reasoning_section_id: "pathfinder-reasoning-1",
         ind: 0,
       },
     });
@@ -1075,17 +1075,17 @@ describe("MessageList Scout agent-run cards", () => {
       <MessageList
         messages={[
           lifecycleMessage(),
-          scoutActivityMessage("reasoning_start", "", 13, {
+          pathfinderActivityMessage("reasoning_start", "", 13, {
             ind: 0,
-            reasoning_section_id: "scout-reasoning-1",
+            reasoning_section_id: "pathfinder-reasoning-1",
           }),
-          scoutActivityMessage("reasoning_delta", "checking exposed services", 14, {
+          pathfinderActivityMessage("reasoning_delta", "checking exposed services", 14, {
             ind: 0,
-            reasoning_section_id: "scout-reasoning-1",
+            reasoning_section_id: "pathfinder-reasoning-1",
           }),
-          scoutActivityMessage("reasoning_section_end", "", 15, {
+          pathfinderActivityMessage("reasoning_section_end", "", 15, {
             ind: 0,
-            reasoning_section_id: "scout-reasoning-1",
+            reasoning_section_id: "pathfinder-reasoning-1",
           }),
         ]}
         taskId={TASK_ID}
@@ -1095,16 +1095,16 @@ describe("MessageList Scout agent-run cards", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /open subagents/i }));
-    fireEvent.click(screen.getByRole("button", { name: /open scout thread/i }));
+    fireEvent.click(screen.getByRole("button", { name: /open pathfinder thread/i }));
 
     expect(screen.getByTestId("agent-run-detail")).toBeTruthy();
     expect(screen.getByTestId("agent-activity-timeline")).toBeTruthy();
     expect(screen.getByTestId("agent-activity-timeline").dataset.activityChain).toBe("true");
     expect(screen.getByTestId("agent-activity-timeline-node-0")).toBeTruthy();
-    expect(screen.getByTestId("reasoning-step-0:reasoning-scout-reasoning-1")).toBeTruthy();
+    expect(screen.getByTestId("reasoning-step-0:reasoning-pathfinder-reasoning-1")).toBeTruthy();
     expect(getAgentRunSnapshot(TASK_ID).presentation).toMatchObject({
       view: "detail",
-      selectedAgentRunId: "scout-run-1",
+      selectedAgentRunId: "pathfinder-run-1",
       activityExpanded: false,
     });
   });
@@ -1118,13 +1118,13 @@ describe("MessageList Scout agent-run cards", () => {
       task_id: TASK_ID,
       metadata: {
         producer_type: "subagent",
-        agent_run_id: "scout-run-1",
+        agent_run_id: "pathfinder-run-1",
         agent_id: "pathfinder",
         agent_kind: "recon",
-        agent_display_name: "Scout",
+        agent_display_name: "Pathfinder",
         parent_turn_id: "turn-parent",
         parent_run_id: "parent-run-1",
-        tool_batch_id: "batch-scout-1",
+        tool_batch_id: "batch-pathfinder-1",
       },
     });
 
@@ -1139,9 +1139,9 @@ describe("MessageList Scout agent-run cards", () => {
 
     expect(screen.getByText("working")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /open subagents/i }));
-    fireEvent.click(screen.getByRole("button", { name: /open scout thread/i }));
+    fireEvent.click(screen.getByRole("button", { name: /open pathfinder thread/i }));
     expect(screen.getByTestId("agent-run-detail")).toBeTruthy();
-    expect(screen.queryByText("Scout found HTTPS on 443.")).toBeNull();
+    expect(screen.queryByText("Pathfinder found HTTPS on 443.")).toBeNull();
 
     applyAgentRunActivityPayload(TASK_ID, {
       type: "message_start",
@@ -1150,10 +1150,10 @@ describe("MessageList Scout agent-run cards", () => {
       task_id: TASK_ID,
       metadata: {
         producer_type: "subagent",
-        agent_run_id: "scout-run-1",
+        agent_run_id: "pathfinder-run-1",
         agent_id: "pathfinder",
         agent_kind: "recon",
-        agent_display_name: "Scout",
+        agent_display_name: "Pathfinder",
         parent_turn_id: "turn-parent",
         parent_run_id: "parent-run-1",
         step_type: "message_start",
@@ -1162,15 +1162,15 @@ describe("MessageList Scout agent-run cards", () => {
     });
     applyAgentRunActivityPayload(TASK_ID, {
       type: "message_delta",
-      content: "Streamed Scout handoff.",
+      content: "Streamed Pathfinder handoff.",
       sequence: 15,
       task_id: TASK_ID,
       metadata: {
         producer_type: "subagent",
-        agent_run_id: "scout-run-1",
+        agent_run_id: "pathfinder-run-1",
         agent_id: "pathfinder",
         agent_kind: "recon",
-        agent_display_name: "Scout",
+        agent_display_name: "Pathfinder",
         parent_turn_id: "turn-parent",
         parent_run_id: "parent-run-1",
         step_type: "message_delta",
@@ -1191,11 +1191,11 @@ describe("MessageList Scout agent-run cards", () => {
       <MessageList
         messages={[
           reconParentAcknowledgementMessage(),
-          scoutActivityMessage("message_start", "", 14, { ind: 2 }),
-          scoutActivityMessage("message_delta", "Streamed Scout handoff.", 15, {
+          pathfinderActivityMessage("message_start", "", 14, { ind: 2 }),
+          pathfinderActivityMessage("message_delta", "Streamed Pathfinder handoff.", 15, {
             ind: 2,
           }),
-          scoutActivityMessage("message_section_end", "", 16, {
+          pathfinderActivityMessage("message_section_end", "", 16, {
             ind: 2,
             streaming: false,
           }),
@@ -1207,20 +1207,20 @@ describe("MessageList Scout agent-run cards", () => {
     );
 
     expect(screen.getByText("completed")).toBeTruthy();
-    expect(screen.getByText("Streamed Scout handoff.")).toBeTruthy();
-    expect(screen.queryByText("Scout found HTTPS on 443.")).toBeNull();
+    expect(screen.getByText("Streamed Pathfinder handoff.")).toBeTruthy();
+    expect(screen.queryByText("Pathfinder found HTTPS on 443.")).toBeNull();
     expect(screen.queryByText("Findings")).toBeNull();
     expect(screen.queryByText("Next Steps")).toBeNull();
     expect(screen.queryByText("Streaming response…")).toBeNull();
     expect(getAgentRunSnapshot(TASK_ID).presentation).toMatchObject({
       isOpen: true,
       view: "detail",
-      selectedAgentRunId: "scout-run-1",
+      selectedAgentRunId: "pathfinder-run-1",
       activityExpanded: false,
     });
   });
 
-  it("shows Scout approval controls only in the selected contained panel", async () => {
+  it("shows Pathfinder approval controls only in the selected contained panel", async () => {
     const onApprove = vi.fn();
     applyAgentRunLifecycleUpdate(
       TASK_ID,
@@ -1238,7 +1238,7 @@ describe("MessageList Scout agent-run cards", () => {
         isLoading={false}
         isConnected
         agentRunApprovalControls={{
-          interrupt: scoutApprovalInterrupt(),
+          interrupt: pathfinderApprovalInterrupt(),
           onApprove,
           onEdit: vi.fn(),
           onSkip: vi.fn(),
@@ -1253,7 +1253,7 @@ describe("MessageList Scout agent-run cards", () => {
     cardButton.focus();
     expect(document.activeElement).toBe(cardButton);
     fireEvent.click(cardButton);
-    fireEvent.click(screen.getByRole("button", { name: /open scout thread/i }));
+    fireEvent.click(screen.getByRole("button", { name: /open pathfinder thread/i }));
 
     expect(screen.getByRole("complementary", { name: /subagents/i })).toBeTruthy();
     expect(screen.getByText("Approval")).toBeTruthy();
@@ -1269,7 +1269,7 @@ describe("MessageList Scout agent-run cards", () => {
     });
   });
 
-  it("marks replayed nonterminal Scout runs interrupted when the local registry lost them", async () => {
+  it("marks replayed nonterminal Pathfinder runs interrupted when the local registry lost them", async () => {
     apiFetchMock.mockResolvedValueOnce(localRunsResponse([]));
     applyAgentRunLifecycleUpdate(TASK_ID, lifecycle({ status: "running" }), 12);
 
@@ -1285,12 +1285,12 @@ describe("MessageList Scout agent-run cards", () => {
     expect(screen.getByText("working")).toBeTruthy();
 
     await waitFor(() => {
-      expect(getAgentRunSnapshot(TASK_ID).runsById["scout-run-1"].status).toBe("interrupted");
+      expect(getAgentRunSnapshot(TASK_ID).runsById["pathfinder-run-1"].status).toBe("interrupted");
     });
 
     expect(screen.getByText("interrupted")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /open subagents/i }));
-    fireEvent.click(screen.getByRole("button", { name: /open scout thread/i }));
+    fireEvent.click(screen.getByRole("button", { name: /open pathfinder thread/i }));
     expect(
       screen.getAllByText(/current backend process no longer owns it/i).length,
     ).toBeGreaterThan(0);
@@ -1298,7 +1298,7 @@ describe("MessageList Scout agent-run cards", () => {
       isOpen: true,
       parentRunId: "parent-run-1",
       view: "detail",
-      selectedAgentRunId: "scout-run-1",
+      selectedAgentRunId: "pathfinder-run-1",
       activityExpanded: false,
     });
     expect(apiFetchMock).toHaveBeenCalledWith(

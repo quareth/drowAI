@@ -530,7 +530,7 @@ describe("useMultiTaskStreamManager full packet ingestion", () => {
     window.removeEventListener("task-plan-created", listener);
   });
 
-  it("does not emit main plan compatibility events for Scout child plan packets", async () => {
+  it("does not emit main plan compatibility events for Pathfinder child plan packets", async () => {
     renderHook(() => useMultiTaskStreamManager({ taskIds: [TASK_ID], enabled: true }));
 
     expect(sockets).toHaveLength(1);
@@ -552,10 +552,10 @@ describe("useMultiTaskStreamManager full packet ingestion", () => {
           plan_steps: ["Scan"],
           metadata: {
             producer_type: "subagent",
-            agent_run_id: "scout-run-1",
+            agent_run_id: "pathfinder-run-1",
             agent_id: "pathfinder",
             agent_kind: "recon",
-            agent_display_name: "Scout",
+            agent_display_name: "Pathfinder",
             parent_turn_id: "turn-parent",
             parent_run_id: "parent-run-1",
             lifecycle_version: 2,
@@ -626,7 +626,7 @@ describe("useMultiTaskStreamManager full packet ingestion", () => {
     window.removeEventListener("task-todo-progress", listener);
   });
 
-  it("keeps Scout graph interrupts on the current task HITL event path", async () => {
+  it("keeps Pathfinder graph interrupts on the current task HITL event path", async () => {
     renderHook(() => useMultiTaskStreamManager({ taskIds: [TASK_ID], enabled: true }));
 
     expect(sockets).toHaveLength(1);
@@ -648,7 +648,7 @@ describe("useMultiTaskStreamManager full packet ingestion", () => {
         obj: {
           type: "graph_interrupt",
           task_id: TASK_ID,
-          thread_id: "graph-scout",
+          thread_id: "graph-pathfinder",
           interrupt_id: "interrupt-1",
           checkpoint_id: "checkpoint-1",
           interrupt_type: "tool_approval",
@@ -660,10 +660,10 @@ describe("useMultiTaskStreamManager full packet ingestion", () => {
           },
           metadata: {
             producer_type: "subagent",
-            agent_run_id: "scout-run-1",
+            agent_run_id: "pathfinder-run-1",
             agent_id: "pathfinder",
             agent_kind: "recon",
-            agent_display_name: "Scout",
+            agent_display_name: "Pathfinder",
             parent_turn_id: "turn-parent",
             parent_run_id: "parent-run-1",
             lifecycle_version: 2,
@@ -676,7 +676,7 @@ describe("useMultiTaskStreamManager full packet ingestion", () => {
     await waitFor(() => {
       expect(eventDetail).toMatchObject({
         taskId: TASK_ID,
-        threadId: "graph-scout",
+        threadId: "graph-pathfinder",
         interruptId: "interrupt-1",
         checkpointId: "checkpoint-1",
         interruptType: "tool_approval",

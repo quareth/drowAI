@@ -118,9 +118,9 @@ def test_main_finalizer_prompt_consumes_completed_agent_result() -> None:
     )
     bundle["completed_agent_results"] = [
         {
-            "agent_run_id": "scout-1",
+            "agent_run_id": "pathfinder-1",
             "agent_kind": "recon",
-            "agent_display_name": "Scout",
+            "agent_display_name": "Pathfinder",
             "outcome": "completed",
             "summary": "PostgreSQL is listening on 5432/tcp.",
             "key_findings": ["5432/tcp open"],
@@ -128,7 +128,7 @@ def test_main_finalizer_prompt_consumes_completed_agent_result() -> None:
             "tools_used": ["information_gathering.network_discovery.nmap"],
             "limitations": [],
             "recommended_next_steps": ["Enumerate the PostgreSQL service."],
-            "final_checkpoint_id": "cp-scout-1",
+            "final_checkpoint_id": "cp-pathfinder-1",
         }
     ]
 
@@ -140,7 +140,7 @@ def test_main_finalizer_prompt_consumes_completed_agent_result() -> None:
 
     assert SYSTEM_BASE.strip() in system_prompt
     assert "## Completed Agent Results" in user_prompt
-    assert "Scout result (scout-1): completed" in user_prompt
+    assert "Pathfinder result (pathfinder-1): completed" in user_prompt
     assert "summary: PostgreSQL is listening on 5432/tcp." in user_prompt
     assert "tools: information_gathering.network_discovery.nmap" in user_prompt
 

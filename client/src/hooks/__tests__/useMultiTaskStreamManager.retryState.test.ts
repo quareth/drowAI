@@ -199,7 +199,7 @@ describe("useMultiTaskStreamManager retry_state handling", () => {
     });
   });
 
-  it("does not apply Scout child retry_state packets to the main retry store", async () => {
+  it("does not apply Pathfinder child retry_state packets to the main retry store", async () => {
     const resetSpy = vi.spyOn(chatStreamStore, "resetTaskStreamForResync");
     renderHook(() =>
       useMultiTaskStreamManager({ taskIds: [TASK_ID], enabled: true }),
@@ -220,10 +220,10 @@ describe("useMultiTaskStreamManager retry_state handling", () => {
       state: "started",
       transcript_resync_required: true,
       producer_type: "subagent",
-      agent_run_id: "scout-run-1",
+      agent_run_id: "pathfinder-run-1",
       agent_id: "pathfinder",
       agent_kind: "recon",
-      agent_display_name: "Scout",
+      agent_display_name: "Pathfinder",
       parent_turn_id: "turn-parent",
       parent_run_id: "parent-run-1",
       lifecycle_version: 2,

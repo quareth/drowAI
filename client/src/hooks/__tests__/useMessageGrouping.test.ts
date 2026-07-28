@@ -18,7 +18,7 @@ function buildMessage(
 }
 
 describe('groupMessages', () => {
-  it('namespaces valid Scout step keys by agent run id', () => {
+  it('namespaces valid Pathfinder step keys by agent run id', () => {
     const baseStep: Step = {
       type: 'tool_start',
       content: '',
@@ -27,19 +27,19 @@ describe('groupMessages', () => {
         tool_call_id: 'tool-1',
       },
     } as Step;
-    const scoutStep: Step = {
+    const pathfinderStep: Step = {
       ...baseStep,
       metadata: {
         ...baseStep.metadata,
         producer_type: 'subagent',
-        agent_run_id: 'scout-run-1',
+        agent_run_id: 'pathfinder-run-1',
         agent_id: "pathfinder",
         agent_kind: 'recon',
       },
     } as Step;
 
     expect(deriveStepKey(baseStep)).toBe('tool-tool-1-tool_start');
-    expect(deriveStepKey(scoutStep)).toBe('agent-run-scout-run-1::tool-tool-1-tool_start');
+    expect(deriveStepKey(pathfinderStep)).toBe('agent-run-pathfinder-run-1::tool-tool-1-tool_start');
   });
 
   it('orders groups by turn sequence and semantic phase (reasoning -> tool -> observation -> message)', () => {

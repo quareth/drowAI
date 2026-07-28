@@ -1,4 +1,4 @@
-"""Contract tests for migration-free Scout agent-run schemas."""
+"""Contract tests for generic subagent run schemas."""
 
 from __future__ import annotations
 
@@ -70,6 +70,9 @@ def test_backend_contracts_reexport_agent_contracts() -> None:
     display_map_name = "AGENT_" + "DISPLAY_NAMES"
     assert not hasattr(agent_contracts, display_map_name)
     assert not hasattr(backend_contracts, display_map_name)
+    legacy_capability_name = "Recon" + "Capability"
+    assert not hasattr(agent_contracts, legacy_capability_name)
+    assert not hasattr(backend_contracts, legacy_capability_name)
 
 
 def test_assignment_validates_deterministically_and_keeps_display_name_separate() -> None:
@@ -153,7 +156,7 @@ def test_contracts_reject_post_validation_mutation_of_safe_payloads() -> None:
         agent_id="pathfinder",
         agent_kind="recon",
         outcome="completed",
-        summary="Scout found two exposed services.",
+        summary="Pathfinder found two exposed services.",
         key_findings=["HTTP exposed on 80"],
         evidence_refs=[{"kind": "artifact", "path": "/workspace/artifacts/nmap.xml"}],
         tools_used=["nmap"],
@@ -206,7 +209,7 @@ def test_result_and_lifecycle_projections_exclude_raw_activity() -> None:
         agent_id="pathfinder",
         agent_kind="recon",
         outcome="completed",
-        summary="Scout found two exposed services.",
+        summary="Pathfinder found two exposed services.",
         key_findings=["HTTP exposed on 80", "HTTPS exposed on 443"],
         evidence_refs=[{"kind": "artifact", "path": "/workspace/artifacts/nmap.xml"}],
         tools_used=["nmap"],

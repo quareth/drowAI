@@ -1,4 +1,4 @@
-"""Tests for Scout agent-run event projection helpers."""
+"""Tests for generic subagent-run event projection helpers."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ def _runtime_identity() -> AgentRuntimeIdentity:
 def _assignment() -> AgentAssignment:
     return AgentAssignment(
         assignment_id="assignment-1",
-        agent_run_id="scout-run-1",
+        agent_run_id="pathfinder-run-1",
         agent_id="pathfinder",
         agent_kind="recon",
         task_id=42,
@@ -54,7 +54,7 @@ async def test_lifecycle_event_carries_agent_identity_in_metadata() -> None:
     assert event["type"] == "status"
     assert event["content"] == "agent_run_lifecycle"
     assert metadata["producer_type"] == "subagent"
-    assert metadata["agent_run_id"] == "scout-run-1"
+    assert metadata["agent_run_id"] == "pathfinder-run-1"
     assert metadata["agent_id"] == "pathfinder"
     assert metadata["agent_kind"] == "recon"
     assert metadata["agent_display_name"] == "Pathfinder"
@@ -63,7 +63,7 @@ async def test_lifecycle_event_carries_agent_identity_in_metadata() -> None:
     assert metadata["parent_run_id"] == "parent-run-1"
     assert metadata["internal_only"] is False
     assert metadata["lifecycle_version"] == 1
-    assert event["agent_run"]["assignment"]["agent_run_id"] == "scout-run-1"
+    assert event["agent_run"]["assignment"]["agent_run_id"] == "pathfinder-run-1"
     assert event["agent_run"]["agent_icon_key"] == "pathfinder"
 
 
@@ -103,7 +103,7 @@ def test_apply_agent_run_metadata_canonicalizes_registered_display_name() -> Non
             "type": "reasoning_delta",
             "metadata": {
                 "producer_type": "subagent",
-                "agent_run_id": "scout-run-1",
+                "agent_run_id": "pathfinder-run-1",
                 "agent_id": "pathfinder",
                 "agent_kind": "recon",
                 "agent_display_name": "Spoofed",

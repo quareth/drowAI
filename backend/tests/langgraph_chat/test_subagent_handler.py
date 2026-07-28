@@ -54,7 +54,7 @@ class _RecordingLauncher:
                 agent_id=assignment.agent_id,
                 agent_kind="recon",
                 outcome="completed",
-                summary="Scout found HTTP.",
+                summary="Pathfinder found HTTP.",
                 key_findings=("80/tcp open",),
                 tools_used=("information_gathering.network_discovery.nmap",),
             )
@@ -98,7 +98,7 @@ class _CompletingExecutor:
         graph_name = config["configurable"]["graph_name"]
         if graph_name != GRAPH_NAME_SUBAGENT:
             final_state = copy.deepcopy(graph_input)
-            final_state["trace"]["final_text"] = "Main agent finalized Scout result."
+            final_state["trace"]["final_text"] = "Main agent finalized Pathfinder result."
             return GraphExecutionResult(final_state=final_state)
 
         agent_run_id = graph_input["facts"]["metadata"]["agent_run_id"]
@@ -111,7 +111,7 @@ class _CompletingExecutor:
                             "agent_id": "pathfinder",
                             "agent_kind": "recon",
                             "outcome": "completed",
-                            "summary": "Scout found HTTP.",
+                            "summary": "Pathfinder found HTTP.",
                             "tools_used": ["information_gathering.network_discovery.nmap"],
                         }
                     }
@@ -168,7 +168,7 @@ def _runtime_config() -> LangGraphRuntimeConfig:
             },
             "subagent_routing": {
                 "should_delegate": True,
-                "reason": "scout_owned",
+            "reason": "pathfinder_owned",
                 "agent_id": "pathfinder",
                 "agent_kind": "recon",
                 "dispatch_branch": "subagent",
@@ -292,7 +292,7 @@ async def test_subagent_handler_waits_for_pathfinder_and_runs_parent_finalizer()
     runtime_config = _runtime_config()
     result = await handler.handle(runtime_config)
 
-    assert result.final_text == "Main agent finalized Scout result."
+    assert result.final_text == "Main agent finalized Pathfinder result."
     assert result.metadata["branch"] == "subagent"
     assert result.metadata["handoff_agent_kind"] == "recon"
     assert result.metadata["status"] == "completed"
@@ -438,7 +438,7 @@ async def test_subagent_handler_default_launcher_runs_real_worker_to_completion(
     assert len(entries) == 1
     assert entries[0].status == "completed"
     assert entries[0].result is not None
-    assert entries[0].result.summary == "Scout found HTTP."
+    assert entries[0].result.summary == "Pathfinder found HTTP."
     assert entries[0].result_consumed is True
     assert events[-1]["agent_run"]["status"] == "completed"
 
