@@ -17,6 +17,7 @@ from .subagent_registry import SubagentRegistry, get_subagent_registry
 
 MAX_ASSIGNMENT_TARGETS = 16
 MAX_TARGET_LENGTH = 512
+MAX_AGENT_HANDOFFS = 3
 
 _CAPABILITY_ALIASES: dict[str, AgentCapability] = {
     "discover_hosts": "host_discovery",
@@ -56,6 +57,18 @@ _NON_CAPABILITY_ROUTE_HINTS = frozenset(
 
 
 @dataclass(frozen=True, slots=True)
+class SubagentPlanHandoff:
+    """One validated entry in the ordered subagent dispatch plan."""
+
+    agent_id: str
+    agent_kind: str
+    dispatch_branch: str
+    capabilities: tuple[AgentCapability, ...]
+    targets: tuple[str, ...]
+    objective: str
+
+
+@dataclass(frozen=True, slots=True)
 class SubagentRoutingDecision:
     """Result of deterministic registry-backed handoff evaluation."""
 
@@ -67,6 +80,7 @@ class SubagentRoutingDecision:
     capabilities: tuple[AgentCapability, ...] = ()
     targets: tuple[str, ...] = ()
     objective: str | None = None
+    handoffs: tuple[SubagentPlanHandoff, ...] = ()
 
 
 def resolve_subagent_handoff(
@@ -75,66 +89,82 @@ def resolve_subagent_handoff(
     registry: SubagentRegistry | None = None,
     active_runs_by_agent_id: Mapping[str, int] | None = None,
 ) -> SubagentRoutingDecision:
-    """Resolve one explicit classifier handoff through the live registry."""
+    """Resolve explicit classifier handoffs through the live registry."""
     if _classifier_label(metadata) != "direct_executor":
         return SubagentRoutingDecision(False, "classifier_not_direct_executor")
 
-    handoffs = _required_agent_handoffs(metadata)
-    if not handoffs:
+    requested_handoffs, invalid_reason = _required_agent_handoffs(metadata)
+    if invalid_reason is not None:
+        return SubagentRoutingDecision(False, invalid_reason)
+    if not requested_handoffs:
         return SubagentRoutingDecision(False, "missing_agent_handoff")
-    if len(handoffs) != 1:
-        return SubagentRoutingDecision(False, "unsupported_handoff_cardinality")
+    if len(requested_handoffs) > MAX_AGENT_HANDOFFS:
+        return SubagentRoutingDecision(False, "too_many_agent_handoffs")
 
-    agent_id, objective = handoffs[0]
     resolved_registry = registry or get_subagent_registry()
-    spec = resolved_registry.get(agent_id)
-    if spec is None:
-        return SubagentRoutingDecision(False, "unsupported_agent_handoff")
-
-    active_count = int((active_runs_by_agent_id or {}).get(agent_id, 0))
-    if not resolved_registry.is_available(
-        agent_id,
-        active_runs_for_task=max(0, active_count),
-    ):
-        return SubagentRoutingDecision(
-            False,
-            "subagent_unavailable",
-            agent_id=spec.agent_id,
-            agent_kind=spec.agent_kind,
-            dispatch_branch=spec.dispatch_branch,
-            objective=objective,
-        )
-
     targets = _assignment_targets(metadata)
-    if spec.requires_resolved_target and not targets:
-        return SubagentRoutingDecision(
-            False,
-            "invalid_assignment_scope",
-            agent_id=spec.agent_id,
-            agent_kind=spec.agent_kind,
-            dispatch_branch=spec.dispatch_branch,
-            objective=objective,
+    plan: list[SubagentPlanHandoff] = []
+    for agent_id, objective in requested_handoffs:
+        spec = resolved_registry.get(agent_id)
+        if spec is None:
+            return SubagentRoutingDecision(False, "unsupported_agent_handoff")
+
+        active_count = int((active_runs_by_agent_id or {}).get(agent_id, 0))
+        if not resolved_registry.is_available(
+            agent_id,
+            active_runs_for_task=max(0, active_count),
+        ):
+            return SubagentRoutingDecision(
+                False,
+                "subagent_unavailable",
+                agent_id=spec.agent_id,
+                agent_kind=spec.agent_kind,
+                dispatch_branch=spec.dispatch_branch,
+                objective=objective,
+            )
+
+        if spec.requires_resolved_target and not targets:
+            return SubagentRoutingDecision(
+                False,
+                "invalid_assignment_scope",
+                agent_id=spec.agent_id,
+                agent_kind=spec.agent_kind,
+                dispatch_branch=spec.dispatch_branch,
+                objective=objective,
+            )
+
+        capabilities, _unknown = _requested_capabilities(
+            metadata,
+            supported_capabilities=spec.supported_task_categories,
+        )
+        plan.append(
+            SubagentPlanHandoff(
+                agent_id=spec.agent_id,
+                agent_kind=spec.agent_kind,
+                dispatch_branch=spec.dispatch_branch,
+                capabilities=tuple(capabilities),
+                targets=targets,
+                objective=objective,
+            )
         )
 
-    capabilities, _unknown = _requested_capabilities(
-        metadata,
-        supported_capabilities=spec.supported_task_categories,
-    )
+    first = plan[0]
     return SubagentRoutingDecision(
         True,
-        f"{spec.name}_owned",
-        agent_id=spec.agent_id,
-        agent_kind=spec.agent_kind,
-        dispatch_branch=spec.dispatch_branch,
-        capabilities=tuple(capabilities),
-        targets=targets,
-        objective=objective,
+        f"{first.agent_id}_owned" if len(plan) == 1 else "ordered_handoff_plan",
+        agent_id=first.agent_id,
+        agent_kind=first.agent_kind,
+        dispatch_branch=first.dispatch_branch,
+        capabilities=first.capabilities,
+        targets=first.targets,
+        objective=first.objective,
+        handoffs=tuple(plan),
     )
 
 
 def _required_agent_handoffs(
     metadata: Mapping[str, Any],
-) -> tuple[tuple[str, str], ...]:
+) -> tuple[tuple[tuple[str, str], ...], str | None]:
     """Return ordered, normalized required handoffs from classifier metadata."""
     raw_handoffs = metadata.get("intent_agent_handoffs")
     if not isinstance(raw_handoffs, Sequence) or isinstance(raw_handoffs, str):
@@ -145,24 +175,21 @@ def _required_agent_handoffs(
             else None
         )
     if not isinstance(raw_handoffs, Sequence) or isinstance(raw_handoffs, str):
-        return ()
+        return (), None
 
     handoffs: list[tuple[str, str]] = []
     for raw_handoff in raw_handoffs:
         if not isinstance(raw_handoff, Mapping):
-            continue
+            return (), "invalid_handoff_plan"
         handoff = _normalize_token(raw_handoff.get("agent_handoff"))
+        if handoff != "required":
+            continue
         subagent = _normalize_token(raw_handoff.get("subagent"))
         objective = raw_handoff.get("objective")
-        if (
-            handoff != "required"
-            or not subagent
-            or not isinstance(objective, str)
-            or not objective.strip()
-        ):
-            continue
+        if not subagent or not isinstance(objective, str) or not objective.strip():
+            return (), "invalid_handoff_plan"
         handoffs.append((subagent, objective.strip()))
-    return tuple(handoffs)
+    return tuple(handoffs), None
 
 
 def _classifier_label(metadata: Mapping[str, Any]) -> str:
@@ -276,7 +303,9 @@ def _normalize_token(value: Any) -> str:
 
 __all__ = [
     "MAX_ASSIGNMENT_TARGETS",
+    "MAX_AGENT_HANDOFFS",
     "MAX_TARGET_LENGTH",
+    "SubagentPlanHandoff",
     "SubagentRoutingDecision",
     "resolve_subagent_handoff",
 ]

@@ -103,29 +103,56 @@ async def test_register_creates_queued_process_local_entry() -> None:
 
 
 @pytest.mark.asyncio
-async def test_second_active_subagent_for_task_is_rejected_until_terminal() -> None:
+async def test_registry_accepts_distinct_active_subagent_run_ids_for_task() -> None:
     registry = ProcessLocalAgentRunRegistry()
     await registry.register(_assignment(agent_run_id="run-1"), graph_thread_id="child-1")
 
-    with pytest.raises(ActiveAgentRunExistsError) as error:
-        await registry.register(
-            _assignment(agent_run_id="run-2"), graph_thread_id="child-2"
-        )
-
-    assert error.value.active_agent_run_id == "run-1"
-
-    await registry.mark_completed(
-        tenant_id=7,
-        task_id=42,
-        agent_run_id="run-1",
-        result=_result("run-1"),
-    )
-    accepted = await registry.register(
+    second = await registry.register(
         _assignment(agent_run_id="run-2"), graph_thread_id="child-2"
     )
 
-    assert accepted.agent_run_id == "run-2"
-    assert accepted.status == "queued"
+    assert second.agent_run_id == "run-2"
+    assert second.status == "queued"
+
+
+@pytest.mark.asyncio
+async def test_register_capacity_claim_is_atomic_per_task_and_agent() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+
+    first_attempt = registry.register(
+        _assignment(agent_run_id="run-1"),
+        graph_thread_id="child-1",
+        max_active_runs_per_task=1,
+    )
+    second_attempt = registry.register(
+        _assignment(agent_run_id="run-2"),
+        graph_thread_id="child-2",
+        max_active_runs_per_task=1,
+    )
+
+    results = await asyncio.gather(first_attempt, second_attempt, return_exceptions=True)
+
+    successful = [result for result in results if not isinstance(result, BaseException)]
+    failed = [result for result in results if isinstance(result, BaseException)]
+    assert len(successful) == 1
+    assert len(failed) == 1
+    assert isinstance(failed[0], ActiveAgentRunExistsError)
+    assert failed[0].active_agent_run_id == successful[0].agent_run_id
+
+    other_agent = _assignment(agent_run_id="run-3").model_copy(
+        update={
+            "assignment_id": "assign-run-3",
+            "agent_id": "cartographer",
+        }
+    )
+    other = await registry.register(
+        other_agent,
+        graph_thread_id="child-3",
+        max_active_runs_per_task=1,
+    )
+
+    assert other.agent_id == "cartographer"
+    assert other.status == "queued"
 
 
 @pytest.mark.asyncio

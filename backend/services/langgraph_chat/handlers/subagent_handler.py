@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
@@ -39,14 +40,17 @@ from backend.services.agent_runs.launcher import (
     AgentRunLauncher,
     AgentRunWorker,
     SubagentRunCancelled,
+    SubagentRunFailed,
     SubagentRunPaused,
 )
+from backend.services.agent_runs.ownership_policy import MAX_AGENT_HANDOFFS
 from backend.services.agent_runs.result_projection import (
     AgentRunResultProjector,
     CompletedAgentResultHandoff,
     attach_completed_agent_results_to_context,
 )
 from backend.services.agent_runs.registry import (
+    ACTIVE_AGENT_RUN_STATUSES,
     LocalAgentRun,
     ProcessLocalAgentRunRegistry,
 )
@@ -96,6 +100,16 @@ logger = logging.getLogger(__name__)
 LifecyclePublisher = Callable[[int, dict[str, Any]], Awaitable[None]]
 
 
+@dataclass(frozen=True, slots=True)
+class _PlannedInvocation:
+    """One immutable subagent invocation prepared before launch."""
+
+    index: int
+    assignment: AgentAssignment
+    display_name: str
+    graph_thread_id: str
+
+
 class SubagentHandler(BaseLangGraphHandler):
     """Run subagent and finalize its bounded result in the original parent turn."""
 
@@ -134,194 +148,344 @@ class SubagentHandler(BaseLangGraphHandler):
     async def handle(
         self, runtime_config: LangGraphRuntimeConfig
     ) -> LangGraphChatResult:
-        """Run subagent, hand its bounded result to the parent, then finalize."""
+        """Run requested subagents, hand bounded results to the parent, then finalize."""
         chat_inputs = runtime_config.chat_inputs
-        task_id = chat_inputs.task_id
         turn = ensure_turn_identity(runtime_config, logger_=logger)
 
-        assignment = _build_assignment(
+        plan = _build_dispatch_plan(
             runtime_config,
             parent_turn_id=str(turn.turn_id),
             subagent_registry=self._subagent_registry,
         )
-        display_name = spec_display_name(self._subagent_registry, assignment.agent_id)
-        child_graph_thread_id = _new_child_graph_thread_id()
-        queued = await self._registry.register(
-            assignment,
-            graph_thread_id=child_graph_thread_id,
+        completion_result = await self._run_dispatch_plan(
+            plan,
+            runtime_config,
+            turn=turn,
         )
-        await self._publish_entry_lifecycle(queued, runtime_config)
+        if isinstance(completion_result, LangGraphChatResult):
+            return completion_result
 
-        try:
-            child_runtime_config = await build_child_execution_config(
-                assignment=assignment,
-                runtime_config=runtime_config,
-                registry=self._registry,
-                graph_thread_id=child_graph_thread_id,
-            )
-            if runtime_config.runtime_services is not None:
-                child_runtime_config = attach_runtime_services(
-                    child_runtime_config,
-                    runtime_config.runtime_services,
-                )
-            running = await self._registry.mark_running(
-                tenant_id=assignment.tenant_id,
-                task_id=assignment.task_id,
-                agent_run_id=assignment.agent_run_id,
-            )
-            await self._publish_entry_lifecycle(running, runtime_config)
-            child_task = await self._launcher.launch(
-                assignment=assignment,
-                runtime_config=child_runtime_config,
-                graph_thread_id=child_graph_thread_id,
-                parent_run_id=_parent_run_id(runtime_config.metadata),
-            )
-        except Exception as exc:
-            logger.warning(
-                "Failed to launch subagent run %s for task %s",
-                assignment.agent_run_id,
-                task_id,
-                exc_info=True,
-            )
-            failed = await self._registry.mark_failed(
-                tenant_id=assignment.tenant_id,
-                task_id=assignment.task_id,
-                agent_run_id=assignment.agent_run_id,
-                safe_error=_safe_launch_error(
-                    exc,
-                    agent_display_name=spec_display_name(
-                        self._subagent_registry,
-                        assignment.agent_id,
-                    ),
-                ),
-            )
-            await self._publish_entry_lifecycle(failed, runtime_config)
-            return _ack_result(
-                runtime_config,
-                turn_id=str(turn.turn_id),
-                turn_sequence=turn.turn_number if isinstance(turn.turn_number, int) else None,
-                agent_run_id=assignment.agent_run_id,
-                agent_id=assignment.agent_id,
-                agent_kind=assignment.agent_kind,
-                agent_display_name=display_name,
-                graph_thread_id=child_graph_thread_id,
-                status="failed",
-            )
-
-        try:
-            child_completion = await _require_child_task(
-                child_task,
-                assignment=assignment,
-                graph_thread_id=child_graph_thread_id,
-            )
-        except SubagentRunPaused as exc:
-            usage = _usage_from_child_execution_result(
-                exc.execution_result,
-                assignment=assignment,
-                graph_thread_id=child_graph_thread_id,
-                turn_index=(
-                    turn.turn_number if isinstance(turn.turn_number, int) else None
-                ),
-            )
-            return _ack_result(
-                runtime_config,
-                turn_id=str(turn.turn_id),
-                turn_sequence=(
-                    turn.turn_number if isinstance(turn.turn_number, int) else None
-                ),
-                agent_run_id=assignment.agent_run_id,
-                agent_id=assignment.agent_id,
-                agent_kind=assignment.agent_kind,
-                agent_display_name=display_name,
-                graph_thread_id=child_graph_thread_id,
-                status="waiting_for_approval",
-                usage=usage,
-            )
-        except SubagentRunCancelled as exc:
-            usage = _usage_from_child_execution_result(
-                exc.execution_result,
-                assignment=assignment,
-                graph_thread_id=child_graph_thread_id,
-                turn_index=(
-                    turn.turn_number if isinstance(turn.turn_number, int) else None
-                ),
-            )
-            return _ack_result(
-                runtime_config,
-                turn_id=str(turn.turn_id),
-                turn_sequence=(
-                    turn.turn_number if isinstance(turn.turn_number, int) else None
-                ),
-                agent_run_id=assignment.agent_run_id,
-                agent_id=assignment.agent_id,
-                agent_kind=assignment.agent_kind,
-                agent_display_name=display_name,
-                graph_thread_id=child_graph_thread_id,
-                status="cancelled",
-                usage=usage,
-            )
-        except asyncio.CancelledError:
-            return _ack_result(
-                runtime_config,
-                turn_id=str(turn.turn_id),
-                turn_sequence=(
-                    turn.turn_number if isinstance(turn.turn_number, int) else None
-                ),
-                agent_run_id=assignment.agent_run_id,
-                agent_id=assignment.agent_id,
-                agent_kind=assignment.agent_kind,
-                agent_display_name=display_name,
-                graph_thread_id=child_graph_thread_id,
-                status="cancelled",
-            )
-        except Exception:
-            logger.warning(
-                "subagent run %s failed before parent handoff for task %s",
-                assignment.agent_run_id,
-                task_id,
-                exc_info=True,
-            )
-            return _ack_result(
-                runtime_config,
-                turn_id=str(turn.turn_id),
-                turn_sequence=(
-                    turn.turn_number if isinstance(turn.turn_number, int) else None
-                ),
-                agent_run_id=assignment.agent_run_id,
-                agent_id=assignment.agent_id,
-                agent_kind=assignment.agent_kind,
-                agent_display_name=display_name,
-                graph_thread_id=child_graph_thread_id,
-                status="failed",
-            )
-
-        child_result = child_completion.result
+        child_completions = completion_result
+        child_results = tuple(completion.result for completion in child_completions)
         handoff = CompletedAgentResultHandoff(
-            results=(self._result_projector.project_result(child_result),),
-            agent_run_ids=(assignment.agent_run_id,),
+            results=tuple(
+                self._result_projector.project_result(result)
+                for result in child_results
+            ),
+            agent_run_ids=tuple(
+                completion.agent_run_id for completion in child_completions
+            ),
         )
         attach_completed_agent_results_to_context(runtime_config.metadata, handoff)
         parent_result = await self._finalize_parent_handoff(
             runtime_config,
             turn=turn,
-            child_completion=child_completion,
-            child_graph_thread_id=child_graph_thread_id,
+            child_completions=child_completions,
         )
         await self._consume_completed_handoff(
-            assignment=assignment,
+            assignments=tuple(item.assignment for item in plan),
             handoff=handoff,
         )
         return parent_result
+
+    async def _run_dispatch_plan(
+        self,
+        plan: tuple["_PlannedInvocation", ...],
+        runtime_config: LangGraphRuntimeConfig,
+        *,
+        turn: Any,
+    ) -> tuple[AgentRunCompletion, ...] | LangGraphChatResult:
+        """Launch validated invocations in concurrency-limited ordered batches."""
+        completions: list[AgentRunCompletion | None] = [None] * len(plan)
+        pending = list(plan)
+        active_counts = await self._active_counts_for_plan(runtime_config)
+
+        while pending:
+            batch: list[_PlannedInvocation] = []
+            deferred: list[_PlannedInvocation] = []
+            for item in pending:
+                spec = self._subagent_registry.require(item.assignment.agent_id)
+                count = active_counts.get(item.assignment.agent_id, 0)
+                if count < spec.max_active_runs_per_task:
+                    batch.append(item)
+                    active_counts[item.assignment.agent_id] = count + 1
+                else:
+                    deferred.append(item)
+
+            if not batch:
+                item = pending[0]
+                assignment = item.assignment
+                return _ack_result(
+                    runtime_config,
+                    turn_id=str(turn.turn_id),
+                    turn_sequence=(
+                        turn.turn_number if isinstance(turn.turn_number, int) else None
+                    ),
+                    agent_run_id=assignment.agent_run_id,
+                    agent_id=assignment.agent_id,
+                    agent_kind=assignment.agent_kind,
+                    agent_display_name=item.display_name,
+                    graph_thread_id=item.graph_thread_id,
+                    status="failed",
+                )
+
+            launch_result = await self._launch_batch(batch, runtime_config, turn=turn)
+            if isinstance(launch_result, LangGraphChatResult):
+                return launch_result
+
+            child_tasks = launch_result
+            batch_results = await asyncio.gather(
+                *(
+                    _require_child_task_result(
+                        child_task,
+                        assignment=item.assignment,
+                        graph_thread_id=item.graph_thread_id,
+                    )
+                    for item, child_task in child_tasks
+                )
+            )
+
+            for item, batch_result in zip(batch, batch_results, strict=True):
+                active_counts[item.assignment.agent_id] = max(
+                    0,
+                    active_counts.get(item.assignment.agent_id, 0) - 1,
+                )
+                if isinstance(batch_result, BaseException):
+                    return _ack_for_child_exception(
+                        batch_result,
+                        item=item,
+                        runtime_config=runtime_config,
+                        turn=turn,
+                    )
+                completions[item.index] = batch_result
+
+            pending = deferred
+
+        return tuple(
+            completion
+            for completion in completions
+            if isinstance(completion, AgentRunCompletion)
+        )
+
+    async def _launch_batch(
+        self,
+        batch: list["_PlannedInvocation"],
+        runtime_config: LangGraphRuntimeConfig,
+        *,
+        turn: Any,
+    ) -> tuple[tuple["_PlannedInvocation", Awaitable[Any]], ...] | LangGraphChatResult:
+        """Register, mark running, and launch one already-validated batch."""
+        launched: list[tuple[_PlannedInvocation, Awaitable[Any]]] = []
+        for item in batch:
+            assignment = item.assignment
+            queued: LocalAgentRun | None = None
+
+            try:
+                spec = self._subagent_registry.require(assignment.agent_id)
+                queued = await self._registry.register(
+                    assignment,
+                    graph_thread_id=item.graph_thread_id,
+                    max_active_runs_per_task=spec.max_active_runs_per_task,
+                )
+                await self._publish_entry_lifecycle(queued, runtime_config)
+                child_runtime_config = await build_child_execution_config(
+                    assignment=assignment,
+                    runtime_config=runtime_config,
+                    registry=self._registry,
+                    graph_thread_id=item.graph_thread_id,
+                )
+                if runtime_config.runtime_services is not None:
+                    child_runtime_config = attach_runtime_services(
+                        child_runtime_config,
+                        runtime_config.runtime_services,
+                    )
+                running = await self._registry.mark_running(
+                    tenant_id=assignment.tenant_id,
+                    task_id=assignment.task_id,
+                    agent_run_id=assignment.agent_run_id,
+                )
+                await self._publish_entry_lifecycle(running, runtime_config)
+                child_task = await self._launcher.launch(
+                    assignment=assignment,
+                    runtime_config=child_runtime_config,
+                    graph_thread_id=item.graph_thread_id,
+                    parent_run_id=_parent_run_id(runtime_config.metadata),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to launch subagent run %s for task %s",
+                    assignment.agent_run_id,
+                    runtime_config.chat_inputs.task_id,
+                    exc_info=True,
+                )
+                turn_sequence = (
+                    turn.turn_number if isinstance(turn.turn_number, int) else None
+                )
+                usage = await self._settle_launched_batch_on_failure(
+                    launched,
+                    runtime_config,
+                    turn_index=turn_sequence,
+                )
+                if queued is not None:
+                    failed = await self._registry.mark_failed(
+                        tenant_id=assignment.tenant_id,
+                        task_id=assignment.task_id,
+                        agent_run_id=assignment.agent_run_id,
+                        safe_error=_safe_launch_error(
+                            exc,
+                            agent_display_name=item.display_name,
+                        ),
+                    )
+                    await self._publish_entry_lifecycle(failed, runtime_config)
+                return _ack_result(
+                    runtime_config,
+                    turn_id=str(turn.turn_id),
+                    turn_sequence=turn_sequence,
+                    agent_run_id=assignment.agent_run_id,
+                    agent_id=assignment.agent_id,
+                    agent_kind=assignment.agent_kind,
+                    agent_display_name=item.display_name,
+                    graph_thread_id=item.graph_thread_id,
+                    status="failed",
+                    usage=usage,
+                )
+            launched.append((item, child_task))
+        return tuple(launched)
+
+    async def _settle_launched_batch_on_failure(
+        self,
+        launched: list[tuple["_PlannedInvocation", Awaitable[Any]]],
+        runtime_config: LangGraphRuntimeConfig,
+        *,
+        turn_index: int | None,
+    ) -> list[Any] | None:
+        """Terminally settle earlier launches when a later launch fails."""
+        if not launched:
+            return None
+
+        for _item, child_task in launched:
+            cancel = getattr(child_task, "cancel", None)
+            done = getattr(child_task, "done", None)
+            if callable(cancel) and (not callable(done) or not done()):
+                cancel()
+
+        settled = await asyncio.gather(
+            *(
+                _require_child_task_result(
+                    child_task,
+                    assignment=item.assignment,
+                    graph_thread_id=item.graph_thread_id,
+                )
+                for item, child_task in launched
+            )
+        )
+        await asyncio.sleep(0)
+        usage: list[Any] = []
+        for (item, _child_task), result in zip(launched, settled, strict=True):
+            assignment = item.assignment
+            if isinstance(result, AgentRunCompletion):
+                usage.extend(
+                    usage_envelopes_from_child_records(
+                        result.usage_records,
+                        execution_branch="subagent_child",
+                        turn_index=turn_index,
+                    )
+                )
+                before = await self._registry.get(
+                    tenant_id=assignment.tenant_id,
+                    task_id=assignment.task_id,
+                    agent_run_id=assignment.agent_run_id,
+                )
+                completed = await self._registry.mark_completed(
+                    tenant_id=assignment.tenant_id,
+                    task_id=assignment.task_id,
+                    agent_run_id=assignment.agent_run_id,
+                    result=result.result,
+                )
+                if (
+                    before is None
+                    or completed.lifecycle_version != before.lifecycle_version
+                ):
+                    await self._publish_entry_lifecycle(completed, runtime_config)
+                await self._registry.consume_result(
+                    tenant_id=assignment.tenant_id,
+                    task_id=assignment.task_id,
+                    agent_run_id=assignment.agent_run_id,
+                )
+                continue
+
+            before = await self._registry.get(
+                tenant_id=assignment.tenant_id,
+                task_id=assignment.task_id,
+                agent_run_id=assignment.agent_run_id,
+            )
+            if isinstance(
+                result,
+                (SubagentRunCancelled, SubagentRunPaused, SubagentRunFailed),
+            ):
+                usage.extend(
+                    _usage_from_child_execution_result(
+                        result.execution_result,
+                        assignment=assignment,
+                        graph_thread_id=item.graph_thread_id,
+                        turn_index=turn_index,
+                    )
+                    or []
+                )
+            if isinstance(
+                result,
+                (asyncio.CancelledError, SubagentRunCancelled, SubagentRunPaused),
+            ):
+                entry = await self._registry.mark_cancelled(
+                    tenant_id=assignment.tenant_id,
+                    task_id=assignment.task_id,
+                    agent_run_id=assignment.agent_run_id,
+                )
+            else:
+                entry = await self._registry.mark_failed(
+                    tenant_id=assignment.tenant_id,
+                    task_id=assignment.task_id,
+                    agent_run_id=assignment.agent_run_id,
+                    safe_error="Subagent batch launch failed before parent handoff",
+                )
+            if before is None or entry.lifecycle_version != before.lifecycle_version:
+                await self._publish_entry_lifecycle(entry, runtime_config)
+        return usage or None
+
+    async def _active_counts_for_plan(
+        self,
+        runtime_config: LangGraphRuntimeConfig,
+    ) -> dict[str, int]:
+        try:
+            tenant_id = int(runtime_config.metadata.get("tenant_id"))
+        except (TypeError, ValueError):
+            return {}
+        try:
+            entries = await self._registry.list_task_runs(
+                tenant_id=tenant_id,
+                task_id=runtime_config.chat_inputs.task_id,
+            )
+        except Exception:
+            logger.debug(
+                "Failed to inspect local subagent registry for task %s",
+                runtime_config.chat_inputs.task_id,
+                exc_info=True,
+            )
+            return {}
+        counts: dict[str, int] = {}
+        for entry in entries:
+            if entry.status in ACTIVE_AGENT_RUN_STATUSES:
+                counts[entry.agent_id] = counts.get(entry.agent_id, 0) + 1
+        return counts
 
     async def _finalize_parent_handoff(
         self,
         runtime_config: LangGraphRuntimeConfig,
         *,
         turn: Any,
-        child_completion: AgentRunCompletion,
-        child_graph_thread_id: str,
+        child_completions: tuple[AgentRunCompletion, ...],
     ) -> LangGraphChatResult:
-        """Run the canonical main finalizer over one completed child result."""
+        """Run the canonical main finalizer over completed child results once."""
         chat_inputs = runtime_config.chat_inputs
         task_id = chat_inputs.task_id
         initial_state, _injected_tokens = build_initial_interactive_state(
@@ -414,10 +578,26 @@ class SubagentHandler(BaseLangGraphHandler):
                 "mode": ExecutionMode.SIMPLE_TOOL.value,
                 "branch": "subagent",
                 "status": "completed",
-                "handoff_agent_run_id": child_completion.result.agent_run_id,
-                "handoff_agent_id": child_completion.result.agent_id,
-                "handoff_agent_kind": child_completion.result.agent_kind,
-                "handoff_graph_thread_id": child_graph_thread_id,
+                "handoff_agent_run_id": child_completions[0].result.agent_run_id,
+                "handoff_agent_id": child_completions[0].result.agent_id,
+                "handoff_agent_kind": child_completions[0].result.agent_kind,
+                "handoff_graph_thread_id": child_completions[0].graph_thread_id,
+                "handoff_agent_run_ids": [
+                    completion.result.agent_run_id
+                    for completion in child_completions
+                ],
+                "handoff_agent_ids": [
+                    completion.result.agent_id
+                    for completion in child_completions
+                ],
+                "handoff_agent_kinds": [
+                    completion.result.agent_kind
+                    for completion in child_completions
+                ],
+                "handoff_graph_thread_ids": [
+                    completion.graph_thread_id
+                    for completion in child_completions
+                ],
             },
             chat_inputs.conversation_id or "",
         )
@@ -432,11 +612,15 @@ class SubagentHandler(BaseLangGraphHandler):
             execution_branch="subagent_parent_finalizer",
             turn_index=turn_index,
         )
-        child_usage = usage_envelopes_from_child_records(
-            child_completion.usage_records,
-            execution_branch="subagent_child",
-            turn_index=turn_index,
-        )
+        child_usage = [
+            usage
+            for completion in child_completions
+            for usage in usage_envelopes_from_child_records(
+                completion.usage_records,
+                execution_branch="subagent_child",
+                turn_index=turn_index,
+            )
+        ]
         usage = [*child_usage, *(parent_usage or [])] or None
         result = build_result(
             final_text=final_text,
@@ -453,27 +637,34 @@ class SubagentHandler(BaseLangGraphHandler):
     async def _consume_completed_handoff(
         self,
         *,
-        assignment: AgentAssignment,
+        assignments: tuple[AgentAssignment, ...],
         handoff: CompletedAgentResultHandoff,
     ) -> None:
         """Consume the registry result after the parent finalizer succeeds."""
         for _ in range(100):
-            entry = await self._registry.get(
-                tenant_id=assignment.tenant_id,
-                task_id=assignment.task_id,
-                agent_run_id=assignment.agent_run_id,
-            )
-            if entry is not None and entry.status == "completed":
-                await self._result_projector.mark_consumed(
+            entries = [
+                await self._registry.get(
                     tenant_id=assignment.tenant_id,
                     task_id=assignment.task_id,
+                    agent_run_id=assignment.agent_run_id,
+                )
+                for assignment in assignments
+            ]
+            if entries and all(
+                entry is not None and entry.status == "completed"
+                for entry in entries
+            ):
+                first = assignments[0]
+                await self._result_projector.mark_consumed(
+                    tenant_id=first.tenant_id,
+                    task_id=first.task_id,
                     handoff=handoff,
                 )
                 return
             await asyncio.sleep(0)
         logger.debug(
-            "subagent result %s was not registry-settled after parent finalization",
-            assignment.agent_run_id,
+            "subagent results %s were not registry-settled after parent finalization",
+            handoff.agent_run_ids,
         )
 
     async def _publish_entry_lifecycle(
@@ -509,6 +700,122 @@ async def _require_child_task(
     raise RuntimeError("Subagent launcher returned an invalid terminal result")
 
 
+async def _require_child_task_result(
+    value: Any,
+    *,
+    assignment: AgentAssignment,
+    graph_thread_id: str,
+) -> AgentRunCompletion | BaseException:
+    """Return child completion or the original terminal exception instance."""
+    try:
+        return await _require_child_task(
+            value,
+            assignment=assignment,
+            graph_thread_id=graph_thread_id,
+        )
+    except BaseException as exc:
+        return exc
+
+
+def _ack_for_child_exception(
+    exc: BaseException,
+    *,
+    item: _PlannedInvocation,
+    runtime_config: LangGraphRuntimeConfig,
+    turn: Any,
+) -> LangGraphChatResult:
+    """Return the same bounded non-finalizer result used by singular runs."""
+    assignment = item.assignment
+    turn_sequence = turn.turn_number if isinstance(turn.turn_number, int) else None
+    if isinstance(exc, SubagentRunPaused):
+        usage = _usage_from_child_execution_result(
+            exc.execution_result,
+            assignment=assignment,
+            graph_thread_id=item.graph_thread_id,
+            turn_index=turn_sequence,
+        )
+        return _ack_result(
+            runtime_config,
+            turn_id=str(turn.turn_id),
+            turn_sequence=turn_sequence,
+            agent_run_id=assignment.agent_run_id,
+            agent_id=assignment.agent_id,
+            agent_kind=assignment.agent_kind,
+            agent_display_name=item.display_name,
+            graph_thread_id=item.graph_thread_id,
+            status="waiting_for_approval",
+            usage=usage,
+        )
+    if isinstance(exc, SubagentRunCancelled):
+        usage = _usage_from_child_execution_result(
+            exc.execution_result,
+            assignment=assignment,
+            graph_thread_id=item.graph_thread_id,
+            turn_index=turn_sequence,
+        )
+        return _ack_result(
+            runtime_config,
+            turn_id=str(turn.turn_id),
+            turn_sequence=turn_sequence,
+            agent_run_id=assignment.agent_run_id,
+            agent_id=assignment.agent_id,
+            agent_kind=assignment.agent_kind,
+            agent_display_name=item.display_name,
+            graph_thread_id=item.graph_thread_id,
+            status="cancelled",
+            usage=usage,
+        )
+    if isinstance(exc, SubagentRunFailed):
+        usage = _usage_from_child_execution_result(
+            exc.execution_result,
+            assignment=assignment,
+            graph_thread_id=item.graph_thread_id,
+            turn_index=turn_sequence,
+        )
+        return _ack_result(
+            runtime_config,
+            turn_id=str(turn.turn_id),
+            turn_sequence=turn_sequence,
+            agent_run_id=assignment.agent_run_id,
+            agent_id=assignment.agent_id,
+            agent_kind=assignment.agent_kind,
+            agent_display_name=item.display_name,
+            graph_thread_id=item.graph_thread_id,
+            status="failed",
+            usage=usage,
+        )
+    if isinstance(exc, asyncio.CancelledError):
+        return _ack_result(
+            runtime_config,
+            turn_id=str(turn.turn_id),
+            turn_sequence=turn_sequence,
+            agent_run_id=assignment.agent_run_id,
+            agent_id=assignment.agent_id,
+            agent_kind=assignment.agent_kind,
+            agent_display_name=item.display_name,
+            graph_thread_id=item.graph_thread_id,
+            status="cancelled",
+        )
+
+    logger.warning(
+        "subagent run %s failed before parent handoff for task %s",
+        assignment.agent_run_id,
+        runtime_config.chat_inputs.task_id,
+        exc_info=(type(exc), exc, exc.__traceback__),
+    )
+    return _ack_result(
+        runtime_config,
+        turn_id=str(turn.turn_id),
+        turn_sequence=turn_sequence,
+        agent_run_id=assignment.agent_run_id,
+        agent_id=assignment.agent_id,
+        agent_kind=assignment.agent_kind,
+        agent_display_name=item.display_name,
+        graph_thread_id=item.graph_thread_id,
+        status="failed",
+    )
+
+
 async def _publish_lifecycle_to_hub(task_id: int, event: dict[str, Any]) -> None:
     """Publish lifecycle events through the existing task stream hub."""
     from backend.services.streaming.in_memory_hub import get_in_memory_stream_hub
@@ -522,15 +829,79 @@ def _build_assignment(
     parent_turn_id: str,
     subagent_registry: SubagentRegistry | None = None,
 ) -> AgentAssignment:
+    return _build_dispatch_plan(
+        runtime_config,
+        parent_turn_id=parent_turn_id,
+        subagent_registry=subagent_registry,
+    )[0].assignment
+
+
+def _build_dispatch_plan(
+    runtime_config: LangGraphRuntimeConfig,
+    *,
+    parent_turn_id: str,
+    subagent_registry: SubagentRegistry | None = None,
+) -> tuple[_PlannedInvocation, ...]:
     metadata = runtime_config.metadata
-    chat_inputs = runtime_config.chat_inputs
     ownership = metadata.get("subagent_routing")
     if not isinstance(ownership, Mapping) or not ownership.get("should_delegate"):
         raise RuntimeError("Subagent branch requires a positive ownership decision")
+
+    raw_handoffs = ownership.get("handoffs")
+    if isinstance(raw_handoffs, list | tuple) and raw_handoffs:
+        requested_handoffs = tuple(raw_handoffs)
+    else:
+        requested_handoffs = (ownership,)
+
+    if len(requested_handoffs) > MAX_AGENT_HANDOFFS:
+        raise RuntimeError("Subagent dispatch plan has too many handoffs")
+
+    registry = subagent_registry or get_subagent_registry()
+    validated: list[tuple[Mapping[str, Any], Any]] = []
+    for raw_handoff in requested_handoffs:
+        if not isinstance(raw_handoff, Mapping):
+            raise RuntimeError("Subagent dispatch plan contains an invalid handoff")
+        agent_id = _required_string(raw_handoff.get("agent_id"), "agent_id")
+        try:
+            spec = registry.require(agent_id)
+        except KeyError as exc:
+            raise RuntimeError(
+                f"subagent is not registered or enabled: {agent_id}"
+            ) from exc
+        if raw_handoff.get("agent_kind") != spec.agent_kind:
+            raise RuntimeError("Subagent branch agent kind does not match registry")
+        if spec.requires_resolved_target and not _string_list(
+            raw_handoff.get("targets")
+        ):
+            raise RuntimeError("Subagent dispatch plan requires resolved targets")
+        validated.append((raw_handoff, spec))
+
+    return tuple(
+        _PlannedInvocation(
+            index=index,
+            assignment=_build_assignment_from_handoff(
+                runtime_config,
+                parent_turn_id=parent_turn_id,
+                ownership=raw_handoff,
+                spec=spec,
+            ),
+            display_name=spec.display_name,
+            graph_thread_id=_new_child_graph_thread_id(),
+        )
+        for index, (raw_handoff, spec) in enumerate(validated)
+    )
+
+
+def _build_assignment_from_handoff(
+    runtime_config: LangGraphRuntimeConfig,
+    *,
+    parent_turn_id: str,
+    ownership: Mapping[str, Any],
+    spec: Any,
+) -> AgentAssignment:
+    metadata = runtime_config.metadata
+    chat_inputs = runtime_config.chat_inputs
     agent_id = _required_string(ownership.get("agent_id"), "agent_id")
-    spec = (subagent_registry or get_subagent_registry()).require(agent_id)
-    if ownership.get("agent_kind") != spec.agent_kind:
-        raise RuntimeError("Subagent branch agent kind does not match registry")
 
     tenant_id = _required_int(metadata.get("tenant_id"), "tenant_id")
     task_id = int(chat_inputs.task_id)
@@ -694,11 +1065,6 @@ def _safe_launch_error(exc: Exception, *, agent_display_name: str) -> str:
 
 def _new_agent_run_id() -> str:
     return f"agent-run-{uuid4().hex}"
-
-
-def spec_display_name(registry: SubagentRegistry, agent_id: str) -> str:
-    """Resolve display text from the injected backend subagent registry."""
-    return registry.require(agent_id).display_name
 
 
 def _new_child_graph_thread_id() -> str:

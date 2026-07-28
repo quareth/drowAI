@@ -494,11 +494,22 @@ class CheckpointContinuationService:
             )
 
         if execution_result.interrupted:
+            usage = None
+            unaccounted_usage_records: tuple[dict[str, Any], ...] = ()
             if subagent_continuation_context is not None:
+                accounted_usage_record_count = (
+                    subagent_continuation_context.entry.accounted_usage_record_count
+                )
                 usage_records = child_usage_records_from_state(
                     execution_result.final_state,
                     assignment=subagent_continuation_context.entry.assignment,
                     graph_thread_id=subagent_continuation_context.graph_thread_id,
+                )
+                unaccounted_usage_records = child_usage_records_from_state(
+                    execution_result.final_state,
+                    assignment=subagent_continuation_context.entry.assignment,
+                    graph_thread_id=subagent_continuation_context.graph_thread_id,
+                    skip_usage_records=accounted_usage_record_count,
                 )
                 await mark_subagent_waiting_for_approval(
                     registry=self._require_agent_run_registry(),
@@ -521,6 +532,12 @@ class CheckpointContinuationService:
                 if turn_number
                 else f"task-{task_id}"
             )
+            if unaccounted_usage_records:
+                usage = usage_envelopes_from_child_records(
+                    unaccounted_usage_records,
+                    execution_branch="subagent_child",
+                    turn_index=turn_number if isinstance(turn_number, int) else None,
+                )
             self._persist_chat_message_from_container(
                 task_id=task_id,
                 turn_id=turn_id,
@@ -548,6 +565,7 @@ class CheckpointContinuationService:
                 conversation_id=None,
                 metadata=interrupt_metadata,
                 persistence_handled=True,
+                usage=usage,
             )
 
         logger.info(

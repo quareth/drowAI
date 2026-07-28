@@ -20,6 +20,7 @@ from backend.services.agent_runs.contracts import (
     AgentResult,
     AgentRuntimeIdentity,
 )
+from backend.services.agent_runs.launcher import SubagentRunFailed
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
 from backend.services.agent_runs.worker import (
     ProcessLocalAgentRunWorker,
@@ -272,6 +273,54 @@ def test_generic_result_extraction_reads_definition_owned_result() -> None:
         expected_agent_id="pathfinder",
         expected_agent_kind="recon",
     ) == _result()
+
+
+@pytest.mark.asyncio
+async def test_generic_worker_failure_preserves_graph_usage_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import backend.services.agent_runs.worker as worker_module
+
+    definition = _pathfinder_definition()
+    registry = ProcessLocalAgentRunRegistry()
+    assignment = _assignment()
+    await registry.register(assignment, graph_thread_id="child-thread-1")
+    checkpointers = _FakeCheckpointerService()
+    final_state = {
+        "trace": {
+            "usage_records": [
+                {
+                    "source": "subagent_runtime_model",
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                }
+            ]
+        }
+    }
+    executor = _FakeExecutor(GraphExecutionResult(final_state=final_state))
+
+    monkeypatch.setattr(
+        worker_module,
+        "build_subagent_graph",
+        lambda _definition, *, checkpointer=None: "compiled-subagent",
+    )
+    worker = ProcessLocalAgentRunWorker(
+        registry=registry,
+        definition_registry=SubagentRegistry([definition]),
+        checkpointer_service=checkpointers,
+        executor=executor,
+    )
+
+    with pytest.raises(SubagentRunFailed) as exc_info:
+        await worker(
+            assignment=assignment,
+            runtime_config={"configurable": {}},
+            graph_thread_id="child-thread-1",
+            is_cancel_requested=_not_cancelled,
+        )
+
+    assert exc_info.value.execution_result.final_state == final_state
 
 
 async def _not_cancelled() -> bool:

@@ -91,6 +91,17 @@ def resolve_branch(
             "capabilities": list(decision.capabilities),
             "targets": list(decision.targets),
             "objective": decision.objective,
+            "handoffs": [
+                {
+                    "agent_id": handoff.agent_id,
+                    "agent_kind": handoff.agent_kind,
+                    "dispatch_branch": handoff.dispatch_branch,
+                    "capabilities": list(handoff.capabilities),
+                    "targets": list(handoff.targets),
+                    "objective": handoff.objective,
+                }
+                for handoff in decision.handoffs
+            ],
         }
         if decision.should_delegate:
             try:

@@ -320,6 +320,92 @@ async def test_resume_from_interrupt_keeps_subagent_waiting_after_next_interrupt
 
 
 @pytest.mark.asyncio
+async def test_resume_from_interrupt_returns_new_child_usage_on_next_interrupt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    child_thread = "a" * 32
+    assignment = _assignment()
+    await registry.register(assignment, graph_thread_id=child_thread)
+    await registry.mark_waiting_for_approval(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="pathfinder-run-1",
+        accounted_usage_record_count=1,
+    )
+    monkeypatch.setattr(
+        continuation,
+        "_load_subagent_resume_ticket",
+        lambda **_kwargs: SubagentInterruptTicketSnapshot(
+            graph_name=GRAPH_NAME_SUBAGENT,
+            thread_id=f"graph-{child_thread}",
+            checkpoint_id="cp-ticket",
+        ),
+    )
+    service = _build_subagent_resume_service(
+        registry=registry,
+        final_state=_interactive_state(
+            usage_records=[
+                {
+                    "source": "subagent_runtime_model",
+                    "prompt_tokens": 50,
+                    "completion_tokens": 50,
+                    "total_tokens": 100,
+                    "provider": "openai",
+                    "model": "gpt-5.2-mini",
+                    "api_surface": "responses",
+                    "request_mode": "non_streaming",
+                    "cache_reporting": "reported",
+                },
+                {
+                    "source": "subagent_runtime_model",
+                    "prompt_tokens": 11,
+                    "completion_tokens": 4,
+                    "total_tokens": 15,
+                    "provider": "openai",
+                    "model": "gpt-5.2-mini",
+                    "api_surface": "responses",
+                    "request_mode": "non_streaming",
+                    "cache_reporting": "reported",
+                },
+            ],
+        ),
+        interrupted=True,
+    )
+    monkeypatch.setattr(
+        service,
+        "_compile_graph_for_name",
+        _compile_stub,
+    )
+
+    result = await service.resume_from_interrupt(
+        task_id=42,
+        tenant_id=7,
+        graph_name=GRAPH_NAME_SUBAGENT,
+        interrupt_id="interrupt-1",
+        checkpoint_id="stale-client-checkpoint",
+        response={"approved": True},
+    )
+
+    assert result.metadata["interrupt"] is True
+    assert result.usage is not None
+    assert len(result.usage) == 1
+    [usage] = result.usage
+    assert usage.usage.total_tokens == 15
+    assert usage.metadata.execution_branch == "subagent_child"
+    assert usage.metadata.role == "subagent"
+    assert usage.metadata.node_name == "subagent_runtime_model"
+    entry = await registry.get(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="pathfinder-run-1",
+    )
+    assert entry is not None
+    assert entry.status == "waiting_for_approval"
+    assert entry.accounted_usage_record_count == 2
+
+
+@pytest.mark.asyncio
 async def test_resume_from_interrupt_marks_subagent_completed_on_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

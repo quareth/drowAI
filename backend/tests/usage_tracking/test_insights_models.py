@@ -43,10 +43,18 @@ class TestUsageRecordMetadataDefaults:
         assert meta.cache_reporting == UNKNOWN
 
     def test_turn_index_defaults_to_none(self):
-        # turn_index is the only field allowed to be None — insights treat
-        # it as "not applicable" rather than a missing required value.
         meta = UsageRecordMetadata()
         assert meta.turn_index is None
+
+    def test_subagent_identity_defaults_to_none(self):
+        meta = UsageRecordMetadata()
+
+        assert meta.agent_id is None
+        assert meta.agent_kind is None
+        assert meta.agent_run_id is None
+        assert meta.graph_thread_id is None
+        assert meta.parent_turn_id is None
+        assert meta.parent_run_id is None
 
     def test_unknown_sentinel_is_the_literal_string(self):
         # Downstream query code groups by this exact literal; guard against
@@ -141,6 +149,26 @@ class TestSerializeUsageMetadata:
 
         assert zero["turn_index"] == 0
         assert none["turn_index"] is None
+
+    def test_subagent_identity_serializes_only_when_present(self):
+        meta = UsageRecordMetadata(
+            agent_id="pathfinder",
+            agent_kind="recon",
+            agent_run_id="agent-run-1",
+            graph_thread_id="graph-agent-run-1",
+            parent_turn_id="turn-7",
+            parent_run_id="parent-run-7",
+        )
+
+        result = serialize_usage_metadata(meta)
+
+        assert result["agent_id"] == "pathfinder"
+        assert result["agent_kind"] == "recon"
+        assert result["agent_run_id"] == "agent-run-1"
+        assert result["graph_thread_id"] == "graph-agent-run-1"
+        assert result["parent_turn_id"] == "turn-7"
+        assert result["parent_run_id"] == "parent-run-7"
+        assert "agent_id" not in serialize_usage_metadata(UsageRecordMetadata())
 
     def test_rejects_non_metadata_input(self):
         with pytest.raises(TypeError):
@@ -281,6 +309,34 @@ class TestBuildUsageMetadataFromTraceRecord:
         )
 
         assert meta.provider == "anthropic"
+
+    def test_preserves_subagent_identity_from_child_usage_record(self):
+        record = {
+            "source": "subagent_runtime_model",
+            "provider": "openai",
+            "agent_id": "pathfinder",
+            "agent_kind": "recon",
+            "agent_run_id": "agent-run-42",
+            "graph_thread_id": "graph-agent-run-42",
+            "parent_turn_id": "turn-42",
+            "parent_run_id": "parent-run-42",
+        }
+
+        meta = build_usage_metadata_from_trace_record(
+            record,
+            execution_branch="subagent_child",
+            provider="openai",
+            turn_index=5,
+        )
+
+        assert meta.role == "subagent"
+        assert meta.node_name == "subagent_runtime_model"
+        assert meta.agent_id == "pathfinder"
+        assert meta.agent_kind == "recon"
+        assert meta.agent_run_id == "agent-run-42"
+        assert meta.graph_thread_id == "graph-agent-run-42"
+        assert meta.parent_turn_id == "turn-42"
+        assert meta.parent_run_id == "parent-run-42"
 
 
 class TestUsageRecordWithMetadataEnvelope:

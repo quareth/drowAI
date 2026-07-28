@@ -53,7 +53,7 @@ class LocalAgentRun:
 
 
 class ActiveAgentRunExistsError(RuntimeError):
-    """Raised when this process already owns an active subagent run for a task."""
+    """Legacy error retained for callers that handle old singleton conflicts."""
 
     def __init__(self, *, tenant_id: int, task_id: int, active_agent_run_id: str) -> None:
         super().__init__(
@@ -88,22 +88,13 @@ class ProcessLocalAgentRunRegistry:
         assignment: AgentAssignment,
         *,
         graph_thread_id: str,
+        max_active_runs_per_task: int | None = None,
     ) -> LocalAgentRun:
-        """Create a queued local entry if no active subagent owns the task."""
+        """Create a queued local entry for one immutable subagent run id."""
         graph_thread_id = _require_non_empty(graph_thread_id, "graph_thread_id")
+        if max_active_runs_per_task is not None and max_active_runs_per_task < 1:
+            raise ValueError("max_active_runs_per_task must be positive")
         async with self._lock:
-            active = self._active_run_for_task(
-                tenant_id=assignment.tenant_id,
-                task_id=assignment.task_id,
-                agent_run_id_to_ignore=assignment.agent_run_id,
-            )
-            if active is not None:
-                raise ActiveAgentRunExistsError(
-                    tenant_id=assignment.tenant_id,
-                    task_id=assignment.task_id,
-                    active_agent_run_id=active.agent_run_id,
-                )
-
             key = _key(
                 tenant_id=assignment.tenant_id,
                 task_id=assignment.task_id,
@@ -112,6 +103,21 @@ class ProcessLocalAgentRunRegistry:
             existing = self._runs.get(key)
             if existing is not None:
                 return existing
+            if max_active_runs_per_task is not None:
+                active_same_agent = [
+                    entry
+                    for entry in self._runs.values()
+                    if entry.tenant_id == assignment.tenant_id
+                    and entry.task_id == assignment.task_id
+                    and entry.agent_id == assignment.agent_id
+                    and entry.status in ACTIVE_AGENT_RUN_STATUSES
+                ]
+                if len(active_same_agent) >= max_active_runs_per_task:
+                    raise ActiveAgentRunExistsError(
+                        tenant_id=assignment.tenant_id,
+                        task_id=assignment.task_id,
+                        active_agent_run_id=active_same_agent[0].agent_run_id,
+                    )
 
             now = self._clock()
             entry = LocalAgentRun(
@@ -349,23 +355,6 @@ class ProcessLocalAgentRunRegistry:
                 for entry in self._runs.values()
                 if entry.tenant_id == tenant_id and entry.task_id == task_id
             ]
-
-    def _active_run_for_task(
-        self,
-        *,
-        tenant_id: int,
-        task_id: int,
-        agent_run_id_to_ignore: str,
-    ) -> LocalAgentRun | None:
-        for entry in self._runs.values():
-            if (
-                entry.tenant_id == tenant_id
-                and entry.task_id == task_id
-                and entry.agent_run_id != agent_run_id_to_ignore
-                and entry.status in ACTIVE_AGENT_RUN_STATUSES
-            ):
-                return entry
-        return None
 
     def _require_entry(
         self,

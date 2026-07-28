@@ -88,6 +88,71 @@ def test_generic_policy_resolves_name_and_dispatch_from_injected_registry() -> N
     assert decision.reason == "probe_owned"
 
 
+def test_policy_accepts_ordered_multi_handoff_plan_from_registry() -> None:
+    pathfinder = get_subagent_registry().require("pathfinder")
+    probe = replace(
+        pathfinder,
+        name="probe",
+        agent_id="probe",
+        display_name="Probe",
+    )
+    metadata = _metadata(
+        raw_capabilities=["port_scan"],
+        agent_handoffs=[
+            {
+                "agent_handoff": "required",
+                "subagent": "pathfinder",
+                "objective": "Scan the approved target.",
+            },
+            {
+                "agent_handoff": "required",
+                "subagent": "probe",
+                "objective": "Probe the approved target.",
+            },
+        ],
+    )
+
+    decision = resolve_subagent_handoff(
+        metadata,
+        registry=SubagentRegistry((pathfinder, probe)),
+    )
+
+    assert decision.should_delegate is True
+    assert decision.reason == "ordered_handoff_plan"
+    assert [handoff.agent_id for handoff in decision.handoffs] == [
+        "pathfinder",
+        "probe",
+    ]
+    assert [handoff.objective for handoff in decision.handoffs] == [
+        "Scan the approved target.",
+        "Probe the approved target.",
+    ]
+    assert decision.agent_id == "pathfinder"
+
+
+def test_policy_rejects_invalid_handoff_inside_ordered_plan() -> None:
+    decision = resolve_subagent_handoff(
+        _metadata(
+            raw_capabilities=["port_scan"],
+            agent_handoffs=[
+                {
+                    "agent_handoff": "required",
+                    "subagent": "pathfinder",
+                    "objective": "Scan the approved target.",
+                },
+                {
+                    "agent_handoff": "required",
+                    "subagent": "exploit",
+                    "objective": "Exploit the target.",
+                },
+            ],
+        )
+    )
+
+    assert decision.should_delegate is False
+    assert decision.reason == "unsupported_agent_handoff"
+
+
 def test_policy_accepts_classifier_network_scanning_vocabulary() -> None:
     decision = resolve_subagent_handoff(
         _metadata(
@@ -175,7 +240,7 @@ def test_policy_rejects_missing_handoff_and_unbounded_scope() -> None:
     assert missing_target.reason == "invalid_assignment_scope"
 
 
-def test_policy_rejects_unsupported_or_multiple_required_handoffs() -> None:
+def test_policy_rejects_unsupported_required_handoff() -> None:
     unsupported = resolve_subagent_handoff(
         _metadata(
             raw_capabilities=[],
@@ -188,28 +253,9 @@ def test_policy_rejects_unsupported_or_multiple_required_handoffs() -> None:
             ],
         )
     )
-    multiple = resolve_subagent_handoff(
-        _metadata(
-            raw_capabilities=["port_scan"],
-            agent_handoffs=[
-                {
-                    "agent_handoff": "required",
-                    "subagent": "pathfinder",
-                    "objective": "Scan the first target.",
-                },
-                {
-                    "agent_handoff": "required",
-                    "subagent": "pathfinder",
-                    "objective": "Scan the second target.",
-                },
-            ],
-        )
-    )
 
     assert unsupported.should_delegate is False
     assert unsupported.reason == "unsupported_agent_handoff"
-    assert multiple.should_delegate is False
-    assert multiple.reason == "unsupported_handoff_cardinality"
 
 
 def test_policy_rejects_non_direct_executor_and_active_local_run() -> None:

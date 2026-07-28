@@ -57,6 +57,14 @@ class SubagentRunCancelled(asyncio.CancelledError):
         self.execution_result = execution_result
 
 
+class SubagentRunFailed(RuntimeError):
+    """Raised when a child graph fails after producing inspectable graph state."""
+
+    def __init__(self, message: str, execution_result: Any) -> None:
+        super().__init__(message)
+        self.execution_result = execution_result
+
+
 class AgentRunLauncher:
     """Creates and observes one local asyncio task per subagent assignment."""
 
@@ -222,6 +230,22 @@ class AgentRunLauncher:
             )
             await self._publish_terminal_lifecycle(entry, parent_run_id=parent_run_id)
             return
+        except SubagentRunFailed:
+            logger.warning(
+                "Subagent worker failed for tenant_id=%s task_id=%s agent_run_id=%s",
+                assignment.tenant_id,
+                assignment.task_id,
+                assignment.agent_run_id,
+                exc_info=True,
+            )
+            entry = await self._registry.mark_failed(
+                tenant_id=assignment.tenant_id,
+                task_id=assignment.task_id,
+                agent_run_id=assignment.agent_run_id,
+                safe_error="Subagent worker failed",
+            )
+            await self._publish_terminal_lifecycle(entry, parent_run_id=parent_run_id)
+            return
         except Exception:
             logger.warning(
                 "Subagent worker failed for tenant_id=%s task_id=%s agent_run_id=%s",
@@ -299,5 +323,6 @@ __all__ = [
     "AgentRunWorker",
     "LifecyclePublisher",
     "SubagentRunCancelled",
+    "SubagentRunFailed",
     "SubagentRunPaused",
 ]

@@ -34,6 +34,7 @@ from backend.services.agent_runs.completion import (
 from backend.services.agent_runs.event_projection import build_agent_run_lifecycle_event
 from backend.services.agent_runs.launcher import (
     SubagentRunCancelled,
+    SubagentRunFailed,
     SubagentRunPaused,
 )
 from backend.services.agent_runs.registry import LocalAgentRun, ProcessLocalAgentRunRegistry
@@ -117,11 +118,20 @@ class ProcessLocalAgentRunWorker:
         if execution_result.interrupted:
             raise SubagentRunPaused(execution_result)
         if not execution_result.final_state:
-            raise RuntimeError("Subagent graph completed without final state")
-        result = extract_subagent_result_from_state(
-            execution_result.final_state,
-            assignment=assignment,
-        )
+            raise SubagentRunFailed(
+                "Subagent graph completed without final state",
+                execution_result,
+            )
+        try:
+            result = extract_subagent_result_from_state(
+                execution_result.final_state,
+                assignment=assignment,
+            )
+        except Exception as exc:
+            raise SubagentRunFailed(
+                "Subagent graph completed without a valid terminal result",
+                execution_result,
+            ) from exc
         return build_agent_run_completion(
             result=result,
             assignment=assignment,

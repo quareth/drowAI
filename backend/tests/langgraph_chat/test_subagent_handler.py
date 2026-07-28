@@ -17,7 +17,10 @@ from agent.graph.context.builder import (
     build_conversation_context_bundle,
 )
 from agent.subagents.definition import SubagentDefinition
-from agent.subagents.registry import SubagentRegistry as DefinitionSubagentRegistry
+from agent.subagents.registry import (
+    SubagentRegistry as DefinitionSubagentRegistry,
+    get_subagent_registry as get_definition_subagent_registry,
+)
 from agent.subagents.runtime.model import SUBAGENT_RESULT_METADATA_KEY
 from backend.services.agent_runs.contracts import AgentResult
 from backend.services.agent_runs.completion import (
@@ -25,10 +28,14 @@ from backend.services.agent_runs.completion import (
     build_agent_run_completion,
 )
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
-from backend.services.agent_runs.result_projection import COMPLETED_AGENT_RESULTS_KEY
+from backend.services.agent_runs.result_projection import (
+    COMPLETED_AGENT_RESULTS_KEY,
+    AgentRunResultProjector,
+)
 from backend.services.agent_runs.subagent_registry import (
     SubagentRegistry,
     SubagentSpec,
+    get_subagent_registry,
 )
 from backend.services.langgraph_chat.execution.graph_executor import GraphExecutionResult
 from backend.services.langgraph_chat.contracts import (
@@ -42,6 +49,7 @@ from backend.services.langgraph_chat.handlers.subagent_handler import (
 )
 from backend.services.agent_runs.launcher import (
     SubagentRunCancelled,
+    SubagentRunFailed,
     SubagentRunPaused,
 )
 from backend.services.langgraph_chat.routing.selectors import ChatBranch, resolve_branch
@@ -85,9 +93,124 @@ class _RecordingLauncher:
         return asyncio.create_task(_finish())
 
 
+class _ControlledLauncher:
+    def __init__(self, registry: ProcessLocalAgentRunRegistry) -> None:
+        self.registry = registry
+        self.calls: list[dict[str, Any]] = []
+        self.releases: list[asyncio.Event] = []
+
+    async def launch(self, **kwargs: Any) -> asyncio.Task[AgentRunCompletion]:
+        self.calls.append(kwargs)
+        assignment = kwargs["assignment"]
+        graph_thread_id = kwargs["graph_thread_id"]
+        release = asyncio.Event()
+        self.releases.append(release)
+
+        async def _finish() -> AgentRunCompletion:
+            await release.wait()
+            result = AgentResult(
+                agent_run_id=assignment.agent_run_id,
+                agent_id=assignment.agent_id,
+                agent_kind=assignment.agent_kind,
+                outcome="completed",
+                summary=f"{assignment.agent_id} completed.",
+                key_findings=(f"{assignment.agent_id} finding",),
+                tools_used=("information_gathering.network_discovery.nmap",),
+            )
+            await self.registry.mark_completed(
+                tenant_id=assignment.tenant_id,
+                task_id=assignment.task_id,
+                agent_run_id=assignment.agent_run_id,
+                result=result,
+            )
+            return build_agent_run_completion(
+                result=result,
+                assignment=assignment,
+                graph_thread_id=graph_thread_id,
+                final_state=_subagent_final_state(
+                    agent_run_id=assignment.agent_run_id,
+                    agent_id=assignment.agent_id,
+                ),
+            )
+
+        return asyncio.create_task(_finish())
+
+
 class _FailingLauncher:
     async def launch(self, **kwargs: Any) -> None:
         raise RuntimeError("boom secret-free")
+
+
+class _FailingSecondLaunchAfterCompletionLauncher:
+    def __init__(self, registry: ProcessLocalAgentRunRegistry) -> None:
+        self.registry = registry
+        self.calls: list[dict[str, Any]] = []
+
+    async def launch(self, **kwargs: Any) -> asyncio.Task[AgentRunCompletion]:
+        self.calls.append(kwargs)
+        assignment = kwargs["assignment"]
+        graph_thread_id = kwargs["graph_thread_id"]
+        if len(self.calls) == 2:
+            raise RuntimeError("second launch failed")
+
+        async def _finish() -> AgentRunCompletion:
+            result = AgentResult(
+                agent_run_id=assignment.agent_run_id,
+                agent_id=assignment.agent_id,
+                agent_kind=assignment.agent_kind,
+                outcome="completed",
+                summary=f"{assignment.agent_id} completed before batch failure.",
+                key_findings=(f"{assignment.agent_id} finding",),
+                tools_used=("information_gathering.network_discovery.nmap",),
+            )
+            await self.registry.mark_completed(
+                tenant_id=assignment.tenant_id,
+                task_id=assignment.task_id,
+                agent_run_id=assignment.agent_run_id,
+                result=result,
+            )
+            return build_agent_run_completion(
+                result=result,
+                assignment=assignment,
+                graph_thread_id=graph_thread_id,
+                final_state=_subagent_final_state(
+                    agent_run_id=assignment.agent_run_id,
+                    agent_id=assignment.agent_id,
+                ),
+            )
+
+        task = asyncio.create_task(_finish())
+        await task
+        return task
+
+
+class _FailingAfterUsageLauncher:
+    async def launch(self, **_kwargs: Any) -> asyncio.Task[AgentRunCompletion]:
+        async def _fail() -> AgentRunCompletion:
+            raise SubagentRunFailed(
+                "Subagent graph completed without a valid terminal result",
+                GraphExecutionResult(
+                    final_state={
+                        "trace": {
+                            "usage_records": [
+                                {
+                                    "source": "subagent_runtime_model",
+                                    "prompt_tokens": 10,
+                                    "completion_tokens": 5,
+                                    "total_tokens": 15,
+                                    "provider": "openai",
+                                    "model": "gpt-5.2-mini",
+                                    "api_surface": "responses",
+                                    "request_mode": "non_streaming",
+                                    "cache_reporting": "reported",
+                                }
+                            ]
+                        }
+                    }
+                ),
+            )
+
+        return asyncio.create_task(_fail())
 
 
 class _CancellingLauncher:
@@ -228,13 +351,17 @@ def _runtime_config() -> LangGraphRuntimeConfig:
     )
 
 
-def _subagent_final_state(*, agent_run_id: str) -> dict[str, Any]:
+def _subagent_final_state(
+    *,
+    agent_run_id: str,
+    agent_id: str = "pathfinder",
+) -> dict[str, Any]:
     return {
         "facts": {
             "metadata": {
                 SUBAGENT_RESULT_METADATA_KEY: {
                     "agent_run_id": agent_run_id,
-                    "agent_id": "pathfinder",
+                    "agent_id": agent_id,
                     "agent_kind": "recon",
                     "outcome": "completed",
                     "summary": "Pathfinder found HTTP.",
@@ -258,6 +385,19 @@ def _subagent_final_state(*, agent_run_id: str) -> dict[str, Any]:
             ]
         },
     }
+
+
+async def _wait_for_call_count(
+    launcher: Any,
+    expected: int,
+    *,
+    timeout: float = 0.5,
+) -> None:
+    async def _poll() -> None:
+        while len(launcher.calls) < expected:
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(_poll(), timeout=timeout)
 
 
 def _second_agent_definition() -> SubagentDefinition:
@@ -295,6 +435,24 @@ def _second_agent_runtime_config() -> LangGraphRuntimeConfig:
         }
     )
     config.metadata["subagent_routing"] = routing
+    return config
+
+
+def _ordered_handoff_runtime_config(
+    *handoffs: dict[str, Any],
+) -> LangGraphRuntimeConfig:
+    config = _runtime_config()
+    config.metadata["subagent_routing"] = {
+        "should_delegate": True,
+        "reason": "ordered_handoff_plan",
+        "agent_id": handoffs[0]["agent_id"],
+        "agent_kind": "recon",
+        "dispatch_branch": "subagent",
+        "capabilities": ["port_scanning"],
+        "targets": ["10.0.0.10"],
+        "objective": handoffs[0]["objective"],
+        "handoffs": list(handoffs),
+    }
     return config
 
 
@@ -411,10 +569,226 @@ async def test_subagent_handler_waits_for_pathfinder_and_runs_parent_finalizer()
     assert child_usage.metadata.execution_branch == "subagent_child"
     assert child_usage.metadata.role == "subagent"
     assert child_usage.metadata.node_name == "subagent_runtime_model"
+    assert child_usage.metadata.agent_id == "pathfinder"
+    assert child_usage.metadata.agent_kind == "recon"
+    assert child_usage.metadata.agent_run_id == assignment.agent_run_id
+    assert child_usage.metadata.graph_thread_id == (
+        launcher.calls[0]["graph_thread_id"]
+    )
+    assert child_usage.metadata.parent_turn_id == assignment.parent_turn_id
+    assert child_usage.metadata.parent_run_id == (
+        assignment.relevant_context["parent_run_id"]
+    )
     assert parent_usage.usage.total_tokens == 29
     assert parent_usage.metadata.execution_branch == "subagent_parent_finalizer"
     assert parent_usage.metadata.role == "finalizer"
     assert parent_usage.metadata.node_name == "finalize_tool_results"
+
+
+@pytest.mark.asyncio
+async def test_subagent_handler_fails_closed_before_launching_invalid_plan() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    launcher = _RecordingLauncher(registry)
+
+    async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
+        return None
+
+    handler = SubagentHandler(
+        object(),
+        _CompletingExecutor(),
+        object(),
+        registry=registry,
+        launcher=launcher,
+        lifecycle_publisher=_publish,
+    )
+    runtime_config = _ordered_handoff_runtime_config(
+        {
+            "agent_id": "pathfinder",
+            "agent_kind": "recon",
+            "capabilities": ["port_scanning"],
+            "targets": ["10.0.0.10"],
+            "objective": "Scan ports on 10.0.0.10.",
+        },
+        {
+            "agent_id": "exploit",
+            "agent_kind": "recon",
+            "capabilities": ["port_scanning"],
+            "targets": ["10.0.0.10"],
+            "objective": "Exploit 10.0.0.10.",
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="subagent is not registered"):
+        await handler.handle(runtime_config)
+
+    assert launcher.calls == []
+    assert await registry.list_task_runs(tenant_id=7, task_id=42) == []
+
+
+@pytest.mark.asyncio
+async def test_subagent_handler_launches_independent_handoffs_concurrently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    launcher = _ControlledLauncher(registry)
+    executor = _CompletingExecutor()
+    second_definition = _second_agent_definition()
+    backend_registry = SubagentRegistry(
+        (
+            get_subagent_registry().require("pathfinder"),
+            SubagentSpec.from_definition(second_definition),
+        )
+    )
+    monkeypatch.setattr(
+        "agent.subagents.registry.get_subagent_registry",
+        lambda: DefinitionSubagentRegistry(
+            [
+                get_definition_subagent_registry().require("pathfinder"),
+                second_definition,
+            ]
+        ),
+    )
+
+    async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
+        return None
+
+    handler = SubagentHandler(
+        object(),
+        executor,
+        object(),
+        registry=registry,
+        launcher=launcher,
+        lifecycle_publisher=_publish,
+        subagent_registry=backend_registry,
+    )
+    runtime_config = _ordered_handoff_runtime_config(
+        {
+            "agent_id": "pathfinder",
+            "agent_kind": "recon",
+            "capabilities": ["port_scanning"],
+            "targets": ["10.0.0.10"],
+            "objective": "Scan ports on 10.0.0.10.",
+        },
+        {
+            "agent_id": "cartographer",
+            "agent_kind": "recon",
+            "capabilities": ["asset_inventory"],
+            "targets": ["10.0.0.10"],
+            "objective": "Inventory approved assets.",
+        },
+    )
+
+    result_task = asyncio.create_task(handler.handle(runtime_config))
+    await _wait_for_call_count(launcher, 2)
+    assert executor.calls == []
+
+    for release in launcher.releases:
+        release.set()
+    result = await result_task
+
+    assert result.metadata["status"] == "completed"
+    assert result.metadata["handoff_agent_ids"] == ["pathfinder", "cartographer"]
+    assert len(executor.calls) == 1
+    assignments = [call["assignment"] for call in launcher.calls]
+    assert [assignment.agent_id for assignment in assignments] == [
+        "pathfinder",
+        "cartographer",
+    ]
+    assert len({assignment.agent_run_id for assignment in assignments}) == 2
+    assert len({call["graph_thread_id"] for call in launcher.calls}) == 2
+    completed_results = runtime_config.metadata[COMPLETED_AGENT_RESULTS_KEY]
+    assert [result["agent_id"] for result in completed_results] == [
+        "pathfinder",
+        "cartographer",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_subagent_handler_serializes_repeated_agent_handoffs_by_limit() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    launcher = _ControlledLauncher(registry)
+
+    async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
+        return None
+
+    handler = SubagentHandler(
+        object(),
+        _CompletingExecutor(),
+        object(),
+        registry=registry,
+        launcher=launcher,
+        lifecycle_publisher=_publish,
+    )
+    runtime_config = _ordered_handoff_runtime_config(
+        {
+            "agent_id": "pathfinder",
+            "agent_kind": "recon",
+            "capabilities": ["port_scanning"],
+            "targets": ["10.0.0.10"],
+            "objective": "Scan the first target.",
+        },
+        {
+            "agent_id": "pathfinder",
+            "agent_kind": "recon",
+            "capabilities": ["port_scanning"],
+            "targets": ["10.0.0.11"],
+            "objective": "Scan the second target.",
+        },
+    )
+
+    result_task = asyncio.create_task(handler.handle(runtime_config))
+    await _wait_for_call_count(launcher, 1)
+    await asyncio.sleep(0)
+    assert len(launcher.calls) == 1
+
+    launcher.releases[0].set()
+    await _wait_for_call_count(launcher, 2)
+    launcher.releases[1].set()
+    result = await result_task
+
+    assert result.metadata["status"] == "completed"
+    assignments = [call["assignment"] for call in launcher.calls]
+    assert [assignment.objective for assignment in assignments] == [
+        "Scan the first target.",
+        "Scan the second target.",
+    ]
+    assert len({assignment.agent_run_id for assignment in assignments}) == 2
+    assert len({call["graph_thread_id"] for call in launcher.calls}) == 2
+
+
+@pytest.mark.asyncio
+async def test_subagent_handler_fails_closed_for_concurrent_same_agent_parent_turns() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    launcher = _ControlledLauncher(registry)
+
+    async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
+        return None
+
+    handler = SubagentHandler(
+        object(),
+        _CompletingExecutor(),
+        object(),
+        registry=registry,
+        launcher=launcher,
+        lifecycle_publisher=_publish,
+    )
+
+    first = asyncio.create_task(handler.handle(_runtime_config()))
+    second = asyncio.create_task(handler.handle(_runtime_config()))
+    await _wait_for_call_count(launcher, 1)
+    await asyncio.sleep(0)
+
+    assert len(launcher.calls) == 1
+
+    launcher.releases[0].set()
+    results = await asyncio.gather(first, second)
+
+    statuses = sorted(result.metadata["status"] for result in results)
+    assert statuses == ["completed", "failed"]
+    entries = await registry.list_task_runs(tenant_id=7, task_id=42)
+    assert len(entries) == 1
+    assert entries[0].status == "completed"
+    assert entries[0].result_consumed is True
 
 
 @pytest.mark.asyncio
@@ -479,6 +853,85 @@ async def test_subagent_handler_emits_failed_lifecycle_when_launch_fails() -> No
 
 
 @pytest.mark.asyncio
+async def test_subagent_handler_settles_prior_batch_child_when_later_launch_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    launcher = _FailingSecondLaunchAfterCompletionLauncher(registry)
+    second_definition = _second_agent_definition()
+    backend_registry = SubagentRegistry(
+        (
+            get_subagent_registry().require("pathfinder"),
+            SubagentSpec.from_definition(second_definition),
+        )
+    )
+    monkeypatch.setattr(
+        "agent.subagents.registry.get_subagent_registry",
+        lambda: DefinitionSubagentRegistry(
+            [
+                get_definition_subagent_registry().require("pathfinder"),
+                second_definition,
+            ]
+        ),
+    )
+
+    async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
+        return None
+
+    handler = SubagentHandler(
+        object(),
+        _CompletingExecutor(),
+        object(),
+        registry=registry,
+        launcher=launcher,
+        lifecycle_publisher=_publish,
+        subagent_registry=backend_registry,
+    )
+    runtime_config = _ordered_handoff_runtime_config(
+        {
+            "agent_id": "pathfinder",
+            "agent_kind": "recon",
+            "capabilities": ["port_scanning"],
+            "targets": ["10.0.0.10"],
+            "objective": "Scan ports on 10.0.0.10.",
+        },
+        {
+            "agent_id": "cartographer",
+            "agent_kind": "recon",
+            "capabilities": ["asset_inventory"],
+            "targets": ["10.0.0.10"],
+            "objective": "Inventory approved assets.",
+        },
+    )
+
+    result = await handler.handle(runtime_config)
+
+    assert result.metadata["status"] == "failed"
+    assert result.metadata["agent_id"] == "cartographer"
+    assert result.usage is not None
+    assert len(result.usage) == 1
+    [usage] = result.usage
+    assert usage.usage.total_tokens == 15
+    assert usage.metadata.execution_branch == "subagent_child"
+    assert usage.metadata.node_name == "subagent_runtime_model"
+    assert COMPLETED_AGENT_RESULTS_KEY not in runtime_config.metadata
+    entries = sorted(
+        await registry.list_task_runs(tenant_id=7, task_id=42),
+        key=lambda entry: entry.agent_id,
+    )
+    assert [entry.agent_id for entry in entries] == ["cartographer", "pathfinder"]
+    assert [entry.status for entry in entries] == ["failed", "completed"]
+    assert entries[1].result_consumed is True
+    later_handoff = await AgentRunResultProjector(registry=registry).collect_for_context(
+        tenant_id=7,
+        task_id=42,
+        conversation_id="conv-42",
+    )
+    assert later_handoff.results == ()
+    assert later_handoff.agent_run_ids == ()
+
+
+@pytest.mark.asyncio
 async def test_subagent_handler_child_cancellation_returns_partial_child_usage() -> None:
     registry = ProcessLocalAgentRunRegistry()
     executor = _CompletingExecutor()
@@ -527,6 +980,35 @@ async def test_subagent_handler_hitl_pause_returns_partial_child_usage() -> None
     result = await handler.handle(_runtime_config())
 
     assert result.metadata["status"] == "waiting_for_approval"
+    assert result.usage is not None
+    assert len(result.usage) == 1
+    [usage] = result.usage
+    assert usage.usage.total_tokens == 15
+    assert usage.metadata.execution_branch == "subagent_child"
+    assert usage.metadata.node_name == "subagent_runtime_model"
+    assert executor.calls == []
+
+
+@pytest.mark.asyncio
+async def test_subagent_handler_child_failure_returns_partial_child_usage() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    executor = _CompletingExecutor()
+
+    async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
+        return None
+
+    handler = SubagentHandler(
+        object(),
+        executor,
+        object(),
+        registry=registry,
+        launcher=_FailingAfterUsageLauncher(),
+        lifecycle_publisher=_publish,
+    )
+
+    result = await handler.handle(_runtime_config())
+
+    assert result.metadata["status"] == "failed"
     assert result.usage is not None
     assert len(result.usage) == 1
     [usage] = result.usage
