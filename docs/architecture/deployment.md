@@ -126,6 +126,37 @@ Management-host runtime access is reserved for explicit development, test, and
 diagnostic utilities. It is not a product deployment path and must not be used as
 a product fallback in standalone or distributed deployments.
 
+## Scout Recon-Agent Routing
+
+Scout ownership routing and its card/drawer UI are active by default. There is
+no backend delegation flag or frontend build-time UI gate. The deterministic
+ownership policy delegates eligible bounded recon turns and leaves non-recon or
+mixed-scope turns on their existing branches.
+
+The current architecture has these operator constraints:
+
+- exactly one backend process must own Scout orchestration for a task
+  population because the registry has no distributed claim, lease, or
+  heartbeat;
+- active or waiting Scout runs are lost on backend restart and are not
+  rediscovered from checkpoints;
+- replay is limited to existing recent task stream replay and client-side
+  `agent_run_id` filtering;
+- on uninterrupted same-process completion, Scout returns a bounded
+  `AgentResult` to the original parent turn and the main finalizer produces the
+  chat answer; result recovery remains best-effort and may be absent or
+  repeated after restart;
+- there is no database rollback because the pilot adds no table, column,
+  repository, or migration.
+
+Supported Compose profiles run one Management backend process. Horizontally
+scaled Management deployments must add distributed ownership before multiple
+replicas accept chat for the same task population. Operators should monitor
+backend logs, task stream replay/card state, and
+`/api/tasks/{task_id}/agent-runs/...` status responses; after a restart, a
+replayed nonterminal Scout run absent from the process-local registry is
+expected to surface as interrupted instead of being recovered.
+
 ## Background Services and Local Development
 
 Background services are process-local backend services owned by

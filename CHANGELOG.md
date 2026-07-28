@@ -18,9 +18,43 @@ The format is based on
   for the installed Amass and enum4linux-ng command interfaces.
 - Amass is available in the LLM-visible tool catalog for DNS enumeration, with
   normalized DNS/IP knowledge assets and `resolves_to` relationships.
+- Pathfinder recon routing and its card/drawer UI are now active by default without
+  backend or frontend feature-flag configuration.
+- The Pathfinder recon-agent pilot UI now reconstructs recent cards from task stream
+  replay and marks replay-only active runs as interrupted when the local backend
+  process no longer owns them.
+- Pathfinder now uses a dedicated colored identity mark across its parent event,
+  drawer list, and detail header instead of the generic robot icon.
+- The Operations task panel can now be resized within a bounded range, collapsed
+  from its divider or toolbar control, and reopened from the expanded
+  conversation header without remounting the chat.
 
 ### Fixed
 
+- Repeated subagent invocations in one conversation now remain separate drawer
+  rows keyed by run identity, with each row opening only its own transcript.
+- Pathfinder now shows its real pre-tool action-selection step as an attributed,
+  refresh-safe Thinking event before tool execution without adding another
+  model call.
+- Pathfinder now binds its complete bounded recon tool profile directly and reuses
+  the shared native call-builder guidance, allowing up to the configured batch
+  limit of concrete sequential or parallel calls without a redundant selector.
+- Intent classification now emits an explicit ordered `agent_handoffs`
+  contract for subagent routing. Pathfinder delegation no longer depends on
+  `suggested_capabilities` vocabulary, while those capabilities remain
+  available as advisory assignment context. Enabled agent names, ownership
+  boundaries, target requirements, concurrency, classifier catalog entries,
+  schema constraints, and dispatch branches now come from one subagent
+  registry instead of prompt-local Scout rules.
+- Subagent calls now participate in the parent turn's ordered activity chain by
+  run identity and stream sequence, regardless of the implemented subagent kind,
+  and completed-turn summaries count each distinct run as an agent.
+- Pathfinder handoff responses now stop their streaming indicator when the answer
+  section closes, use a bounded subagent finalizer prompt, and return their
+  structured result to the original parent turn so the unchanged main
+  finalizer produces the chat answer.
+- JWT signing now rejects configured HS256 secrets shorter than 32 bytes and
+  automatically repairs legacy short generated secrets during bootstrap.
 - Amass now reuses serialized task-scoped v5 state across enumeration and
   result queries, returns stored partial results after bounded enumeration,
   and distinguishes parser status, enumeration status, completeness, and
