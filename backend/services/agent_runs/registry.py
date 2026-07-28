@@ -356,6 +356,28 @@ class ProcessLocalAgentRunRegistry:
                 if entry.tenant_id == tenant_id and entry.task_id == task_id
             ]
 
+    async def find_active_by_graph_thread(
+        self,
+        *,
+        task_id: int,
+        graph_thread_id: str,
+        tenant_id: int | None = None,
+    ) -> LocalAgentRun | None:
+        """Return the active local run for one task child graph thread."""
+        graph_thread_id = _require_non_empty(graph_thread_id, "graph_thread_id")
+        async with self._lock:
+            candidates = [
+                entry
+                for entry in self._runs.values()
+                if entry.task_id == task_id
+                and entry.graph_thread_id == graph_thread_id
+                and entry.status in ACTIVE_AGENT_RUN_STATUSES
+                and (tenant_id is None or entry.tenant_id == tenant_id)
+            ]
+            if len(candidates) != 1:
+                return None
+            return candidates[0]
+
     def _require_entry(
         self,
         *,

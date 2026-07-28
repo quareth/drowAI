@@ -207,6 +207,7 @@ class TaskInterruptService:
             graph_name=ticket.graph_name,
             thread_id=ticket.thread_id,
             graph_thread_id=runtime_context.graph_thread_id,
+            tenant_id=tenant_id,
         )
         if not isinstance(hydrated_interrupt, dict):
             return response
@@ -324,6 +325,7 @@ class TaskInterruptService:
                 graph_name=resolved_graph_name,
                 thread_id=getattr(claimed_ticket, "thread_id", None),
                 graph_thread_id=runtime_context.graph_thread_id,
+                tenant_id=tenant_id,
             )
         except Exception:
             pending_interrupt = None

@@ -12,6 +12,9 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 import pytest
 
 from agent.graph.graph_names import GRAPH_NAME_SUBAGENT
+from agent.subagents.definition import SubagentDefinition
+from agent.subagents.registry import SubagentRegistry
+from agent.subagents.runtime.model import SUBAGENT_RESULT_METADATA_KEY
 from backend.services.agent_runs import continuation
 from backend.services.agent_runs.continuation import (
     SUBAGENT_RECOVERY_ERROR,
@@ -24,7 +27,6 @@ from backend.services.agent_runs.continuation import (
 from backend.services.agent_runs.contracts import AgentAssignment, AgentRuntimeIdentity
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
 from backend.services.agent_runs.worker import mark_subagent_completed_from_state
-from agent.subagents.runtime.model import SUBAGENT_RESULT_METADATA_KEY
 from backend.services.langgraph_chat.checkpoint.continuation_service import (
     CheckpointContinuationService,
 )
@@ -575,18 +577,51 @@ async def test_mark_subagent_completed_from_state_returns_usage_identity_envelop
 
 
 @pytest.mark.asyncio
-async def test_interrupt_snapshot_hydrates_subagent_graph(
+async def test_interrupt_snapshot_hydrates_matching_subagent_graph_with_two_definitions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    await registry.register(_assignment(), graph_thread_id="b" * 32)
+    matching_assignment = _assignment().model_copy(
+        update={
+            "assignment_id": "assignment-2",
+            "agent_run_id": "cartographer-run-1",
+            "agent_id": "cartographer",
+        }
+    )
+    await registry.register(matching_assignment, graph_thread_id="a" * 32)
+    await registry.mark_waiting_for_approval(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="cartographer-run-1",
+    )
+    definition_registry = SubagentRegistry(
+        (
+            _definition("pathfinder", "Pathfinder"),
+            _definition("cartographer", "Cartographer"),
+        )
+    )
     compiled = _FakeCompiledGraph()
+
+    compiled_agent_ids: list[str] = []
+    monkeypatch.setattr(
+        "agent.subagents.registry.get_subagent_registry",
+        lambda: definition_registry,
+    )
     monkeypatch.setattr(
         "agent.subagents.runtime.graph.build_subagent_graph",
-        lambda _definition, *, checkpointer: compiled,
+        lambda definition, *, checkpointer: (
+            compiled_agent_ids.append(definition.id) or compiled
+        ),
     )
-    service = InterruptStateService(checkpointer_service=_FakeCheckpointerService())
+    service = InterruptStateService(
+        checkpointer_service=_FakeCheckpointerService(),
+        agent_run_registry=registry,
+    )
 
     result = await service.get_pending_interrupt(
         task_id=42,
+        tenant_id=7,
         graph_name=GRAPH_NAME_SUBAGENT,
         thread_id="graph-" + ("a" * 32),
     )
@@ -596,6 +631,30 @@ async def test_interrupt_snapshot_hydrates_subagent_graph(
     assert result["thread_id"] == "graph-" + ("a" * 32)
     assert result["interrupt_id"] == "interrupt-1"
     assert result["checkpoint_id"] == "cp-1"
+    assert compiled_agent_ids == ["cartographer"]
+
+
+def _definition(agent_id: str, display_name: str) -> SubagentDefinition:
+    return SubagentDefinition(
+        schema_version=1,
+        id=agent_id,
+        display_name=display_name,
+        kind="recon",
+        description=f"{display_name} test definition.",
+        ownership_boundary="Own only the assigned test objective.",
+        supported_task_categories=("host_discovery",),
+        excluded_task_categories=(),
+        tool_ids=("information_gathering.network_discovery.nmap",),
+        enabled=True,
+        max_active_runs_per_task=1,
+        max_iterations=1,
+        max_tool_calls_per_iteration=1,
+        requires_resolved_target=True,
+        icon=agent_id,
+        instructions=f"You are {display_name}.",
+        runtime_role_prompt=None,
+        runtime_boundary_rules=(),
+    )
 
 
 class _FakeCheckpointerService:

@@ -21,6 +21,10 @@ import logging
 from typing import Any, Dict, Optional
 
 from backend.services.agent_runs.continuation import is_subagent_graph_name
+from backend.services.agent_runs.registry import (
+    LocalAgentRun,
+    ProcessLocalAgentRunRegistry,
+)
 from backend.services.langgraph_chat.checkpoint.checkpointer_service import (
     CheckpointerService,
 )
@@ -29,7 +33,10 @@ from backend.services.langgraph_chat.hitl_constants import (
     GRAPH_NAME_DEEP_REASONING,
     GRAPH_NAME_SUBAGENT,
 )
-from backend.services.langgraph_chat.checkpoint.thread_identity import format_graph_thread_id
+from backend.services.langgraph_chat.checkpoint.thread_identity import (
+    format_graph_thread_id,
+    normalize_graph_thread_id,
+)
 
 logger = logging.getLogger("backend.services.langgraph_chat.interrupt_state_service")
 
@@ -40,6 +47,7 @@ class InterruptStateService:
     def __init__(
         self,
         checkpointer_service: Optional[CheckpointerService] = None,
+        agent_run_registry: Optional[ProcessLocalAgentRunRegistry] = None,
     ) -> None:
         """Initialize service with checkpointer dependency.
 
@@ -48,6 +56,7 @@ class InterruptStateService:
                                   If None, creates default instance.
         """
         self._checkpointer = checkpointer_service or CheckpointerService()
+        self._agent_run_registry = agent_run_registry
 
     async def get_pending_interrupt(
         self,
@@ -55,6 +64,7 @@ class InterruptStateService:
         graph_name: Optional[str] = None,
         graph_thread_id: Optional[str] = None,
         thread_id: Optional[str] = None,
+        tenant_id: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
         """Get pending interrupt for a task from checkpointer.
 
@@ -65,6 +75,8 @@ class InterruptStateService:
             task_id: Task ID to check for pending interrupt.
             graph_name: Which graph to query. If None, checks BOTH graphs
                        (simple_tool first, then deep_reasoning).
+            tenant_id: Optional tenant scope used to resolve subagent child
+                       graph identity from the process-local run registry.
 
         Returns:
             Dict with interrupt details if pending, None otherwise.
@@ -84,6 +96,7 @@ class InterruptStateService:
                 graph_name,
                 graph_thread_id=graph_thread_id,
                 thread_id=thread_id,
+                tenant_id=tenant_id,
             )
 
         # Otherwise check known HITL graphs - parent graphs first, then subagents.
@@ -98,6 +111,7 @@ class InterruptStateService:
                 gname,
                 graph_thread_id=graph_thread_id,
                 thread_id=thread_id,
+                tenant_id=tenant_id,
             )
             if result is not None:
                 return result
@@ -110,6 +124,7 @@ class InterruptStateService:
         graph_name: str,
         graph_thread_id: Optional[str] = None,
         thread_id: Optional[str] = None,
+        tenant_id: Optional[int] = None,
     ) -> Optional[Dict[str, Any]]:
         """Check a specific graph for pending interrupt.
 
@@ -118,6 +133,8 @@ class InterruptStateService:
         Args:
             task_id: Task ID to check.
             graph_name: Graph name to query (simple_tool or deep_reasoning).
+            tenant_id: Optional tenant scope used for subagent child graph
+                       identity resolution.
 
         Returns:
             Interrupt details if found, None otherwise.
@@ -143,13 +160,16 @@ class InterruptStateService:
                 if graph_name == GRAPH_NAME_DEEP_REASONING:
                     compiled = compile_deep_reasoning_graph(checkpointer=checkpointer)
                 elif is_subagent_graph_name(graph_name):
-                    definitions = get_subagent_registry().definitions()
-                    if len(definitions) != 1:
-                        raise RuntimeError(
-                            "Subagent interrupt snapshot requires registered agent identity"
-                        )
+                    agent_run_entry = await self._resolve_subagent_run_for_thread(
+                        task_id=task_id,
+                        tenant_id=tenant_id,
+                        resolved_thread_id=resolved_thread_id,
+                    )
+                    definition = get_subagent_registry().require(
+                        agent_run_entry.agent_id
+                    )
                     compiled = build_subagent_graph(
-                        definitions[0],
+                        definition,
                         checkpointer=checkpointer,
                     )
                 else:
@@ -255,6 +275,7 @@ class InterruptStateService:
         graph_name: Optional[str] = None,
         graph_thread_id: Optional[str] = None,
         thread_id: Optional[str] = None,
+        tenant_id: Optional[int] = None,
     ) -> bool:
         """Check if task has a pending interrupt.
 
@@ -272,8 +293,39 @@ class InterruptStateService:
             graph_name,
             graph_thread_id=graph_thread_id,
             thread_id=thread_id,
+            tenant_id=tenant_id,
         )
         return result is not None
+
+    async def _resolve_subagent_run_for_thread(
+        self,
+        *,
+        task_id: int,
+        tenant_id: Optional[int],
+        resolved_thread_id: str,
+    ) -> LocalAgentRun:
+        graph_thread_id = _normalize_resolved_thread_id(resolved_thread_id)
+        if graph_thread_id is None:
+            raise RuntimeError(
+                "Subagent interrupt snapshot requires child graph thread identity"
+            )
+        registry = self._agent_run_registry
+        if registry is None:
+            from backend.services.agent_runs.local_runtime import (
+                get_process_local_agent_run_registry,
+            )
+
+            registry = get_process_local_agent_run_registry()
+        entry = await registry.find_active_by_graph_thread(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            graph_thread_id=graph_thread_id,
+        )
+        if entry is None:
+            raise RuntimeError(
+                "Subagent interrupt snapshot requires registered agent identity"
+            )
+        return entry
 
     @staticmethod
     def _resolve_interrupt_id(
@@ -299,6 +351,13 @@ class InterruptStateService:
             return f"{graph_name}:turn-seq:{turn_sequence}"
 
         return f"{graph_name}:task:{task_id}:legacy"
+
+
+def _normalize_resolved_thread_id(thread_id: str) -> str | None:
+    normalized = thread_id.strip()
+    if normalized.startswith("graph-"):
+        normalized = normalized.removeprefix("graph-")
+    return normalize_graph_thread_id(normalized)
 
 
 # Singleton instance for convenience
