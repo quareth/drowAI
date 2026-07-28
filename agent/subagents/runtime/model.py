@@ -71,8 +71,8 @@ class SubagentActionSelectionError(ValueError):
     """Raised when a subagent cannot produce a safe canonical tool batch."""
 
 
-class SubagentToolBuilderPromptBuilder:
-    """Build one native-call request over all definition-visible tools."""
+class SubagentRuntimePromptAdapter:
+    """Bind one declarative definition to the generic runtime prompt family."""
 
     def __init__(self, definition: SubagentDefinition) -> None:
         self._definition = definition
@@ -86,10 +86,10 @@ class SubagentToolBuilderPromptBuilder:
         """Return canonical shared guidance plus scheduling metadata."""
 
         display_name = self._definition.display_name
-        role_prompt = self._definition.tool_builder_role_prompt
+        role_prompt = self._definition.runtime_role_prompt
         if role_prompt is None:
             role_prompt = self._definition.instructions
-        boundary_rules = self._definition.tool_builder_boundary_rules
+        boundary_rules = self._definition.runtime_boundary_rules
         if not boundary_rules:
             boundary_rules = (self._definition.ownership_boundary,)
         return self._delegate.build_system_prompt(
@@ -151,7 +151,7 @@ async def run_subagent_model_turn(
         function_to_tool_id = {}
         tool_choice = "none"
 
-    prompt_builder = SubagentToolBuilderPromptBuilder(definition)
+    prompt_builder = SubagentRuntimePromptAdapter(definition)
     resolver = llm_resolver or resolve_llm_client
     llm_client = resolver(
         interactive.facts.ensure_metadata(),
@@ -198,10 +198,10 @@ async def run_subagent_model_turn(
             ),
             timeout_sec=LLM_TIMEOUT_PLANNER_PARAMETER_RESOLUTION_SEC,
             component="SUBAGENT",
-            operation="native_tool_builder_llm_call",
+            operation="subagent_runtime_model_llm_call",
             logger=logger,
             task_id=interactive.facts.task_id,
-            outcome="native_tool_builder_timeout",
+            outcome="subagent_runtime_model_timeout",
         )
 
         _append_usage(interactive, result)
@@ -290,11 +290,11 @@ def _build_tool_batch_from_result(
     native_calls = list(result.tool_calls or [])
     if not native_calls:
         raise SubagentActionSelectionError(
-            "Subagent native tool builder returned no calls"
+            "Subagent runtime model returned no native tool calls"
         )
     if len(native_calls) > max_committed_calls:
         raise SubagentActionSelectionError(
-            "Subagent native tool builder exceeded the committed call cap: "
+            "Subagent runtime model exceeded the committed call cap: "
             f"{len(native_calls)} > {max_committed_calls}"
         )
 
@@ -343,7 +343,7 @@ def _build_tool_batch_from_result(
 
     if batch_strategy is None:
         raise SubagentActionSelectionError(
-            "Subagent native tool builder omitted execution strategy"
+            "Subagent runtime model omitted execution strategy"
         )
     if len(committed_calls) == 1:
         batch_strategy = ExecutionStrategy.SEQUENTIAL
@@ -790,7 +790,7 @@ __all__ = [
     "SUBAGENT_OBSERVATION_TRANSCRIPT_KEY",
     "SUBAGENT_RESULT_METADATA_KEY",
     "SubagentActionSelectionError",
-    "SubagentToolBuilderPromptBuilder",
+    "SubagentRuntimePromptAdapter",
     "record_subagent_observation_and_budget",
     "run_subagent_model_turn",
 ]

@@ -62,6 +62,9 @@ Not owned by graph builders:
   - Compiles `build_simple_tool_graph`.
 - `backend/services/langgraph_chat/handlers/deep_reasoning_handler.py`
   - Compiles `compile_deep_reasoning_graph`.
+- `backend/services/langgraph_chat/handlers/subagent_handler.py`
+  - Validates classifier handoff arrays, launches generic subagent runs, and
+    runs the parent handoff finalizer once over completed child results.
 - `backend/services/langgraph_chat/execution/graph_executor.py`
   - Runs compiled graphs with `astream(..., stream_mode=["custom", "values"])`.
 - `agent/graph/graph_builder.py`
@@ -110,9 +113,9 @@ Route policy:
   mode for approval behavior.
 - Agent/full-access without plan mode can route through classifier-derived
   execution mode.
-- A direct-executor turn with one supported required Pathfinder handoff routes
-  to the generic subagent handler. `suggested_capabilities` remains advisory assignment
-  context and is not delegation authority.
+- A direct-executor turn with supported required Pathfinder handoff entries
+  routes to the generic subagent handler. `suggested_capabilities` remains
+  advisory assignment context and is not delegation authority.
 - `backend/services/agent_runs/subagent_registry.py` is the control-plane source
   of truth for enabled subagent names, purpose, ownership boundary, supported
   and excluded task categories, target requirements, per-task concurrency, and
@@ -125,11 +128,12 @@ Route policy:
 - Because the registry is currently small and process-static, the classifier
   receives direct catalog enumeration. Tool-based agent discovery is reserved
   for a materially larger or dynamically managed registry.
-- The classifier contract represents handoffs as an ordered array so future
-  registered subagents can be added without another schema-shape change.
-  Current execution supports one subagent handoff and fails closed for unsupported
-  multi-handoff cardinality; parallel fan-out is not claimed until the parent
-  graph owns an explicit fan-out and result-reduction step.
+- The classifier contract represents handoffs as an ordered array. The handler
+  validates every handoff against the live registry before launching any run,
+  caps the plan through `MAX_AGENT_HANDOFFS`, runs allowed entries in
+  concurrency-limited ordered batches, preserves one immutable run/thread per
+  invocation, and runs the parent handoff finalizer once after successful child
+  completion.
 
 ### Pre-classifier context compaction
 
@@ -367,6 +371,37 @@ Important boundaries:
 - `observation_adapter` converts post-tool findings into compact observations
   before returning to `decision_router`.
 - Terminal path is `finalize -> fallback_finalize -> END`.
+
+## Subagent Child Graph
+
+Builder: `agent/subagents/runtime/graph.py::build_subagent_graph`
+
+```mermaid
+flowchart TD
+    initialize --> model
+    model --> approval_gate
+    model --> handoff
+    approval_gate --> dispatch_tool
+    dispatch_tool --> tool_synthesizer
+    tool_synthesizer --> observation
+    observation --> model
+    handoff --> END
+```
+
+Important boundaries:
+
+- `initialize` normalizes declarative definition metadata, assignment identity,
+  graph thread identity, and the definition-owned tool profile.
+- `model` builds the versioned `subagent_runtime` prompt, binds all
+  definition-visible native tools with runtime scheduling metadata, and routes
+  either to shared tool execution or directly to handoff text.
+- `approval_gate`, `dispatch_tool`, and `tool_synthesizer` reuse the existing
+  shared tool execution subgraph.
+- `observation` records a bounded in-session observation transcript and budget
+  marker before returning to the same model session.
+- `handoff` projects the terminal state into the generic `AgentResult`
+  contract. Child PTR, decision-router, think-more, reflect, and separate
+  child-finalizer nodes are not part of the subagent graph.
 
 ## Shared Tool Execution Subgraph
 

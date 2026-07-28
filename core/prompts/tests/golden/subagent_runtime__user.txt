@@ -7,7 +7,7 @@ Turn Execution Brief:
 - Targets: ["10.0.0.10"]
 - Explicit constraints: ["Approved internal test host only."]
 
-Candidate Tools (complete Pathfinder profile; no selection step):
+Candidate Tools (complete Pathfinder runtime profile; no separate selection step):
 ["information_gathering.network_discovery.fping", "information_gathering.network_discovery.nmap"]
 
 Remaining Limits:

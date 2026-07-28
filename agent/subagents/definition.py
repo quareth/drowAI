@@ -49,8 +49,8 @@ _REQUIRED_KEYS = frozenset(
 _OPTIONAL_KEYS = frozenset(
     {
         "enabled",
-        "tool_builder_role_prompt",
-        "tool_builder_boundary_rules",
+        "runtime_role_prompt",
+        "runtime_boundary_rules",
     }
 )
 _KNOWN_KEYS = _REQUIRED_KEYS | _OPTIONAL_KEYS
@@ -80,8 +80,8 @@ class SubagentDefinition:
     requires_resolved_target: bool
     icon: str
     instructions: str
-    tool_builder_role_prompt: str | None
-    tool_builder_boundary_rules: tuple[str, ...]
+    runtime_role_prompt: str | None
+    runtime_boundary_rules: tuple[str, ...]
 
     @classmethod
     def from_mapping(
@@ -155,14 +155,14 @@ class SubagentDefinition:
             ),
             icon=_require_canonical_id(data, "icon", source=source),
             instructions=_require_text(data, "instructions", source=source),
-            tool_builder_role_prompt=_require_optional_text(
+            runtime_role_prompt=_require_optional_text(
                 data,
-                "tool_builder_role_prompt",
+                "runtime_role_prompt",
                 source=source,
             ),
-            tool_builder_boundary_rules=_require_optional_text_tuple(
+            runtime_boundary_rules=_require_optional_text_tuple(
                 data,
-                "tool_builder_boundary_rules",
+                "runtime_boundary_rules",
                 source=source,
                 require_non_empty=True,
             ),

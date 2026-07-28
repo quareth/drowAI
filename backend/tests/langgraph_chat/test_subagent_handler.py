@@ -418,8 +418,8 @@ def _second_agent_definition() -> SubagentDefinition:
         requires_resolved_target=True,
         icon="cartographer",
         instructions="Map only the assigned approved assets.",
-        tool_builder_role_prompt=None,
-        tool_builder_boundary_rules=(),
+        runtime_role_prompt=None,
+        runtime_boundary_rules=(),
     )
 
 

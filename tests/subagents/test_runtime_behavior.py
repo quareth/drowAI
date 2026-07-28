@@ -10,23 +10,22 @@ from typing import Any
 
 import pytest
 
-from agent.config import AgentConfig
 from agent.graph.state import InteractiveState, ToolExecutionRecord
 from agent.providers.llm.core.base import ToolCall as ProviderToolCall
 from agent.providers.llm.core.base import ToolCallResult
 from agent.subagents.contracts import AgentAssignment, AgentRuntimeIdentity
 from agent.subagents.definition import SubagentDefinition, load_subagent_definitions
+from agent.subagents.runtime import model as runtime_model
 from agent.subagents.runtime.complete import complete_subagent_result
 from agent.subagents.runtime.model import (
     SUBAGENT_ACTION_METADATA_KEY,
     SUBAGENT_EXECUTION_STRATEGY_KEY,
     SUBAGENT_OBSERVATION_TRANSCRIPT_KEY,
     SUBAGENT_RESULT_METADATA_KEY,
-    SubagentToolBuilderPromptBuilder,
+    SubagentRuntimePromptAdapter,
     record_subagent_observation_and_budget,
     run_subagent_model_turn,
 )
-from agent.subagents.runtime import model as runtime_model
 from agent.subagents.runtime.profile import (
     SubagentToolProfile,
     SubagentToolSpec,
@@ -38,7 +37,6 @@ from agent.subagents.runtime.state import (
     subagent_state_from_graph_state,
 )
 from agent.tools.tool_call_specs import make_function_name_for_tool
-from core.prompts.tests._golden import assert_golden
 
 
 FPING_TOOL_ID = "information_gathering.network_discovery.fping"
@@ -219,34 +217,6 @@ def test_runtime_initial_state_uses_generic_metadata_key() -> None:
     )
 
 
-def test_runtime_model_prompt_matches_current_pathfinder_golden() -> None:
-    definition = _pathfinder_definition()
-    prompt = SubagentToolBuilderPromptBuilder(definition).build_system_prompt(
-        max_committed_tools_per_batch=AgentConfig().max_committed_tools_per_batch
-    )
-
-    assert_golden("subagent_tool_builder__system.txt", prompt)
-
-
-def test_runtime_model_user_prompt_matches_current_pathfinder_golden() -> None:
-    definition = _pathfinder_definition()
-    prompt = SubagentToolBuilderPromptBuilder(definition).build_user_prompt(
-        assignment=_assignment().model_dump(mode="json"),
-        tool_ids=_profile().tool_ids,
-        working_memory={
-            "findings": ["prior ping sweep found one host"],
-            "todos": ["confirm exposed services"],
-        },
-        previous_tool_summary={
-            "tool": FPING_TOOL_ID,
-            "summary": "10.0.0.10 responded",
-            "key_findings": ["host alive"],
-        },
-    )
-
-    assert_golden("subagent_tool_builder__user.txt", prompt)
-
-
 def test_runtime_model_prompt_identity_and_boundaries_come_from_definition() -> None:
     definition = replace(
         _pathfinder_definition(),
@@ -262,17 +232,17 @@ def test_runtime_model_prompt_identity_and_boundaries_come_from_definition() -> 
             "You are ArtifactAuditor, a generated-artifact review subagent.\n"
             "Inspect only assigned artifacts."
         ),
-        tool_builder_role_prompt=(
+        runtime_role_prompt=(
             "You are ArtifactAuditor, a generated-artifact review subagent.\n"
             "Emit artifact review notes only."
         ),
-        tool_builder_boundary_rules=(
+        runtime_boundary_rules=(
             "Use only the assigned artifacts and review objective.",
             "Do not scan networks, modify files, or produce final user-facing reports.",
         ),
     )
 
-    prompt = SubagentToolBuilderPromptBuilder(definition).build_system_prompt(
+    prompt = SubagentRuntimePromptAdapter(definition).build_system_prompt(
         max_committed_tools_per_batch=2
     )
 

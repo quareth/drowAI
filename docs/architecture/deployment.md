@@ -136,16 +136,16 @@ non-recon or mixed-scope turns on their existing branches.
 The current architecture has these operator constraints:
 
 - exactly one backend process must own subagent orchestration for a task
-  population because the registry has no distributed claim, lease, or
-  heartbeat;
+  population because the process-local run registry has no distributed claim,
+  lease, or heartbeat;
 - active or waiting subagent runs are lost on backend restart and are not
   rediscovered from checkpoints;
 - replay is limited to existing recent task stream replay and client-side
   `agent_run_id` filtering;
-- on uninterrupted same-process completion, Pathfinder returns a bounded
-  `AgentResult` to the original parent turn and the main finalizer produces the
-  chat answer; result recovery remains best-effort and may be absent or
-  repeated after restart;
+- on uninterrupted same-process completion, validated subagent handoffs return
+  bounded `AgentResult` values to the original parent turn and the main
+  finalizer produces the chat answer once; result recovery remains best-effort
+  and may be absent or repeated after restart;
 - there is no database rollback because the pilot adds no table, column,
   repository, or migration.
 

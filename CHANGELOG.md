@@ -55,9 +55,8 @@ The format is based on
   run identity and stream sequence, regardless of the implemented subagent kind,
   and completed-turn summaries count each distinct run as an agent.
 - Pathfinder handoff responses now stop their streaming indicator when the answer
-  section closes, use a bounded subagent finalizer prompt, and return their
-  structured result to the original parent turn so the unchanged main
-  finalizer produces the chat answer.
+  section closes, return a bounded child result from the generic runtime loop,
+  and hand it to the unchanged main finalizer to produce the chat answer.
 - JWT signing now rejects configured HS256 secrets shorter than 32 bytes and
   automatically repairs legacy short generated secrets during bootstrap.
 - Amass now reuses serialized task-scoped v5 state across enumeration and

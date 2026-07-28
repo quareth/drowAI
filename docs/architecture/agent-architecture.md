@@ -53,6 +53,9 @@ Not owned by the agent layer:
 - `agent/graph/*`
   - Graph state, builders, nodes, context, memory, streaming, and tool execution
     subgraphs.
+- `agent/subagents/*`
+  - Declarative subagent definitions, definition-backed registries, and the
+    generic child runtime graph used by process-local subagent runs.
 - `agent/tool_runtime/*`
   - Runtime tool coordination, transport routing, timeout policy, batch
     execution, and lane policy.
@@ -68,6 +71,14 @@ Not owned by the agent layer:
   - Owns LangGraph runtime structure: state models, builders, nodes, context
     bundle projections, memory updates, streaming event helpers, and shared
     tool execution subgraph.
+- `agent/subagents`
+  - Owns static TOML definition loading, registry projections, generic
+    assignment/result contracts, and the definition-configured child graph.
+    The child graph runs one bounded model/tool session using the versioned
+    `subagent_runtime` prompt family, shared approval/dispatch/synthesis nodes,
+    bounded observations, and a concise parent handoff. It does not carry
+    Pathfinder/Scout-specific Python orchestration, child PTR/router reasoning,
+    or an extra child-only LLM completion stage.
 - `agent/tool_runtime`
   - Owns tool execution policy after a tool plan exists: lane classification,
     timeout planning, transport routing, batch execution, PTY/file-comm/direct

@@ -89,7 +89,10 @@ def test_subagent_runtime_user_prompt_injects_assignment_tools_observations_and_
     )
 
     assert_golden("subagent_runtime__user.txt", prompt)
-    assert "Candidate Tools (complete Pathfinder profile; no selection step):" in prompt
+    assert (
+        "Candidate Tools (complete Pathfinder runtime profile; "
+        "no separate selection step):"
+    ) in prompt
     assert "Remaining Limits:" in prompt
     assert "Bounded Prior Observations:" in prompt
     assert "...[truncated]" in prompt
@@ -110,7 +113,7 @@ def test_subagent_runtime_prompt_metadata_is_stable() -> None:
     )
 
     assert rendered.prompt_family == SUBAGENT_RUNTIME_PROMPT_FAMILY
-    assert rendered.prompt_version == "v1"
+    assert rendered.prompt_version == "v2"
     assert rendered.prompt_template_ids == SUBAGENT_RUNTIME_PROMPT_TEMPLATE_IDS
     assert rendered.system_prompt
     assert rendered.user_prompt

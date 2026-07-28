@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from agent.config import AgentConfig
 from agent.subagents.definition import SubagentDefinition, load_subagent_definitions
-from agent.subagents.runtime.model import SubagentToolBuilderPromptBuilder
 from agent.subagents.runtime.profile import resolve_subagent_tool_profile
 from backend.services.agent_runs.subagent_registry import get_subagent_registry
-from core.prompts.tests._golden import assert_golden
 
 
 _SUPPORTED_CATEGORY_TO_PROFILE_CAPABILITY = {
@@ -78,31 +76,17 @@ def test_pathfinder_definition_matches_current_runtime_limits() -> None:
     assert definition.max_iterations == 3
 
 
-def test_pathfinder_definition_matches_current_prompt_sections() -> None:
+def test_pathfinder_definition_owns_runtime_prompt_sections() -> None:
     definition = _pathfinder_definition()
 
-    prompt = SubagentToolBuilderPromptBuilder(definition).build_system_prompt(
-        max_committed_tools_per_batch=definition.max_tool_calls_per_iteration,
-    )
-
-    assert_golden("subagent_tool_builder__system.txt", prompt)
-    assert prompt.startswith(
-        f"You are {definition.display_name}, a bounded recon subagent.\n"
+    assert definition.runtime_role_prompt == (
+        "You are Pathfinder, a bounded recon subagent.\n"
         "Use native tool calls when more evidence is needed; otherwise return a "
         "concise parent handoff."
     )
-    assert (
-        f"Call between 1 and {definition.max_tool_calls_per_iteration} "
-        "candidate tool function(s) for this iteration."
-    ) in prompt
-    assert (
-        f"{definition.display_name} batch strategy metadata (`_execution_strategy`):"
-        in prompt
+    assert definition.runtime_boundary_rules == (
+        "Use only the targets, objective, scope, and constraints in the "
+        "assignment context.",
+        "Do not exploit, authenticate, mutate files, run shells, manage "
+        "agents, or request credentials.",
     )
-    assert (
-        f"{definition.display_name} boundaries:\n"
-        "- Use only the targets, objective, scope, and constraints in the "
-        "assignment context.\n"
-        "- Do not exploit, authenticate, mutate files, run shells, manage "
-        "agents, or request credentials."
-    ) in prompt
