@@ -11,6 +11,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { TaskPanelVisibilityButton } from "@/components/panels/task-panel-visibility-button";
 import { Filter, LayoutList, List, ListTodo, Plus, Search, X } from "lucide-react";
 
 export interface TaskPanelToolbarProps {
@@ -20,6 +21,7 @@ export interface TaskPanelToolbarProps {
   onNewEngagement: () => void;
   nameFilter: string;
   onNameFilterChange: (value: string) => void;
+  onToggleVisibility?: () => void;
   canCreateTask?: boolean;
   canCreateEngagement?: boolean;
 }
@@ -31,6 +33,7 @@ export function TaskPanelToolbar({
   onNewEngagement,
   nameFilter,
   onNameFilterChange,
+  onToggleVisibility,
   canCreateTask = true,
   canCreateEngagement = true,
 }: TaskPanelToolbarProps) {
@@ -44,6 +47,12 @@ export function TaskPanelToolbar({
         <span className="text-xs font-medium text-slate-200">Operations</span>
       </div>
       <div className="flex items-center space-x-1">
+        {onToggleVisibility ? (
+          <TaskPanelVisibilityButton
+            isCollapsed={false}
+            onToggle={onToggleVisibility}
+          />
+        ) : null}
         <Button
           variant={viewMode === "grouped" ? "secondary" : "ghost"}
           size="sm"
