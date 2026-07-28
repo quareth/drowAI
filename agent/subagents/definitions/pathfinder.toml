@@ -2,7 +2,7 @@ schema_version = 1
 id = "pathfinder"
 display_name = "Pathfinder"
 kind = "recon"
-description = "Bounded network reconnaissance agent."
+description = "Perform bounded network reconnaissance and return concise evidence to the main agent."
 ownership_boundary = "Own host discovery, port scanning, and service enumeration only; do not exploit, authenticate, modify targets, or produce the user's final answer."
 supported_task_categories = [
   "host_discovery",
