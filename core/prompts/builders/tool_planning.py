@@ -33,6 +33,18 @@ def _render_latest(template_name: str, **context: Any) -> str:
     return template.format_map(safe_context)
 
 
+def _extract_tagged_prompt_section(prompt: str, tag: str) -> str:
+    """Return one inclusive XML-like section from a canonical prompt."""
+
+    start_marker = f"<{tag}>"
+    end_marker = f"</{tag}>"
+    start = prompt.find(start_marker)
+    end = prompt.find(end_marker)
+    if start < 0 or end < start:
+        raise ValueError(f"Canonical tool builder prompt is missing <{tag}>")
+    return prompt[start : end + len(end_marker)]
+
+
 def _format_history(history: Sequence[Dict[str, Any]], max_turns: int = 5) -> str:
     """Format conversation history for context.
 
@@ -400,6 +412,45 @@ class ToolPlanningPromptBuilder:
             "tool_parameters_system.txt",
             max_committed_tools_per_batch=cap_value,
         )
+
+    def build_native_tool_call_shared_guidance(
+        self,
+        *,
+        max_committed_tools_per_batch: int = 1,
+    ) -> str:
+        """Return exact selector-independent guidance from the native builder.
+
+        The Scout subagent binds its complete bounded tool profile directly, so
+        it must not inherit the main planner's upstream-selector paragraph.
+        This method keeps the reusable instructions single-sourced in the
+        canonical parameter-builder prompt while returning only:
+
+        - native call count, candidate, concrete-parameter, and intent rules;
+        - execution-strategy guidance;
+        - batch examples; and
+        - commit rules.
+        """
+
+        prompt = self.build_tool_parameters_system_prompt(
+            max_committed_tools_per_batch=max_committed_tools_per_batch,
+        )
+        selector_header = "Execution strategy (read from Selector Decision"
+        selector_start = prompt.find(selector_header)
+        if selector_start < 0:
+            raise ValueError(
+                "Canonical tool builder prompt is missing selector strategy guidance"
+            )
+        intro = prompt[:selector_start].rstrip()
+        strategy = _extract_tagged_prompt_section(
+            prompt,
+            "execution_strategy_guidance",
+        )
+        examples = _extract_tagged_prompt_section(prompt, "examples")
+        commit_start = prompt.find("Commit rules:")
+        if commit_start < 0:
+            raise ValueError("Canonical tool builder prompt is missing Commit rules")
+        commit_rules = prompt[commit_start:].strip()
+        return "\n\n".join((intro, strategy, examples, commit_rules))
 
     def build_resolve_tools_prompt(
         self,

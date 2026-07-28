@@ -11,11 +11,16 @@ from __future__ import annotations
 import json
 from typing import Any, Dict
 
+from agent.graph.context.builder import (
+    METADATA_CONTEXT_BUNDLE_KEY,
+    build_conversation_context_bundle,
+)
 from agent.graph.utils import iteration_memory as _iteration_memory
 from core.prompts.builders.finalize import (
     ADDENDUM_ANALYST,
     ADDENDUM_DR,
     ADDENDUM_RETRY,
+    SUBAGENT_SYSTEM_BASE,
     SYSTEM_BASE,
     build_finalize_prompts,
 )
@@ -77,6 +82,67 @@ def test_finalize_results_prompt_contract_no_intent_classifier_leak() -> None:
     assert "intent classifier decision" not in combined
     # Closer must be the operator-voice instructions, not the legacy summarizer.
     assert "summarize the engagement results above" not in combined
+
+
+def test_subagent_finalizer_prompt_is_a_bounded_handoff() -> None:
+    """Child finalization reuses evidence sections without impersonating the parent."""
+    system_prompt, user_prompt = build_finalize_prompts(
+        user_message="Scan 127.0.0.1 for PostgreSQL",
+        synthesized={
+            "tool": "nmap.scan",
+            "summary": "5432/tcp is closed",
+            "key_findings": ["5432/tcp closed"],
+        },
+        capability="simple_tool_execution",
+        finalizer_mode="subagent_handoff",
+    )
+
+    assert SUBAGENT_SYSTEM_BASE.strip() in system_prompt
+    assert SYSTEM_BASE.strip() not in system_prompt
+    assert "bounded assignment" in system_prompt.lower()
+    assert "parent agent" in system_prompt.lower()
+    assert "## User Request" in user_prompt
+    assert "## Tool Summary (nmap.scan)" in user_prompt
+    assert "exactly the four" not in user_prompt.lower()
+    assert "handoff" in user_prompt.lower()
+
+
+def test_main_finalizer_prompt_consumes_completed_agent_result() -> None:
+    """The parent finalizer receives the child's bounded structured handoff."""
+    bundle = build_conversation_context_bundle(
+        conversation_id="conv-42",
+        turn_id="task-42-turn-5",
+        turn_sequence=5,
+        messages=[],
+        current_message="Scan 127.0.0.1 for PostgreSQL",
+    )
+    bundle["completed_agent_results"] = [
+        {
+            "agent_run_id": "scout-1",
+            "agent_kind": "recon",
+            "agent_display_name": "Scout",
+            "outcome": "completed",
+            "summary": "PostgreSQL is listening on 5432/tcp.",
+            "key_findings": ["5432/tcp open"],
+            "evidence_refs": [],
+            "tools_used": ["information_gathering.network_discovery.nmap"],
+            "limitations": [],
+            "recommended_next_steps": ["Enumerate the PostgreSQL service."],
+            "final_checkpoint_id": "cp-scout-1",
+        }
+    ]
+
+    system_prompt, user_prompt = build_finalize_prompts(
+        user_message="Scan 127.0.0.1 for PostgreSQL",
+        metadata={METADATA_CONTEXT_BUNDLE_KEY: bundle},
+        capability="simple_tool_execution",
+    )
+
+    assert SYSTEM_BASE.strip() in system_prompt
+    assert "## Completed Agent Results" in user_prompt
+    assert "Scout result (scout-1): completed" in user_prompt
+    assert "summary: PostgreSQL is listening on 5432/tcp." in user_prompt
+    assert "tools: information_gathering.network_discovery.nmap" in user_prompt
 
 
 def test_finalize_results_prompt_contract_retry_addendum_present() -> None:

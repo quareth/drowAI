@@ -74,7 +74,7 @@ from core.llm import (
     iter_with_idle_timeout,
     wait_for_with_timeout,
 )
-from core.prompts.builders.finalize import build_finalize_prompts
+from core.prompts.builders.finalize import FinalizerMode, build_finalize_prompts
 
 from ._finalize_helpers import resolve_simple_tool_retry_context
 from .node_utils import _usage_to_dict, normalize_stream_chunk
@@ -89,6 +89,24 @@ logger = logging.getLogger(__name__)
 
 def _is_deep_reasoning(facts: FactsState) -> bool:
     return str(facts.capability or "").strip().lower() == "deep_reasoning"
+
+
+def _resolve_finalizer_mode(
+    interactive: InteractiveState,
+    config: Optional[Mapping[str, Any]],
+) -> FinalizerMode:
+    """Select child handoff finalization only for attributed subagent runs."""
+    sources: List[Mapping[str, Any]] = [interactive.facts.safe_metadata]
+    if isinstance(config, Mapping):
+        configurable = config.get("configurable")
+        if isinstance(configurable, Mapping):
+            sources.append(configurable)
+
+    for source in sources:
+        agent_run_id = str(source.get("agent_run_id") or "").strip()
+        if source.get("producer_type") == "subagent" and agent_run_id:
+            return "subagent_handoff"
+    return "main"
 
 
 # ---------------------------------------------------------------------------
@@ -221,6 +239,7 @@ def _build_prompts(interactive: InteractiveState) -> Tuple[str, str]:
         interactive=interactive,
         context=None,
         capability=capability,
+        finalizer_mode=_resolve_finalizer_mode(interactive, None),
     )
     return system_prompt, user_prompt
 
@@ -230,6 +249,7 @@ def _build_messages(
     interactive: InteractiveState,
     context: Optional[GraphRuntimeContext],
     capability: str,
+    finalizer_mode: FinalizerMode,
 ) -> Tuple[str, str, Dict[str, Any]]:
     """Build messages for the unified finalizer call.
 
@@ -253,6 +273,7 @@ def _build_messages(
             transcript_text=ctx["transcript_text"],
             runtime_state_text=ctx["runtime_state_text"],
             targets=ctx["targets"],
+            finalizer_mode=finalizer_mode,
         )
         return system_prompt, user_prompt, ctx
 
@@ -270,6 +291,7 @@ def _build_messages(
         current_goal=ctx["current_goal"],
         turn_sequence=ctx["turn_sequence"],
         capability=capability,
+        finalizer_mode=finalizer_mode,
     )
     return system_prompt, user_prompt, ctx
 
@@ -428,11 +450,15 @@ async def finalize_results(
     writer = get_stream_writer()
 
     capability = "deep_reasoning" if _is_deep_reasoning(facts) else "simple_tool_execution"
-    operation_label = (
-        "deep_reasoning_finalizer"
-        if capability == "deep_reasoning"
-        else "finalize_tool_results"
-    )
+    finalizer_mode = _resolve_finalizer_mode(interactive, config)
+    if finalizer_mode == "subagent_handoff":
+        operation_label = "subagent_handoff_finalizer"
+    else:
+        operation_label = (
+            "deep_reasoning_finalizer"
+            if capability == "deep_reasoning"
+            else "finalize_tool_results"
+        )
 
     emitter = _create_emitter(
         capability=capability,
@@ -455,8 +481,10 @@ async def finalize_results(
         interactive=interactive,
         context=context,
         capability=capability,
+        finalizer_mode=finalizer_mode,
     )
 
+    message_section_open = False
     try:
         llm_client = resolve_llm_client(
             metadata,
@@ -472,6 +500,7 @@ async def finalize_results(
 
         if writer and emitter:
             emitter.emit_message_start()
+            message_section_open = True
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -494,8 +523,21 @@ async def finalize_results(
 
         if writer and emitter:
             emitter.emit_section_end("final_answer")
+            message_section_open = False
 
     except Exception as exc:
+        if writer and emitter and message_section_open:
+            try:
+                emitter.emit_stream_error(
+                    "Final response stream failed.",
+                    recoverable=False,
+                )
+                emitter.emit_section_end("final_answer")
+            except Exception:
+                logger.debug(
+                    "Failed to close finalizer message section after error",
+                    exc_info=True,
+                )
         logger.error(
             "Unified finalizer (%s) failed: %s", capability, exc, exc_info=True
         )
@@ -503,7 +545,8 @@ async def finalize_results(
 
     interactive.trace.final_text = final_text
     interactive.trace.reasoning.append(
-        f"Generated final response via unified finalizer ({capability})."
+        f"Generated final response via unified finalizer "
+        f"({capability}, {finalizer_mode})."
     )
 
     if captured_usage:

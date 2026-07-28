@@ -75,6 +75,21 @@ class MissingUsageClient(DummyClient):
         return _StreamWithoutUsage()
 
 
+class FailingUsageStreamClient(DummyClient):
+    async def stream_chat_messages_with_usage(self, messages, **kwargs):
+        async def _failing_iterator():
+            yield "partial final text"
+            raise RuntimeError("stream failed")
+
+        class _FailingStream:
+            content_iterator = _failing_iterator()
+
+            def get_final_usage(self):
+                return None
+
+        return _FailingStream()
+
+
 def _minimal_state() -> dict[str, Any]:
     interactive = InteractiveState(
         facts=FactsState(
@@ -256,6 +271,95 @@ async def test_finalize_tool_results_includes_ptr_context_sections(monkeypatch):
     assert "## PTR Analyst Observation" in user_prompt
     assert "## Active Decision (advisory)" in user_prompt
     assert "### Key Findings (analyst-derived)" in user_prompt
+
+
+@pytest.mark.asyncio
+async def test_finalize_results_selects_subagent_handoff_prompt(monkeypatch):
+    """Subagent attribution should select the child handoff prompt only."""
+    interactive = InteractiveState(
+        facts=FactsState(
+            task_id=42,
+            message="Scan localhost for PostgreSQL.",
+            conversation_id="conv-xyz",
+            metadata={
+                "producer_type": "subagent",
+                "agent_run_id": "scout-run-1",
+                "agent_kind": "recon",
+                "synthesized_output": {
+                    "tool": "nmap",
+                    "summary": "5432/tcp is closed.",
+                    "key_findings": ["5432/tcp closed"],
+                },
+            },
+        ),
+        trace=TraceState(),
+    )
+
+    client = CapturingClient("test-key", "gpt-5.2")
+    monkeypatch.setattr(finalize_module, "resolve_llm_client", lambda *_args, **_kwargs: client)
+    monkeypatch.setattr(finalize_module, "get_stream_writer", lambda: None)
+
+    result = await finalize_module.finalize_results(
+        interactive.model_dump(),
+        context=None,
+        config={"configurable": {"thread_id": "lg-42"}},
+    )
+
+    assert client.calls
+    system_prompt = client.calls[-1][0]["content"]
+    user_prompt = client.calls[-1][1]["content"]
+    assert "bounded assignment" in system_prompt.lower()
+    assert "parent agent" in system_prompt.lower()
+    assert "handoff" in user_prompt.lower()
+    assert any(
+        "subagent_handoff" in entry
+        for entry in result["trace"]["reasoning"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_finalize_results_closes_subagent_message_section_on_stream_failure(monkeypatch):
+    """An opened child final-answer stream must emit a terminal section on failure."""
+    interactive = InteractiveState(
+        facts=FactsState(
+            task_id=42,
+            message="Scan localhost for PostgreSQL.",
+            conversation_id="conv-xyz",
+            metadata={
+                "producer_type": "subagent",
+                "agent_run_id": "scout-run-1",
+                "agent_kind": "recon",
+                "synthesized_output": {
+                    "tool": "nmap",
+                    "summary": "5432/tcp is closed.",
+                    "key_findings": ["5432/tcp closed"],
+                },
+            },
+        ),
+        trace=TraceState(),
+    )
+    dummy_writer = DummyWriter()
+    monkeypatch.setattr(
+        finalize_module,
+        "resolve_llm_client",
+        lambda *_args, **_kwargs: FailingUsageStreamClient("test-key", "gpt-5.2"),
+    )
+    monkeypatch.setattr(finalize_module, "get_stream_writer", lambda: dummy_writer)
+
+    with pytest.raises(RuntimeError, match="stream failed"):
+        await finalize_module.finalize_results(
+            interactive.model_dump(),
+            context=None,
+            config={"configurable": {"thread_id": "lg-42"}},
+        )
+
+    step_types = [event.get("step_type") for event in dummy_writer.events]
+    assert step_types.count("message_start") == 1
+    assert "stream_error" in step_types
+    assert "message_section_end" in step_types
+    terminal_event = dummy_writer.events[-1]
+    assert terminal_event["step_type"] == "message_section_end"
+    assert terminal_event["agent_run_id"] == "scout-run-1"
 
 
 @pytest.mark.asyncio

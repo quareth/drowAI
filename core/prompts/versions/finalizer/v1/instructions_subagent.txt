@@ -1,0 +1,3 @@
+## Handoff Instructions
+
+Produce the bounded subagent handoff now. Summarize the completed assignment using only the supplied context and evidence. Include any material limitation or failure that changes how the result should be interpreted. A next-step suggestion may be included as advice to the parent agent, but do not take ownership of the broader engagement or address the user as though this were the main agent's final answer.

@@ -16,8 +16,10 @@ the existing helper contract: return either a non-empty rendered string or
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Literal, Mapping, Optional, Sequence, Tuple
 
+from agent.graph.context.builder import METADATA_CONTEXT_BUNDLE_KEY
+from agent.graph.context.serialization import render_completed_agent_results_section
 from agent.graph.memory.findings import format_findings_for_finalizer
 from agent.graph.utils import iteration_memory as _iteration_memory
 from core.prompts.builders._text import strip_referenced_prior_turns_label
@@ -28,6 +30,9 @@ _TEMPLATE_LOADER = TemplateLoader(Path(__file__).resolve().parents[1] / "version
 SYSTEM_BASE = _TEMPLATE_LOADER.load_latest_version("finalizer", "system_base.txt").rstrip(
     "\n"
 )
+SUBAGENT_SYSTEM_BASE = _TEMPLATE_LOADER.load_latest_version(
+    "finalizer", "system_subagent.txt"
+).rstrip("\n")
 ADDENDUM_RETRY = _TEMPLATE_LOADER.load_latest_version(
     "finalizer", "addendum_retry.txt"
 ).rstrip("\n")
@@ -40,6 +45,11 @@ ADDENDUM_ANALYST = _TEMPLATE_LOADER.load_latest_version(
 USER_INSTRUCTIONS = _TEMPLATE_LOADER.load_latest_version(
     "finalizer", "instructions.txt"
 ).rstrip("\n")
+SUBAGENT_USER_INSTRUCTIONS = _TEMPLATE_LOADER.load_latest_version(
+    "finalizer", "instructions_subagent.txt"
+).rstrip("\n")
+
+FinalizerMode = Literal["main", "subagent_handoff"]
 
 
 # ---------------------------------------------------------------------------
@@ -262,6 +272,20 @@ def _build_phase_memory_section(
     )
 
 
+def _build_completed_agent_results_section(
+    metadata: Optional[Mapping[str, Any]],
+) -> str:
+    """Render bounded child results for the parent finalizer."""
+    if not isinstance(metadata, Mapping):
+        return ""
+    bundle = metadata.get(METADATA_CONTEXT_BUNDLE_KEY)
+    source = bundle if isinstance(bundle, Mapping) else metadata
+    rendered = render_completed_agent_results_section(source)
+    if not rendered:
+        return ""
+    return f"## {rendered}"
+
+
 def _build_effective_goal_section(current_goal: Optional[str]) -> str:
     """Render effective-goal section from current facts state."""
     goal = str(current_goal or "").strip()
@@ -477,8 +501,10 @@ def _build_tool_activity_section(
     return f"## Tool Activity\n{rendered}"
 
 
-def _build_user_instructions_section() -> str:
+def _build_user_instructions_section(finalizer_mode: FinalizerMode) -> str:
     """Return the closing user-prompt instructions block (always present)."""
+    if finalizer_mode == "subagent_handoff":
+        return SUBAGENT_USER_INSTRUCTIONS
     return USER_INSTRUCTIONS
 
 
@@ -496,8 +522,15 @@ def _assemble_system_prompt(
     retry_attempts: Optional[Sequence[Mapping[str, Any]]],
     capability: Optional[str],
     candidate_findings: Sequence[Mapping[str, Any]],
+    finalizer_mode: FinalizerMode,
 ) -> str:
     """Return the additive operator-voice system prompt for this turn."""
+    if finalizer_mode == "subagent_handoff":
+        parts: List[str] = [SUBAGENT_SYSTEM_BASE]
+        if candidate_findings:
+            parts.append(ADDENDUM_ANALYST)
+        return "\n\n".join(parts)
+
     parts: List[str] = [SYSTEM_BASE]
     if retry_attempts and len(retry_attempts) > 1:
         parts.append(ADDENDUM_RETRY)
@@ -535,6 +568,7 @@ def build_finalize_prompts(
     transcript_text: str = "",
     runtime_state_text: str = "",
     targets: Optional[Sequence[str]] = None,
+    finalizer_mode: FinalizerMode = "main",
 ) -> Tuple[str, str]:
     """Build system + user prompts for the unified finalizer node.
 
@@ -559,6 +593,7 @@ def build_finalize_prompts(
         retry_attempts=retry_attempts,
         capability=capability,
         candidate_findings=candidate_findings,
+        finalizer_mode=finalizer_mode,
     )
 
     sections: List[str] = []
@@ -583,6 +618,7 @@ def build_finalize_prompts(
         sections.append(
             _build_phase_memory_section(metadata, turn_sequence=turn_sequence)
         )
+        sections.append(_build_completed_agent_results_section(metadata))
         sections.append(_build_ptr_observation_section(synthesized_map))
         sections.append(_build_tool_summary_section(synthesized_map))
         sections.extend(
@@ -594,7 +630,7 @@ def build_finalize_prompts(
             )
         )
 
-    sections.append(_build_user_instructions_section())
+    sections.append(_build_user_instructions_section(finalizer_mode))
 
     user_prompt = "\n\n".join(section for section in sections if section)
     return system_prompt, user_prompt
@@ -604,6 +640,9 @@ __all__ = [
     "ADDENDUM_ANALYST",
     "ADDENDUM_DR",
     "ADDENDUM_RETRY",
+    "FinalizerMode",
+    "SUBAGENT_SYSTEM_BASE",
+    "SUBAGENT_USER_INSTRUCTIONS",
     "SYSTEM_BASE",
     "USER_INSTRUCTIONS",
     "build_finalize_prompts",

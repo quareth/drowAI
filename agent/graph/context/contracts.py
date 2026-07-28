@@ -63,6 +63,11 @@ Section ownership
     runtime-verified ``ChatMessage`` text that downstream prompts may
     quote or reason from.
 
+- ``CompletedAgentResult``
+    Bounded, safe same-process subagent result summaries projected by
+    the backend registry. These are not durable memory and carry no raw
+    output or reasoning traces.
+
 - ``ConversationContextBundle``
     The single hot-path envelope. Combines identity fields
     (``conversation_id``, ``turn_id``, ``turn_sequence``) with the
@@ -228,6 +233,22 @@ class PriorTurnReferences(TypedDict):
     unresolved_hints: list[dict[str, Any]]
 
 
+class CompletedAgentResult(TypedDict, total=False):
+    """Bounded same-process subagent result summary for prompt context."""
+
+    agent_run_id: str
+    agent_kind: str
+    agent_display_name: str
+    outcome: str
+    summary: str
+    key_findings: list[str]
+    evidence_refs: list[dict[str, str]]
+    tools_used: list[str]
+    limitations: list[str]
+    recommended_next_steps: list[str]
+    final_checkpoint_id: str | None
+
+
 class ConversationContextBundle(TypedDict):
     """Canonical hot-path memory envelope assembled once per turn.
 
@@ -272,6 +293,10 @@ class ConversationContextBundle(TypedDict):
         current turn across every consumer — text-rendering prompts
         read it via the serializer (opt-in), and simple_chat reads
         it directly when building the chat-API message list.
+    completed_agent_results:
+        Bounded completed subagent result summaries accepted from the
+        live backend process-local registry for this turn. Best-effort
+        only; absence does not imply no subagent work happened.
     retrieved_prior_context:
         **Reserved; intentionally empty in this migration.** Future
         long-term retrieval work will populate this list with
@@ -290,11 +315,13 @@ class ConversationContextBundle(TypedDict):
     evidence_refs: list[EvidenceRef]
     prior_turn_references: PriorTurnReferences
     current_user_turn: dict[str, Any] | None
+    completed_agent_results: list[CompletedAgentResult]
     retrieved_prior_context: list[dict[str, Any]]
 
 
 __all__ = [
     "CLASSIFIER_TRANSCRIPT_WINDOW_KEY",
+    "CompletedAgentResult",
     "ConversationContextBundle",
     "EvidenceRef",
     "PriorTurnReferences",

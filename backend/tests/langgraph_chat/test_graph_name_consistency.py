@@ -13,6 +13,7 @@ def test_backend_hitl_constants_reexport_agent_graph_names() -> None:
         GRAPH_NAME_DEEP_REASONING,
         GRAPH_NAME_INTERRUPT_RESUME,
         GRAPH_NAME_NORMAL_CHAT,
+        GRAPH_NAME_SCOUT_RECON,
         GRAPH_NAME_SIMPLE_TOOL,
     )
     from backend.services.langgraph_chat import hitl_constants
@@ -25,16 +26,23 @@ def test_backend_hitl_constants_reexport_agent_graph_names() -> None:
         == GRAPH_NAME_INTERRUPT_RESUME
         == "interrupt_resume"
     )
+    assert GRAPH_NAME_SCOUT_RECON == "scout_recon"
     assert hitl_constants.DEFAULT_GRAPH_NAME == DEFAULT_GRAPH_NAME == GRAPH_NAME_SIMPLE_TOOL
 
 
 def test_builder_graph_names_are_runtime_names() -> None:
     from agent.graph.builders.deep_reasoning_builder import GRAPH_NAME as deep_reasoning_name
     from agent.graph.builders.simple_tool_builder import GRAPH_NAME as simple_tool_name
-    from agent.graph.graph_names import GRAPH_NAME_DEEP_REASONING, GRAPH_NAME_SIMPLE_TOOL
+    from agent.graph.graph_names import (
+        GRAPH_NAME_DEEP_REASONING,
+        GRAPH_NAME_SCOUT_RECON,
+        GRAPH_NAME_SIMPLE_TOOL,
+    )
+    from agent.subagents.scout.graph import GRAPH_NAME_SCOUT_RECON as scout_name
 
     assert simple_tool_name == GRAPH_NAME_SIMPLE_TOOL
     assert deep_reasoning_name == GRAPH_NAME_DEEP_REASONING
+    assert scout_name == GRAPH_NAME_SCOUT_RECON
 
 
 def test_usage_extractor_import_path_stays_compatible() -> None:
