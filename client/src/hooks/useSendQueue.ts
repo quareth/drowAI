@@ -1,9 +1,11 @@
+/**
+ * Manages client-side prompt queuing and releases one prompt after each completed chat run.
+ */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getConversationId } from "@/utils/chatMeta";
 import { useStreamingState } from "@/hooks/useStreamingState";
 
 import type { ChatMessage } from "@/components/chat/types";
-
 
 const QUEUE_DISPATCH_DELAY_MS = 500;
 const STREAM_END_DEBOUNCE_MS = 700;
@@ -101,6 +103,21 @@ export function useSendQueue({
   const prevGlobalStreamingRef = useRef(false);
   const [shouldProcessQueue, setShouldProcessQueue] = useState(false);
   const streamEndTimerRef = useRef<number | null>(null);
+  const completionReleaseArmedRef = useRef(false);
+
+  const clearStreamEndTimer = useCallback(() => {
+    if (streamEndTimerRef.current !== null) {
+      clearTimeout(streamEndTimerRef.current);
+      streamEndTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(
+    () => () => {
+      clearStreamEndTimer();
+    },
+    [clearStreamEndTimer],
+  );
 
   // Reset queue on task or conversation change
   useEffect(() => {
@@ -113,15 +130,13 @@ export function useSendQueue({
       setGlobalStreamingState(false);
       globalStreamingRef.current = false;
       prevGlobalStreamingRef.current = false;
+      completionReleaseArmedRef.current = false;
       setShouldProcessQueue(false);
-      if (streamEndTimerRef.current) {
-        clearTimeout(streamEndTimerRef.current);
-      }
-      streamEndTimerRef.current = null;
+      clearStreamEndTimer();
       prevTaskRef.current = taskId;
       prevConvRef.current = conversationId;
     }
-  }, [taskId, conversationId]);
+  }, [clearStreamEndTimer, taskId, conversationId]);
 
   // Listen for global streaming events
   useEffect(() => {
@@ -143,13 +158,21 @@ export function useSendQueue({
         globalStreamingRef.current = isNowStreaming;
         setGlobalStreamingState(isNowStreaming);
 
-        // If we were streaming and now we're not, debounce queue processing
-        if (wasStreaming && !isNowStreaming) {
-          if (streamEndTimerRef.current) {
-            clearTimeout(streamEndTimerRef.current);
+        if (isNowStreaming) {
+          if (!wasStreaming) {
+            completionReleaseArmedRef.current = true;
           }
+          clearStreamEndTimer();
+          setShouldProcessQueue(false);
+        }
+
+        // If we were streaming and now we're not, debounce queue processing
+        if (wasStreaming && !isNowStreaming && completionReleaseArmedRef.current) {
+          completionReleaseArmedRef.current = false;
+          clearStreamEndTimer();
           streamEndTimerRef.current = window.setTimeout(() => {
-            if (!sendingRef.current && items.length > 0) {
+            streamEndTimerRef.current = null;
+            if (!globalStreamingRef.current && !sendingRef.current && items.length > 0) {
               setShouldProcessQueue(true);
             }
           }, STREAM_END_DEBOUNCE_MS);
@@ -164,7 +187,7 @@ export function useSendQueue({
       // Removed console.log to prevent excessive re-renders
       window.removeEventListener('llm-streaming', handleStreamingEvent as EventListener);
     };
-  }, [taskId, items.length]);
+  }, [clearStreamEndTimer, taskId, items.length]);
 
   // Preserve queue release semantics when run state updates indicate completion
   // even if no explicit llm-streaming=false event is observed.
@@ -179,6 +202,15 @@ export function useSendQueue({
       if (!state || state === "running" || state === "waiting_for_human") {
         return;
       }
+      const hasPendingRelease =
+        completionReleaseArmedRef.current || streamEndTimerRef.current !== null;
+      if (!hasPendingRelease) {
+        return;
+      }
+      completionReleaseArmedRef.current = false;
+      clearStreamEndTimer();
+      globalStreamingRef.current = false;
+      setGlobalStreamingState(false);
       if (!sendingRef.current && items.length > 0) {
         setShouldProcessQueue(true);
       }
@@ -187,13 +219,14 @@ export function useSendQueue({
     return () => {
       window.removeEventListener("task-run-state", handleRunState as EventListener);
     };
-  }, [items.length, taskId]);
+  }, [clearStreamEndTimer, items.length, taskId]);
 
   // Single-source streaming state with fallback
   const { isStreaming } = useStreamingState({ taskId, conversationId, messages });
 
   const processNextItem = useCallback(() => {
-    if (sendingRef.current) {
+    if (sendingRef.current || globalStreamingRef.current) {
+      setShouldProcessQueue(false);
       return false;
     }
 
@@ -211,6 +244,12 @@ export function useSendQueue({
         await new Promise<void>((resolve) => {
           setTimeout(resolve, QUEUE_DISPATCH_DELAY_MS);
         });
+        if (globalStreamingRef.current) {
+          if (isMountedRef.current) {
+            setShouldProcessQueue(false);
+          }
+          return;
+        }
         await sendQueued(nextItem.content);
         if (isMountedRef.current) {
           setItems(prev => prev.filter(item => item.id !== nextItem.id));
@@ -240,13 +279,18 @@ export function useSendQueue({
     const hasQueuedItems = items.length > 0;
     const streamEnded = (prevStreaming || prevGlobalStreamingRef.current) && !isStreaming;
 
-    if (streamEnded && hasQueuedItems && !sendingRef.current) {
+    if (
+      streamEnded &&
+      hasQueuedItems &&
+      !sendingRef.current &&
+      completionReleaseArmedRef.current
+    ) {
+      completionReleaseArmedRef.current = false;
       prevGlobalStreamingRef.current = false;
-      if (streamEndTimerRef.current) {
-        clearTimeout(streamEndTimerRef.current);
-      }
+      clearStreamEndTimer();
       streamEndTimerRef.current = window.setTimeout(() => {
-        if (!sendingRef.current && items.length > 0) {
+        streamEndTimerRef.current = null;
+        if (!globalStreamingRef.current && !sendingRef.current && items.length > 0) {
           setShouldProcessQueue(true);
         }
       }, STREAM_END_DEBOUNCE_MS);
@@ -259,7 +303,7 @@ export function useSendQueue({
     if (currentTurnId) {
       lastTurnIdRef.current = currentTurnId;
     }
-  }, [currentTurnId, isStreaming, items.length, messages]);
+  }, [clearStreamEndTimer, currentTurnId, isStreaming, items.length, messages]);
 
   useEffect(() => {
     if (shouldProcessQueue && items.length > 0 && !sendingRef.current) {
@@ -294,6 +338,9 @@ export function useSendQueue({
     // Only queue if LLM is currently streaming or a queued send is in-flight
     const shouldQueue = isStreaming || sendingRef.current || items.length > 0;
     if (shouldQueue) {
+      if (isStreaming) {
+        completionReleaseArmedRef.current = true;
+      }
       // Removed logging to prevent excessive re-renders
       enqueue(trimmed);
       // Don't send to backend immediately when queued - wait for queue processing
@@ -347,7 +394,9 @@ export function useSendQueue({
   const clear = useCallback(() => {
     setItems([]);
     setShouldProcessQueue(false);
-  }, []);
+    completionReleaseArmedRef.current = false;
+    clearStreamEndTimer();
+  }, [clearStreamEndTimer]);
 
 
   return {

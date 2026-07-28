@@ -21,6 +21,9 @@ The format is based on
 
 ### Fixed
 
+- Queued prompts now remain visible and scrollable in constrained Overview
+  layouts, keep their controls reachable, and advance exactly one item after
+  each completed run.
 - Profile and Settings now share an accessible contextual back control that
   returns to the originating in-app page and safely falls back to Outpost for
   direct entries.
