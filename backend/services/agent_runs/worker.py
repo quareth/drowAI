@@ -193,22 +193,12 @@ def resolve_definition_for_assignment(
 ) -> SubagentDefinition:
     """Return the single enabled definition matching assignment identity."""
 
-    matches = tuple(
-        definition
-        for definition in definition_registry.definitions()
-        if definition.id == assignment.agent_id
-    )
-    if not matches:
+    definition = definition_registry.get(assignment.agent_id)
+    if definition is None:
         raise RuntimeError(
             "No subagent definition matches assignment agent_id "
             f"{assignment.agent_id!r}"
         )
-    if len(matches) > 1:
-        raise RuntimeError(
-            "Multiple subagent definitions match assignment agent_id "
-            f"{assignment.agent_id!r}"
-        )
-    definition = matches[0]
     if definition.kind != assignment.agent_kind:
         raise RuntimeError("Subagent definition kind does not match assignment")
     return definition
@@ -217,10 +207,7 @@ def resolve_definition_for_assignment(
 def extract_subagent_result_from_state(
     final_state: Mapping[str, Any],
     *,
-    assignment: AgentAssignment | None = None,
-    expected_agent_run_id: str | None = None,
-    expected_agent_id: str | None = None,
-    expected_agent_kind: str | None = None,
+    assignment: AgentAssignment,
 ) -> AgentResult:
     """Read a generic subagent terminal result from final graph metadata."""
 
@@ -234,15 +221,11 @@ def extract_subagent_result_from_state(
     if not isinstance(result_payload, Mapping):
         raise RuntimeError("Subagent graph completed without a terminal result")
     result = AgentResult.model_validate(dict(result_payload))
-    if assignment is not None:
-        expected_agent_run_id = assignment.agent_run_id
-        expected_agent_id = assignment.agent_id
-        expected_agent_kind = assignment.agent_kind
-    if result.agent_run_id != expected_agent_run_id:
+    if result.agent_run_id != assignment.agent_run_id:
         raise RuntimeError("Subagent result agent_run_id does not match assignment")
-    if result.agent_id != expected_agent_id:
+    if result.agent_id != assignment.agent_id:
         raise RuntimeError("Subagent result agent_id does not match assignment")
-    if result.agent_kind != expected_agent_kind:
+    if result.agent_kind != assignment.agent_kind:
         raise RuntimeError("Subagent result agent_kind does not match assignment")
     return result
 

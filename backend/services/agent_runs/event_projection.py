@@ -10,6 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from agent.graph.emission.agent_run_attribution import resolve_agent_run_attribution
 from backend.core.time_utils import format_iso, utc_now
 from backend.services.agent_runs.contracts import (
     AgentRunLifecycleProjection,
@@ -20,19 +21,6 @@ from backend.services.agent_runs.contracts import (
 from backend.services.agent_runs.registry import LocalAgentRun
 from backend.services.chat.event_builders import attach_conversation_ids
 from backend.services.langgraph_chat.streaming.event_types import ensure_mutable_metadata
-
-AGENT_RUN_METADATA_KEYS: tuple[str, ...] = (
-    "producer_type",
-    "agent_run_id",
-    "agent_id",
-    "agent_kind",
-    "agent_display_name",
-    "agent_icon_key",
-    "parent_turn_id",
-    "parent_run_id",
-    "internal_only",
-    "lifecycle_version",
-)
 
 
 def build_agent_run_lifecycle_event(
@@ -100,102 +88,23 @@ def apply_agent_run_metadata(
 ) -> None:
     """Forward safe subagent attribution metadata from raw graph events."""
 
-    source = _agent_metadata_source(raw_event)
-    if not source:
+    raw_metadata = raw_event.get("metadata")
+    attribution = resolve_agent_run_attribution(
+        metadata=raw_metadata if isinstance(raw_metadata, Mapping) else None,
+        config={"configurable": raw_event},
+    )
+    if not attribution:
         return
 
     metadata = ensure_mutable_metadata(processed)
-    for key in AGENT_RUN_METADATA_KEYS:
-        if key not in source:
-            continue
-        value = _safe_metadata_value(key, source[key])
-        if value is not None:
-            if key == "agent_display_name":
-                metadata[key] = value
-            else:
-                metadata.setdefault(key, value)
-
-
-def _agent_metadata_source(raw_event: Mapping[str, Any]) -> dict[str, Any]:
-    source: dict[str, Any] = {}
-    raw_metadata = raw_event.get("metadata")
-    if isinstance(raw_metadata, Mapping):
-        source.update(dict(raw_metadata))
-    for key in AGENT_RUN_METADATA_KEYS:
-        if key in raw_event:
-            source[key] = raw_event[key]
-    if source.get("agent_run_id") and source.get("producer_type") is None:
-        source["producer_type"] = "subagent"
-    display_name = registered_agent_display_name(source.get("agent_id"))
-    if display_name is not None:
-        source["agent_display_name"] = display_name
-    elif source.get("agent_display_name") is None:
-        source["agent_display_name"] = _format_agent_kind(source.get("agent_kind"))
-    icon_key = registered_agent_icon_key(source.get("agent_id"))
-    if icon_key is not None:
-        source["agent_icon_key"] = icon_key
-    return source
-
-
-def _safe_metadata_value(key: str, value: Any) -> str | int | bool | None:
-    if key == "internal_only":
-        return value if isinstance(value, bool) else None
-    if key == "lifecycle_version":
-        if isinstance(value, bool):
-            return None
-        if isinstance(value, int) and value > 0:
-            return value
-        return None
-    if key == "producer_type":
-        return "subagent" if value == "subagent" else None
-    if key == "agent_kind":
-        if not isinstance(value, str):
-            return None
-        normalized = value.strip()
-        return normalized or None
-    if isinstance(value, str):
-        normalized = value.strip()
-        return normalized or None
-    return None
-
-
-def registered_agent_display_name(value: Any) -> str | None:
-    """Resolve display metadata from the shared definition-owned registry."""
-
-    if not isinstance(value, str):
-        return None
-    normalized = value.strip()
-    try:
-        return agent_display_name(normalized)
-    except KeyError:
-        return None
-
-
-def registered_agent_icon_key(value: Any) -> str | None:
-    """Resolve icon metadata from the shared definition-owned registry."""
-
-    if not isinstance(value, str):
-        return None
-    normalized = value.strip()
-    try:
-        return agent_icon_key(normalized)
-    except KeyError:
-        return None
-
-
-def _format_agent_kind(value: Any) -> str | None:
-    if not isinstance(value, str):
-        return None
-    parts = [part for part in value.strip().replace("-", "_").split("_") if part]
-    if not parts:
-        return None
-    return " ".join(f"{part[:1].upper()}{part[1:]}" for part in parts)
+    for key, value in attribution.items():
+        if key == "agent_display_name":
+            metadata[key] = value
+        else:
+            metadata.setdefault(key, value)
 
 
 __all__ = [
-    "AGENT_RUN_METADATA_KEYS",
     "apply_agent_run_metadata",
     "build_agent_run_lifecycle_event",
-    "registered_agent_display_name",
-    "registered_agent_icon_key",
 ]

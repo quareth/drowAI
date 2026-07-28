@@ -199,10 +199,7 @@ async def test_generic_worker_builds_definition_configured_graph_input_config_an
     )
 
     assert completion.result == _result()
-    assert completion.agent_run_id == "run-1"
     assert completion.graph_thread_id == "child-thread-1"
-    assert completion.provider == "openai"
-    assert completion.model == "gpt-5.2-mini"
     assert completion.usage_records[0]["agent_run_id"] == "run-1"
     assert completion.usage_records[0]["tenant_id"] == 7
     assert completion.usage_records[0]["task_id"] == 42
@@ -269,9 +266,7 @@ def test_generic_worker_rejects_missing_assignment_agent_id() -> None:
 def test_generic_result_extraction_reads_definition_owned_result() -> None:
     assert extract_subagent_result_from_state(
         _final_state(),
-        expected_agent_run_id="run-1",
-        expected_agent_id="pathfinder",
-        expected_agent_kind="recon",
+        assignment=_assignment(),
     ) == _result()
 
 

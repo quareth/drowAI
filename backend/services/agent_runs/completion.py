@@ -18,22 +18,11 @@ from backend.services.agent_runs.contracts import AgentAssignment, AgentResult
 
 @dataclass(frozen=True, slots=True)
 class AgentRunCompletion:
-    """Terminal child result plus canonical child usage and run identity."""
+    """Terminal child result plus canonical child usage and graph identity."""
 
     result: AgentResult
     usage_records: tuple[dict[str, Any], ...]
-    tenant_id: int
-    task_id: int
-    user_id: int | None
-    conversation_id: str
-    provider: str | None
-    model: str | None
-    agent_id: str
-    agent_kind: str
-    agent_run_id: str
     graph_thread_id: str
-    parent_turn_id: str
-    parent_run_id: str | None
 
 
 def build_agent_run_completion(
@@ -54,18 +43,7 @@ def build_agent_run_completion(
             graph_thread_id=graph_thread_id,
             skip_usage_records=skip_usage_records,
         ),
-        tenant_id=assignment.tenant_id,
-        task_id=assignment.task_id,
-        user_id=assignment.runtime_identity.user_id,
-        conversation_id=assignment.conversation_id,
-        provider=assignment.runtime_identity.provider,
-        model=assignment.runtime_identity.model,
-        agent_id=assignment.agent_id,
-        agent_kind=assignment.agent_kind,
-        agent_run_id=assignment.agent_run_id,
         graph_thread_id=graph_thread_id,
-        parent_turn_id=assignment.parent_turn_id,
-        parent_run_id=_optional_string(assignment.relevant_context.get("parent_run_id")),
     )
 
 

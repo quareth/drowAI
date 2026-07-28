@@ -26,13 +26,10 @@ from typing import Any, Callable, Dict, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from backend.services.langgraph_chat.runtime.state_container import ChatStateContainer
 
+from agent.graph.emission.agent_run_attribution import resolve_agent_run_attribution
 from agent.graph.utils.provider_model_resolution import resolve_graph_provider_model_ref
 from backend.database import SessionLocal
 from backend.core.time_utils import format_iso, utc_now
-from backend.services.agent_runs.event_projection import (
-    AGENT_RUN_METADATA_KEYS,
-    registered_agent_display_name,
-)
 from backend.services.chat import event_builders
 from backend.services.streaming.in_memory_hub import get_in_memory_stream_hub
 from backend.services.metrics.utils import safe_inc
@@ -277,25 +274,12 @@ class LangGraphExecutor:
         config: Mapping[str, Any],
     ) -> Dict[str, Any]:
         """Stamp configured subagent identity onto custom events that lack it."""
-        configurable = config.get("configurable") if isinstance(config, Mapping) else None
-        if not isinstance(configurable, Mapping):
-            return event
-
-        attribution = {
-            key: configurable[key]
-            for key in AGENT_RUN_METADATA_KEYS
-            if key in configurable
-        }
+        attribution = resolve_agent_run_attribution(config=config)
         if not attribution.get("agent_run_id"):
             return event
-        attribution.setdefault("producer_type", "subagent")
-        display_name = registered_agent_display_name(attribution.get("agent_id"))
-        if display_name is not None:
-            attribution["agent_display_name"] = display_name
 
         enriched = dict(event)
-        for key, value in attribution.items():
-            enriched[key] = value
+        enriched.update(attribution)
         return enriched
 
     async def _observe_context_window_checkpoint(

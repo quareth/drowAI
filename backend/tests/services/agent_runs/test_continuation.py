@@ -197,8 +197,12 @@ async def test_prepare_subagent_resume_matches_registered_thread_without_recon_k
     )
     registry._runs[(7, 42, "pathfinder-run-1")] = replace(
         waiting,
-        agent_id="cartographer",
-        agent_kind="asset_mapper",  # type: ignore[arg-type]
+        assignment=waiting.assignment.model_copy(
+            update={
+                "agent_id": "cartographer",
+                "agent_kind": "asset_mapper",
+            }
+        ),
     )
     monkeypatch.setattr(
         continuation,
@@ -548,12 +552,6 @@ async def test_mark_subagent_completed_from_state_returns_usage_identity_envelop
     )
 
     assert completion.result.agent_run_id == "pathfinder-run-1"
-    assert completion.tenant_id == 7
-    assert completion.task_id == 42
-    assert completion.user_id == 3
-    assert completion.conversation_id == "conv-42"
-    assert completion.agent_id == "pathfinder"
-    assert completion.agent_run_id == "pathfinder-run-1"
     assert completion.graph_thread_id == child_thread
     assert completion.usage_records == (
         {

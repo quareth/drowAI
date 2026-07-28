@@ -19,7 +19,12 @@ from backend.services.agent_runs.completion import (
     AgentRunCompletion,
     build_agent_run_completion,
 )
-from backend.services.agent_runs.launcher import AgentRunLauncher, SubagentRunPaused
+from backend.services.agent_runs.launcher import (
+    AgentRunLauncher,
+    SubagentRunCancelled,
+    SubagentRunFailed,
+    SubagentRunPaused,
+)
 from backend.services.agent_runs.registry import (
     LocalAgentRun,
     ProcessLocalAgentRunRegistry,
@@ -220,6 +225,64 @@ async def test_worker_failure_is_sanitized_and_contained() -> None:
     assert failed.safe_error == "Subagent worker failed"
     assert "abc123" not in failed.safe_error
     assert failed.task_handle is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("worker_error", "expected_status", "expected_safe_error"),
+    [
+        (SubagentRunCancelled(object()), "cancelled", None),
+        (
+            SubagentRunFailed("secret token=abc123", object()),
+            "failed",
+            "Subagent worker failed",
+        ),
+    ],
+)
+async def test_specialized_worker_errors_use_fallback_terminalization(
+    worker_error: BaseException,
+    expected_status: str,
+    expected_safe_error: str | None,
+) -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    assignment = _assignment()
+    await registry.register(assignment, graph_thread_id="child-thread-1")
+    events: list[tuple[int, dict[str, Any]]] = []
+
+    async def _publish(task_id: int, event: dict[str, Any]) -> None:
+        events.append((task_id, event))
+
+    async def _worker(**_kwargs: Any) -> AgentRunCompletion:
+        raise worker_error
+
+    launcher = AgentRunLauncher(
+        registry=registry,
+        worker=_worker,
+        lifecycle_publisher=_publish,
+    )
+    task = await launcher.launch(
+        assignment=assignment,
+        runtime_config=object(),
+        graph_thread_id="child-thread-1",
+        parent_run_id="parent-run-1",
+    )
+
+    with pytest.raises(type(worker_error)):
+        await task
+    terminal = await _wait_for_status(
+        registry,
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="run-1",
+        status=expected_status,
+    )
+
+    assert terminal.safe_error == expected_safe_error
+    assert terminal.task_handle is None
+    assert len(events) == 1
+    assert events[0][0] == 42
+    assert events[0][1]["agent_run"]["status"] == expected_status
+    assert events[0][1]["metadata"]["parent_run_id"] == "parent-run-1"
 
 
 @pytest.mark.asyncio

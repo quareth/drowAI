@@ -200,14 +200,6 @@ class AgentRunLauncher:
     ) -> None:
         try:
             completion = completed.result()
-        except SubagentRunCancelled:
-            entry = await self._registry.mark_cancelled(
-                tenant_id=assignment.tenant_id,
-                task_id=assignment.task_id,
-                agent_run_id=assignment.agent_run_id,
-            )
-            await self._publish_terminal_lifecycle(entry, parent_run_id=parent_run_id)
-            return
         except asyncio.CancelledError:
             entry = await self._registry.mark_cancelled(
                 tenant_id=assignment.tenant_id,
@@ -227,22 +219,6 @@ class AgentRunLauncher:
                 task_id=assignment.task_id,
                 agent_run_id=assignment.agent_run_id,
                 accounted_usage_record_count=len(usage_records),
-            )
-            await self._publish_terminal_lifecycle(entry, parent_run_id=parent_run_id)
-            return
-        except SubagentRunFailed:
-            logger.warning(
-                "Subagent worker failed for tenant_id=%s task_id=%s agent_run_id=%s",
-                assignment.tenant_id,
-                assignment.task_id,
-                assignment.agent_run_id,
-                exc_info=True,
-            )
-            entry = await self._registry.mark_failed(
-                tenant_id=assignment.tenant_id,
-                task_id=assignment.task_id,
-                agent_run_id=assignment.agent_run_id,
-                safe_error="Subagent worker failed",
             )
             await self._publish_terminal_lifecycle(entry, parent_run_id=parent_run_id)
             return

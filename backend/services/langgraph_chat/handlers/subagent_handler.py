@@ -170,7 +170,7 @@ class SubagentHandler(BaseLangGraphHandler):
                 for result in child_results
             ),
             agent_run_ids=tuple(
-                completion.agent_run_id for completion in child_completions
+                completion.result.agent_run_id for completion in child_completions
             ),
         )
         attach_completed_agent_results_to_context(runtime_config.metadata, handoff)
@@ -724,82 +724,31 @@ def _ack_for_child_exception(
     """Return the same bounded non-finalizer result used by singular runs."""
     assignment = item.assignment
     turn_sequence = turn.turn_number if isinstance(turn.turn_number, int) else None
-    if isinstance(exc, SubagentRunPaused):
+    usage: list[Any] | None = None
+    if isinstance(exc, SubagentRunPaused | SubagentRunCancelled | SubagentRunFailed):
         usage = _usage_from_child_execution_result(
             exc.execution_result,
             assignment=assignment,
             graph_thread_id=item.graph_thread_id,
             turn_index=turn_sequence,
         )
-        return _ack_result(
-            runtime_config,
-            turn_id=str(turn.turn_id),
-            turn_sequence=turn_sequence,
-            agent_run_id=assignment.agent_run_id,
-            agent_id=assignment.agent_id,
-            agent_kind=assignment.agent_kind,
-            agent_display_name=item.display_name,
-            graph_thread_id=item.graph_thread_id,
-            status="waiting_for_approval",
-            usage=usage,
+        status = (
+            "waiting_for_approval"
+            if isinstance(exc, SubagentRunPaused)
+            else "cancelled"
+            if isinstance(exc, SubagentRunCancelled)
+            else "failed"
         )
-    if isinstance(exc, SubagentRunCancelled):
-        usage = _usage_from_child_execution_result(
-            exc.execution_result,
-            assignment=assignment,
-            graph_thread_id=item.graph_thread_id,
-            turn_index=turn_sequence,
+    elif isinstance(exc, asyncio.CancelledError):
+        status = "cancelled"
+    else:
+        status = "failed"
+        logger.warning(
+            "subagent run %s failed before parent handoff for task %s",
+            assignment.agent_run_id,
+            runtime_config.chat_inputs.task_id,
+            exc_info=(type(exc), exc, exc.__traceback__),
         )
-        return _ack_result(
-            runtime_config,
-            turn_id=str(turn.turn_id),
-            turn_sequence=turn_sequence,
-            agent_run_id=assignment.agent_run_id,
-            agent_id=assignment.agent_id,
-            agent_kind=assignment.agent_kind,
-            agent_display_name=item.display_name,
-            graph_thread_id=item.graph_thread_id,
-            status="cancelled",
-            usage=usage,
-        )
-    if isinstance(exc, SubagentRunFailed):
-        usage = _usage_from_child_execution_result(
-            exc.execution_result,
-            assignment=assignment,
-            graph_thread_id=item.graph_thread_id,
-            turn_index=turn_sequence,
-        )
-        return _ack_result(
-            runtime_config,
-            turn_id=str(turn.turn_id),
-            turn_sequence=turn_sequence,
-            agent_run_id=assignment.agent_run_id,
-            agent_id=assignment.agent_id,
-            agent_kind=assignment.agent_kind,
-            agent_display_name=item.display_name,
-            graph_thread_id=item.graph_thread_id,
-            status="failed",
-            usage=usage,
-        )
-    if isinstance(exc, asyncio.CancelledError):
-        return _ack_result(
-            runtime_config,
-            turn_id=str(turn.turn_id),
-            turn_sequence=turn_sequence,
-            agent_run_id=assignment.agent_run_id,
-            agent_id=assignment.agent_id,
-            agent_kind=assignment.agent_kind,
-            agent_display_name=item.display_name,
-            graph_thread_id=item.graph_thread_id,
-            status="cancelled",
-        )
-
-    logger.warning(
-        "subagent run %s failed before parent handoff for task %s",
-        assignment.agent_run_id,
-        runtime_config.chat_inputs.task_id,
-        exc_info=(type(exc), exc, exc.__traceback__),
-    )
     return _ack_result(
         runtime_config,
         turn_id=str(turn.turn_id),
@@ -809,7 +758,8 @@ def _ack_for_child_exception(
         agent_kind=assignment.agent_kind,
         agent_display_name=item.display_name,
         graph_thread_id=item.graph_thread_id,
-        status="failed",
+        status=status,
+        usage=usage,
     )
 
 

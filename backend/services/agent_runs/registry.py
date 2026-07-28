@@ -30,14 +30,7 @@ DEFAULT_FINISHED_RETENTION = timedelta(minutes=15)
 class LocalAgentRun:
     """Immutable snapshot of one process-local subagent run."""
 
-    agent_run_id: str
-    agent_id: str
-    tenant_id: int
-    task_id: int
-    conversation_id: str
-    parent_turn_id: str
     graph_thread_id: str
-    agent_kind: AgentKind
     assignment: AgentAssignment
     status: AgentRunStatus
     lifecycle_version: int
@@ -50,6 +43,34 @@ class LocalAgentRun:
     cancel_requested: bool
     result_consumed: bool
     accounted_usage_record_count: int
+
+    @property
+    def agent_run_id(self) -> str:
+        return self.assignment.agent_run_id
+
+    @property
+    def agent_id(self) -> str:
+        return self.assignment.agent_id
+
+    @property
+    def tenant_id(self) -> int:
+        return self.assignment.tenant_id
+
+    @property
+    def task_id(self) -> int:
+        return self.assignment.task_id
+
+    @property
+    def conversation_id(self) -> str:
+        return self.assignment.conversation_id
+
+    @property
+    def parent_turn_id(self) -> str:
+        return self.assignment.parent_turn_id
+
+    @property
+    def agent_kind(self) -> AgentKind:
+        return self.assignment.agent_kind
 
 
 class ActiveAgentRunExistsError(RuntimeError):
@@ -121,14 +142,7 @@ class ProcessLocalAgentRunRegistry:
 
             now = self._clock()
             entry = LocalAgentRun(
-                agent_run_id=assignment.agent_run_id,
-                agent_id=assignment.agent_id,
-                tenant_id=assignment.tenant_id,
-                task_id=assignment.task_id,
-                conversation_id=assignment.conversation_id,
-                parent_turn_id=assignment.parent_turn_id,
                 graph_thread_id=graph_thread_id,
-                agent_kind=assignment.agent_kind,
                 assignment=assignment,
                 status="queued",
                 lifecycle_version=1,
