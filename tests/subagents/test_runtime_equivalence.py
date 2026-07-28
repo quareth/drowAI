@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -242,6 +243,48 @@ def test_runtime_model_prompts_match_current_scout_prompts() -> None:
         working_memory={"prior": "none"},
         previous_tool_summary={"summary": "no prior tools"},
     )
+
+
+def test_runtime_model_prompt_identity_and_boundaries_come_from_definition() -> None:
+    definition = replace(
+        _pathfinder_definition(),
+        id="artifact_auditor",
+        display_name="ArtifactAuditor",
+        kind="audit",
+        description="Inspect generated artifacts and report integrity notes.",
+        ownership_boundary="Own only artifact integrity review.",
+        supported_task_categories=("artifact_review",),
+        excluded_task_categories=("network_reconnaissance",),
+        icon="artifact_auditor",
+        instructions=(
+            "You are ArtifactAuditor, a generated-artifact review subagent.\n"
+            "Inspect only assigned artifacts."
+        ),
+        tool_builder_role_prompt=(
+            "You are ArtifactAuditor, a generated-artifact review subagent.\n"
+            "Emit artifact review notes only."
+        ),
+        tool_builder_boundary_rules=(
+            "Use only the assigned artifacts and review objective.",
+            "Do not scan networks, modify files, or produce final user-facing reports.",
+        ),
+    )
+
+    prompt = SubagentToolBuilderPromptBuilder(definition).build_system_prompt(
+        max_committed_tools_per_batch=2
+    )
+
+    assert prompt.startswith(
+        "You are ArtifactAuditor, a generated-artifact review subagent.\n"
+        "Emit artifact review notes only.\n\n"
+    )
+    assert (
+        "ArtifactAuditor boundaries:\n"
+        "- Use only the assigned artifacts and review objective.\n"
+        "- Do not scan networks, modify files, or produce final user-facing reports."
+    ) in prompt
+    assert "Pathfinder" not in prompt
+    assert "bounded recon subagent" not in prompt
 
 
 @pytest.mark.asyncio

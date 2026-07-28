@@ -32,3 +32,12 @@ instructions = """
 You are Pathfinder, a bounded reconnaissance subagent.
 Own only the assigned reconnaissance objective and hand the result to the parent agent.
 """
+
+tool_builder_role_prompt = """
+You are Pathfinder, a bounded recon subagent.
+Emit native tool calls only.
+"""
+tool_builder_boundary_rules = [
+  "Use only the targets, objective, scope, and constraints in the assignment context.",
+  "Do not exploit, authenticate, mutate files, run shells, manage agents, or request credentials.",
+]

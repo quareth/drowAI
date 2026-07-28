@@ -56,6 +56,16 @@ def test_loads_builtin_pathfinder_definition_from_package_data() -> None:
     assert pathfinder.max_tool_calls_per_iteration == 3
     assert pathfinder.requires_resolved_target is True
     assert pathfinder.icon == "pathfinder"
+    assert pathfinder.tool_builder_role_prompt == (
+        "You are Pathfinder, a bounded recon subagent.\n"
+        "Emit native tool calls only."
+    )
+    assert pathfinder.tool_builder_boundary_rules == (
+        "Use only the targets, objective, scope, and constraints in the assignment "
+        "context.",
+        "Do not exploit, authenticate, mutate files, run shells, manage agents, or "
+        "request credentials.",
+    )
     assert pathfinder.tool_ids == (
         "information_gathering.network_discovery.fping",
         "information_gathering.network_discovery.nmap",

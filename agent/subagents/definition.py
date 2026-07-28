@@ -46,7 +46,13 @@ _REQUIRED_KEYS = frozenset(
         "instructions",
     }
 )
-_OPTIONAL_KEYS = frozenset({"enabled"})
+_OPTIONAL_KEYS = frozenset(
+    {
+        "enabled",
+        "tool_builder_role_prompt",
+        "tool_builder_boundary_rules",
+    }
+)
 _KNOWN_KEYS = _REQUIRED_KEYS | _OPTIONAL_KEYS
 
 
@@ -74,6 +80,8 @@ class SubagentDefinition:
     requires_resolved_target: bool
     icon: str
     instructions: str
+    tool_builder_role_prompt: str | None
+    tool_builder_boundary_rules: tuple[str, ...]
 
     @classmethod
     def from_mapping(
@@ -147,6 +155,17 @@ class SubagentDefinition:
             ),
             icon=_require_canonical_id(data, "icon", source=source),
             instructions=_require_text(data, "instructions", source=source),
+            tool_builder_role_prompt=_require_optional_text(
+                data,
+                "tool_builder_role_prompt",
+                source=source,
+            ),
+            tool_builder_boundary_rules=_require_optional_text_tuple(
+                data,
+                "tool_builder_boundary_rules",
+                source=source,
+                require_non_empty=True,
+            ),
         )
 
 
@@ -223,6 +242,17 @@ def _require_text(
     if not isinstance(value, str) or not value.strip():
         raise SubagentDefinitionError(f"{source}: {key} must be a non-empty string")
     return value.strip()
+
+
+def _require_optional_text(
+    data: Mapping[str, Any],
+    key: str,
+    *,
+    source: str,
+) -> str | None:
+    if key not in data:
+        return None
+    return _require_text(data, key, source=source)
 
 
 def _require_canonical_id(
@@ -314,6 +344,23 @@ def _require_text_tuple(
     if require_non_empty and not values:
         raise SubagentDefinitionError(f"{source}: {key} must not be empty")
     return tuple(values)
+
+
+def _require_optional_text_tuple(
+    data: Mapping[str, Any],
+    key: str,
+    *,
+    source: str,
+    require_non_empty: bool,
+) -> tuple[str, ...]:
+    if key not in data:
+        return ()
+    return _require_text_tuple(
+        data,
+        key,
+        source=source,
+        require_non_empty=require_non_empty,
+    )
 
 
 __all__ = [

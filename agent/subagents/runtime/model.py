@@ -81,13 +81,18 @@ class SubagentToolBuilderPromptBuilder:
         """Return canonical shared guidance plus scheduling metadata."""
 
         display_name = self._definition.display_name
+        role_prompt = self._definition.tool_builder_role_prompt
+        if role_prompt is None:
+            role_prompt = self._definition.instructions
+        boundary_rules = self._definition.tool_builder_boundary_rules
+        if not boundary_rules:
+            boundary_rules = (self._definition.ownership_boundary,)
         shared_guidance = (
             ToolPlanningPromptBuilder().build_native_tool_call_shared_guidance(
                 max_committed_tools_per_batch=max_committed_tools_per_batch,
             )
         )
-        return f"""You are {display_name}, a bounded recon subagent.
-Emit native tool calls only.
+        return f"""{role_prompt}
 
 {shared_guidance}
 
@@ -99,8 +104,7 @@ Emit native tool calls only.
 - For multiple calls, choose the strategy using the exact execution-strategy guidance above.
 
 {display_name} boundaries:
-- Use only the targets, objective, scope, and constraints in the assignment context.
-- Do not exploit, authenticate, mutate files, run shells, manage agents, or request credentials.
+{_to_prompt_bullets(boundary_rules)}
 """
 
     def build_user_prompt(
@@ -518,6 +522,12 @@ def _to_prompt_json(value: Any) -> str:
     """Serialize prompt context deterministically without provider objects."""
 
     return json.dumps(value, ensure_ascii=True, sort_keys=True, default=str)
+
+
+def _to_prompt_bullets(values: Sequence[str]) -> str:
+    """Render definition-owned prompt bullets without changing their text."""
+
+    return "\n".join(f"- {value}" for value in values)
 
 
 __all__ = [
