@@ -27,7 +27,7 @@ SCOUT_RECON_TOOL_ID_CEILING: frozenset[str] = frozenset(
     }
 )
 SCOUT_OWNED_CAPABILITIES: frozenset[ReconCapability] = frozenset(
-    {"host_discovery", "port_scan", "service_enum"}
+    {"host_discovery", "port_scanning", "service_enumeration"}
 )
 
 _SCOUT_ALLOWED_CATEGORIES: frozenset[ToolCategory] = frozenset(
@@ -35,13 +35,13 @@ _SCOUT_ALLOWED_CATEGORIES: frozenset[ToolCategory] = frozenset(
 )
 _CAPABILITY_ALIASES: dict[str, ReconCapability] = {
     "host_discovery": "host_discovery",
-    "port_discovery": "port_scan",
-    "port_scan": "port_scan",
-    "port_scanning": "port_scan",
-    "service_detection": "service_enum",
-    "service_discovery": "service_enum",
-    "service_enum": "service_enum",
-    "service_enumeration": "service_enum",
+    "port_discovery": "port_scanning",
+    "port_scan": "port_scanning",
+    "port_scanning": "port_scanning",
+    "service_detection": "service_enumeration",
+    "service_discovery": "service_enumeration",
+    "service_enum": "service_enumeration",
+    "service_enumeration": "service_enumeration",
 }
 _FORBIDDEN_CATEGORIES: frozenset[ToolCategory] = frozenset(
     {

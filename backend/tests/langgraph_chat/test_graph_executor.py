@@ -258,6 +258,10 @@ class TestGraphExecutorStreaming:
                     "conversation_id": "conv-42",
                     "turn_id": "parent-turn-1",
                     "status": "success",
+                    "metadata": {
+                        "agent_id": "spoofed",
+                        "agent_display_name": "Spoofed",
+                    },
                 },
             )
             yield ("values", {"facts": {}, "trace": {}})
@@ -273,6 +277,7 @@ class TestGraphExecutorStreaming:
                     "configurable": {
                         "thread_id": "graph-child",
                         "agent_run_id": "scout-run-1",
+                        "agent_id": "pathfinder",
                         "agent_kind": "recon",
                         "parent_turn_id": "parent-turn-1",
                         "parent_run_id": "parent-run-1",
@@ -287,6 +292,7 @@ class TestGraphExecutorStreaming:
         assert raw_event["type"] == "tool_end"
         assert raw_event["producer_type"] == "subagent"
         assert raw_event["agent_run_id"] == "scout-run-1"
+        assert raw_event["agent_id"] == "pathfinder"
         assert raw_event["agent_kind"] == "recon"
         assert raw_event["agent_display_name"] == "Pathfinder"
         assert raw_event["parent_turn_id"] == "parent-turn-1"

@@ -68,8 +68,9 @@ async def build_child_execution_config(
         "graph_thread_id": child_graph_thread_id,
         "producer_type": "subagent",
         "agent_run_id": assignment.agent_run_id,
+        "agent_id": assignment.agent_id,
         "agent_kind": assignment.agent_kind,
-        "agent_display_name": agent_display_name(assignment.agent_kind),
+        "agent_display_name": agent_display_name(assignment.agent_id),
         "parent_turn_id": assignment.parent_turn_id,
         "parent_run_id": parent_run_id,
         "parent_graph_thread_id": assignment.parent_graph_thread_id,
@@ -150,6 +151,7 @@ def _runtime_projection(
     projection = runtime_identity.model_dump(mode="json", exclude_none=True)
     projection["graph_thread_id"] = child_graph_thread_id
     projection["agent_run_id"] = assignment.agent_run_id
+    projection["agent_id"] = assignment.agent_id
     projection["agent_kind"] = assignment.agent_kind
     projection["parent_turn_id"] = assignment.parent_turn_id
     projection["parent_run_id"] = parent_run_id

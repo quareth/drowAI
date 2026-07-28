@@ -13,11 +13,8 @@ export const AGENT_RUN_LIFECYCLE_SUBTYPE = "agent_run_lifecycle";
 export const AGENT_RUN_PRODUCER_TYPE = "subagent";
 
 export type AgentKind = string;
+export type AgentId = string;
 export type AgentDisplayName = string;
-
-const AGENT_DISPLAY_NAMES: Readonly<Record<string, string>> = {
-  recon: "Pathfinder",
-};
 
 export type AgentRunStatus =
   | "queued"
@@ -37,7 +34,7 @@ export type AgentRunOutcome =
   | "failed"
   | "cancelled";
 
-export type ReconCapability = "host_discovery" | "port_scan" | "service_enum";
+export type AgentCapability = string;
 
 export type AgentRunDrawerView = "list" | "detail";
 
@@ -67,6 +64,7 @@ export interface AgentRuntimeIdentity {
 export interface AgentAssignment {
   assignment_id: string;
   agent_run_id: string;
+  agent_id: AgentId;
   agent_kind: AgentKind;
   task_id: number;
   tenant_id: number;
@@ -75,7 +73,7 @@ export interface AgentAssignment {
   parent_graph_thread_id: string;
   objective: string;
   targets: string[];
-  suggested_capabilities: ReconCapability[];
+  suggested_capabilities: AgentCapability[];
   scope_summary?: string | null;
   relevant_context: Record<string, unknown>;
   runtime_identity: AgentRuntimeIdentity;
@@ -87,6 +85,7 @@ export interface AgentEvidenceRef {
 
 export interface AgentResultProjection {
   agent_run_id: string;
+  agent_id: AgentId;
   agent_kind: AgentKind;
   agent_display_name: AgentDisplayName;
   outcome: AgentRunOutcome;
@@ -101,6 +100,7 @@ export interface AgentResultProjection {
 
 export interface AgentRunLifecycleProjection {
   agent_run_id: string;
+  agent_id: AgentId;
   agent_kind: AgentKind;
   agent_display_name: AgentDisplayName;
   status: AgentRunLifecycleStatus;
@@ -153,6 +153,7 @@ export type AgentRunStreamPayload = StreamPacket | StreamEvent;
 export interface AgentRunActivityIdentity {
   taskId: number;
   agentRunId: string;
+  agentId: AgentId;
   agentKind: AgentKind;
   agentDisplayName: string;
   parentTurnId: string | null;
@@ -198,10 +199,12 @@ export function readAgentRunActivityIdentity(
   }
   const producerType = readString(metadata.producer_type);
   const agentRunId = readString(metadata.agent_run_id);
+  const agentId = readString(metadata.agent_id);
   const agentKind = readString(metadata.agent_kind);
   if (
     producerType !== AGENT_RUN_PRODUCER_TYPE ||
     !agentRunId ||
+    !agentId ||
     !agentKind
   ) {
     return null;
@@ -209,9 +212,10 @@ export function readAgentRunActivityIdentity(
   return {
     taskId,
     agentRunId,
+    agentId,
     agentKind,
     agentDisplayName: resolveAgentDisplayName(
-      agentKind,
+      agentId,
       readString(metadata.agent_display_name),
     ),
     parentTurnId: readString(metadata.parent_turn_id),
@@ -263,12 +267,13 @@ function normalizeAgentRunLifecycleProjection(
   value: Record<string, unknown>,
 ): AgentRunLifecycleProjection | null {
   const agentRunId = readString(value.agent_run_id);
+  const agentId = readString(value.agent_id);
   const status = readLifecycleStatus(value.status);
   const lifecycleVersion = readPositiveInt(value.lifecycle_version);
   const taskId = readPositiveInt(value.task_id);
   const conversationId = readString(value.conversation_id);
   const parentTurnId = readString(value.parent_turn_id);
-  if (!agentRunId || !status || lifecycleVersion === null || taskId === null || !conversationId || !parentTurnId) {
+  if (!agentRunId || !agentId || !status || lifecycleVersion === null || taskId === null || !conversationId || !parentTurnId) {
     return null;
   }
   const agentKind = readString(value.agent_kind);
@@ -276,11 +281,12 @@ function normalizeAgentRunLifecycleProjection(
     return null;
   }
   const agentDisplayName = resolveAgentDisplayName(
-    agentKind,
+    agentId,
     readString(value.agent_display_name),
   );
   return {
     agent_run_id: agentRunId,
+    agent_id: agentId,
     agent_kind: agentKind,
     agent_display_name: agentDisplayName,
     status,
@@ -308,24 +314,21 @@ function readResultProjection(value: unknown): AgentResultProjection | null {
   if (!record) {
     return null;
   }
-  if (!readString(record.agent_kind) || !readString(record.summary)) {
+  if (!readString(record.agent_id) || !readString(record.agent_kind) || !readString(record.summary)) {
     return null;
   }
   return record as unknown as AgentResultProjection;
 }
 
 export function resolveAgentDisplayName(
-  agentKind: AgentKind,
+  agentId: AgentId,
   reportedDisplayName?: string | null,
 ): AgentDisplayName {
-  return (
-    AGENT_DISPLAY_NAMES[agentKind] ??
-    (reportedDisplayName?.trim() || formatAgentKind(agentKind))
-  );
+  return reportedDisplayName?.trim() || formatAgentId(agentId);
 }
 
-function formatAgentKind(agentKind: string): string {
-  return agentKind
+function formatAgentId(agentId: string): string {
+  return agentId
     .split(/[-_]/)
     .filter(Boolean)
     .map((part) => `${part.charAt(0).toUpperCase()}${part.slice(1)}`)

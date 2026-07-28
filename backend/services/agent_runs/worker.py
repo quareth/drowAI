@@ -114,6 +114,7 @@ class ProcessLocalAgentRunWorker:
         return extract_subagent_result_from_state(
             execution_result.final_state,
             expected_agent_run_id=assignment.agent_run_id,
+            expected_agent_id=assignment.agent_id,
             expected_agent_kind=assignment.agent_kind,
         )
 
@@ -146,6 +147,7 @@ async def mark_subagent_completed_from_state(
     result = extract_subagent_result_from_state(
         final_state,
         expected_agent_run_id=entry.agent_run_id,
+        expected_agent_id=entry.agent_id,
         expected_agent_kind=entry.agent_kind,
     )
     completed = await registry.mark_completed(
@@ -168,25 +170,29 @@ def resolve_definition_for_assignment(
     matches = tuple(
         definition
         for definition in definition_registry.definitions()
-        if definition.kind == assignment.agent_kind
+        if definition.id == assignment.agent_id
     )
     if not matches:
         raise RuntimeError(
-            "No subagent definition matches assignment agent_kind "
-            f"{assignment.agent_kind!r}"
+            "No subagent definition matches assignment agent_id "
+            f"{assignment.agent_id!r}"
         )
     if len(matches) > 1:
         raise RuntimeError(
-            "Multiple subagent definitions match assignment agent_kind "
-            f"{assignment.agent_kind!r}"
+            "Multiple subagent definitions match assignment agent_id "
+            f"{assignment.agent_id!r}"
         )
-    return matches[0]
+    definition = matches[0]
+    if definition.kind != assignment.agent_kind:
+        raise RuntimeError("Subagent definition kind does not match assignment")
+    return definition
 
 
 def extract_subagent_result_from_state(
     final_state: Mapping[str, Any],
     *,
     expected_agent_run_id: str,
+    expected_agent_id: str,
     expected_agent_kind: str,
 ) -> AgentResult:
     """Read a generic subagent terminal result from final graph metadata."""
@@ -203,6 +209,8 @@ def extract_subagent_result_from_state(
     result = AgentResult.model_validate(dict(result_payload))
     if result.agent_run_id != expected_agent_run_id:
         raise RuntimeError("Subagent result agent_run_id does not match assignment")
+    if result.agent_id != expected_agent_id:
+        raise RuntimeError("Subagent result agent_id does not match assignment")
     if result.agent_kind != expected_agent_kind:
         raise RuntimeError("Subagent result agent_kind does not match assignment")
     return result

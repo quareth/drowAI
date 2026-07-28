@@ -58,6 +58,7 @@ def complete_subagent_result(
     )
     metadata[SUBAGENT_COMPLETION_METADATA_KEY] = {
         "agent_run_id": result.agent_run_id,
+        "agent_id": result.agent_id,
         "agent_kind": result.agent_kind,
         "outcome": result.outcome,
     }
@@ -69,6 +70,7 @@ def complete_subagent_result(
         {
             "type": "scout_result",
             "agent_run_id": result.agent_run_id,
+            "agent_id": result.agent_id,
             "agent_kind": result.agent_kind,
             "outcome": result.outcome,
             "summary": result.summary,
@@ -90,6 +92,7 @@ def _resolve_result(
 
     return AgentResult(
         agent_run_id=subagent.agent_run_id,
+        agent_id=subagent.agent_id,
         agent_kind=subagent.agent_kind,
         outcome=_derived_outcome(metadata),
         summary=_derived_summary(interactive),
@@ -109,6 +112,10 @@ def _validate_result_identity(
     if result.agent_run_id != subagent.agent_run_id:
         raise SubagentCompletionError(
             "Subagent result agent_run_id does not match assignment metadata"
+        )
+    if result.agent_id != subagent.agent_id:
+        raise SubagentCompletionError(
+            "Subagent result agent_id does not match assignment metadata"
         )
     if result.agent_kind != subagent.agent_kind:
         raise SubagentCompletionError(

@@ -258,7 +258,7 @@ async def test_classifier_sends_exact_current_request_to_selected_model(monkeypa
         "subagent",
         "objective",
     ]
-    assert handoff_items["properties"]["subagent"]["enum"] == ["scout"]
+    assert handoff_items["properties"]["subagent"]["enum"] == ["pathfinder"]
 
 
 def test_classifier_context_limit_rejects_unknown_provider_model() -> None:

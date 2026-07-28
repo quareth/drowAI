@@ -22,7 +22,7 @@ def test_scout_profile_resolves_exact_bounded_recon_tools() -> None:
     ) == ("host_discovery",)
     assert profile.capabilities_for_tool(
         "information_gathering.network_discovery.nmap"
-    ) == ("port_scan", "service_enum")
+    ) == ("port_scanning", "service_enumeration")
 
 
 def test_scout_profile_excludes_visible_non_owned_tools() -> None:

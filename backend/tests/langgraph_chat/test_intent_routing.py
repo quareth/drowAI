@@ -44,7 +44,7 @@ def test_select_branch_simple_tool() -> None:
 def test_resolve_branch_routes_scout_owned_direct_executor_by_default() -> None:
     registry = get_subagent_registry()
     scout_name = registry.classifier_catalog()[0]["name"]
-    assert scout_name == "scout"
+    assert scout_name == "pathfinder"
 
     config = _runtime_config(ExecutionMode.SIMPLE_TOOL)
     config.metadata.update(
@@ -73,11 +73,12 @@ def test_resolve_branch_routes_scout_owned_direct_executor_by_default() -> None:
             deep_reasoning_enabled=True,
             simple_tool_enabled=True,
         )
-        is ChatBranch.RECON_AGENT
+        is ChatBranch.SUBAGENT
     )
+    assert config.metadata["subagent_routing"]["agent_id"] == "pathfinder"
     assert config.metadata["subagent_routing"]["capabilities"] == [
-        "port_scan",
-        "service_enum",
+        "port_scanning",
+        "service_enumeration",
     ]
     assert (
         config.metadata["subagent_routing"]["objective"]
@@ -95,7 +96,7 @@ def test_resolve_branch_uses_handoff_instead_of_capability_vocabulary() -> None:
                 "agent_handoffs": [
                     {
                         "agent_handoff": "required",
-                        "subagent": "scout",
+                        "subagent": "pathfinder",
                         "objective": "Scan ports on 10.0.0.10.",
                     }
                 ],
@@ -113,9 +114,9 @@ def test_resolve_branch_uses_handoff_instead_of_capability_vocabulary() -> None:
             deep_reasoning_enabled=True,
             simple_tool_enabled=True,
         )
-        is ChatBranch.RECON_AGENT
+        is ChatBranch.SUBAGENT
     )
-    assert config.metadata["subagent_routing"]["reason"] == "scout_owned"
+    assert config.metadata["subagent_routing"]["reason"] == "pathfinder_owned"
 
 
 def test_resolve_branch_rejects_active_local_scout_run() -> None:
@@ -128,7 +129,7 @@ def test_resolve_branch_rejects_active_local_scout_run() -> None:
                 "agent_handoffs": [
                     {
                         "agent_handoff": "required",
-                        "subagent": "scout",
+                        "subagent": "pathfinder",
                         "objective": "Scan ports on 10.0.0.10.",
                     }
                 ],
@@ -145,7 +146,7 @@ def test_resolve_branch_rejects_active_local_scout_run() -> None:
             config,
             deep_reasoning_enabled=True,
             simple_tool_enabled=True,
-            active_recon_run_exists=True,
+            active_subagent_run_counts={"pathfinder": 1},
         )
         is ChatBranch.SIMPLE_TOOL
     )

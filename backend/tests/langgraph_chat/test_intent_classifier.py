@@ -753,7 +753,7 @@ async def test_intent_classifier_prefers_structured_output_payload() -> None:
             "agent_handoffs": [
                 {
                     "agent_handoff": "required",
-                    "subagent": "scout",
+                    "subagent": "pathfinder",
                     "objective": "Run an Nmap scan against 10.10.10.10.",
                 }
             ],
@@ -795,7 +795,7 @@ async def test_intent_classifier_prefers_structured_output_payload() -> None:
     assert config.metadata["intent_agent_handoffs"] == [
         {
             "agent_handoff": "required",
-            "subagent": "scout",
+            "subagent": "pathfinder",
             "objective": "Run an Nmap scan against 10.10.10.10.",
         }
     ]

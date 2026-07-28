@@ -98,7 +98,7 @@ class _PilotIntentClassifier:
                         "agent_handoffs": [
                             {
                                 "agent_handoff": "required",
-                                "subagent": "scout",
+                                "subagent": "pathfinder",
                                 "objective": (
                                     "Run service discovery against 10.0.0.10."
                                 ),
@@ -112,7 +112,7 @@ class _PilotIntentClassifier:
                         "agent_handoffs": [
                             {
                                 "agent_handoff": "required",
-                                "subagent": "scout",
+                                "subagent": "pathfinder",
                                 "objective": (
                                     "Run service discovery against 10.0.0.10."
                                 ),
@@ -164,6 +164,7 @@ class _DelayedScoutWorker:
         assert not await is_cancel_requested()
         return AgentResult(
             agent_run_id=assignment.agent_run_id,
+            agent_id="pathfinder",
             agent_kind="recon",
             outcome="completed",
             summary="Scout found HTTPS on 443.",
@@ -245,7 +246,7 @@ async def test_scout_recon_pilot_hands_result_back_to_original_parent_turn(
         scout_launcher=None,
         agent_run_lifecycle_publisher=_publish_lifecycle,
     )
-    facade._handlers[ChatBranch.RECON_AGENT]._launcher._worker = worker
+    facade._handlers[ChatBranch.SUBAGENT]._launcher._worker = worker
 
     parent_turn = asyncio.create_task(
         facade.handle_turn(_chat_inputs("Run service discovery against 10.0.0.10"))
@@ -257,7 +258,7 @@ async def test_scout_recon_pilot_hands_result_back_to_original_parent_turn(
     worker_call = worker.calls[0]
     assignment = worker_call["assignment"]
     assert assignment.targets == ("10.0.0.10",)
-    assert assignment.suggested_capabilities == ("service_enum",)
+    assert assignment.suggested_capabilities == ("service_enumeration",)
     child_config = worker_call["runtime_config"]["configurable"]
     assert child_config["graph_name"] == "scout_recon"
     assert child_config["thread_id"] != (
@@ -280,7 +281,7 @@ async def test_scout_recon_pilot_hands_result_back_to_original_parent_turn(
     result = await asyncio.wait_for(parent_turn, timeout=1)
 
     assert result.final_text == "The Scout scan found HTTPS exposed on port 443."
-    assert result.metadata["branch"] == "recon_agent"
+    assert result.metadata["branch"] == "subagent"
     assert result.metadata["status"] == "completed"
     assert result.metadata["handoff_agent_run_id"] == assignment.agent_run_id
     assert len(parent_executor.calls) == 1

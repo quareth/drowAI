@@ -87,6 +87,7 @@ describe("chat-stream-store persistence contracts", () => {
         streaming: true,
         producer_type: "subagent",
         agent_run_id: agentRunId,
+        agent_id: "pathfinder",
         agent_kind: "recon",
       },
     });
@@ -103,6 +104,7 @@ describe("chat-stream-store persistence contracts", () => {
         streaming: false,
         producer_type: "subagent",
         agent_run_id: "scout-a",
+        agent_id: "pathfinder",
         agent_kind: "recon",
       },
     });
@@ -145,6 +147,7 @@ describe("chat-stream-store persistence contracts", () => {
         streaming: false,
         producer_type: "subagent",
         agent_run_id: "scout-b",
+        agent_id: "pathfinder",
         agent_kind: "recon",
       },
     });
@@ -169,6 +172,7 @@ describe("chat-stream-store persistence contracts", () => {
         streaming: true,
         producer_type: "subagent",
         agent_run_id: agentRunId,
+        agent_id: "pathfinder",
         agent_kind: "recon",
         ...extra,
       },
@@ -230,6 +234,7 @@ describe("chat-stream-store persistence contracts", () => {
         streaming: true,
         producer_type: "subagent",
         agent_run_id: agentRunId,
+        agent_id: "pathfinder",
         agent_kind: agentKind,
       },
       isStreaming: true,

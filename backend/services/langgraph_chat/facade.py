@@ -177,7 +177,7 @@ class LangGraphChatFacade:
             ChatBranch.SIMPLE_TOOL: SimpleToolHandler(
                 self._checkpointer_service, self._executor, self._streaming_adapter
             ),
-            ChatBranch.RECON_AGENT: ReconAgentHandler(
+            ChatBranch.SUBAGENT: ReconAgentHandler(
                 self._checkpointer_service,
                 self._executor,
                 self._streaming_adapter,
@@ -419,7 +419,9 @@ class LangGraphChatFacade:
             runtime_config,
             deep_reasoning_enabled=ENABLE_LANGGRAPH_DEEP_REASONING,
             simple_tool_enabled=ENABLE_LANGGRAPH_SIMPLE_TOOL,
-            active_recon_run_exists=await self._active_recon_run_exists(runtime_config),
+            active_subagent_run_counts=await self._active_subagent_run_counts(
+                runtime_config
+            ),
             subagent_registry=self._subagent_registry,
         )
 
@@ -508,16 +510,16 @@ class LangGraphChatFacade:
                 exc_info=True,
             )
 
-    async def _active_recon_run_exists(
+    async def _active_subagent_run_counts(
         self,
         runtime_config: LangGraphRuntimeConfig,
-    ) -> bool:
-        """Return whether this process already owns an active Scout for the task."""
+    ) -> dict[str, int]:
+        """Return task-local active run counts keyed by definition-owned agent id."""
         tenant_id = runtime_config.metadata.get("tenant_id")
         try:
             resolved_tenant_id = int(tenant_id)
         except (TypeError, ValueError):
-            return False
+            return {}
         try:
             entries = await self._agent_run_registry.list_task_runs(
                 tenant_id=resolved_tenant_id,
@@ -525,12 +527,17 @@ class LangGraphChatFacade:
             )
         except Exception:
             logger.debug(
-                "Failed to inspect local Scout registry for task %s",
+                "Failed to inspect local subagent registry for task %s",
                 runtime_config.chat_inputs.task_id,
                 exc_info=True,
             )
-            return False
-        return any(entry.status in ACTIVE_AGENT_RUN_STATUSES for entry in entries)
+            return {}
+        counts: dict[str, int] = {}
+        for entry in entries:
+            if entry.status not in ACTIVE_AGENT_RUN_STATUSES:
+                continue
+            counts[entry.agent_id] = counts.get(entry.agent_id, 0) + 1
+        return counts
 
     def _validate_registered_subagent_handlers(self) -> None:
         """Fail startup when an enabled registry entry has no wired handler."""

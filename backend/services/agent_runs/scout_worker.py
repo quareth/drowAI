@@ -100,6 +100,7 @@ class ProcessLocalScoutRunWorker:
         return extract_scout_result_from_state(
             execution_result.final_state,
             expected_agent_run_id=assignment.agent_run_id,
+            expected_agent_id=assignment.agent_id,
             expected_agent_kind=assignment.agent_kind,
         )
 
@@ -132,6 +133,7 @@ async def mark_scout_completed_from_state(
     result = extract_scout_result_from_state(
         final_state,
         expected_agent_run_id=entry.agent_run_id,
+        expected_agent_id=entry.agent_id,
         expected_agent_kind=entry.agent_kind,
     )
     completed = await registry.mark_completed(
@@ -148,6 +150,7 @@ def extract_scout_result_from_state(
     final_state: Mapping[str, Any],
     *,
     expected_agent_run_id: str,
+    expected_agent_id: str,
     expected_agent_kind: str,
 ) -> AgentResult:
     """Read Scout's safe terminal result from final graph metadata."""
@@ -162,6 +165,8 @@ def extract_scout_result_from_state(
     result = AgentResult.model_validate(dict(result_payload))
     if result.agent_run_id != expected_agent_run_id:
         raise RuntimeError("Scout result agent_run_id does not match assignment")
+    if result.agent_id != expected_agent_id:
+        raise RuntimeError("Scout result agent_id does not match assignment")
     if result.agent_kind != expected_agent_kind:
         raise RuntimeError("Scout result agent_kind does not match assignment")
     return result

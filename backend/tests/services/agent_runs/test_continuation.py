@@ -51,6 +51,7 @@ def _assignment() -> AgentAssignment:
     return AgentAssignment(
         assignment_id="assignment-1",
         agent_run_id="scout-run-1",
+        agent_id="pathfinder",
         agent_kind="recon",
         task_id=42,
         tenant_id=7,
@@ -263,6 +264,7 @@ async def test_resume_from_interrupt_marks_scout_completed_on_success(
             metadata={
                 SCOUT_RESULT_METADATA_KEY: {
                     "agent_run_id": "scout-run-1",
+                    "agent_id": "pathfinder",
                     "agent_kind": "recon",
                     "outcome": "completed",
                     "summary": "Scout found HTTP on port 80.",

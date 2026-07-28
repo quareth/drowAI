@@ -20,7 +20,7 @@ class ChatBranch(str, Enum):
     NORMAL_CHAT = "normal_chat"
     DEEP_REASONING = "deep_reasoning"
     SIMPLE_TOOL = "simple_tool_execution"
-    RECON_AGENT = "recon_agent"
+    SUBAGENT = "subagent"
 
 
 def select_branch(config: LangGraphRuntimeConfig) -> ChatBranch:
@@ -39,7 +39,6 @@ def resolve_branch(
     *,
     deep_reasoning_enabled: bool,
     simple_tool_enabled: bool,
-    active_recon_run_exists: bool = False,
     active_subagent_run_counts: Mapping[str, int] | None = None,
     subagent_registry: SubagentRegistry | None = None,
 ) -> ChatBranch:
@@ -49,10 +48,8 @@ def resolve_branch(
         runtime_config: Runtime config for the current chat turn.
         deep_reasoning_enabled: Whether the deep-reasoning handler is enabled.
         simple_tool_enabled: Whether the simple-tool handler is enabled.
-        active_recon_run_exists: Whether this process already owns an active
-            Scout run for the task.
         active_subagent_run_counts: Optional task-local active counts by
-            registered subagent name.
+            registered definition-owned agent id.
         subagent_registry: Registry used for deterministic handoff validation.
 
     Returns:
@@ -80,17 +77,15 @@ def resolve_branch(
         branch = ChatBranch.NORMAL_CHAT
     if branch is ChatBranch.SIMPLE_TOOL:
         active_counts = dict(active_subagent_run_counts or {})
-        if active_recon_run_exists:
-            active_counts["scout"] = max(1, active_counts.get("scout", 0))
         decision = resolve_subagent_handoff(
             runtime_config.metadata,
             registry=subagent_registry,
-            active_runs_by_subagent=active_counts,
+            active_runs_by_agent_id=active_counts,
         )
         runtime_config.metadata["subagent_routing"] = {
             "should_delegate": decision.should_delegate,
             "reason": decision.reason,
-            "subagent_name": decision.subagent_name,
+            "agent_id": decision.agent_id,
             "agent_kind": decision.agent_kind,
             "dispatch_branch": decision.dispatch_branch,
             "capabilities": list(decision.capabilities),

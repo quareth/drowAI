@@ -9,15 +9,15 @@ from agent.subagents.scout.profile import (
     SCOUT_RECON_TOOL_ID_CEILING,
     resolve_scout_tool_profile,
 )
-from backend.services.agent_runs.subagent_registry import SCOUT_SUBAGENT_SPEC
+from backend.services.agent_runs.subagent_registry import PATHFINDER_SUBAGENT_SPEC
 from core.prompts.builders.scout_tool_builder import ScoutToolBuilderPromptBuilder
 from core.prompts.tests._golden import assert_golden
 
 
 _SUPPORTED_CATEGORY_TO_LEGACY_CAPABILITY = {
     "host_discovery": "host_discovery",
-    "port_scanning": "port_scan",
-    "service_enumeration": "service_enum",
+    "port_scanning": "port_scanning",
+    "service_enumeration": "service_enumeration",
 }
 
 
@@ -31,10 +31,10 @@ def _pathfinder_definition() -> SubagentDefinition:
 
 def test_pathfinder_definition_matches_legacy_scout_registry_metadata() -> None:
     definition = _pathfinder_definition()
-    legacy = SCOUT_SUBAGENT_SPEC
+    legacy = PATHFINDER_SUBAGENT_SPEC
 
     assert definition.id == "pathfinder"
-    assert legacy.name == "scout"
+    assert legacy.name == "pathfinder"
     assert definition.display_name == legacy.display_name
     assert definition.kind == legacy.agent_kind
     assert definition.description == legacy.purpose
@@ -58,7 +58,7 @@ def test_pathfinder_definition_matches_current_scout_tool_profile() -> None:
     ) == ("host_discovery",)
     assert profile.capabilities_for_tool(
         "information_gathering.network_discovery.nmap"
-    ) == ("port_scan", "service_enum")
+    ) == ("port_scanning", "service_enumeration")
     assert {
         _SUPPORTED_CATEGORY_TO_LEGACY_CAPABILITY[category]
         for category in definition.supported_task_categories
@@ -70,7 +70,7 @@ def test_pathfinder_definition_matches_current_scout_runtime_limits() -> None:
 
     assert (
         definition.max_active_runs_per_task
-        == SCOUT_SUBAGENT_SPEC.max_active_runs_per_task
+        == PATHFINDER_SUBAGENT_SPEC.max_active_runs_per_task
     )
     assert (
         definition.max_tool_calls_per_iteration

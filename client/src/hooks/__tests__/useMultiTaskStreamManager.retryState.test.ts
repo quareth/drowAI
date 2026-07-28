@@ -221,6 +221,7 @@ describe("useMultiTaskStreamManager retry_state handling", () => {
       transcript_resync_required: true,
       producer_type: "subagent",
       agent_run_id: "scout-run-1",
+      agent_id: "pathfinder",
       agent_kind: "recon",
       agent_display_name: "Scout",
       parent_turn_id: "turn-parent",

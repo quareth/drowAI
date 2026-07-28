@@ -8,12 +8,10 @@ metadata that frontend replay/projection code needs.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import Any
 
 from backend.core.time_utils import format_iso, utc_now
 from backend.services.agent_runs.contracts import (
-    AGENT_DISPLAY_NAMES,
-    AgentKind,
     AgentRunLifecycleProjection,
     AgentResultProjection,
     agent_display_name,
@@ -25,6 +23,7 @@ from backend.services.langgraph_chat.streaming.event_types import ensure_mutable
 AGENT_RUN_METADATA_KEYS: tuple[str, ...] = (
     "producer_type",
     "agent_run_id",
+    "agent_id",
     "agent_kind",
     "agent_display_name",
     "parent_turn_id",
@@ -46,9 +45,10 @@ def build_agent_run_lifecycle_event(
         if entry.result is None
         else AgentResultProjection.from_result(entry.result)
     )
-    display_name = agent_display_name(entry.agent_kind)
+    display_name = agent_display_name(entry.agent_id)
     projection = AgentRunLifecycleProjection(
         agent_run_id=entry.agent_run_id,
+        agent_id=entry.agent_id,
         agent_kind=entry.agent_kind,
         agent_display_name=display_name,
         status=entry.status,
@@ -66,6 +66,7 @@ def build_agent_run_lifecycle_event(
             "subtype": "agent_run_lifecycle",
             "producer_type": "subagent",
             "agent_run_id": entry.agent_run_id,
+            "agent_id": entry.agent_id,
             "agent_kind": entry.agent_kind,
             "agent_display_name": display_name,
             "parent_turn_id": entry.parent_turn_id,
@@ -104,7 +105,10 @@ def apply_agent_run_metadata(
             continue
         value = _safe_metadata_value(key, source[key])
         if value is not None:
-            metadata.setdefault(key, value)
+            if key == "agent_display_name":
+                metadata[key] = value
+            else:
+                metadata.setdefault(key, value)
 
 
 def _agent_metadata_source(raw_event: Mapping[str, Any]) -> dict[str, Any]:
@@ -117,12 +121,12 @@ def _agent_metadata_source(raw_event: Mapping[str, Any]) -> dict[str, Any]:
             source[key] = raw_event[key]
     if source.get("agent_run_id") and source.get("producer_type") is None:
         source["producer_type"] = "subagent"
-    if source.get("agent_display_name") is None:
-        display_name = registered_agent_display_name(source.get("agent_kind"))
+    display_name = registered_agent_display_name(source.get("agent_id"))
+    if display_name is not None:
+        source["agent_display_name"] = display_name
+    elif source.get("agent_display_name") is None:
         source["agent_display_name"] = (
-            display_name
-            if display_name is not None
-            else _format_agent_kind(source.get("agent_kind"))
+            _format_agent_kind(source.get("agent_kind"))
         )
     return source
 
@@ -150,14 +154,15 @@ def _safe_metadata_value(key: str, value: Any) -> str | int | bool | None:
 
 
 def registered_agent_display_name(value: Any) -> str | None:
-    """Resolve display metadata from the shared implemented-agent registry."""
+    """Resolve display metadata from the shared definition-owned registry."""
 
     if not isinstance(value, str):
         return None
     normalized = value.strip()
-    if normalized not in AGENT_DISPLAY_NAMES:
+    try:
+        return agent_display_name(normalized)
+    except KeyError:
         return None
-    return AGENT_DISPLAY_NAMES[cast(AgentKind, normalized)]
 
 
 def _format_agent_kind(value: Any) -> str | None:

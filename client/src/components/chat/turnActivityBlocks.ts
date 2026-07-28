@@ -110,6 +110,8 @@ export function isAgentRunEventGroup(group: MessageGroup): boolean {
     }
     return (
       metadata.producer_type !== "subagent" &&
+      typeof metadata.agent_id === "string" &&
+      metadata.agent_id.trim().length > 0 &&
       typeof metadata.agent_kind === "string" &&
       metadata.agent_kind.trim().length > 0 &&
       typeof metadata.agent_display_name === "string" &&

@@ -53,6 +53,7 @@ class LocalAgentRunStatusProjection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     agent_run_id: str
+    agent_id: str
     agent_kind: AgentKind
     agent_display_name: str
     status: AgentRunStatus
@@ -73,8 +74,9 @@ class LocalAgentRunStatusProjection(BaseModel):
         """Project a registry entry without exposing live task handles."""
         return cls(
             agent_run_id=entry.agent_run_id,
+            agent_id=entry.agent_id,
             agent_kind=entry.agent_kind,
-            agent_display_name=agent_display_name(entry.agent_kind),
+            agent_display_name=agent_display_name(entry.agent_id),
             status=entry.status,
             lifecycle_version=entry.lifecycle_version,
             task_id=entry.task_id,

@@ -43,6 +43,7 @@ def _assignment() -> AgentAssignment:
     return AgentAssignment(
         assignment_id="assign-1",
         agent_run_id="run-1",
+        agent_id="pathfinder",
         agent_kind="recon",
         task_id=42,
         tenant_id=7,
@@ -66,6 +67,9 @@ def test_backend_contracts_reexport_agent_contracts() -> None:
     )
     assert backend_contracts.AgentRuntimeIdentity is agent_contracts.AgentRuntimeIdentity
     assert backend_contracts.AgentResult is agent_contracts.AgentResult
+    display_map_name = "AGENT_" + "DISPLAY_NAMES"
+    assert not hasattr(agent_contracts, display_map_name)
+    assert not hasattr(backend_contracts, display_map_name)
 
 
 def test_assignment_validates_deterministically_and_keeps_display_name_separate() -> None:
@@ -73,11 +77,16 @@ def test_assignment_validates_deterministically_and_keeps_display_name_separate(
 
     assert assignment.agent_kind == "recon"
     assert "agent_display_name" not in assignment.model_dump()
-    assert agent_display_name(assignment.agent_kind) == "Pathfinder"
+    assert agent_display_name(assignment.agent_id) == "Pathfinder"
 
     dumped = assignment.model_dump(mode="json")
     round_tripped = AgentAssignment.model_validate(dumped)
     assert round_tripped == assignment
+
+
+def test_agent_display_name_requires_declarative_definition() -> None:
+    with pytest.raises(KeyError, match="unknown subagent definition id"):
+        agent_display_name("unknown_agent")
 
 
 def test_runtime_identity_rejects_non_serializable_values() -> None:
@@ -141,6 +150,7 @@ def test_contracts_reject_post_validation_mutation_of_safe_payloads() -> None:
     assignment = _assignment()
     result = AgentResult(
         agent_run_id="run-1",
+        agent_id="pathfinder",
         agent_kind="recon",
         outcome="completed",
         summary="Scout found two exposed services.",
@@ -154,6 +164,7 @@ def test_contracts_reject_post_validation_mutation_of_safe_payloads() -> None:
     result_projection = AgentResultProjection.from_result(result)
     lifecycle_projection = AgentRunLifecycleProjection(
         agent_run_id="run-1",
+        agent_id="pathfinder",
         agent_kind="recon",
         agent_display_name="Pathfinder",
         status="completed",
@@ -191,6 +202,7 @@ def test_contracts_reject_post_validation_mutation_of_safe_payloads() -> None:
 def test_result_and_lifecycle_projections_exclude_raw_activity() -> None:
     result = AgentResult(
         agent_run_id="run-1",
+        agent_id="pathfinder",
         agent_kind="recon",
         outcome="completed",
         summary="Scout found two exposed services.",
@@ -205,6 +217,7 @@ def test_result_and_lifecycle_projections_exclude_raw_activity() -> None:
     result_projection = AgentResultProjection.from_result(result)
     lifecycle_projection = AgentRunLifecycleProjection(
         agent_run_id="run-1",
+        agent_id="pathfinder",
         agent_kind="recon",
         agent_display_name="Pathfinder",
         status="completed",
@@ -230,6 +243,7 @@ def test_lifecycle_projection_requires_display_metadata_match() -> None:
     with pytest.raises(ValidationError, match="display metadata"):
         AgentRunLifecycleProjection(
             agent_run_id="run-1",
+            agent_id="pathfinder",
             agent_kind="recon",
             agent_display_name="Recon",
             status="running",

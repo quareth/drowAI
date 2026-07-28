@@ -39,6 +39,7 @@ function assignment(): AgentAssignment {
   return {
     assignment_id: "assign-scout-1",
     agent_run_id: "scout-run-1",
+    agent_id: "pathfinder",
     agent_kind: "recon",
     task_id: TASK_ID,
     tenant_id: 7,
@@ -66,6 +67,7 @@ function lifecycle(
 ): AgentRunLifecycleProjection {
   return {
     agent_run_id: "scout-run-1",
+    agent_id: "pathfinder",
     agent_kind: "recon",
     agent_display_name: "Scout",
     status: "running",
@@ -95,6 +97,7 @@ function lifecyclePacket(
       subtype: "agent_run_lifecycle",
       producer_type: "subagent",
       agent_run_id: "scout-run-1",
+      agent_id: "pathfinder",
       agent_kind: "recon",
       agent_display_name: "Scout",
       parent_turn_id: "turn-parent",
@@ -121,6 +124,7 @@ function activityPacket(sequence: number): StreamEvent {
       turn_sequence: 1,
       producer_type: "subagent",
       agent_run_id: "scout-run-1",
+      agent_id: "pathfinder",
       agent_kind: "recon",
       agent_display_name: "Scout",
       parent_turn_id: "turn-parent",
@@ -253,6 +257,7 @@ describe("agent-run replay hydration", () => {
                 assignment: null,
                 result: {
                   agent_run_id: "scout-run-1",
+                  agent_id: "pathfinder",
                   agent_kind: "recon",
                   agent_display_name: "Scout",
                   outcome: "completed",

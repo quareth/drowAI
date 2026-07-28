@@ -459,6 +459,7 @@ def _apply_subagent_tool_batch(
     metadata[SUBAGENT_ACTION_METADATA_KEY] = {
         "route": "tool",
         "agent_run_id": subagent.agent_run_id,
+        "agent_id": subagent.agent_id,
         "tool_id": first_call.tool_id,
         "tool_ids": committed_tool_ids,
         "tool_batch_id": batch.tool_batch_id,

@@ -88,6 +88,7 @@ function isAgentRunLifecycleMessage(message: ChatMessage): boolean {
   const metadata = message.metadata ?? {};
   return (
     readString(metadata.agent_run_id) !== null &&
+    readString(metadata.agent_id) !== null &&
     (message.content === AGENT_RUN_LIFECYCLE_CONTENT ||
       metadata.subtype === AGENT_RUN_LIFECYCLE_SUBTYPE)
   );
@@ -97,6 +98,7 @@ function isAgentRunParentControlMessage(message: ChatMessage): boolean {
   const metadata = message.metadata ?? {};
   return (
     readString(metadata.agent_run_id) !== null &&
+    readString(metadata.agent_id) !== null &&
     readString(metadata.agent_kind) !== null &&
     readString(metadata.agent_display_name) !== null &&
     readString(metadata.status) !== null &&
@@ -112,6 +114,7 @@ function isAgentRunActivityMessage(message: ChatMessage): boolean {
   return (
     !isLifecycle &&
     readString(metadata.agent_run_id) !== null &&
+    readString(metadata.agent_id) !== null &&
     metadata.producer_type === "subagent"
   );
 }
@@ -185,6 +188,7 @@ function addMissingAgentRunMarkers(
         subtype: AGENT_RUN_LIFECYCLE_SUBTYPE,
         producer_type: "subagent",
         agent_run_id: run.agentRunId,
+        agent_id: run.agentId,
         agent_kind: run.agentKind,
         agent_display_name: run.agentDisplayName,
         parent_turn_id: run.parentTurnId,

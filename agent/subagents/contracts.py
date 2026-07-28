@@ -16,7 +16,9 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 AgentKind: TypeAlias = Literal["recon"]
-ReconCapability: TypeAlias = Literal["host_discovery", "port_scan", "service_enum"]
+AgentId: TypeAlias = str
+AgentCapability: TypeAlias = str
+ReconCapability: TypeAlias = AgentCapability
 AgentRunStatus: TypeAlias = Literal[
     "queued",
     "running",
@@ -32,10 +34,6 @@ AgentRunOutcome: TypeAlias = Literal[
     "failed",
     "cancelled",
 ]
-
-AGENT_DISPLAY_NAMES: dict[AgentKind, str] = {
-    "recon": "Pathfinder",
-}
 
 SENSITIVE_CONTEXT_KEYS = frozenset(
     {
@@ -260,10 +258,11 @@ class AgentRuntimeIdentity(_StrictContract):
 
 
 class AgentAssignment(_StrictContract):
-    """Immutable assignment used to launch one Scout run."""
+    """Immutable assignment used to launch one subagent run."""
 
     assignment_id: str
     agent_run_id: str
+    agent_id: AgentId
     agent_kind: AgentKind
     task_id: int
     tenant_id: int
@@ -272,7 +271,7 @@ class AgentAssignment(_StrictContract):
     parent_graph_thread_id: str
     objective: str
     targets: tuple[str, ...] = Field(default_factory=tuple)
-    suggested_capabilities: tuple[ReconCapability, ...] = Field(default_factory=tuple)
+    suggested_capabilities: tuple[AgentCapability, ...] = Field(default_factory=tuple)
     scope_summary: str | None = None
     relevant_context: dict[str, Any] = Field(default_factory=dict)
     runtime_identity: AgentRuntimeIdentity
@@ -280,6 +279,7 @@ class AgentAssignment(_StrictContract):
     @field_validator(
         "assignment_id",
         "agent_run_id",
+        "agent_id",
         "conversation_id",
         "parent_turn_id",
         "parent_graph_thread_id",
@@ -330,6 +330,7 @@ class AgentResult(_StrictContract):
     """Safe terminal result produced by a subagent run."""
 
     agent_run_id: str
+    agent_id: AgentId
     agent_kind: AgentKind
     outcome: AgentRunOutcome
     summary: str
@@ -340,7 +341,13 @@ class AgentResult(_StrictContract):
     recommended_next_steps: tuple[str, ...] = Field(default_factory=tuple)
     final_checkpoint_id: str | None = None
 
-    @field_validator("agent_run_id", "summary", "final_checkpoint_id", mode="before")
+    @field_validator(
+        "agent_run_id",
+        "agent_id",
+        "summary",
+        "final_checkpoint_id",
+        mode="before",
+    )
     @classmethod
     def _strip_result_strings(cls, value: Any, info: Any) -> Any:
         if value is None:
@@ -403,6 +410,7 @@ class AgentRunLifecycleProjection(_StrictContract):
     """Safe stream projection for subagent lifecycle card updates."""
 
     agent_run_id: str
+    agent_id: AgentId
     agent_kind: AgentKind
     agent_display_name: str
     status: AgentRunStatus
@@ -417,6 +425,7 @@ class AgentRunLifecycleProjection(_StrictContract):
 
     @field_validator(
         "agent_run_id",
+        "agent_id",
         "agent_display_name",
         "conversation_id",
         "parent_turn_id",
@@ -437,11 +446,15 @@ class AgentRunLifecycleProjection(_StrictContract):
 
     @model_validator(mode="after")
     def _display_name_matches_agent_kind(self) -> "AgentRunLifecycleProjection":
-        expected = AGENT_DISPLAY_NAMES[self.agent_kind]
+        expected = agent_display_name(self.agent_id)
         if self.agent_display_name != expected:
-            raise ValueError("agent_display_name must match agent_kind display metadata")
+            raise ValueError("agent_display_name must match agent_id display metadata")
+        if self.assignment is not None and self.assignment.agent_id != self.agent_id:
+            raise ValueError("assignment.agent_id must match lifecycle projection")
         if self.result is not None and self.result.agent_run_id != self.agent_run_id:
             raise ValueError("result.agent_run_id must match lifecycle projection")
+        if self.result is not None and self.result.agent_id != self.agent_id:
+            raise ValueError("result.agent_id must match lifecycle projection")
         return self
 
 
@@ -449,6 +462,7 @@ class AgentResultProjection(_StrictContract):
     """Safe result subset for frontend and main-agent context handoff."""
 
     agent_run_id: str
+    agent_id: AgentId
     agent_kind: AgentKind
     agent_display_name: str
     outcome: AgentRunOutcome
@@ -465,7 +479,7 @@ class AgentResultProjection(_StrictContract):
         """Build the public projection for a validated terminal result."""
         return cls(
             **result.model_dump(),
-            agent_display_name=AGENT_DISPLAY_NAMES[result.agent_kind],
+            agent_display_name=agent_display_name(result.agent_id),
         )
 
     @field_validator("agent_display_name")
@@ -498,21 +512,28 @@ class AgentResultProjection(_StrictContract):
 
     @model_validator(mode="after")
     def _display_name_matches_agent_kind(self) -> "AgentResultProjection":
-        expected = AGENT_DISPLAY_NAMES[self.agent_kind]
+        expected = agent_display_name(self.agent_id)
         if self.agent_display_name != expected:
-            raise ValueError("agent_display_name must match agent_kind display metadata")
+            raise ValueError("agent_display_name must match agent_id display metadata")
         return self
 
 
-def agent_display_name(agent_kind: AgentKind) -> str:
-    """Return presentation text for a policy agent identity."""
-    return AGENT_DISPLAY_NAMES[agent_kind]
+def agent_display_name(agent_id: AgentId) -> str:
+    """Return presentation text for a declarative agent identity."""
+    normalized = _validate_non_empty(str(agent_id), "agent_id").lower()
+    try:
+        from agent.subagents.registry import get_subagent_registry
+
+        return get_subagent_registry().display_metadata(normalized).display_name
+    except Exception as exc:
+        raise KeyError(f"unknown subagent definition id: {agent_id}") from exc
 
 
 __all__ = [
-    "AGENT_DISPLAY_NAMES",
     "AgentAssignment",
+    "AgentCapability",
     "AgentCredentialReference",
+    "AgentId",
     "AgentKind",
     "AgentResult",
     "AgentResultProjection",

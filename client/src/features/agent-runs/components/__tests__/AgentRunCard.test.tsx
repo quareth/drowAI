@@ -12,6 +12,7 @@ function runWithStatus(status: AgentRunRecord["status"]): AgentRunRecord {
   return {
     taskId: 7,
     agentRunId: "run-1",
+    agentId: "pathfinder",
     agentKind: "scout",
     agentDisplayName: "Pathfinder",
     status,

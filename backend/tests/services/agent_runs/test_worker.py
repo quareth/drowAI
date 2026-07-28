@@ -67,6 +67,7 @@ def _assignment() -> AgentAssignment:
     return AgentAssignment(
         assignment_id="assign-1",
         agent_run_id="run-1",
+        agent_id="pathfinder",
         agent_kind="recon",
         task_id=42,
         tenant_id=7,
@@ -85,6 +86,7 @@ def _assignment() -> AgentAssignment:
 def _result() -> AgentResult:
     return AgentResult(
         agent_run_id="run-1",
+        agent_id="pathfinder",
         agent_kind="recon",
         outcome="completed",
         summary="Pathfinder found one live host.",
@@ -248,18 +250,18 @@ def test_generic_worker_resolves_definition_by_assignment_kind() -> None:
     )
 
 
-def test_generic_worker_rejects_ambiguous_assignment_kind() -> None:
+def test_generic_worker_rejects_missing_assignment_agent_id() -> None:
     definition = _pathfinder_definition()
-    duplicate_kind = replace(
+    other_definition = replace(
         definition,
         id="otheragent",
         display_name="Other Agent",
         icon="otheragent",
     )
 
-    with pytest.raises(RuntimeError, match="Multiple subagent definitions"):
+    with pytest.raises(RuntimeError, match="No subagent definition matches"):
         resolve_definition_for_assignment(
-            SubagentRegistry([definition, duplicate_kind]),
+            SubagentRegistry([other_definition]),
             assignment=_assignment(),
         )
 
@@ -268,10 +270,12 @@ def test_generic_result_extraction_matches_current_scout_result_extraction() -> 
     assert extract_subagent_result_from_state(
         _final_state(),
         expected_agent_run_id="run-1",
+        expected_agent_id="pathfinder",
         expected_agent_kind="recon",
     ) == extract_scout_result_from_state(
         _final_state(),
         expected_agent_run_id="run-1",
+        expected_agent_id="pathfinder",
         expected_agent_kind="recon",
     )
 

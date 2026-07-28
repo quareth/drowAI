@@ -9,9 +9,10 @@ one validated contract set during the migration-free pilot.
 from __future__ import annotations
 
 from agent.subagents.contracts import (
-    AGENT_DISPLAY_NAMES,
+    AgentCapability,
     AgentAssignment,
     AgentCredentialReference,
+    AgentId,
     AgentKind,
     AgentResult,
     AgentResultProjection,
@@ -25,9 +26,10 @@ from agent.subagents.contracts import (
 )
 
 __all__ = [
-    "AGENT_DISPLAY_NAMES",
+    "AgentCapability",
     "AgentAssignment",
     "AgentCredentialReference",
+    "AgentId",
     "AgentKind",
     "AgentResult",
     "AgentResultProjection",

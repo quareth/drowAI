@@ -28,6 +28,7 @@ def _assignment() -> AgentAssignment:
     return AgentAssignment(
         assignment_id="assignment-1",
         agent_run_id="scout-run-1",
+        agent_id="pathfinder",
         agent_kind="recon",
         task_id=42,
         tenant_id=7,
@@ -83,3 +84,29 @@ def test_apply_agent_run_metadata_preserves_generic_subagent_identity() -> None:
     assert metadata["agent_run_id"] == "review-run-1"
     assert metadata["agent_kind"] == "review"
     assert metadata["agent_display_name"] == "Review"
+
+
+def test_apply_agent_run_metadata_canonicalizes_registered_display_name() -> None:
+    processed: dict[str, object] = {
+        "type": "reasoning_delta",
+        "metadata": {"agent_display_name": "Spoofed"},
+    }
+
+    apply_agent_run_metadata(
+        processed,
+        {
+            "type": "reasoning_delta",
+            "metadata": {
+                "producer_type": "subagent",
+                "agent_run_id": "scout-run-1",
+                "agent_id": "pathfinder",
+                "agent_kind": "recon",
+                "agent_display_name": "Spoofed",
+                "parent_turn_id": "turn-parent",
+            },
+        },
+    )
+
+    metadata = processed["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata["agent_display_name"] == "Pathfinder"

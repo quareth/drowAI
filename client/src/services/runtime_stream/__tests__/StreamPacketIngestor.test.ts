@@ -164,6 +164,7 @@ describe("StreamPacketIngestor", () => {
             subtype: "agent_run_lifecycle",
             producer_type: "subagent",
             agent_run_id: "scout-run-1",
+            agent_id: "pathfinder",
             agent_kind: "recon",
             agent_display_name: "Scout",
             parent_turn_id: "turn-parent",
@@ -173,6 +174,7 @@ describe("StreamPacketIngestor", () => {
           },
           agent_run: {
             agent_run_id: "scout-run-1",
+            agent_id: "pathfinder",
             agent_kind: "recon",
             agent_display_name: "Scout",
             status: "running",
@@ -215,6 +217,7 @@ describe("StreamPacketIngestor", () => {
               step_type: "tool_start",
               producer_type: "subagent",
               agent_run_id: "scout-run-1",
+              agent_id: "pathfinder",
               agent_kind: "recon",
               agent_display_name: "Scout",
               parent_turn_id: "turn-parent",

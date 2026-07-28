@@ -52,6 +52,7 @@ def _assignment() -> AgentAssignment:
     return AgentAssignment(
         assignment_id="assign-1",
         agent_run_id="run-1",
+        agent_id="pathfinder",
         agent_kind="recon",
         task_id=42,
         tenant_id=7,
@@ -155,6 +156,7 @@ def test_complete_node_validates_explicit_submit_result() -> None:
     }
     metadata[SCOUT_RESULT_METADATA_KEY] = {
         "agent_run_id": "run-1",
+        "agent_id": "pathfinder",
         "agent_kind": "recon",
         "outcome": "completed",
         "summary": "Host liveness was checked.",
@@ -167,6 +169,7 @@ def test_complete_node_validates_explicit_submit_result() -> None:
     metadata = update["facts"]["metadata"]
     assert metadata[SCOUT_COMPLETION_METADATA_KEY] == {
         "agent_run_id": "run-1",
+        "agent_id": "pathfinder",
         "agent_kind": "recon",
         "outcome": "completed",
     }
@@ -182,6 +185,7 @@ def test_complete_node_uses_streamed_finalizer_message_as_handoff_summary() -> N
     interactive = InteractiveState.from_mapping(_state())
     interactive.facts.metadata[SCOUT_RESULT_METADATA_KEY] = {
         "agent_run_id": "run-1",
+        "agent_id": "pathfinder",
         "agent_kind": "recon",
         "outcome": "completed",
         "summary": "Structured draft summary.",
@@ -217,6 +221,7 @@ def test_complete_node_derives_bounded_result_from_compact_state() -> None:
 
     result = update["facts"]["metadata"][SCOUT_RESULT_METADATA_KEY]
     assert result["agent_run_id"] == "run-1"
+    assert result["agent_id"] == "pathfinder"
     assert result["agent_kind"] == "recon"
     assert result["outcome"] == "completed"
     assert result["summary"] == "fping found one live host."

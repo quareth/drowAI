@@ -14,6 +14,7 @@ import {
   returnAgentRunDrawerToList,
   setAgentRunActivityExpanded,
 } from "../state/agent-stream-store";
+import { resolveAgentDisplayName } from "../contracts/agent-run";
 import type {
   AgentAssignment,
   AgentRunLifecycleProjection,
@@ -32,6 +33,7 @@ function assignment(overrides: Partial<AgentAssignment> = {}): AgentAssignment {
   return {
     assignment_id: "assign-1",
     agent_run_id: "run-1",
+    agent_id: "pathfinder",
     agent_kind: "recon",
     task_id: TASK_ID,
     tenant_id: 77,
@@ -61,6 +63,7 @@ function lifecycle(
 ): AgentRunLifecycleProjection {
   return {
     agent_run_id: "run-1",
+    agent_id: "pathfinder",
     agent_kind: "recon",
     agent_display_name: "Scout",
     status: "queued",
@@ -89,6 +92,7 @@ function lifecycleEvent(
       subtype: "agent_run_lifecycle",
       producer_type: "subagent",
       agent_run_id: projection.agent_run_id,
+      agent_id: projection.agent_id,
       agent_kind: "recon",
       agent_display_name: "Scout",
       parent_turn_id: projection.parent_turn_id,
@@ -110,6 +114,7 @@ function activityEvent(sequence: number, agentRunId = "run-1"): StreamEvent {
     metadata: {
       producer_type: "subagent",
       agent_run_id: agentRunId,
+      agent_id: "pathfinder",
       agent_kind: "recon",
       agent_display_name: "Scout",
       parent_turn_id: "turn-1",
@@ -121,6 +126,11 @@ function activityEvent(sequence: number, agentRunId = "run-1"): StreamEvent {
 }
 
 describe("agent-stream-store lifecycle state", () => {
+  it("uses reported display names and generic unknown-id fallback only", () => {
+    expect(resolveAgentDisplayName("reviewer", "Reviewer")).toBe("Reviewer");
+    expect(resolveAgentDisplayName("unknown_agent", null)).toBe("Unknown Agent");
+  });
+
   it("merges lifecycle updates by monotonic version and preserves assignment", () => {
     applyAgentRunLifecycleUpdate(TASK_ID, lifecycle(), 10);
     applyAgentRunLifecycleUpdate(
@@ -131,6 +141,7 @@ describe("agent-stream-store lifecycle state", () => {
         assignment: null,
         result: {
           agent_run_id: "run-1",
+          agent_id: "pathfinder",
           agent_kind: "recon",
           agent_display_name: "Scout",
           outcome: "completed",
@@ -248,6 +259,7 @@ describe("agent-stream-store lifecycle state", () => {
     const projection = {
       ...lifecycle({ assignment: null }),
       agent_run_id: "review-run-1",
+      agent_id: "reviewer",
       agent_kind: "review",
       agent_display_name: "Reviewer",
     } as AgentRunLifecycleProjection;
@@ -255,6 +267,7 @@ describe("agent-stream-store lifecycle state", () => {
     event.metadata = {
       ...event.metadata,
       agent_run_id: projection.agent_run_id,
+      agent_id: projection.agent_id,
       agent_kind: projection.agent_kind,
       agent_display_name: projection.agent_display_name,
     };

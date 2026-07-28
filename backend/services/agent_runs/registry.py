@@ -28,9 +28,10 @@ DEFAULT_FINISHED_RETENTION = timedelta(minutes=15)
 
 @dataclass(frozen=True, slots=True)
 class LocalAgentRun:
-    """Immutable snapshot of one process-local Scout run."""
+    """Immutable snapshot of one process-local subagent run."""
 
     agent_run_id: str
+    agent_id: str
     tenant_id: int
     task_id: int
     conversation_id: str
@@ -114,6 +115,7 @@ class ProcessLocalAgentRunRegistry:
             now = self._clock()
             entry = LocalAgentRun(
                 agent_run_id=assignment.agent_run_id,
+                agent_id=assignment.agent_id,
                 tenant_id=assignment.tenant_id,
                 task_id=assignment.task_id,
                 conversation_id=assignment.conversation_id,

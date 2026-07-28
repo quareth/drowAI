@@ -108,6 +108,7 @@ function assignment(overrides: Partial<AgentAssignment> = {}): AgentAssignment {
   return {
     assignment_id: "assignment-run-1",
     agent_run_id: "scout-run-1",
+    agent_id: "pathfinder",
     agent_kind: "recon",
     task_id: TASK_ID,
     tenant_id: 7,
@@ -137,6 +138,7 @@ function lifecycle(
 ): AgentRunLifecycleProjection {
   return {
     agent_run_id: "scout-run-1",
+    agent_id: "pathfinder",
     agent_kind: "recon",
     agent_display_name: "Scout",
     status: "running",
@@ -157,6 +159,7 @@ function completedResult(
 ): AgentResultProjection {
   return {
     agent_run_id: "scout-run-1",
+    agent_id: "pathfinder",
     agent_kind: "recon",
     agent_display_name: "Scout",
     outcome: "completed",
@@ -181,7 +184,10 @@ function lifecycleMessage(): ChatMessage {
     metadata: {
       id: "turn-parent",
       subtype: "agent_run_lifecycle",
+      producer_type: "subagent",
       agent_run_id: "scout-run-1",
+      agent_id: "pathfinder",
+      agent_kind: "recon",
       parent_turn_id: "turn-parent",
       parent_run_id: "parent-run-1",
       turn_sequence: 1,
@@ -200,8 +206,9 @@ function reconParentAcknowledgementMessage(): ChatMessage {
     metadata: {
       id: "turn-parent",
       role: "assistant",
-      branch: "recon_agent",
+      branch: "subagent",
       agent_run_id: "scout-run-1",
+      agent_id: "pathfinder",
       agent_kind: "recon",
       agent_display_name: "Scout",
       graph_thread_id: "thread-scout",
@@ -228,6 +235,7 @@ function scoutActivityMessage(
       id: "child-turn",
       producer_type: "subagent",
       agent_run_id: "scout-run-1",
+      agent_id: "pathfinder",
       agent_kind: "recon",
       agent_display_name: "Scout",
       parent_turn_id: "turn-parent",
@@ -274,6 +282,7 @@ function lifecycleReplayPacket(sequence: number): Record<string, unknown> {
       subtype: "agent_run_lifecycle",
       producer_type: "subagent",
       agent_run_id: "scout-run-1",
+      agent_id: "pathfinder",
       agent_kind: "recon",
       agent_display_name: "Scout",
       parent_turn_id: "turn-parent",
@@ -492,6 +501,7 @@ describe("MessageList Scout agent-run cards", () => {
       TASK_ID,
       lifecycle({
         agent_run_id: "research-run-1",
+        agent_id: "researcher",
         agent_kind: "research",
         agent_display_name: "Researcher",
         assignment: null,
@@ -502,6 +512,7 @@ describe("MessageList Scout agent-run cards", () => {
       TASK_ID,
       lifecycle({
         agent_run_id: "review-run-1",
+        agent_id: "reviewer",
         agent_kind: "review",
         agent_display_name: "Reviewer",
         assignment: null,
@@ -635,6 +646,7 @@ describe("MessageList Scout agent-run cards", () => {
           turn_sequence: 1,
           producer_type: "subagent",
           agent_run_id: "scout-run-1",
+          agent_id: "pathfinder",
           agent_kind: "recon",
           agent_display_name: "Scout",
           parent_turn_id: "turn-parent",
@@ -737,6 +749,7 @@ describe("MessageList Scout agent-run cards", () => {
       metadata: {
         producer_type: "subagent",
         agent_run_id: "scout-run-1",
+        agent_id: "pathfinder",
         agent_kind: "recon",
         agent_display_name: "Scout",
         parent_turn_id: "turn-parent",
@@ -754,7 +767,7 @@ describe("MessageList Scout agent-run cards", () => {
     );
 
     expect(screen.getByTestId("agent-run-card-scout-run-1")).toBeTruthy();
-    expect(screen.getByText("Pathfinder")).toBeTruthy();
+    expect(screen.getByText("Scout")).toBeTruthy();
     expect(screen.getByText("working")).toBeTruthy();
     expect(screen.queryByText("agent_run_lifecycle")).toBeNull();
     expect(screen.queryByText("internal chain of thought")).toBeNull();
@@ -766,7 +779,7 @@ describe("MessageList Scout agent-run cards", () => {
     });
   });
 
-  it("opens the contained subagent list before selecting the Pathfinder thread", () => {
+  it("opens the contained subagent list before selecting the Scout thread", () => {
     applyAgentRunLifecycleUpdate(TASK_ID, lifecycle(), 12);
 
     render(
@@ -807,7 +820,7 @@ describe("MessageList Scout agent-run cards", () => {
     expect(screen.getByTestId("agent-run-list")).toBeTruthy();
     expect(screen.getByText("Active · 1")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: /open pathfinder thread/i }));
+    fireEvent.click(screen.getByRole("button", { name: /open scout thread/i }));
 
     expect(screen.getByTestId("agent-run-detail")).toBeTruthy();
     expect(screen.getByTestId("agent-activity-timeline")).toBeTruthy();
@@ -1011,6 +1024,7 @@ describe("MessageList Scout agent-run cards", () => {
       metadata: {
         producer_type: "subagent",
         agent_run_id: "scout-run-1",
+        agent_id: "pathfinder",
         agent_kind: "recon",
         agent_display_name: "Scout",
         parent_turn_id: "turn-parent",
@@ -1028,6 +1042,7 @@ describe("MessageList Scout agent-run cards", () => {
       metadata: {
         producer_type: "subagent",
         agent_run_id: "scout-run-1",
+        agent_id: "pathfinder",
         agent_kind: "recon",
         agent_display_name: "Scout",
         parent_turn_id: "turn-parent",
@@ -1045,6 +1060,7 @@ describe("MessageList Scout agent-run cards", () => {
       metadata: {
         producer_type: "subagent",
         agent_run_id: "scout-run-1",
+        agent_id: "pathfinder",
         agent_kind: "recon",
         agent_display_name: "Scout",
         parent_turn_id: "turn-parent",
@@ -1079,7 +1095,7 @@ describe("MessageList Scout agent-run cards", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: /open subagents/i }));
-    fireEvent.click(screen.getByRole("button", { name: /open pathfinder thread/i }));
+    fireEvent.click(screen.getByRole("button", { name: /open scout thread/i }));
 
     expect(screen.getByTestId("agent-run-detail")).toBeTruthy();
     expect(screen.getByTestId("agent-activity-timeline")).toBeTruthy();
@@ -1103,6 +1119,7 @@ describe("MessageList Scout agent-run cards", () => {
       metadata: {
         producer_type: "subagent",
         agent_run_id: "scout-run-1",
+        agent_id: "pathfinder",
         agent_kind: "recon",
         agent_display_name: "Scout",
         parent_turn_id: "turn-parent",
@@ -1122,7 +1139,7 @@ describe("MessageList Scout agent-run cards", () => {
 
     expect(screen.getByText("working")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /open subagents/i }));
-    fireEvent.click(screen.getByRole("button", { name: /open pathfinder thread/i }));
+    fireEvent.click(screen.getByRole("button", { name: /open scout thread/i }));
     expect(screen.getByTestId("agent-run-detail")).toBeTruthy();
     expect(screen.queryByText("Scout found HTTPS on 443.")).toBeNull();
 
@@ -1134,6 +1151,7 @@ describe("MessageList Scout agent-run cards", () => {
       metadata: {
         producer_type: "subagent",
         agent_run_id: "scout-run-1",
+        agent_id: "pathfinder",
         agent_kind: "recon",
         agent_display_name: "Scout",
         parent_turn_id: "turn-parent",
@@ -1150,6 +1168,7 @@ describe("MessageList Scout agent-run cards", () => {
       metadata: {
         producer_type: "subagent",
         agent_run_id: "scout-run-1",
+        agent_id: "pathfinder",
         agent_kind: "recon",
         agent_display_name: "Scout",
         parent_turn_id: "turn-parent",
@@ -1234,7 +1253,7 @@ describe("MessageList Scout agent-run cards", () => {
     cardButton.focus();
     expect(document.activeElement).toBe(cardButton);
     fireEvent.click(cardButton);
-    fireEvent.click(screen.getByRole("button", { name: /open pathfinder thread/i }));
+    fireEvent.click(screen.getByRole("button", { name: /open scout thread/i }));
 
     expect(screen.getByRole("complementary", { name: /subagents/i })).toBeTruthy();
     expect(screen.getByText("Approval")).toBeTruthy();
@@ -1271,7 +1290,7 @@ describe("MessageList Scout agent-run cards", () => {
 
     expect(screen.getByText("interrupted")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /open subagents/i }));
-    fireEvent.click(screen.getByRole("button", { name: /open pathfinder thread/i }));
+    fireEvent.click(screen.getByRole("button", { name: /open scout thread/i }));
     expect(
       screen.getAllByText(/current backend process no longer owns it/i).length,
     ).toBeGreaterThan(0);

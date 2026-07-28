@@ -289,16 +289,13 @@ class LangGraphExecutor:
         if not attribution.get("agent_run_id"):
             return event
         attribution.setdefault("producer_type", "subagent")
-        display_name = registered_agent_display_name(attribution.get("agent_kind"))
+        display_name = registered_agent_display_name(attribution.get("agent_id"))
         if display_name is not None:
-            attribution.setdefault("agent_display_name", display_name)
+            attribution["agent_display_name"] = display_name
 
-        raw_metadata = event.get("metadata")
-        metadata = raw_metadata if isinstance(raw_metadata, Mapping) else {}
         enriched = dict(event)
         for key, value in attribution.items():
-            if key not in enriched and key not in metadata:
-                enriched[key] = value
+            enriched[key] = value
         return enriched
 
     async def _observe_context_window_checkpoint(

@@ -18,6 +18,7 @@ import {
   readStreamSequence,
   resolveAgentDisplayName,
   type AgentAssignment,
+  type AgentId,
   type AgentKind,
   type AgentResultProjection,
   type AgentRunActivityIdentity,
@@ -41,6 +42,7 @@ export interface AgentRunActivityEntry {
 export interface AgentRunRecord {
   taskId: number;
   agentRunId: string;
+  agentId: AgentId;
   agentKind: AgentKind;
   agentDisplayName: string;
   status: AgentRunStatus;
@@ -185,9 +187,10 @@ export function applyAgentRunLifecycleUpdate(
     const next: AgentRunRecord = {
       taskId,
       agentRunId: projection.agent_run_id,
+      agentId: projection.agent_id,
       agentKind: projection.agent_kind,
       agentDisplayName: resolveAgentDisplayName(
-        projection.agent_kind,
+        projection.agent_id,
         projection.agent_display_name,
       ),
       status: projection.status,
@@ -259,8 +262,9 @@ export function applyAgentRunActivityPayload(
     }
     draft.runs.set(identity.agentRunId, {
       ...nextRun,
+      agentId: identity.agentId,
       agentDisplayName: resolveAgentDisplayName(
-        identity.agentKind,
+        identity.agentId,
         identity.agentDisplayName,
       ),
       parentRunId: identity.parentRunId ?? nextRun.parentRunId,
@@ -468,9 +472,10 @@ function emptyRunFromActivity(identity: AgentRunActivityIdentity): AgentRunRecor
   return {
     taskId: identity.taskId,
     agentRunId: identity.agentRunId,
+    agentId: identity.agentId,
     agentKind: identity.agentKind,
     agentDisplayName: resolveAgentDisplayName(
-      identity.agentKind,
+      identity.agentId,
       identity.agentDisplayName,
     ),
     status: "running",
@@ -564,6 +569,9 @@ function isTerminalStatus(status: AgentRunStatus): boolean {
 function sameRunRecord(a: AgentRunRecord, b: AgentRunRecord): boolean {
   return (
     a.status === b.status &&
+    a.agentId === b.agentId &&
+    a.agentKind === b.agentKind &&
+    a.agentDisplayName === b.agentDisplayName &&
     a.lifecycleVersion === b.lifecycleVersion &&
     a.parentRunId === b.parentRunId &&
     a.assignment === b.assignment &&

@@ -33,6 +33,7 @@ describe('groupMessages', () => {
         ...baseStep.metadata,
         producer_type: 'subagent',
         agent_run_id: 'scout-run-1',
+        agent_id: "pathfinder",
         agent_kind: 'recon',
       },
     } as Step;

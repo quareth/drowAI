@@ -41,6 +41,7 @@ def _assignment(
     return AgentAssignment(
         assignment_id=f"assignment-{agent_run_id}",
         agent_run_id=agent_run_id,
+        agent_id="pathfinder",
         agent_kind="recon",
         task_id=task_id,
         tenant_id=tenant_id,

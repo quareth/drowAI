@@ -21,10 +21,10 @@ from agent.graph.graph_names import GRAPH_NAME_SIMPLE_TOOL
 from agent.graph.streaming import build_agent_turn_metadata
 from backend.services.agent_runs.contracts import (
     AgentAssignment,
+    AgentCapability,
     AgentCredentialReference,
     AgentResult,
     AgentRuntimeIdentity,
-    ReconCapability,
     agent_display_name,
 )
 from backend.services.agent_runs.event_projection import build_agent_run_lifecycle_event
@@ -177,6 +177,7 @@ class ReconAgentHandler(BaseLangGraphHandler):
                 turn_id=str(turn.turn_id),
                 turn_sequence=turn.turn_number if isinstance(turn.turn_number, int) else None,
                 agent_run_id=assignment.agent_run_id,
+                agent_id=assignment.agent_id,
                 graph_thread_id=child_graph_thread_id,
                 status="failed",
             )
@@ -191,6 +192,7 @@ class ReconAgentHandler(BaseLangGraphHandler):
                     turn.turn_number if isinstance(turn.turn_number, int) else None
                 ),
                 agent_run_id=assignment.agent_run_id,
+                agent_id=assignment.agent_id,
                 graph_thread_id=child_graph_thread_id,
                 status="waiting_for_approval",
             )
@@ -202,6 +204,7 @@ class ReconAgentHandler(BaseLangGraphHandler):
                     turn.turn_number if isinstance(turn.turn_number, int) else None
                 ),
                 agent_run_id=assignment.agent_run_id,
+                agent_id=assignment.agent_id,
                 graph_thread_id=child_graph_thread_id,
                 status="cancelled",
             )
@@ -219,6 +222,7 @@ class ReconAgentHandler(BaseLangGraphHandler):
                     turn.turn_number if isinstance(turn.turn_number, int) else None
                 ),
                 agent_run_id=assignment.agent_run_id,
+                agent_id=assignment.agent_id,
                 graph_thread_id=child_graph_thread_id,
                 status="failed",
             )
@@ -339,9 +343,10 @@ class ReconAgentHandler(BaseLangGraphHandler):
                 "role": "assistant",
                 "streaming": False,
                 "mode": ExecutionMode.SIMPLE_TOOL.value,
-                "branch": "recon_agent",
+                "branch": "subagent",
                 "status": "completed",
                 "handoff_agent_run_id": child_result.agent_run_id,
+                "handoff_agent_id": child_result.agent_id,
                 "handoff_agent_kind": child_result.agent_kind,
                 "handoff_graph_thread_id": child_graph_thread_id,
             },
@@ -354,7 +359,7 @@ class ReconAgentHandler(BaseLangGraphHandler):
 
         usage = _extract_usage_from_state(
             interactive_state,
-            execution_branch="recon_agent_parent_finalizer",
+            execution_branch="subagent_parent_finalizer",
             turn_index=(
                 turn.turn_number if isinstance(turn.turn_number, int) else None
             ),
@@ -436,8 +441,7 @@ def _build_assignment(
     ownership = metadata.get("subagent_routing")
     if not isinstance(ownership, Mapping) or not ownership.get("should_delegate"):
         raise RuntimeError("Recon agent branch requires a positive ownership decision")
-    if ownership.get("subagent_name") != "scout":
-        raise RuntimeError("Recon agent branch requires the Scout registration")
+    agent_id = _required_string(ownership.get("agent_id"), "agent_id")
     if ownership.get("agent_kind") != "recon":
         raise RuntimeError("Recon agent branch requires recon agent kind")
 
@@ -467,6 +471,7 @@ def _build_assignment(
     return AgentAssignment(
         assignment_id=f"assignment-{uuid4().hex}",
         agent_run_id=agent_run_id,
+        agent_id=agent_id,
         agent_kind="recon",
         task_id=task_id,
         tenant_id=tenant_id,
@@ -482,7 +487,7 @@ def _build_assignment(
         objective=_optional_string(ownership.get("objective")) or chat_inputs.message,
         targets=tuple(_string_list(ownership.get("targets"))),
         suggested_capabilities=tuple(
-            _recon_capabilities(ownership.get("capabilities"))
+            _agent_capabilities(ownership.get("capabilities"))
         ),
         scope_summary=_scope_summary(ownership.get("targets")),
         relevant_context={
@@ -508,6 +513,7 @@ def _ack_result(
     turn_id: str,
     turn_sequence: int | None,
     agent_run_id: str,
+    agent_id: str,
     graph_thread_id: str,
     status: str,
 ) -> LangGraphChatResult:
@@ -517,10 +523,11 @@ def _ack_result(
             "role": "assistant",
             "streaming": False,
             "mode": ExecutionMode.SIMPLE_TOOL.value,
-            "branch": "recon_agent",
+            "branch": "subagent",
             "agent_run_id": agent_run_id,
+            "agent_id": agent_id,
             "agent_kind": "recon",
-            "agent_display_name": agent_display_name("recon"),
+            "agent_display_name": agent_display_name(agent_id),
             "graph_thread_id": graph_thread_id,
             "status": status,
             "id": turn_id,
@@ -529,7 +536,7 @@ def _ack_result(
     )
     if turn_sequence is not None:
         metadata["turn_sequence"] = turn_sequence
-    display_name = agent_display_name("recon")
+    display_name = agent_display_name(agent_id)
     return LangGraphChatResult(
         final_text={
             "failed": f"{display_name} could not complete the recon run.",
@@ -566,7 +573,7 @@ def _credential_ref_from_input(value: Any) -> AgentCredentialReference | None:
 
 def _safe_launch_error(exc: Exception) -> str:
     _ = exc
-    return f"{agent_display_name('recon')} launch failed"
+    return f"{agent_display_name('pathfinder')} launch failed"
 
 
 def _new_agent_run_id() -> str:
@@ -592,13 +599,13 @@ def _scope_summary(value: Any) -> str | None:
     return "Targets: " + ", ".join(targets)
 
 
-def _recon_capabilities(value: Any) -> list[ReconCapability]:
-    allowed = {"host_discovery", "port_scan", "service_enum"}
+def _agent_capabilities(value: Any) -> list[AgentCapability]:
+    allowed = {"host_discovery", "port_scanning", "service_enumeration"}
     return [
         capability
         for capability in _string_list(value)
         if capability in allowed
-    ]  # type: ignore[list-item]
+    ]
 
 
 def _string_list(value: Any) -> list[str]:

@@ -15,10 +15,11 @@ from core.prompts.builders.intent_classifier import build_classifier_system_prom
 def test_default_registry_exposes_scout_as_the_only_available_subagent() -> None:
     registry = get_subagent_registry()
 
-    assert registry.names() == ("scout",)
-    scout = registry.require("scout")
+    assert registry.names() == ("pathfinder",)
+    scout = registry.require("pathfinder")
+    assert scout.agent_id == "pathfinder"
     assert scout.agent_kind == "recon"
-    assert scout.dispatch_branch == "recon_agent"
+    assert scout.dispatch_branch == "subagent"
     assert scout.requires_resolved_target is True
     assert scout.max_active_runs_per_task == 1
     assert scout.supported_task_categories == (
@@ -33,7 +34,8 @@ def test_classifier_catalog_is_derived_from_available_registry_specs() -> None:
 
     assert registry.classifier_catalog() == (
         {
-            "name": "scout",
+            "name": "pathfinder",
+            "agent_id": "pathfinder",
             "display_name": "Pathfinder",
             "purpose": (
                 "Perform bounded network reconnaissance and return concise "
@@ -64,7 +66,7 @@ def test_classifier_catalog_is_derived_from_available_registry_specs() -> None:
 
 
 def test_registry_rejects_duplicate_names() -> None:
-    spec = get_subagent_registry().require("scout")
+    spec = get_subagent_registry().require("pathfinder")
 
     with pytest.raises(ValueError, match="duplicate subagent name"):
         SubagentRegistry((spec, spec))
@@ -73,9 +75,10 @@ def test_registry_rejects_duplicate_names() -> None:
 def test_disabled_specs_are_not_projected_to_classifier() -> None:
     disabled = SubagentSpec(
         name="disabled_scout",
+        agent_id="disabled_scout",
         display_name="Disabled Scout",
         agent_kind="recon",
-        dispatch_branch="recon_agent",
+        dispatch_branch="subagent",
         purpose="Unavailable test agent.",
         ownership_boundary="No current ownership.",
         supported_task_categories=("host_discovery",),
@@ -99,7 +102,7 @@ def test_classifier_prompt_renders_registry_metadata_without_agent_hardcoding() 
     )
 
     assert "Registered Subagent Catalog:" in prompt
-    assert "- Name: scout" in prompt
+    assert "- Name: pathfinder" in prompt
     assert "Purpose: Perform bounded network reconnaissance" in prompt
     assert "Supported task categories: host_discovery, port_scanning" in prompt
     assert "Maximum active runs per task: 1" in prompt

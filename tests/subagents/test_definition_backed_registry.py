@@ -12,7 +12,7 @@ from agent.subagents.registry import (
     get_subagent_registry,
     load_subagent_registry,
 )
-from backend.services.agent_runs.subagent_registry import SCOUT_SUBAGENT_SPEC
+from backend.services.agent_runs.subagent_registry import PATHFINDER_SUBAGENT_SPEC
 
 
 def _pathfinder_definition() -> SubagentDefinition:
@@ -31,10 +31,10 @@ def test_default_registry_loads_enabled_pathfinder_from_toml() -> None:
 
 def test_classifier_catalog_is_definition_backed_and_matches_legacy_metadata() -> None:
     registry = load_subagent_registry()
-    legacy_projection = dict(SCOUT_SUBAGENT_SPEC.classifier_projection())
+    legacy_projection = dict(PATHFINDER_SUBAGENT_SPEC.classifier_projection())
     [catalog_projection] = [dict(entry) for entry in registry.classifier_catalog()]
 
-    assert legacy_projection["name"] == "scout"
+    assert legacy_projection["name"] == "pathfinder"
     assert catalog_projection["name"] == "pathfinder"
     assert catalog_projection["agent_id"] == "pathfinder"
     for key in (

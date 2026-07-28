@@ -109,6 +109,7 @@ def test_scout_emitter_stamps_agent_attribution_before_adapter_projection():
             metadata={
                 "producer_type": "subagent",
                 "agent_run_id": "scout-run-1",
+                "agent_id": "pathfinder",
                 "agent_kind": "recon",
                 "parent_turn_id": "parent-turn-1",
                 "internal_only": False,
@@ -136,6 +137,7 @@ def test_scout_emitter_stamps_agent_attribution_before_adapter_projection():
     metadata = processed["metadata"]
     assert metadata["producer_type"] == "subagent"
     assert metadata["agent_run_id"] == "scout-run-1"
+    assert metadata["agent_id"] == "pathfinder"
     assert metadata["agent_kind"] == "recon"
     assert metadata["agent_display_name"] == "Pathfinder"
     assert metadata["parent_turn_id"] == "parent-turn-1"

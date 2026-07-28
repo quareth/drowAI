@@ -44,6 +44,7 @@ def complete_scout_result(
     metadata[SCOUT_RESULT_PROJECTION_METADATA_KEY] = projection.model_dump(mode="json")
     metadata[SCOUT_COMPLETION_METADATA_KEY] = {
         "agent_run_id": result.agent_run_id,
+        "agent_id": result.agent_id,
         "agent_kind": result.agent_kind,
         "outcome": result.outcome,
     }
@@ -55,6 +56,7 @@ def complete_scout_result(
         {
             "type": "scout_result",
             "agent_run_id": result.agent_run_id,
+            "agent_id": result.agent_id,
             "agent_kind": result.agent_kind,
             "outcome": result.outcome,
             "summary": result.summary,
@@ -76,6 +78,7 @@ def _resolve_result(
 
     return AgentResult(
         agent_run_id=scout.agent_run_id,
+        agent_id=scout.agent_id,
         agent_kind=scout.agent_kind,
         outcome=_derived_outcome(metadata),
         summary=_derived_summary(interactive),
@@ -92,6 +95,10 @@ def _validate_result_identity(result: AgentResult, scout: ScoutRuntimeState) -> 
     if result.agent_run_id != scout.agent_run_id:
         raise ScoutCompletionError(
             "Scout result agent_run_id does not match assignment metadata"
+        )
+    if result.agent_id != scout.agent_id:
+        raise ScoutCompletionError(
+            "Scout result agent_id does not match assignment metadata"
         )
     if result.agent_kind != scout.agent_kind:
         raise ScoutCompletionError(

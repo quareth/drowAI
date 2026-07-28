@@ -50,6 +50,7 @@ def initialize_scout_state(
         {
             "type": "scout_initialize",
             "agent_run_id": refreshed.agent_run_id,
+            "agent_id": refreshed.agent_id,
             "agent_kind": refreshed.agent_kind,
             "tool_ids": list(refreshed.tool_profile.tool_ids),
         }

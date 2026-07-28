@@ -42,6 +42,7 @@ class _RecordingLauncher:
         async def _finish() -> AgentResult:
             result = AgentResult(
                 agent_run_id=assignment.agent_run_id,
+                agent_id=assignment.agent_id,
                 agent_kind="recon",
                 outcome="completed",
                 summary="Scout found HTTP.",
@@ -98,6 +99,7 @@ class _CompletingExecutor:
                     "metadata": {
                         "scout_result": {
                             "agent_run_id": agent_run_id,
+                            "agent_id": "pathfinder",
                             "agent_kind": "recon",
                             "outcome": "completed",
                             "summary": "Scout found HTTP.",
@@ -158,10 +160,10 @@ def _runtime_config() -> LangGraphRuntimeConfig:
             "subagent_routing": {
                 "should_delegate": True,
                 "reason": "scout_owned",
-                "subagent_name": "scout",
+                "agent_id": "pathfinder",
                 "agent_kind": "recon",
-                "dispatch_branch": "recon_agent",
-                "capabilities": ["port_scan"],
+                "dispatch_branch": "subagent",
+                "capabilities": ["port_scanning"],
                 "targets": ["10.0.0.10"],
                 "objective": "Scan ports on 10.0.0.10.",
             },
@@ -199,15 +201,16 @@ async def test_recon_handler_waits_for_scout_and_runs_parent_finalizer() -> None
     result = await handler.handle(_runtime_config())
 
     assert result.final_text == "Main agent finalized Scout result."
-    assert result.metadata["branch"] == "recon_agent"
+    assert result.metadata["branch"] == "subagent"
     assert result.metadata["handoff_agent_kind"] == "recon"
     assert result.metadata["status"] == "completed"
     assert len(launcher.calls) == 1
     assignment = launcher.calls[0]["assignment"]
     assert assignment.agent_kind == "recon"
+    assert assignment.agent_id == "pathfinder"
     assert assignment.objective == "Scan ports on 10.0.0.10."
     assert assignment.targets == ("10.0.0.10",)
-    assert assignment.suggested_capabilities == ("port_scan",)
+    assert assignment.suggested_capabilities == ("port_scanning",)
     assert assignment.runtime_identity.tenant_id == 7
     child_config = launcher.calls[0]["runtime_config"]
     assert child_config["configurable"]["graph_name"] == "scout_recon"
@@ -300,7 +303,7 @@ def test_facade_registers_recon_agent_handler() -> None:
         agent_run_lifecycle_publisher=lambda _task_id, _event: None,
     )
 
-    assert isinstance(facade._handlers[ChatBranch.RECON_AGENT], ReconAgentHandler)
+    assert isinstance(facade._handlers[ChatBranch.SUBAGENT], ReconAgentHandler)
 
 
 @pytest.mark.asyncio
@@ -360,13 +363,13 @@ async def test_facade_active_registry_check_prevents_recon_branch() -> None:
         agent_run_registry=registry,
         scout_launcher=_RecordingLauncher(registry),
     )
-    assert (await facade._active_recon_run_exists(config)) is True
+    assert (await facade._active_subagent_run_counts(config)) == {"pathfinder": 1}
     assert (
         resolve_branch(
             config,
             deep_reasoning_enabled=True,
             simple_tool_enabled=True,
-            active_recon_run_exists=True,
+            active_subagent_run_counts={"pathfinder": 1},
         )
         is ChatBranch.SIMPLE_TOOL
     )

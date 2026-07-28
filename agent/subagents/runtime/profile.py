@@ -28,13 +28,13 @@ from agent.tools.enhanced_metadata_registry import get_enhanced_tool_metadata
 
 _CAPABILITY_ALIASES: dict[str, str] = {
     "host_discovery": "host_discovery",
-    "port_discovery": "port_scan",
-    "port_scan": "port_scan",
-    "port_scanning": "port_scan",
-    "service_detection": "service_enum",
-    "service_discovery": "service_enum",
-    "service_enum": "service_enum",
-    "service_enumeration": "service_enum",
+    "port_discovery": "port_scanning",
+    "port_scan": "port_scanning",
+    "port_scanning": "port_scanning",
+    "service_detection": "service_enumeration",
+    "service_discovery": "service_enumeration",
+    "service_enum": "service_enumeration",
+    "service_enumeration": "service_enumeration",
 }
 _FORBIDDEN_CATEGORIES: frozenset[ToolCategory] = frozenset(
     {

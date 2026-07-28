@@ -21,9 +21,9 @@ from agent.graph.infrastructure.state_models import GraphRuntimeContext
 from agent.graph.state import FactsState, InteractiveState, TraceState
 from agent.subagents.contracts import (
     AgentAssignment,
+    AgentCapability,
     AgentKind,
     AgentRuntimeIdentity,
-    ReconCapability,
     agent_display_name,
 )
 from agent.subagents.scout.profile import ScoutToolProfile, ScoutToolSpec
@@ -40,7 +40,7 @@ class ScoutToolState(BaseModel):
 
     tool_id: str
     display_name: str
-    scout_capabilities: tuple[ReconCapability, ...] = Field(default_factory=tuple)
+    scout_capabilities: tuple[AgentCapability, ...] = Field(default_factory=tuple)
 
     @classmethod
     def from_spec(cls, spec: ScoutToolSpec) -> "ScoutToolState":
@@ -92,6 +92,7 @@ class ScoutRuntimeState(BaseModel):
     runtime_identity: AgentRuntimeIdentity
     graph_thread_id: str
     agent_run_id: str
+    agent_id: str
     agent_kind: AgentKind
     parent_turn_id: str
     parent_graph_thread_id: str
@@ -119,6 +120,7 @@ class ScoutRuntimeState(BaseModel):
             runtime_identity=assignment.runtime_identity,
             graph_thread_id=graph_thread_id,
             agent_run_id=assignment.agent_run_id,
+            agent_id=assignment.agent_id,
             agent_kind=assignment.agent_kind,
             parent_turn_id=assignment.parent_turn_id,
             parent_graph_thread_id=assignment.parent_graph_thread_id,
@@ -141,6 +143,8 @@ class ScoutRuntimeState(BaseModel):
             raise ValueError("runtime_identity must match assignment.runtime_identity")
         if self.agent_run_id != self.assignment.agent_run_id:
             raise ValueError("agent_run_id must match assignment.agent_run_id")
+        if self.agent_id != self.assignment.agent_id:
+            raise ValueError("agent_id must match assignment.agent_id")
         if self.agent_kind != self.assignment.agent_kind:
             raise ValueError("agent_kind must match assignment.agent_kind")
         if self.parent_turn_id != self.assignment.parent_turn_id:
@@ -180,6 +184,7 @@ def build_scout_initial_state(
         tool_candidates=list(scout.tool_profile.tool_ids),
         metadata=metadata,
         intent_hints={
+            "agent_id": assignment.agent_id,
             "agent_kind": assignment.agent_kind,
             "suggested_capabilities": list(assignment.suggested_capabilities),
             "targets": list(assignment.targets),
@@ -226,8 +231,9 @@ def _metadata_from_scout_state(scout: ScoutRuntimeState) -> dict[str, Any]:
     metadata: dict[str, Any] = {
         "producer_type": "subagent",
         "agent_run_id": scout.agent_run_id,
+        "agent_id": scout.agent_id,
         "agent_kind": scout.agent_kind,
-        "agent_display_name": agent_display_name(scout.agent_kind),
+        "agent_display_name": agent_display_name(scout.agent_id),
         "parent_turn_id": scout.parent_turn_id,
         "parent_graph_thread_id": scout.parent_graph_thread_id,
         "graph_thread_id": scout.graph_thread_id,

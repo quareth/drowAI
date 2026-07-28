@@ -74,7 +74,7 @@ def _stub_recon_classifier() -> IntentClassifier:
         '"reasoning": "stub", '
         '"suggested_capabilities": ["port scanning"], '
         '"agent_handoffs": [{"agent_handoff": "required", '
-        '"subagent": "scout", "objective": "Scan ports on 10.0.0.10."}], '
+        '"subagent": "pathfinder", "objective": "Scan ports on 10.0.0.10."}], '
         '"risk_flags": [], '
         '"target_status": "resolved", '
         '"target_source": "explicit_current_message", '
@@ -210,7 +210,7 @@ async def test_recon_candidate_routes_to_scout_by_default() -> None:
 
     await facade.handle_turn(chat_inputs)
 
-    assert capture["branch"] is ChatBranch.RECON_AGENT
+    assert capture["branch"] is ChatBranch.SUBAGENT
     assert capture["execution_mode"] is ExecutionMode.SIMPLE_TOOL
     assert capture["metadata_snapshot"]["subagent_routing"]["should_delegate"] is True
 

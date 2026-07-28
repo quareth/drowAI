@@ -370,6 +370,7 @@ def _apply_recon_tool_batch(
     metadata[SCOUT_ACTION_METADATA_KEY] = {
         "route": "tool",
         "agent_run_id": scout.agent_run_id,
+        "agent_id": scout.agent_id,
         "tool_id": first_call.tool_id,
         "tool_ids": committed_tool_ids,
         "tool_batch_id": batch.tool_batch_id,

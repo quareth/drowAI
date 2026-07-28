@@ -46,6 +46,7 @@ def _assignment() -> AgentAssignment:
     return AgentAssignment(
         assignment_id="assign-1",
         agent_run_id="run-1",
+        agent_id="pathfinder",
         agent_kind="recon",
         task_id=42,
         tenant_id=7,
@@ -67,7 +68,7 @@ def _profile() -> ScoutToolProfile:
             ScoutToolSpec(
                 tool_id="information_gathering.network_discovery.nmap",
                 display_name="Nmap",
-                scout_capabilities=("port_scan", "service_enum"),
+                scout_capabilities=("port_scanning", "service_enumeration"),
             ),
         )
     )
@@ -159,6 +160,7 @@ def test_initialize_node_binds_profile_and_keeps_plain_graph_update() -> None:
     assert update["trace"]["history"][-1] == {
         "type": "scout_initialize",
         "agent_run_id": "run-1",
+        "agent_id": "pathfinder",
         "agent_kind": "recon",
         "tool_ids": ["information_gathering.network_discovery.nmap"],
     }

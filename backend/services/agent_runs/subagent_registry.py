@@ -1,7 +1,7 @@
 """Canonical subagent specifications used by classification and dispatch.
 
 The registry is the control-plane source of truth for which subagents are
-available, what work they own, and which existing chat branch dispatches them.
+available, what work they own, and which generic chat branch dispatches them.
 It contains no runtime handles, graph instances, database sessions, or secrets.
 """
 
@@ -11,6 +11,9 @@ import re
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Iterable, Mapping
+
+from agent.subagents.definition import SubagentDefinition
+from agent.subagents.registry import get_subagent_registry as get_definition_registry
 
 from .contracts import AgentKind
 
@@ -23,6 +26,7 @@ class SubagentSpec:
     """Immutable registration metadata for one dispatchable subagent."""
 
     name: str
+    agent_id: str
     display_name: str
     agent_kind: AgentKind
     dispatch_branch: str
@@ -34,10 +38,34 @@ class SubagentSpec:
     max_active_runs_per_task: int
     requires_resolved_target: bool
 
+    @classmethod
+    def from_definition(
+        cls,
+        definition: SubagentDefinition,
+        *,
+        dispatch_branch: str = "subagent",
+    ) -> "SubagentSpec":
+        """Build control-plane dispatch metadata from one loaded definition."""
+        return cls(
+            name=definition.id,
+            agent_id=definition.id,
+            display_name=definition.display_name,
+            agent_kind=definition.kind,
+            dispatch_branch=dispatch_branch,
+            purpose=definition.description,
+            ownership_boundary=definition.ownership_boundary,
+            supported_task_categories=definition.supported_task_categories,
+            excluded_task_categories=definition.excluded_task_categories,
+            enabled=definition.enabled,
+            max_active_runs_per_task=definition.max_active_runs_per_task,
+            requires_resolved_target=definition.requires_resolved_target,
+        )
+
     def __post_init__(self) -> None:
         """Reject ambiguous or unsafe registration metadata."""
         for field_name in (
             "name",
+            "agent_id",
             "display_name",
             "dispatch_branch",
             "purpose",
@@ -48,6 +76,10 @@ class SubagentSpec:
                 raise ValueError(f"subagent {field_name} must not be empty")
         if not _CANONICAL_NAME_PATTERN.fullmatch(self.name):
             raise ValueError("subagent name must be a canonical lowercase identifier")
+        if not _CANONICAL_NAME_PATTERN.fullmatch(self.agent_id):
+            raise ValueError("subagent agent_id must be a canonical lowercase identifier")
+        if self.name != self.agent_id:
+            raise ValueError("subagent name must match definition agent_id")
         if not _CANONICAL_NAME_PATTERN.fullmatch(self.dispatch_branch):
             raise ValueError(
                 "subagent dispatch_branch must be a canonical lowercase identifier"
@@ -62,6 +94,7 @@ class SubagentSpec:
         return MappingProxyType(
             {
                 "name": self.name,
+                "agent_id": self.agent_id,
                 "display_name": self.display_name,
                 "purpose": self.purpose,
                 "ownership_boundary": self.ownership_boundary,
@@ -123,39 +156,14 @@ class SubagentRegistry:
         return active_runs_for_task < spec.max_active_runs_per_task
 
 
-SCOUT_SUBAGENT_SPEC = SubagentSpec(
-    name="scout",
-    display_name="Pathfinder",
-    agent_kind="recon",
-    dispatch_branch="recon_agent",
-    purpose=(
-        "Perform bounded network reconnaissance and return concise evidence "
-        "to the main agent."
-    ),
-    ownership_boundary=(
-        "Own host discovery, port scanning, and service enumeration only; "
-        "do not exploit, authenticate, modify targets, or produce the user's "
-        "final answer."
-    ),
-    supported_task_categories=(
-        "host_discovery",
-        "port_scanning",
-        "service_enumeration",
-    ),
-    excluded_task_categories=(
-        "exploitation",
-        "credential_attacks",
-        "phishing",
-        "payload_delivery",
-        "privilege_escalation",
-        "reporting",
-    ),
-    enabled=True,
-    max_active_runs_per_task=1,
-    requires_resolved_target=True,
+PATHFINDER_SUBAGENT_SPEC = SubagentSpec.from_definition(
+    get_definition_registry().require("pathfinder")
 )
 
-_SUBAGENT_REGISTRY = SubagentRegistry((SCOUT_SUBAGENT_SPEC,))
+_SUBAGENT_REGISTRY = SubagentRegistry(
+    SubagentSpec.from_definition(definition)
+    for definition in get_definition_registry().definitions()
+)
 
 
 def get_subagent_registry() -> SubagentRegistry:
@@ -164,7 +172,7 @@ def get_subagent_registry() -> SubagentRegistry:
 
 
 __all__ = [
-    "SCOUT_SUBAGENT_SPEC",
+    "PATHFINDER_SUBAGENT_SPEC",
     "SubagentRegistry",
     "SubagentSpec",
     "get_subagent_registry",

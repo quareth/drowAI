@@ -48,6 +48,7 @@ def _assignment() -> AgentAssignment:
     return AgentAssignment(
         assignment_id="assign-run-1",
         agent_run_id="run-1",
+        agent_id="pathfinder",
         agent_kind="recon",
         task_id=42,
         tenant_id=7,
@@ -66,6 +67,7 @@ def _assignment() -> AgentAssignment:
 def _result() -> AgentResult:
     return AgentResult(
         agent_run_id="run-1",
+        agent_id="pathfinder",
         agent_kind="recon",
         outcome="completed",
         summary="Scout found HTTP.",

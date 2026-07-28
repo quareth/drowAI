@@ -97,6 +97,7 @@ def _assignment() -> AgentAssignment:
     return AgentAssignment(
         assignment_id="assign-1",
         agent_run_id="run-1",
+        agent_id="pathfinder",
         agent_kind="recon",
         task_id=42,
         tenant_id=7,
@@ -123,7 +124,7 @@ def _state() -> dict[str, Any]:
             ScoutToolSpec(
                 tool_id=NMAP_TOOL_ID,
                 display_name="nmap",
-                scout_capabilities=("port_scan", "service_enum"),
+                scout_capabilities=("port_scanning", "service_enumeration"),
             ),
         )
     )

@@ -8,14 +8,15 @@ that task-stream processors are allowed to preserve.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, cast
+from typing import Any
 
-from agent.subagents.contracts import AGENT_DISPLAY_NAMES, AgentKind
+from agent.subagents.contracts import agent_display_name
 
 
 AGENT_RUN_ATTRIBUTION_KEYS: tuple[str, ...] = (
     "producer_type",
     "agent_run_id",
+    "agent_id",
     "agent_kind",
     "agent_display_name",
     "parent_turn_id",
@@ -45,12 +46,12 @@ def resolve_agent_run_attribution(
 
     if source.get("agent_run_id") and source.get("producer_type") is None:
         source["producer_type"] = "subagent"
-    if source.get("agent_display_name") is None:
-        display_name = _registered_agent_display_name(source.get("agent_kind"))
+    display_name = _registered_agent_display_name(source.get("agent_id"))
+    if display_name is not None:
+        source["agent_display_name"] = display_name
+    elif source.get("agent_display_name") is None:
         source["agent_display_name"] = (
-            display_name
-            if display_name is not None
-            else _format_agent_kind(source.get("agent_kind"))
+            _format_agent_kind(source.get("agent_kind"))
         )
 
     attribution: dict[str, Any] = {}
@@ -103,9 +104,10 @@ def _registered_agent_display_name(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
     normalized = value.strip()
-    if normalized not in AGENT_DISPLAY_NAMES:
+    try:
+        return agent_display_name(normalized)
+    except KeyError:
         return None
-    return AGENT_DISPLAY_NAMES[cast(AgentKind, normalized)]
 
 
 def _format_agent_kind(value: Any) -> str | None:

@@ -183,6 +183,7 @@ function isLocalAgentRunStatusProjection(value: unknown): value is LocalAgentRun
   const run = value as Partial<LocalAgentRunStatusProjection>;
   return (
     isNonEmptyString(run.agent_run_id) &&
+    isNonEmptyString(run.agent_id) &&
     isNonEmptyString(run.agent_kind) &&
     isNonEmptyString(run.agent_display_name) &&
     isLifecycleStatus(run.status) &&

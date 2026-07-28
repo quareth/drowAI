@@ -96,6 +96,7 @@ class SubagentRuntimeState(BaseModel):
     runtime_identity: AgentRuntimeIdentity
     graph_thread_id: str
     agent_run_id: str
+    agent_id: str
     agent_kind: AgentKind
     parent_turn_id: str
     parent_graph_thread_id: str
@@ -116,6 +117,8 @@ class SubagentRuntimeState(BaseModel):
 
         if definition is not None and assignment.agent_kind != definition.kind:
             raise ValueError("assignment.agent_kind must match definition.kind")
+        if definition is not None and assignment.agent_id != definition.id:
+            raise ValueError("assignment.agent_id must match definition.id")
         if isinstance(tool_profile, SubagentToolProfileState):
             profile_state = tool_profile
         elif tool_profile is not None:
@@ -128,6 +131,7 @@ class SubagentRuntimeState(BaseModel):
             runtime_identity=assignment.runtime_identity,
             graph_thread_id=graph_thread_id,
             agent_run_id=assignment.agent_run_id,
+            agent_id=assignment.agent_id,
             agent_kind=assignment.agent_kind,
             parent_turn_id=assignment.parent_turn_id,
             parent_graph_thread_id=assignment.parent_graph_thread_id,
@@ -150,6 +154,8 @@ class SubagentRuntimeState(BaseModel):
             raise ValueError("runtime_identity must match assignment.runtime_identity")
         if self.agent_run_id != self.assignment.agent_run_id:
             raise ValueError("agent_run_id must match assignment.agent_run_id")
+        if self.agent_id != self.assignment.agent_id:
+            raise ValueError("agent_id must match assignment.agent_id")
         if self.agent_kind != self.assignment.agent_kind:
             raise ValueError("agent_kind must match assignment.agent_kind")
         if self.parent_turn_id != self.assignment.parent_turn_id:
@@ -191,6 +197,7 @@ def build_subagent_initial_state(
         tool_candidates=list(subagent.tool_profile.tool_ids),
         metadata=metadata,
         intent_hints={
+            "agent_id": assignment.agent_id,
             "agent_kind": assignment.agent_kind,
             "suggested_capabilities": list(assignment.suggested_capabilities),
             "targets": list(assignment.targets),
@@ -247,6 +254,7 @@ def _metadata_from_subagent_state(
     metadata: dict[str, Any] = {
         "producer_type": "subagent",
         "agent_run_id": subagent.agent_run_id,
+        "agent_id": subagent.agent_id,
         "agent_kind": subagent.agent_kind,
         "agent_display_name": definition.display_name,
         "parent_turn_id": subagent.parent_turn_id,

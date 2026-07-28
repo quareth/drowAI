@@ -553,6 +553,7 @@ describe("useMultiTaskStreamManager full packet ingestion", () => {
           metadata: {
             producer_type: "subagent",
             agent_run_id: "scout-run-1",
+            agent_id: "pathfinder",
             agent_kind: "recon",
             agent_display_name: "Scout",
             parent_turn_id: "turn-parent",
@@ -660,6 +661,7 @@ describe("useMultiTaskStreamManager full packet ingestion", () => {
           metadata: {
             producer_type: "subagent",
             agent_run_id: "scout-run-1",
+            agent_id: "pathfinder",
             agent_kind: "recon",
             agent_display_name: "Scout",
             parent_turn_id: "turn-parent",
