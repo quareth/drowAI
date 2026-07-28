@@ -19,6 +19,8 @@ from agent.graph.context.contracts import RuntimeStateSnapshot
 from agent.graph.context.projections import (
     project_for_category_selector,
     project_for_planner,
+)
+from agent.graph.context.serialization import (
     serialize_projection_to_prompt_sections,
 )
 

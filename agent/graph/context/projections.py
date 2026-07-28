@@ -75,12 +75,6 @@ ordered list of ``{"name", "content"}`` blocks using the fixed section
 order declared in that module. Ordering is intentionally stable to
 preserve provider-side cache prefixes.
 
-For backward compatibility during the migration, this module
-re-exports the section-name constants and
-``serialize_projection_to_prompt_sections`` from
-``agent.graph.context.serialization``; new code should import them
-from ``agent.graph.context.serialization`` directly.
-
 Scope notes
 -----------
 - No transcript text shaping lives here. Rendering invariants
@@ -109,16 +103,6 @@ from agent.graph.context.contracts import (
 # the migration window. The final cleanup pass (Phase 5) can drop
 # these re-exports once all consumers import from serialization.py
 # directly.
-from agent.graph.context.serialization import (
-    SECTION_EVIDENCE_REFS,
-    SECTION_COMPLETED_AGENT_RESULTS,
-    SECTION_REFERENCED_PRIOR_TURNS,
-    SECTION_RECENT_TRANSCRIPT,
-    SECTION_RUNTIME_STATE,
-    serialize_projection_to_prompt_sections,
-)
-
-
 # -- Role identifiers. --------------------------------------------------
 
 ROLE_INTENT_CLASSIFIER = "intent_classifier"
@@ -372,14 +356,8 @@ __all__ = [
     "ROLE_CATEGORY_SELECTOR",
     "ROLE_INTENT_CLASSIFIER",
     "ROLE_PLANNER",
-    "SECTION_COMPLETED_AGENT_RESULTS",
-    "SECTION_EVIDENCE_REFS",
-    "SECTION_REFERENCED_PRIOR_TURNS",
-    "SECTION_RECENT_TRANSCRIPT",
-    "SECTION_RUNTIME_STATE",
     "project_for_articulation",
     "project_for_category_selector",
     "project_for_intent_classifier",
     "project_for_planner",
-    "serialize_projection_to_prompt_sections",
 ]
