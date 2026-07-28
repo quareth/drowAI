@@ -1,4 +1,4 @@
-"""Process-local Scout agent-run registry for the migration-free pilot.
+"""Process-local subagent-run registry.
 
 The registry owns only in-memory lifecycle state for the current backend
 process. It is intentionally not durable, distributed, or database-backed.
@@ -51,12 +51,12 @@ class LocalAgentRun:
     result_consumed: bool
 
 
-class ActiveScoutRunExistsError(RuntimeError):
-    """Raised when this process already owns an active Scout run for a task."""
+class ActiveAgentRunExistsError(RuntimeError):
+    """Raised when this process already owns an active subagent run for a task."""
 
     def __init__(self, *, tenant_id: int, task_id: int, active_agent_run_id: str) -> None:
         super().__init__(
-            "An active process-local Scout run already exists for "
+            "An active process-local subagent run already exists for "
             f"tenant_id={tenant_id}, task_id={task_id}: {active_agent_run_id}"
         )
         self.tenant_id = tenant_id
@@ -65,11 +65,11 @@ class ActiveScoutRunExistsError(RuntimeError):
 
 
 class AgentRunNotFoundError(KeyError):
-    """Raised when a process-local Scout run key is not present."""
+    """Raised when a process-local subagent run key is not present."""
 
 
 class ProcessLocalAgentRunRegistry:
-    """Lock-protected registry for Scout runs owned by this backend process."""
+    """Lock-protected registry for subagent runs owned by this backend process."""
 
     def __init__(
         self,
@@ -88,7 +88,7 @@ class ProcessLocalAgentRunRegistry:
         *,
         graph_thread_id: str,
     ) -> LocalAgentRun:
-        """Create a queued local entry if no active Scout owns the task."""
+        """Create a queued local entry if no active subagent owns the task."""
         graph_thread_id = _require_non_empty(graph_thread_id, "graph_thread_id")
         async with self._lock:
             active = self._active_run_for_task(
@@ -97,7 +97,7 @@ class ProcessLocalAgentRunRegistry:
                 agent_run_id_to_ignore=assignment.agent_run_id,
             )
             if active is not None:
-                raise ActiveScoutRunExistsError(
+                raise ActiveAgentRunExistsError(
                     tenant_id=assignment.tenant_id,
                     task_id=assignment.task_id,
                     active_agent_run_id=active.agent_run_id,
@@ -369,7 +369,7 @@ class ProcessLocalAgentRunRegistry:
         entry = self._runs.get(key)
         if entry is None:
             raise AgentRunNotFoundError(
-                f"Process-local Scout run not found for key={key!r}"
+                f"Process-local subagent run not found for key={key!r}"
             )
         return entry
 
@@ -431,7 +431,7 @@ __all__ = [
     "ACTIVE_AGENT_RUN_STATUSES",
     "DEFAULT_FINISHED_RETENTION",
     "TERMINAL_AGENT_RUN_STATUSES",
-    "ActiveScoutRunExistsError",
+    "ActiveAgentRunExistsError",
     "AgentRunKey",
     "AgentRunNotFoundError",
     "LocalAgentRun",

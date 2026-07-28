@@ -1,9 +1,9 @@
-"""Facade handler for process-local Scout recon runs and parent handoff.
+"""Facade handler for process-local subagent runs and parent handoff.
 
-The handler keeps the original parent turn open while Scout executes. Scout
+The handler keeps the original parent turn open while the subagent executes. It
 streams its own attributed events, returns a bounded ``AgentResult``, and the
 handler projects that result into the parent context before running the existing
-main finalizer. Scout graph execution and lifecycle cleanup remain launcher
+main finalizer. Subagent graph execution and lifecycle cleanup remain launcher
 responsibilities.
 """
 
@@ -43,7 +43,11 @@ from backend.services.agent_runs.registry import (
     LocalAgentRun,
     ProcessLocalAgentRunRegistry,
 )
-from backend.services.agent_runs.scout_worker import ProcessLocalScoutRunWorker
+from backend.services.agent_runs.subagent_registry import (
+    SubagentRegistry,
+    get_subagent_registry,
+)
+from backend.services.agent_runs.worker import ProcessLocalAgentRunWorker
 from backend.services.chat.event_builders import attach_conversation_ids
 from backend.services.langgraph_chat.contracts import (
     ExecutionMode,
@@ -85,8 +89,8 @@ logger = logging.getLogger(__name__)
 LifecyclePublisher = Callable[[int, dict[str, Any]], Awaitable[None]]
 
 
-class ReconAgentHandler(BaseLangGraphHandler):
-    """Run Scout and finalize its bounded result in the original parent turn."""
+class SubagentHandler(BaseLangGraphHandler):
+    """Run subagent and finalize its bounded result in the original parent turn."""
 
     def __init__(
         self,
@@ -96,18 +100,20 @@ class ReconAgentHandler(BaseLangGraphHandler):
         worker: AgentRunWorker | None = None,
         lifecycle_publisher: LifecyclePublisher | None = None,
         result_projector: AgentRunResultProjector | None = None,
+        subagent_registry: SubagentRegistry | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self._publish_lifecycle = lifecycle_publisher or _publish_lifecycle_to_hub
         self._registry = registry
+        self._subagent_registry = subagent_registry or get_subagent_registry()
         self._result_projector = result_projector or AgentRunResultProjector(
             registry=registry
         )
         if launcher is not None:
             self._launcher = launcher
         else:
-            resolved_worker = worker or ProcessLocalScoutRunWorker(
+            resolved_worker = worker or ProcessLocalAgentRunWorker(
                 registry=registry,
                 checkpointer_service=self._checkpointer,
                 executor=self._executor,
@@ -121,12 +127,17 @@ class ReconAgentHandler(BaseLangGraphHandler):
     async def handle(
         self, runtime_config: LangGraphRuntimeConfig
     ) -> LangGraphChatResult:
-        """Run Scout, hand its bounded result to the parent, then finalize."""
+        """Run subagent, hand its bounded result to the parent, then finalize."""
         chat_inputs = runtime_config.chat_inputs
         task_id = chat_inputs.task_id
         turn = ensure_turn_identity(runtime_config, logger_=logger)
 
-        assignment = _build_assignment(runtime_config, parent_turn_id=str(turn.turn_id))
+        assignment = _build_assignment(
+            runtime_config,
+            parent_turn_id=str(turn.turn_id),
+            subagent_registry=self._subagent_registry,
+        )
+        display_name = spec_display_name(self._subagent_registry, assignment.agent_id)
         child_graph_thread_id = _new_child_graph_thread_id()
         queued = await self._registry.register(
             assignment,
@@ -160,7 +171,7 @@ class ReconAgentHandler(BaseLangGraphHandler):
             )
         except Exception as exc:
             logger.warning(
-                "Failed to launch Scout run %s for task %s",
+                "Failed to launch subagent run %s for task %s",
                 assignment.agent_run_id,
                 task_id,
                 exc_info=True,
@@ -169,7 +180,13 @@ class ReconAgentHandler(BaseLangGraphHandler):
                 tenant_id=assignment.tenant_id,
                 task_id=assignment.task_id,
                 agent_run_id=assignment.agent_run_id,
-                safe_error=_safe_launch_error(exc),
+                safe_error=_safe_launch_error(
+                    exc,
+                    agent_display_name=spec_display_name(
+                        self._subagent_registry,
+                        assignment.agent_id,
+                    ),
+                ),
             )
             await self._publish_entry_lifecycle(failed, runtime_config)
             return _ack_result(
@@ -178,6 +195,8 @@ class ReconAgentHandler(BaseLangGraphHandler):
                 turn_sequence=turn.turn_number if isinstance(turn.turn_number, int) else None,
                 agent_run_id=assignment.agent_run_id,
                 agent_id=assignment.agent_id,
+                agent_kind=assignment.agent_kind,
+                agent_display_name=display_name,
                 graph_thread_id=child_graph_thread_id,
                 status="failed",
             )
@@ -193,6 +212,8 @@ class ReconAgentHandler(BaseLangGraphHandler):
                 ),
                 agent_run_id=assignment.agent_run_id,
                 agent_id=assignment.agent_id,
+                agent_kind=assignment.agent_kind,
+                agent_display_name=display_name,
                 graph_thread_id=child_graph_thread_id,
                 status="waiting_for_approval",
             )
@@ -205,12 +226,14 @@ class ReconAgentHandler(BaseLangGraphHandler):
                 ),
                 agent_run_id=assignment.agent_run_id,
                 agent_id=assignment.agent_id,
+                agent_kind=assignment.agent_kind,
+                agent_display_name=display_name,
                 graph_thread_id=child_graph_thread_id,
                 status="cancelled",
             )
         except Exception:
             logger.warning(
-                "Scout run %s failed before parent handoff for task %s",
+                "subagent run %s failed before parent handoff for task %s",
                 assignment.agent_run_id,
                 task_id,
                 exc_info=True,
@@ -223,6 +246,8 @@ class ReconAgentHandler(BaseLangGraphHandler):
                 ),
                 agent_run_id=assignment.agent_run_id,
                 agent_id=assignment.agent_id,
+                agent_kind=assignment.agent_kind,
+                agent_display_name=display_name,
                 graph_thread_id=child_graph_thread_id,
                 status="failed",
             )
@@ -398,7 +423,7 @@ class ReconAgentHandler(BaseLangGraphHandler):
                 return
             await asyncio.sleep(0)
         logger.debug(
-            "Scout result %s was not registry-settled after parent finalization",
+            "subagent result %s was not registry-settled after parent finalization",
             assignment.agent_run_id,
         )
 
@@ -415,12 +440,12 @@ class ReconAgentHandler(BaseLangGraphHandler):
 
 
 async def _require_child_task(value: Any) -> AgentResult:
-    """Await and validate the launcher's terminal Scout result."""
+    """Await and validate the launcher's terminal subagent result."""
     if not isinstance(value, Awaitable):
-        raise RuntimeError("Scout launcher did not return an awaitable result task")
+        raise RuntimeError("Subagent launcher did not return an awaitable result task")
     result = await value
     if not isinstance(result, AgentResult):
-        raise RuntimeError("Scout launcher returned an invalid terminal result")
+        raise RuntimeError("Subagent launcher returned an invalid terminal result")
     return result
 
 
@@ -435,15 +460,17 @@ def _build_assignment(
     runtime_config: LangGraphRuntimeConfig,
     *,
     parent_turn_id: str,
+    subagent_registry: SubagentRegistry | None = None,
 ) -> AgentAssignment:
     metadata = runtime_config.metadata
     chat_inputs = runtime_config.chat_inputs
     ownership = metadata.get("subagent_routing")
     if not isinstance(ownership, Mapping) or not ownership.get("should_delegate"):
-        raise RuntimeError("Recon agent branch requires a positive ownership decision")
+        raise RuntimeError("Subagent branch requires a positive ownership decision")
     agent_id = _required_string(ownership.get("agent_id"), "agent_id")
-    if ownership.get("agent_kind") != "recon":
-        raise RuntimeError("Recon agent branch requires recon agent kind")
+    spec = (subagent_registry or get_subagent_registry()).require(agent_id)
+    if ownership.get("agent_kind") != spec.agent_kind:
+        raise RuntimeError("Subagent branch agent kind does not match registry")
 
     tenant_id = _required_int(metadata.get("tenant_id"), "tenant_id")
     task_id = int(chat_inputs.task_id)
@@ -472,7 +499,7 @@ def _build_assignment(
         assignment_id=f"assignment-{uuid4().hex}",
         agent_run_id=agent_run_id,
         agent_id=agent_id,
-        agent_kind="recon",
+        agent_kind=spec.agent_kind,
         task_id=task_id,
         tenant_id=tenant_id,
         conversation_id=_required_string(
@@ -487,7 +514,10 @@ def _build_assignment(
         objective=_optional_string(ownership.get("objective")) or chat_inputs.message,
         targets=tuple(_string_list(ownership.get("targets"))),
         suggested_capabilities=tuple(
-            _agent_capabilities(ownership.get("capabilities"))
+            _agent_capabilities(
+                ownership.get("capabilities"),
+                allowed=spec.supported_task_categories,
+            )
         ),
         scope_summary=_scope_summary(ownership.get("targets")),
         relevant_context={
@@ -514,6 +544,8 @@ def _ack_result(
     turn_sequence: int | None,
     agent_run_id: str,
     agent_id: str,
+    agent_kind: str,
+    agent_display_name: str,
     graph_thread_id: str,
     status: str,
 ) -> LangGraphChatResult:
@@ -526,8 +558,8 @@ def _ack_result(
             "branch": "subagent",
             "agent_run_id": agent_run_id,
             "agent_id": agent_id,
-            "agent_kind": "recon",
-            "agent_display_name": agent_display_name(agent_id),
+            "agent_kind": agent_kind,
+            "agent_display_name": agent_display_name,
             "graph_thread_id": graph_thread_id,
             "status": status,
             "id": turn_id,
@@ -536,17 +568,17 @@ def _ack_result(
     )
     if turn_sequence is not None:
         metadata["turn_sequence"] = turn_sequence
-    display_name = agent_display_name(agent_id)
+    display_name = agent_display_name
     return LangGraphChatResult(
         final_text={
-            "failed": f"{display_name} could not complete the recon run.",
-            "cancelled": f"{display_name} recon was cancelled.",
+            "failed": f"{display_name} could not complete the subagent run.",
+            "cancelled": f"{display_name} subagent run was cancelled.",
             "waiting_for_approval": f"{display_name} is waiting for tool approval.",
             "running": (
-                f"{display_name} has started a recon run and will hand off findings "
+                f"{display_name} has started a subagent run and will hand off findings "
                 "when it finishes."
             ),
-        }.get(status, f"{display_name} recon status changed."),
+        }.get(status, f"{display_name} subagent status changed."),
         conversation_id=conversation_id,
         metadata=metadata,
     )
@@ -571,13 +603,18 @@ def _credential_ref_from_input(value: Any) -> AgentCredentialReference | None:
     return AgentCredentialReference(provider=provider, credential_id=credential_id)
 
 
-def _safe_launch_error(exc: Exception) -> str:
+def _safe_launch_error(exc: Exception, *, agent_display_name: str) -> str:
     _ = exc
-    return f"{agent_display_name('pathfinder')} launch failed"
+    return f"{agent_display_name} launch failed"
 
 
 def _new_agent_run_id() -> str:
-    return f"scout-{uuid4().hex}"
+    return f"agent-run-{uuid4().hex}"
+
+
+def spec_display_name(registry: SubagentRegistry, agent_id: str) -> str:
+    """Resolve display text from the injected backend subagent registry."""
+    return registry.require(agent_id).display_name
 
 
 def _new_child_graph_thread_id() -> str:
@@ -599,12 +636,16 @@ def _scope_summary(value: Any) -> str | None:
     return "Targets: " + ", ".join(targets)
 
 
-def _agent_capabilities(value: Any) -> list[AgentCapability]:
-    allowed = {"host_discovery", "port_scanning", "service_enumeration"}
+def _agent_capabilities(
+    value: Any,
+    *,
+    allowed: tuple[str, ...],
+) -> list[AgentCapability]:
+    allowed_set = set(allowed)
     return [
         capability
         for capability in _string_list(value)
-        if capability in allowed
+        if capability in allowed_set
     ]
 
 
@@ -622,13 +663,13 @@ def _required_int(value: Any, field_name: str) -> int:
     try:
         return int(value)
     except (TypeError, ValueError) as exc:
-        raise RuntimeError(f"Recon assignment requires {field_name}") from exc
+        raise RuntimeError(f"Subagent assignment requires {field_name}") from exc
 
 
 def _required_string(value: Any, field_name: str) -> str:
     normalized = _optional_string(value)
     if not normalized:
-        raise RuntimeError(f"Recon assignment requires {field_name}")
+        raise RuntimeError(f"Subagent assignment requires {field_name}")
     return normalized
 
 
@@ -640,6 +681,6 @@ def _optional_string(value: Any) -> str | None:
 
 
 __all__ = [
-    "ReconAgentHandler",
+    "SubagentHandler",
     "build_agent_run_lifecycle_event",
 ]

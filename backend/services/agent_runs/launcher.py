@@ -1,8 +1,8 @@
-"""Process-local asyncio launcher for Scout agent runs.
+"""Process-local asyncio launcher for subagent runs.
 
 The launcher owns local task creation, handle attachment, cancellation
-signaling, and terminal registry cleanup for the migration-free Scout pilot.
-Scout graph execution is supplied as an injectable worker so this module stays
+signaling, and terminal registry cleanup for process-local subagent runs.
+Graph execution is supplied as an injectable worker so this module stays
 inside the process-local lifecycle boundary.
 """
 
@@ -20,8 +20,8 @@ from .registry import LocalAgentRun, ProcessLocalAgentRunRegistry
 logger = logging.getLogger(__name__)
 
 
-class ScoutRunWorker(Protocol):
-    """Callable boundary for the future Scout graph worker."""
+class AgentRunWorker(Protocol):
+    """Callable boundary for process-local subagent graph workers."""
 
     async def __call__(
         self,
@@ -31,29 +31,29 @@ class ScoutRunWorker(Protocol):
         graph_thread_id: str,
         is_cancel_requested: Callable[[], Awaitable[bool]],
     ) -> AgentResult:
-        """Run Scout work and return a safe terminal result."""
+        """Run subagent work and return a safe terminal result."""
 
 
 TaskFactory = Callable[[Coroutine[Any, Any, AgentResult]], asyncio.Task[AgentResult]]
 LifecyclePublisher = Callable[[int, dict[str, Any]], Awaitable[None]]
 
 
-class ScoutRunPaused(RuntimeError):
-    """Raised by the worker when Scout is waiting on shared HITL approval."""
+class SubagentRunPaused(RuntimeError):
+    """Raised by a worker when a subagent is waiting on shared HITL approval."""
 
     def __init__(self, execution_result: Any) -> None:
-        super().__init__("Scout run paused for approval")
+        super().__init__("Subagent run paused for approval")
         self.execution_result = execution_result
 
 
 class AgentRunLauncher:
-    """Creates and observes one local asyncio task per Scout assignment."""
+    """Creates and observes one local asyncio task per subagent assignment."""
 
     def __init__(
         self,
         *,
         registry: ProcessLocalAgentRunRegistry,
-        worker: ScoutRunWorker | None = None,
+        worker: AgentRunWorker | None = None,
         task_factory: TaskFactory = asyncio.create_task,
         lifecycle_publisher: LifecyclePublisher | None = None,
     ) -> None:
@@ -70,7 +70,7 @@ class AgentRunLauncher:
         graph_thread_id: str,
         parent_run_id: str | None = None,
     ) -> asyncio.Task[AgentResult]:
-        """Create the local Scout task and attach its handle to the registry."""
+        """Create the local subagent task and attach its handle to the registry."""
         task_coro = self._run_worker(
             assignment=assignment,
             runtime_config=runtime_config,
@@ -108,7 +108,7 @@ class AgentRunLauncher:
         task_id: int,
         agent_run_id: str,
     ) -> LocalAgentRun:
-        """Signal cancellation for exactly one process-local Scout run."""
+        """Signal cancellation for exactly one process-local subagent run."""
         previous = await self._registry.get(
             tenant_id=tenant_id,
             task_id=task_id,
@@ -185,7 +185,7 @@ class AgentRunLauncher:
             )
             await self._publish_terminal_lifecycle(entry, parent_run_id=parent_run_id)
             return
-        except ScoutRunPaused:
+        except SubagentRunPaused:
             entry = await self._registry.mark_waiting_for_approval(
                 tenant_id=assignment.tenant_id,
                 task_id=assignment.task_id,
@@ -195,7 +195,7 @@ class AgentRunLauncher:
             return
         except Exception:
             logger.warning(
-                "Scout worker failed for tenant_id=%s task_id=%s agent_run_id=%s",
+                "Subagent worker failed for tenant_id=%s task_id=%s agent_run_id=%s",
                 assignment.tenant_id,
                 assignment.task_id,
                 assignment.agent_run_id,
@@ -205,7 +205,7 @@ class AgentRunLauncher:
                 tenant_id=assignment.tenant_id,
                 task_id=assignment.task_id,
                 agent_run_id=assignment.agent_run_id,
-                safe_error="Scout worker failed",
+                safe_error="Subagent worker failed",
             )
             await self._publish_terminal_lifecycle(entry, parent_run_id=parent_run_id)
             return
@@ -231,7 +231,7 @@ class AgentRunLauncher:
             await self._publish_lifecycle(entry.task_id, event)
         except Exception:
             logger.debug(
-                "Scout lifecycle publish failed for tenant_id=%s task_id=%s agent_run_id=%s",
+                "Subagent lifecycle publish failed for tenant_id=%s task_id=%s agent_run_id=%s",
                 entry.tenant_id,
                 entry.task_id,
                 entry.agent_run_id,
@@ -247,7 +247,7 @@ class AgentRunLauncher:
             cleanup.result()
         except Exception:
             logger.exception(
-                "Scout completion cleanup failed for tenant_id=%s task_id=%s agent_run_id=%s",
+                "Subagent completion cleanup failed for tenant_id=%s task_id=%s agent_run_id=%s",
                 assignment.tenant_id,
                 assignment.task_id,
                 assignment.agent_run_id,
@@ -262,12 +262,12 @@ async def _unavailable_worker(
     is_cancel_requested: Callable[[], Awaitable[bool]],
 ) -> AgentResult:
     _ = (assignment, runtime_config, graph_thread_id, is_cancel_requested)
-    raise RuntimeError("Scout worker is not configured")
+    raise RuntimeError("Subagent worker is not configured")
 
 
 __all__ = [
     "AgentRunLauncher",
+    "AgentRunWorker",
     "LifecyclePublisher",
-    "ScoutRunPaused",
-    "ScoutRunWorker",
+    "SubagentRunPaused",
 ]

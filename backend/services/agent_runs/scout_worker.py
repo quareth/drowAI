@@ -18,7 +18,7 @@ from agent.subagents.scout.nodes.choose_action import SCOUT_RESULT_METADATA_KEY
 from agent.subagents.scout.state import build_scout_initial_state
 from backend.services.agent_runs.contracts import AgentAssignment, AgentResult
 from backend.services.agent_runs.event_projection import build_agent_run_lifecycle_event
-from backend.services.agent_runs.launcher import ScoutRunPaused
+from backend.services.agent_runs.launcher import SubagentRunPaused
 from backend.services.agent_runs.registry import LocalAgentRun, ProcessLocalAgentRunRegistry
 from backend.services.langgraph_chat.checkpoint.checkpointer_service import (
     CheckpointerService,
@@ -94,7 +94,7 @@ class ProcessLocalScoutRunWorker:
         if await is_cancel_requested():
             raise asyncio.CancelledError
         if execution_result.interrupted:
-            raise ScoutRunPaused(execution_result)
+            raise SubagentRunPaused(execution_result)
         if not execution_result.final_state:
             raise RuntimeError("Scout graph completed without final state")
         return extract_scout_result_from_state(

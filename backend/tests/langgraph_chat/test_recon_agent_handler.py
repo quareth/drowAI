@@ -15,8 +15,15 @@ from agent.graph.context.builder import (
     METADATA_CONTEXT_BUNDLE_KEY,
     build_conversation_context_bundle,
 )
+from agent.subagents.definition import SubagentDefinition
+from agent.subagents.registry import SubagentRegistry as DefinitionSubagentRegistry
+from agent.subagents.runtime.model import SUBAGENT_RESULT_METADATA_KEY
 from backend.services.agent_runs.contracts import AgentResult
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
+from backend.services.agent_runs.subagent_registry import (
+    SubagentRegistry,
+    SubagentSpec,
+)
 from backend.services.langgraph_chat.execution.graph_executor import GraphExecutionResult
 from backend.services.langgraph_chat.contracts import (
     ChatInputs,
@@ -24,8 +31,8 @@ from backend.services.langgraph_chat.contracts import (
     LangGraphRuntimeConfig,
 )
 from backend.services.langgraph_chat.facade import LangGraphChatFacade
-from backend.services.langgraph_chat.handlers.recon_agent_handler import (
-    ReconAgentHandler,
+from backend.services.langgraph_chat.handlers.subagent_handler import (
+    SubagentHandler,
 )
 from backend.services.langgraph_chat.routing.selectors import ChatBranch, resolve_branch
 
@@ -97,7 +104,7 @@ class _CompletingExecutor:
             final_state={
                 "facts": {
                     "metadata": {
-                        "scout_result": {
+                        SUBAGENT_RESULT_METADATA_KEY: {
                             "agent_run_id": agent_run_id,
                             "agent_id": "pathfinder",
                             "agent_kind": "recon",
@@ -179,8 +186,90 @@ def _runtime_config() -> LangGraphRuntimeConfig:
     )
 
 
+def _second_agent_definition() -> SubagentDefinition:
+    return SubagentDefinition(
+        schema_version=1,
+        id="cartographer",
+        display_name="Cartographer",
+        kind="recon",
+        description="Map approved assets and summarize reachable surfaces.",
+        ownership_boundary="Own approved asset inventory only.",
+        supported_task_categories=("asset_inventory",),
+        excluded_task_categories=(),
+        tool_ids=("information_gathering.network_discovery.fping",),
+        enabled=True,
+        max_active_runs_per_task=1,
+        max_iterations=1,
+        max_tool_calls_per_iteration=1,
+        requires_resolved_target=True,
+        icon="cartographer",
+        instructions="Map only the assigned approved assets.",
+        tool_builder_role_prompt=None,
+        tool_builder_boundary_rules=(),
+    )
+
+
+def _second_agent_runtime_config() -> LangGraphRuntimeConfig:
+    config = _runtime_config()
+    routing = dict(config.metadata["subagent_routing"])
+    routing.update(
+        {
+            "reason": "cartographer_owned",
+            "agent_id": "cartographer",
+            "capabilities": ["asset_inventory", "port_scanning"],
+            "objective": "Inventory approved assets.",
+        }
+    )
+    config.metadata["subagent_routing"] = routing
+    return config
+
+
 @pytest.mark.asyncio
-async def test_recon_handler_waits_for_scout_and_runs_parent_finalizer() -> None:
+async def test_subagent_handler_uses_registered_agent_identity_for_launch_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    definition = _second_agent_definition()
+    backend_registry = SubagentRegistry([SubagentSpec.from_definition(definition)])
+    monkeypatch.setattr(
+        "agent.subagents.registry.get_subagent_registry",
+        lambda: DefinitionSubagentRegistry([definition]),
+    )
+    registry = ProcessLocalAgentRunRegistry()
+    events: list[dict[str, Any]] = []
+
+    async def _publish(_task_id: int, event: dict[str, Any]) -> None:
+        events.append(event)
+
+    handler = SubagentHandler(
+        object(),
+        object(),
+        object(),
+        registry=registry,
+        launcher=_FailingLauncher(),
+        lifecycle_publisher=_publish,
+        subagent_registry=backend_registry,
+    )
+
+    result = await handler.handle(_second_agent_runtime_config())
+
+    entries = await registry.list_task_runs(tenant_id=7, task_id=42)
+    assert len(entries) == 1
+    assert entries[0].agent_id == "cartographer"
+    assert entries[0].agent_run_id.startswith("agent-run-")
+    assert entries[0].safe_error == "Cartographer launch failed"
+    assert result.final_text == "Cartographer could not complete the subagent run."
+    assert result.metadata["agent_id"] == "cartographer"
+    assert result.metadata["agent_display_name"] == "Cartographer"
+    assert [event["agent_run"]["agent_id"] for event in events] == [
+        "cartographer",
+        "cartographer",
+        "cartographer",
+    ]
+    assert events[-1]["agent_run"]["safe_error"] == "Cartographer launch failed"
+
+
+@pytest.mark.asyncio
+async def test_subagent_handler_waits_for_pathfinder_and_runs_parent_finalizer() -> None:
     registry = ProcessLocalAgentRunRegistry()
     launcher = _RecordingLauncher(registry)
     executor = _CompletingExecutor()
@@ -189,7 +278,7 @@ async def test_recon_handler_waits_for_scout_and_runs_parent_finalizer() -> None
     async def _publish(task_id: int, event: dict[str, Any]) -> None:
         events.append((task_id, event))
 
-    handler = ReconAgentHandler(
+    handler = SubagentHandler(
         object(),
         executor,
         object(),
@@ -238,7 +327,7 @@ async def test_recon_handler_waits_for_scout_and_runs_parent_finalizer() -> None
 
 
 @pytest.mark.asyncio
-async def test_recon_handler_attaches_live_runtime_services_only_at_launch() -> None:
+async def test_subagent_handler_attaches_live_runtime_services_only_at_launch() -> None:
     registry = ProcessLocalAgentRunRegistry()
     launcher = _RecordingLauncher(registry)
     runtime_config = _runtime_config()
@@ -248,7 +337,7 @@ async def test_recon_handler_attaches_live_runtime_services_only_at_launch() -> 
     async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
         return None
 
-    handler = ReconAgentHandler(
+    handler = SubagentHandler(
         object(),
         _CompletingExecutor(),
         object(),
@@ -264,14 +353,14 @@ async def test_recon_handler_attaches_live_runtime_services_only_at_launch() -> 
 
 
 @pytest.mark.asyncio
-async def test_recon_handler_emits_failed_lifecycle_when_launch_fails() -> None:
+async def test_subagent_handler_emits_failed_lifecycle_when_launch_fails() -> None:
     registry = ProcessLocalAgentRunRegistry()
     events: list[dict[str, Any]] = []
 
     async def _publish(task_id: int, event: dict[str, Any]) -> None:
         events.append(event)
 
-    handler = ReconAgentHandler(
+    handler = SubagentHandler(
         object(),
         object(),
         object(),
@@ -295,19 +384,19 @@ async def test_recon_handler_emits_failed_lifecycle_when_launch_fails() -> None:
     assert events[-1]["agent_run"]["safe_error"] == "Pathfinder launch failed"
 
 
-def test_facade_registers_recon_agent_handler() -> None:
+def test_facade_registers_subagent_handler() -> None:
     registry = ProcessLocalAgentRunRegistry()
     facade = LangGraphChatFacade(
         agent_run_registry=registry,
-        scout_launcher=_RecordingLauncher(registry),
+        agent_run_launcher=_RecordingLauncher(registry),
         agent_run_lifecycle_publisher=lambda _task_id, _event: None,
     )
 
-    assert isinstance(facade._handlers[ChatBranch.SUBAGENT], ReconAgentHandler)
+    assert isinstance(facade._handlers[ChatBranch.SUBAGENT], SubagentHandler)
 
 
 @pytest.mark.asyncio
-async def test_recon_handler_default_launcher_runs_real_worker_to_completion(
+async def test_subagent_handler_default_launcher_runs_real_worker_to_completion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry = ProcessLocalAgentRunRegistry()
@@ -318,10 +407,10 @@ async def test_recon_handler_default_launcher_runs_real_worker_to_completion(
         events.append(event)
 
     monkeypatch.setattr(
-        "backend.services.agent_runs.scout_worker.build_scout_recon_graph",
-        lambda *, checkpointer: {"compiled_with": checkpointer},
+        "backend.services.agent_runs.worker.build_subagent_graph",
+        lambda _definition, *, checkpointer: {"compiled_with": checkpointer},
     )
-    handler = ReconAgentHandler(
+    handler = SubagentHandler(
         _FakeCheckpointerService(),
         executor,
         object(),
@@ -361,7 +450,7 @@ async def test_facade_active_registry_check_prevents_recon_branch() -> None:
     config = _runtime_config()
     facade = LangGraphChatFacade(
         agent_run_registry=registry,
-        scout_launcher=_RecordingLauncher(registry),
+        agent_run_launcher=_RecordingLauncher(registry),
     )
     assert (await facade._active_subagent_run_counts(config)) == {"pathfinder": 1}
     assert (
@@ -376,7 +465,7 @@ async def test_facade_active_registry_check_prevents_recon_branch() -> None:
 
 
 def _build_assignment_for_active_run(runtime_config: LangGraphRuntimeConfig) -> Any:
-    from backend.services.langgraph_chat.handlers.recon_agent_handler import (
+    from backend.services.langgraph_chat.handlers.subagent_handler import (
         _build_assignment,
     )
 

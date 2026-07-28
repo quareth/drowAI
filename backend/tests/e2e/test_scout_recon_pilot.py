@@ -243,7 +243,7 @@ async def test_scout_recon_pilot_hands_result_back_to_original_parent_turn(
         intent_classifier=_PilotIntentClassifier(),
         prior_turn_reference_materializer=_NoopPriorTurnReferenceMaterializer(),
         agent_run_registry=registry,
-        scout_launcher=None,
+        agent_run_launcher=None,
         agent_run_lifecycle_publisher=_publish_lifecycle,
     )
     facade._handlers[ChatBranch.SUBAGENT]._launcher._worker = worker

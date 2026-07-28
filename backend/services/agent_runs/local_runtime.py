@@ -1,7 +1,7 @@
-"""Shared process-local Scout runtime objects for the backend process.
+"""Shared process-local subagent runtime objects for the backend process.
 
-This module owns the single in-memory registry used by the migration-free pilot
-when no test-specific registry is injected. The objects are intentionally
+This module owns the single in-memory registry used by process-local subagent
+runs when no test-specific registry is injected. The objects are intentionally
 process-local and are not durable or distributed coordination primitives.
 """
 
@@ -15,23 +15,25 @@ from backend.services.langgraph_chat.streaming.adapter import LangGraphStreaming
 
 from .launcher import AgentRunLauncher
 from .registry import ProcessLocalAgentRunRegistry
-from .scout_worker import ProcessLocalScoutRunWorker
+from .worker import ProcessLocalAgentRunWorker
 
 _PROCESS_LOCAL_AGENT_RUN_REGISTRY = ProcessLocalAgentRunRegistry()
-_PROCESS_LOCAL_SCOUT_STREAMING_ADAPTER = LangGraphStreamingAdapter()
-_PROCESS_LOCAL_SCOUT_WORKER = ProcessLocalScoutRunWorker(
+_PROCESS_LOCAL_SUBAGENT_STREAMING_ADAPTER = LangGraphStreamingAdapter()
+_PROCESS_LOCAL_AGENT_RUN_WORKER = ProcessLocalAgentRunWorker(
     registry=_PROCESS_LOCAL_AGENT_RUN_REGISTRY,
     checkpointer_service=get_shared_checkpointer_service(),
-    executor=LangGraphExecutor(streaming_adapter=_PROCESS_LOCAL_SCOUT_STREAMING_ADAPTER),
+    executor=LangGraphExecutor(
+        streaming_adapter=_PROCESS_LOCAL_SUBAGENT_STREAMING_ADAPTER
+    ),
 )
 _PROCESS_LOCAL_AGENT_RUN_LAUNCHER = AgentRunLauncher(
     registry=_PROCESS_LOCAL_AGENT_RUN_REGISTRY,
-    worker=_PROCESS_LOCAL_SCOUT_WORKER,
+    worker=_PROCESS_LOCAL_AGENT_RUN_WORKER,
 )
 
 
 def get_process_local_agent_run_registry() -> ProcessLocalAgentRunRegistry:
-    """Return this process' shared migration-free Scout registry."""
+    """Return this process' shared subagent registry."""
     return _PROCESS_LOCAL_AGENT_RUN_REGISTRY
 
 

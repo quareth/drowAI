@@ -1,4 +1,4 @@
-"""Tests for the process-local Scout asyncio launcher."""
+"""Tests for the process-local subagent asyncio launcher."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from backend.services.agent_runs.contracts import (
     AgentResult,
     AgentRuntimeIdentity,
 )
-from backend.services.agent_runs.launcher import AgentRunLauncher, ScoutRunPaused
+from backend.services.agent_runs.launcher import AgentRunLauncher, SubagentRunPaused
 from backend.services.agent_runs.registry import (
     LocalAgentRun,
     ProcessLocalAgentRunRegistry,
@@ -186,7 +186,7 @@ async def test_worker_failure_is_sanitized_and_contained() -> None:
         registry, tenant_id=7, task_id=42, agent_run_id="run-1", status="failed"
     )
 
-    assert failed.safe_error == "Scout worker failed"
+    assert failed.safe_error == "Subagent worker failed"
     assert "abc123" not in failed.safe_error
     assert failed.task_handle is None
 
@@ -258,7 +258,7 @@ async def test_paused_approval_cancellation_becomes_terminal_and_publishes() -> 
         events.append((task_id, event))
 
     async def _worker(**_kwargs: Any) -> AgentResult:
-        raise ScoutRunPaused(execution_result={"interrupt_id": "interrupt-1"})
+        raise SubagentRunPaused(execution_result={"interrupt_id": "interrupt-1"})
 
     launcher = AgentRunLauncher(
         registry=registry,

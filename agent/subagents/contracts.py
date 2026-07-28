@@ -1,7 +1,7 @@
 """Shared serializable contracts for asynchronous subagent runs.
 
-This module defines the migration-free pilot data shapes exchanged between the
-backend control plane and agent runtime. The contracts intentionally exclude raw
+This module defines the subagent data shapes exchanged between the backend
+control plane and agent runtime. The contracts intentionally exclude raw
 tool output, chain-of-thought, live runtime handles, database sessions, and
 provider clients so values can be safely persisted in graph checkpoints or
 projected to task stream events.

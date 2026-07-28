@@ -85,7 +85,7 @@ class InterruptStateService:
                 thread_id=thread_id,
             )
 
-        # Otherwise check known HITL graphs - parent graphs first, then Scout.
+        # Otherwise check known HITL graphs - parent graphs first, then subagents.
         # This ensures we find interrupts regardless of which graph created them
         for gname in [
             DEFAULT_GRAPH_NAME,
@@ -126,7 +126,8 @@ class InterruptStateService:
         from agent.graph.builders.deep_reasoning_builder import (
             compile_deep_reasoning_graph,
         )
-        from agent.subagents.scout.graph import build_scout_recon_graph
+        from agent.subagents.registry import get_subagent_registry
+        from agent.subagents.runtime.graph import build_subagent_graph
 
         resolved_thread_id = (
             thread_id.strip()
@@ -141,7 +142,15 @@ class InterruptStateService:
                 if graph_name == GRAPH_NAME_DEEP_REASONING:
                     compiled = compile_deep_reasoning_graph(checkpointer=checkpointer)
                 elif graph_name == GRAPH_NAME_SCOUT_RECON:
-                    compiled = build_scout_recon_graph(checkpointer=checkpointer)
+                    definitions = get_subagent_registry().definitions()
+                    if len(definitions) != 1:
+                        raise RuntimeError(
+                            "Subagent interrupt snapshot requires registered agent identity"
+                        )
+                    compiled = build_subagent_graph(
+                        definitions[0],
+                        checkpointer=checkpointer,
+                    )
                 else:
                     compiled = build_simple_tool_graph(checkpointer=checkpointer)
 

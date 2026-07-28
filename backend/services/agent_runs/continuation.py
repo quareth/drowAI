@@ -1,8 +1,8 @@
-"""Scout HITL continuation checks for the migration-free pilot.
+"""Subagent HITL continuation checks for process-local runs.
 
 This module bridges existing task-bound interrupt tickets to the process-local
-Scout run registry. It does not own approval payloads, routes, persistence
-schema, or graph execution; it only verifies that a canonical Scout ticket still
+subagent run registry. It does not own approval payloads, routes, persistence
+schema, or graph execution; it only verifies that a canonical subagent ticket still
 maps to a live local child thread before checkpoint continuation resumes.
 """
 
@@ -25,15 +25,15 @@ from .registry import (
 )
 
 
-SCOUT_PILOT_RECOVERY_ERROR = (
-    "Scout approval cannot be resumed because the live process-local registry "
-    "entry is missing. Start a new Scout run."
+SUBAGENT_RECOVERY_ERROR = (
+    "Subagent approval cannot be resumed because the live process-local registry "
+    "entry is missing. Start a new subagent run."
 )
 
 
 @dataclass(frozen=True, slots=True)
-class ScoutContinuationContext:
-    """Verified continuation identity for one live Scout approval resume."""
+class SubagentContinuationContext:
+    """Verified continuation identity for one live subagent approval resume."""
 
     entry: LocalAgentRun
     graph_thread_id: str
@@ -41,19 +41,19 @@ class ScoutContinuationContext:
 
 
 @dataclass(frozen=True, slots=True)
-class ScoutInterruptTicketSnapshot:
-    """Minimal canonical ticket identity needed to resume a Scout child graph."""
+class SubagentInterruptTicketSnapshot:
+    """Minimal canonical ticket identity needed to resume a subagent child graph."""
 
     graph_name: str
     thread_id: str | None
     checkpoint_id: str | None
 
 
-class ScoutContinuationError(RuntimeError):
-    """Raised when a Scout approval cannot be safely resumed in this process."""
+class SubagentContinuationError(RuntimeError):
+    """Raised when a subagent approval cannot be safely resumed in this process."""
 
 
-async def prepare_scout_resume(
+async def prepare_subagent_resume(
     *,
     registry: ProcessLocalAgentRunRegistry,
     task_id: int,
@@ -62,57 +62,57 @@ async def prepare_scout_resume(
     interrupt_id: str | None,
     checkpoint_id: int | str | None,
     session_factory: Callable[[], Any] = SessionLocal,
-) -> ScoutContinuationContext | None:
-    """Verify a Scout resume and return the canonical child checkpoint identity."""
+) -> SubagentContinuationContext | None:
+    """Verify a subagent resume and return the canonical child checkpoint identity."""
 
     if graph_name != GRAPH_NAME_SCOUT_RECON:
         return None
     if tenant_id is None:
-        raise ScoutContinuationError("Scout resume requires tenant identity")
+        raise SubagentContinuationError("Subagent resume requires tenant identity")
     if not isinstance(interrupt_id, str) or not interrupt_id.strip():
-        raise ScoutContinuationError(
-            "Scout resume requires canonical interrupt identity"
+        raise SubagentContinuationError(
+            "Subagent resume requires canonical interrupt identity"
         )
 
-    ticket = _load_scout_resume_ticket(
+    ticket = _load_subagent_resume_ticket(
         session_factory=session_factory,
         task_id=task_id,
         interrupt_id=interrupt_id.strip(),
     )
     if ticket is None or ticket.graph_name != GRAPH_NAME_SCOUT_RECON:
-        raise ScoutContinuationError(SCOUT_PILOT_RECOVERY_ERROR)
+        raise SubagentContinuationError(SUBAGENT_RECOVERY_ERROR)
 
     graph_thread_id = _normalize_ticket_thread_id(ticket.thread_id)
     if graph_thread_id is None:
-        raise ScoutContinuationError(
-            "Scout resume ticket is missing child thread identity"
+        raise SubagentContinuationError(
+            "Subagent resume ticket is missing child thread identity"
         )
 
-    entry = await _find_live_scout_entry(
+    entry = await _find_live_subagent_entry(
         registry=registry,
         tenant_id=int(tenant_id),
         task_id=int(task_id),
         graph_thread_id=graph_thread_id,
     )
     if entry is None:
-        raise ScoutContinuationError(SCOUT_PILOT_RECOVERY_ERROR)
+        raise SubagentContinuationError(SUBAGENT_RECOVERY_ERROR)
 
     canonical_checkpoint = ticket.checkpoint_id
     if canonical_checkpoint is None and checkpoint_id is not None:
         canonical_checkpoint = str(checkpoint_id)
-    return ScoutContinuationContext(
+    return SubagentContinuationContext(
         entry=entry,
         graph_thread_id=graph_thread_id,
         checkpoint_id=canonical_checkpoint,
     )
 
 
-async def mark_scout_running(
+async def mark_subagent_running(
     *,
     registry: ProcessLocalAgentRunRegistry,
-    context: ScoutContinuationContext | None,
+    context: SubagentContinuationContext | None,
 ) -> None:
-    """Move a verified live Scout run out of waiting state for resume work."""
+    """Move a verified live subagent run out of waiting state for resume work."""
 
     if context is None:
         return
@@ -123,12 +123,12 @@ async def mark_scout_running(
     )
 
 
-async def mark_scout_waiting_for_approval(
+async def mark_subagent_waiting_for_approval(
     *,
     registry: ProcessLocalAgentRunRegistry,
-    context: ScoutContinuationContext | None,
+    context: SubagentContinuationContext | None,
 ) -> None:
-    """Record that a continued Scout run paused again on the shared HITL gate."""
+    """Record that a continued subagent run paused again on the shared HITL gate."""
 
     if context is None:
         return
@@ -139,12 +139,12 @@ async def mark_scout_waiting_for_approval(
     )
 
 
-def _load_scout_resume_ticket(
+def _load_subagent_resume_ticket(
     *,
     session_factory: Callable[[], Any],
     task_id: int,
     interrupt_id: str,
-) -> ScoutInterruptTicketSnapshot | None:
+) -> SubagentInterruptTicketSnapshot | None:
     db = session_factory()
     try:
         ticket = (
@@ -158,7 +158,7 @@ def _load_scout_resume_ticket(
         )
         if ticket is None:
             return None
-        return ScoutInterruptTicketSnapshot(
+        return SubagentInterruptTicketSnapshot(
             graph_name=str(ticket.graph_name or ""),
             thread_id=ticket.thread_id,
             checkpoint_id=ticket.checkpoint_id,
@@ -169,7 +169,7 @@ def _load_scout_resume_ticket(
             close()
 
 
-async def _find_live_scout_entry(
+async def _find_live_subagent_entry(
     *,
     registry: ProcessLocalAgentRunRegistry,
     tenant_id: int,
@@ -180,7 +180,6 @@ async def _find_live_scout_entry(
     for entry in entries:
         if (
             entry.graph_thread_id == graph_thread_id
-            and entry.agent_kind == "recon"
             and entry.status in ACTIVE_AGENT_RUN_STATUSES
         ):
             return entry
@@ -197,11 +196,11 @@ def _normalize_ticket_thread_id(thread_id: str | None) -> str | None:
 
 
 __all__ = [
-    "SCOUT_PILOT_RECOVERY_ERROR",
-    "ScoutContinuationContext",
-    "ScoutContinuationError",
-    "ScoutInterruptTicketSnapshot",
-    "mark_scout_running",
-    "mark_scout_waiting_for_approval",
-    "prepare_scout_resume",
+    "SUBAGENT_RECOVERY_ERROR",
+    "SubagentContinuationContext",
+    "SubagentContinuationError",
+    "SubagentInterruptTicketSnapshot",
+    "mark_subagent_running",
+    "mark_subagent_waiting_for_approval",
+    "prepare_subagent_resume",
 ]

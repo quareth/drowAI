@@ -1,4 +1,4 @@
-"""Tests for the process-local Scout agent-run registry."""
+"""Tests for the process-local subagent-run registry."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from backend.services.agent_runs.contracts import (
     AgentRuntimeIdentity,
 )
 from backend.services.agent_runs.registry import (
-    ActiveScoutRunExistsError,
+    ActiveAgentRunExistsError,
     AgentRunNotFoundError,
     ProcessLocalAgentRunRegistry,
 )
@@ -102,11 +102,11 @@ async def test_register_creates_queued_process_local_entry() -> None:
 
 
 @pytest.mark.asyncio
-async def test_second_active_scout_for_task_is_rejected_until_terminal() -> None:
+async def test_second_active_subagent_for_task_is_rejected_until_terminal() -> None:
     registry = ProcessLocalAgentRunRegistry()
     await registry.register(_assignment(agent_run_id="run-1"), graph_thread_id="child-1")
 
-    with pytest.raises(ActiveScoutRunExistsError) as error:
+    with pytest.raises(ActiveAgentRunExistsError) as error:
         await registry.register(
             _assignment(agent_run_id="run-2"), graph_thread_id="child-2"
         )

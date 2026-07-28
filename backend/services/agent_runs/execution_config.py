@@ -1,6 +1,6 @@
-"""Build safe LangGraph execution config for process-local Scout child runs.
+"""Build safe LangGraph execution config for process-local subagent child runs.
 
-This module owns the boundary between a parent chat turn and the Scout child
+This module owns the boundary between a parent chat turn and the subagent child
 checkpoint thread. It verifies tenant/task/user ownership through the live
 process-local registry and returns only serializable config values.
 """
@@ -24,7 +24,7 @@ from .registry import ProcessLocalAgentRunRegistry
 
 
 class ChildExecutionConfigError(RuntimeError):
-    """Raised when Scout child execution config cannot be built safely."""
+    """Raised when subagent child execution config cannot be built safely."""
 
 
 async def build_child_execution_config(
@@ -34,7 +34,7 @@ async def build_child_execution_config(
     registry: ProcessLocalAgentRunRegistry,
     graph_thread_id: str,
 ) -> dict[str, Any]:
-    """Return checkpoint-safe LangGraph config for one registered Scout child run."""
+    """Return checkpoint-safe LangGraph config for one registered subagent child run."""
     _authorize_parent_runtime(assignment=assignment, runtime_config=runtime_config)
     child_graph_thread_id = require_graph_thread_id(
         graph_thread_id,
@@ -46,9 +46,9 @@ async def build_child_execution_config(
         agent_run_id=assignment.agent_run_id,
     )
     if entry is None:
-        raise ChildExecutionConfigError("Scout child run is not registered")
+        raise ChildExecutionConfigError("Subagent child run is not registered")
     if entry.graph_thread_id != child_graph_thread_id:
-        raise ChildExecutionConfigError("Scout child thread does not match registry")
+        raise ChildExecutionConfigError("Subagent child thread does not match registry")
 
     parent_run_id = _parent_run_id(runtime_config.metadata) or _parent_run_id(
         assignment.relevant_context
@@ -169,20 +169,20 @@ def _parent_run_id(metadata: Mapping[str, Any]) -> str | None:
 
 def _require_equal(field_name: str, actual: Any, expected: Any) -> None:
     if actual != expected:
-        raise ChildExecutionConfigError(f"Scout child config {field_name} mismatch")
+        raise ChildExecutionConfigError(f"Subagent child config {field_name} mismatch")
 
 
 def _coerce_int(value: Any) -> int:
     try:
         return int(value)
     except (TypeError, ValueError) as exc:
-        raise ChildExecutionConfigError("Scout child config tenant_id mismatch") from exc
+        raise ChildExecutionConfigError("Subagent child config tenant_id mismatch") from exc
 
 
 def _non_empty(value: Any) -> str:
     normalized = _optional_string(value)
     if normalized is None:
-        raise ChildExecutionConfigError("Scout child config is missing parent identity")
+        raise ChildExecutionConfigError("Subagent child config is missing parent identity")
     return normalized
 
 
@@ -190,7 +190,7 @@ def _optional_string(value: Any) -> str | None:
     if value is None:
         return None
     if isinstance(value, Mapping):
-        raise ChildExecutionConfigError("Scout child config contains invalid identity")
+        raise ChildExecutionConfigError("Subagent child config contains invalid identity")
     normalized = str(value).strip()
     return normalized or None
 

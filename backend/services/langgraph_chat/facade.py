@@ -66,8 +66,8 @@ from backend.services.langgraph_chat.execution.graph_executor import LangGraphEx
 from .handlers import (
     DeepReasoningHandler,
     NormalChatHandler,
-    ReconAgentHandler,
     SimpleToolHandler,
+    SubagentHandler,
 )
 from backend.services.langgraph_chat.intent.briefs import (
     ensure_intent_brief_seed_present,
@@ -126,7 +126,7 @@ class LangGraphChatFacade:
             PriorTurnReferenceMaterializer
         ] = None,
         agent_run_registry: Optional[ProcessLocalAgentRunRegistry] = None,
-        scout_launcher: Any = None,
+        agent_run_launcher: Any = None,
         agent_run_lifecycle_publisher: Any = None,
         agent_run_result_projector: Optional[AgentRunResultProjector] = None,
         session_factory: Optional[Callable[[], Any]] = None,
@@ -177,14 +177,15 @@ class LangGraphChatFacade:
             ChatBranch.SIMPLE_TOOL: SimpleToolHandler(
                 self._checkpointer_service, self._executor, self._streaming_adapter
             ),
-            ChatBranch.SUBAGENT: ReconAgentHandler(
+            ChatBranch.SUBAGENT: SubagentHandler(
                 self._checkpointer_service,
                 self._executor,
                 self._streaming_adapter,
                 registry=self._agent_run_registry,
-                launcher=scout_launcher,
+                launcher=agent_run_launcher,
                 lifecycle_publisher=agent_run_lifecycle_publisher,
                 result_projector=self._agent_run_result_projector,
+                subagent_registry=self._subagent_registry,
             ),
         }
         self._validate_registered_subagent_handlers()
@@ -458,7 +459,7 @@ class LangGraphChatFacade:
         self,
         runtime_config: LangGraphRuntimeConfig,
     ) -> CompletedAgentResultHandoff:
-        """Best-effort projection of completed Scout results into main context."""
+        """Best-effort projection of completed subagent results into main context."""
         try:
             tenant_id = int(runtime_config.metadata.get("tenant_id"))
         except (TypeError, ValueError):
@@ -479,7 +480,7 @@ class LangGraphChatFacade:
             return handoff
         except Exception:
             logger.debug(
-                "Failed to project completed Scout results for task %s",
+                "Failed to project completed subagent results for task %s",
                 runtime_config.chat_inputs.task_id,
                 exc_info=True,
             )
@@ -505,7 +506,7 @@ class LangGraphChatFacade:
             )
         except Exception:
             logger.debug(
-                "Failed to mark completed Scout results consumed for task %s",
+                "Failed to mark completed subagent results consumed for task %s",
                 runtime_config.chat_inputs.task_id,
                 exc_info=True,
             )

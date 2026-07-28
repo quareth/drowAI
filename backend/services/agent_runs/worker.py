@@ -10,8 +10,8 @@ Responsibility boundary
 -----------------------
 This module owns only process-local graph execution and terminal result
 extraction for generic subagent definitions. It does not launch local tasks,
-store durable coordination state, authorize requests, or migrate production
-callers away from the legacy Scout worker.
+store durable coordination state, authorize requests, or choose between legacy
+and generic execution stacks.
 """
 
 from __future__ import annotations
@@ -28,7 +28,7 @@ from agent.subagents.runtime.model import SUBAGENT_RESULT_METADATA_KEY
 from agent.subagents.runtime.state import build_subagent_initial_state
 from backend.services.agent_runs.contracts import AgentAssignment, AgentResult
 from backend.services.agent_runs.event_projection import build_agent_run_lifecycle_event
-from backend.services.agent_runs.launcher import ScoutRunPaused
+from backend.services.agent_runs.launcher import SubagentRunPaused
 from backend.services.agent_runs.registry import LocalAgentRun, ProcessLocalAgentRunRegistry
 from backend.services.langgraph_chat.checkpoint.checkpointer_service import (
     CheckpointerService,
@@ -108,7 +108,7 @@ class ProcessLocalAgentRunWorker:
         if await is_cancel_requested():
             raise asyncio.CancelledError
         if execution_result.interrupted:
-            raise ScoutRunPaused(execution_result)
+            raise SubagentRunPaused(execution_result)
         if not execution_result.final_state:
             raise RuntimeError("Subagent graph completed without final state")
         return extract_subagent_result_from_state(

@@ -1,9 +1,9 @@
-"""Best-effort same-process Scout result projection.
+"""Best-effort same-process subagent result projection.
 
-This module projects completed process-local Scout results into the next main
+This module projects completed process-local subagent results into the next main
 LangGraph turn context. It intentionally owns no persistence, lease, recovery,
 or exactly-once delivery guarantee; the process-local registry remains the sole
-runtime source for the migration-free pilot.
+runtime source for live same-process handoff.
 """
 
 from __future__ import annotations
@@ -72,7 +72,7 @@ class AgentRunResultProjector:
         task_id: int,
         conversation_id: str,
     ) -> CompletedAgentResultHandoff:
-        """Return completed, unconsumed Scout results without mutating state."""
+        """Return completed, unconsumed subagent results without mutating state."""
         if self._max_results <= 0 or not conversation_id:
             return CompletedAgentResultHandoff(results=(), agent_run_ids=())
 

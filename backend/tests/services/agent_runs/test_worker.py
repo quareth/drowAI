@@ -23,9 +23,12 @@ from backend.services.agent_runs.contracts import (
 )
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
 from backend.services.agent_runs.scout_worker import (
-    _prepare_child_config as prepare_scout_child_config,
+    _prepare_child_config as prepare_legacy_scout_child_config,
 )
-from backend.services.agent_runs.scout_worker import extract_scout_result_from_state
+from backend.services.agent_runs.scout_worker import (
+    SCOUT_RESULT_METADATA_KEY,
+    extract_scout_result_from_state,
+)
 from backend.services.agent_runs.worker import (
     ProcessLocalAgentRunWorker,
     extract_subagent_result_from_state,
@@ -100,6 +103,16 @@ def _final_state() -> dict[str, Any]:
         "facts": {
             "metadata": {
                 SUBAGENT_RESULT_METADATA_KEY: _result().model_dump(mode="json")
+            }
+        }
+    }
+
+
+def _legacy_scout_final_state() -> dict[str, Any]:
+    return {
+        "facts": {
+            "metadata": {
+                SCOUT_RESULT_METADATA_KEY: _result().model_dump(mode="json")
             }
         }
     }
@@ -206,7 +219,7 @@ async def test_generic_worker_matches_scout_graph_input_config_and_result(
         assignment=assignment,
         graph_thread_id="child-thread-1",
     )
-    assert call["config"] == prepare_subagent_child_config(
+    assert call["config"] == prepare_legacy_scout_child_config(
         {
             "configurable": {
                 "runtime_projection": {
@@ -218,7 +231,7 @@ async def test_generic_worker_matches_scout_graph_input_config_and_result(
         assignment=assignment,
         graph_thread_id="child-thread-1",
     )
-    assert call["config"] == prepare_scout_child_config(
+    assert call["config"] == prepare_subagent_child_config(
         {
             "configurable": {
                 "runtime_projection": {
@@ -273,7 +286,7 @@ def test_generic_result_extraction_matches_current_scout_result_extraction() -> 
         expected_agent_id="pathfinder",
         expected_agent_kind="recon",
     ) == extract_scout_result_from_state(
-        _final_state(),
+        _legacy_scout_final_state(),
         expected_agent_run_id="run-1",
         expected_agent_id="pathfinder",
         expected_agent_kind="recon",

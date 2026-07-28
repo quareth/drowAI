@@ -1,8 +1,9 @@
-"""Tests for Scout HITL continuation registry verification."""
+"""Tests for subagent HITL continuation registry verification."""
 
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from types import SimpleNamespace
 from typing import Any
 
@@ -13,16 +14,16 @@ import pytest
 from agent.graph.graph_names import GRAPH_NAME_SCOUT_RECON
 from backend.services.agent_runs import continuation
 from backend.services.agent_runs.continuation import (
-    SCOUT_PILOT_RECOVERY_ERROR,
-    ScoutContinuationError,
-    ScoutInterruptTicketSnapshot,
-    mark_scout_running,
-    mark_scout_waiting_for_approval,
-    prepare_scout_resume,
+    SUBAGENT_RECOVERY_ERROR,
+    SubagentContinuationError,
+    SubagentInterruptTicketSnapshot,
+    mark_subagent_running,
+    mark_subagent_waiting_for_approval,
+    prepare_subagent_resume,
 )
 from backend.services.agent_runs.contracts import AgentAssignment, AgentRuntimeIdentity
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
-from backend.services.agent_runs.scout_worker import SCOUT_RESULT_METADATA_KEY
+from agent.subagents.runtime.model import SUBAGENT_RESULT_METADATA_KEY
 from backend.services.langgraph_chat.checkpoint.continuation_service import (
     CheckpointContinuationService,
 )
@@ -67,7 +68,7 @@ def _assignment() -> AgentAssignment:
 
 
 @pytest.mark.asyncio
-async def test_prepare_scout_resume_uses_ticket_thread_and_updates_status(
+async def test_prepare_subagent_resume_uses_ticket_thread_and_updates_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry = ProcessLocalAgentRunRegistry()
@@ -82,15 +83,15 @@ async def test_prepare_scout_resume_uses_ticket_thread_and_updates_status(
 
     monkeypatch.setattr(
         continuation,
-        "_load_scout_resume_ticket",
-        lambda **_kwargs: ScoutInterruptTicketSnapshot(
+        "_load_subagent_resume_ticket",
+        lambda **_kwargs: SubagentInterruptTicketSnapshot(
             graph_name=GRAPH_NAME_SCOUT_RECON,
             thread_id=f"graph-{child_thread}",
             checkpoint_id="cp-ticket",
         ),
     )
 
-    context = await prepare_scout_resume(
+    context = await prepare_subagent_resume(
         registry=registry,
         tenant_id=7,
         task_id=42,
@@ -102,35 +103,35 @@ async def test_prepare_scout_resume_uses_ticket_thread_and_updates_status(
     assert context is not None
     assert context.graph_thread_id == child_thread
     assert context.checkpoint_id == "cp-ticket"
-    await mark_scout_running(registry=registry, context=context)
+    await mark_subagent_running(registry=registry, context=context)
     running = await registry.get(tenant_id=7, task_id=42, agent_run_id="scout-run-1")
     assert running is not None
     assert running.status == "running"
 
-    await mark_scout_waiting_for_approval(registry=registry, context=context)
+    await mark_subagent_waiting_for_approval(registry=registry, context=context)
     waiting = await registry.get(tenant_id=7, task_id=42, agent_run_id="scout-run-1")
     assert waiting is not None
     assert waiting.status == "waiting_for_approval"
 
 
 @pytest.mark.asyncio
-async def test_prepare_scout_resume_fails_explicitly_without_live_registry_entry(
+async def test_prepare_subagent_resume_fails_explicitly_without_live_registry_entry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry = ProcessLocalAgentRunRegistry()
     child_thread = "a" * 32
     monkeypatch.setattr(
         continuation,
-        "_load_scout_resume_ticket",
-        lambda **_kwargs: ScoutInterruptTicketSnapshot(
+        "_load_subagent_resume_ticket",
+        lambda **_kwargs: SubagentInterruptTicketSnapshot(
             graph_name=GRAPH_NAME_SCOUT_RECON,
             thread_id=f"graph-{child_thread}",
             checkpoint_id="cp-ticket",
         ),
     )
 
-    with pytest.raises(ScoutContinuationError, match=SCOUT_PILOT_RECOVERY_ERROR):
-        await prepare_scout_resume(
+    with pytest.raises(SubagentContinuationError, match=SUBAGENT_RECOVERY_ERROR):
+        await prepare_subagent_resume(
             registry=registry,
             tenant_id=7,
             task_id=42,
@@ -141,8 +142,51 @@ async def test_prepare_scout_resume_fails_explicitly_without_live_registry_entry
 
 
 @pytest.mark.asyncio
-async def test_prepare_scout_resume_ignores_non_scout_graph() -> None:
-    context = await prepare_scout_resume(
+async def test_prepare_subagent_resume_matches_registered_thread_without_recon_kind(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    child_thread = "a" * 32
+    assignment = _assignment()
+    await registry.register(assignment, graph_thread_id=child_thread)
+    waiting = await registry.mark_waiting_for_approval(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="scout-run-1",
+    )
+    registry._runs[(7, 42, "scout-run-1")] = replace(
+        waiting,
+        agent_id="cartographer",
+        agent_kind="asset_mapper",  # type: ignore[arg-type]
+    )
+    monkeypatch.setattr(
+        continuation,
+        "_load_subagent_resume_ticket",
+        lambda **_kwargs: SubagentInterruptTicketSnapshot(
+            graph_name=GRAPH_NAME_SCOUT_RECON,
+            thread_id=f"graph-{child_thread}",
+            checkpoint_id="cp-ticket",
+        ),
+    )
+
+    context = await prepare_subagent_resume(
+        registry=registry,
+        tenant_id=7,
+        task_id=42,
+        graph_name=GRAPH_NAME_SCOUT_RECON,
+        interrupt_id="interrupt-1",
+        checkpoint_id=None,
+    )
+
+    assert context is not None
+    assert context.entry.agent_id == "cartographer"
+    assert context.entry.agent_kind == "asset_mapper"
+    assert context.graph_thread_id == child_thread
+
+
+@pytest.mark.asyncio
+async def test_prepare_subagent_resume_ignores_non_scout_graph() -> None:
+    context = await prepare_subagent_resume(
         registry=ProcessLocalAgentRunRegistry(),
         tenant_id=None,
         task_id=42,
@@ -155,13 +199,13 @@ async def test_prepare_scout_resume_ignores_non_scout_graph() -> None:
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_continuation_compiles_scout_graph(
+async def test_checkpoint_continuation_compiles_subagent_graph(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     compiled = object()
     monkeypatch.setattr(
-        "agent.subagents.scout.graph.build_scout_recon_graph",
-        lambda *, checkpointer: compiled,
+        "agent.subagents.runtime.graph.build_subagent_graph",
+        lambda _definition, *, checkpointer: compiled,
     )
     service = CheckpointContinuationService(
         checkpointer_service=object(),
@@ -199,8 +243,8 @@ async def test_resume_from_interrupt_keeps_scout_waiting_after_next_interrupt(
     )
     monkeypatch.setattr(
         continuation,
-        "_load_scout_resume_ticket",
-        lambda **_kwargs: ScoutInterruptTicketSnapshot(
+        "_load_subagent_resume_ticket",
+        lambda **_kwargs: SubagentInterruptTicketSnapshot(
             graph_name=GRAPH_NAME_SCOUT_RECON,
             thread_id=f"graph-{child_thread}",
             checkpoint_id="cp-ticket",
@@ -237,7 +281,7 @@ async def test_resume_from_interrupt_keeps_scout_waiting_after_next_interrupt(
 
 
 @pytest.mark.asyncio
-async def test_resume_from_interrupt_marks_scout_completed_on_success(
+async def test_resume_from_interrupt_marks_subagent_completed_on_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry = ProcessLocalAgentRunRegistry()
@@ -251,8 +295,8 @@ async def test_resume_from_interrupt_marks_scout_completed_on_success(
     )
     monkeypatch.setattr(
         continuation,
-        "_load_scout_resume_ticket",
-        lambda **_kwargs: ScoutInterruptTicketSnapshot(
+        "_load_subagent_resume_ticket",
+        lambda **_kwargs: SubagentInterruptTicketSnapshot(
             graph_name=GRAPH_NAME_SCOUT_RECON,
             thread_id=f"graph-{child_thread}",
             checkpoint_id="cp-ticket",
@@ -262,7 +306,7 @@ async def test_resume_from_interrupt_marks_scout_completed_on_success(
         registry=registry,
         final_state=_interactive_state(
             metadata={
-                SCOUT_RESULT_METADATA_KEY: {
+                SUBAGENT_RESULT_METADATA_KEY: {
                     "agent_run_id": "scout-run-1",
                     "agent_id": "pathfinder",
                     "agent_kind": "recon",
@@ -311,13 +355,13 @@ async def test_resume_from_interrupt_marks_scout_completed_on_success(
 
 
 @pytest.mark.asyncio
-async def test_interrupt_snapshot_hydrates_scout_graph(
+async def test_interrupt_snapshot_hydrates_subagent_graph(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     compiled = _FakeCompiledGraph()
     monkeypatch.setattr(
-        "agent.subagents.scout.graph.build_scout_recon_graph",
-        lambda *, checkpointer: compiled,
+        "agent.subagents.runtime.graph.build_subagent_graph",
+        lambda _definition, *, checkpointer: compiled,
     )
     service = InterruptStateService(checkpointer_service=_FakeCheckpointerService())
 

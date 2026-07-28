@@ -129,7 +129,7 @@ class AgentRunControlService:
         task_id: int,
         agent_run_id: str,
     ) -> LocalAgentRunStatusProjection:
-        """Request cancellation for one active process-local Scout run."""
+        """Request cancellation for one active process-local subagent run."""
         entry = await self._registry.get(
             tenant_id=tenant_id,
             task_id=task_id,
