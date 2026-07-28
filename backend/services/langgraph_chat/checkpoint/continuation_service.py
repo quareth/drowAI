@@ -14,6 +14,15 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, Mapping, Optional
 from agent.graph.infrastructure.state_models import checkpoint_safe_llm_runtime_selection
 from backend.config import E2E_DETERMINISTIC_MODE
 from backend.database import SessionLocal
+from backend.services.agent_runs.continuation import (
+    ScoutContinuationContext,
+    ScoutContinuationError,
+    mark_scout_running,
+    mark_scout_waiting_for_approval,
+    prepare_scout_resume,
+)
+from backend.services.agent_runs.scout_worker import mark_scout_completed_from_state
+from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
 from backend.services.chat.message_service import ChatMessageService
 from backend.services.langgraph_chat.checkpoint.runtime_selection_resolver import (
     resolve_checkpoint_runtime_selection,
@@ -24,6 +33,7 @@ from backend.services.langgraph_chat.hitl_constants import (
     DEFAULT_GRAPH_NAME,
     GRAPH_NAME_DEEP_REASONING,
     GRAPH_NAME_INTERRUPT_RESUME,
+    GRAPH_NAME_SCOUT_RECON,
     GRAPH_NAME_SIMPLE_TOOL,
 )
 from backend.services.langgraph_chat.execution.scenario_factory import get_scenario_graph
@@ -105,6 +115,7 @@ class CheckpointContinuationService:
         resolve_resume_turn_number: Callable[..., int],
         persist_chat_message_from_container: Callable[..., None],
         build_result: Callable[..., LangGraphChatResult],
+        agent_run_registry: Optional[ProcessLocalAgentRunRegistry] = None,
     ) -> None:
         """Initialize continuation service dependencies.
 
@@ -130,6 +141,7 @@ class CheckpointContinuationService:
         self._resolve_resume_turn_number = resolve_resume_turn_number
         self._persist_chat_message_from_container = persist_chat_message_from_container
         self._build_result = build_result
+        self._agent_run_registry = agent_run_registry
 
     async def resume_from_interrupt(
         self,
@@ -180,6 +192,20 @@ class CheckpointContinuationService:
 
         graph_name = graph_name or DEFAULT_GRAPH_NAME
         try:
+            scout_context = await self._prepare_scout_resume_context(
+                task_id=task_id,
+                tenant_id=tenant_id,
+                graph_name=graph_name,
+                interrupt_id=interrupt_id,
+                checkpoint_id=checkpoint_id,
+            )
+            if scout_context is not None:
+                graph_thread_id = scout_context.graph_thread_id
+                checkpoint_id = scout_context.checkpoint_id
+                await mark_scout_running(
+                    registry=self._require_agent_run_registry(),
+                    context=scout_context,
+                )
             return await self.continue_from_checkpoint(
                 task_id=task_id,
                 user_id=user_id,
@@ -204,6 +230,7 @@ class CheckpointContinuationService:
                 replace_turn_events=replace_turn_events,
                 llm_runtime_selection=llm_runtime_selection,
                 runtime_services=runtime_services,
+                scout_continuation_context=scout_context,
             )
         except Exception as exc:
             msg = f"[HITL] Resume failed for task {task_id}: {exc}"
@@ -230,6 +257,7 @@ class CheckpointContinuationService:
         should_cancel: Optional[Callable[[], bool]] = None,
         llm_runtime_selection: Optional[Mapping[str, Any]] = None,
         runtime_services: Any = None,
+        scout_continuation_context: ScoutContinuationContext | None = None,
     ) -> LangGraphChatResult:
         """Retry a failed turn from a stored checkpoint.
 
@@ -303,6 +331,7 @@ class CheckpointContinuationService:
         replace_turn_events: bool = False,
         llm_runtime_selection: Optional[Mapping[str, Any]] = None,
         runtime_services: Any = None,
+        scout_continuation_context: ScoutContinuationContext | None = None,
     ) -> LangGraphChatResult:
         """Continue a graph from persisted checkpoint state.
 
@@ -320,6 +349,8 @@ class CheckpointContinuationService:
             interrupt_persist_reason: Persistence reason for interrupt.
             success_persist_reason: Persistence reason for success.
             replace_turn_events: Whether to replace canonical turn events.
+            scout_continuation_context: Verified Scout run context for local
+                registry status updates during approval resume.
 
         Returns:
             LangGraphChatResult from continued execution.
@@ -453,6 +484,11 @@ class CheckpointContinuationService:
             )
 
         if execution_result.interrupted:
+            if scout_continuation_context is not None:
+                await mark_scout_waiting_for_approval(
+                    registry=self._require_agent_run_registry(),
+                    context=scout_continuation_context,
+                )
             logger.info(
                 "[HITL] Continuation hit another interrupt for task %s", task_id
             )
@@ -504,6 +540,12 @@ class CheckpointContinuationService:
         # Success path: parse failure raised above for non-interrupt paths,
         # so ``interactive_state`` is guaranteed non-None here.
         assert interactive_state is not None
+        if scout_continuation_context is not None:
+            await mark_scout_completed_from_state(
+                registry=self._require_agent_run_registry(),
+                entry=scout_continuation_context.entry,
+                final_state=execution_result.final_state,
+            )
 
         final_text = (
             interactive_state.trace.final_text or interactive_state.facts.message
@@ -722,12 +764,45 @@ class CheckpointContinuationService:
             compile_deep_reasoning_graph,
         )
         from agent.graph.builders.simple_tool_builder import build_simple_tool_graph
+        from agent.subagents.scout.graph import build_scout_recon_graph
 
         if E2E_DETERMINISTIC_MODE or graph_name == GRAPH_NAME_INTERRUPT_RESUME:
             return get_scenario_graph(GRAPH_NAME_INTERRUPT_RESUME, checkpointer)
         if graph_name == GRAPH_NAME_DEEP_REASONING:
             return compile_deep_reasoning_graph(checkpointer=checkpointer)
+        if graph_name == GRAPH_NAME_SCOUT_RECON:
+            return build_scout_recon_graph(checkpointer=checkpointer)
         return build_simple_tool_graph(checkpointer=checkpointer)
+
+    async def _prepare_scout_resume_context(
+        self,
+        *,
+        task_id: int,
+        tenant_id: Optional[int],
+        graph_name: str,
+        interrupt_id: Optional[str],
+        checkpoint_id: Optional[int | str],
+    ) -> ScoutContinuationContext | None:
+        if graph_name != GRAPH_NAME_SCOUT_RECON:
+            return None
+        try:
+            return await prepare_scout_resume(
+                registry=self._require_agent_run_registry(),
+                task_id=task_id,
+                tenant_id=tenant_id,
+                graph_name=graph_name,
+                interrupt_id=interrupt_id,
+                checkpoint_id=checkpoint_id,
+            )
+        except ScoutContinuationError:
+            raise
+
+    def _require_agent_run_registry(self) -> ProcessLocalAgentRunRegistry:
+        if self._agent_run_registry is None:
+            raise ScoutContinuationError(
+                "Scout resume requires the process-local agent-run registry"
+            )
+        return self._agent_run_registry
 
 
 __all__ = [

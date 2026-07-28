@@ -67,6 +67,27 @@ def _stub_classifier_returning(label: str) -> IntentClassifier:
     return IntentClassifier(client_factory=lambda *_: _StubClient())
 
 
+def _stub_recon_classifier() -> IntentClassifier:
+    """Return direct-executor recon output with a resolved bounded target."""
+    response = (
+        '{"label": "direct_executor", "confidence": 0.99, '
+        '"reasoning": "stub", '
+        '"suggested_capabilities": ["port scanning"], '
+        '"agent_handoffs": [{"agent_handoff": "required", '
+        '"subagent": "scout", "objective": "Scan ports on 10.0.0.10."}], '
+        '"risk_flags": [], '
+        '"target_status": "resolved", '
+        '"target_source": "explicit_current_message", '
+        '"resolved_target": "10.0.0.10"}'
+    )
+
+    class _StubClient:
+        async def chat_with_usage(self, *args: Any, **kwargs: Any) -> Any:
+            return SimpleNamespace(content=response, usage=None, structured_output=None)
+
+    return IntentClassifier(client_factory=lambda *_: _StubClient())
+
+
 def _build_facade_with_branch_capture(
     *,
     intent_classifier: IntentClassifier,
@@ -168,6 +189,30 @@ async def test_chat_with_classifier_plan_executor_lands_on_normal_chat(
     assert snapshot["intent_classifier_route_forced"] is True
     assert snapshot["intent_classifier_route_force_source"] == "agent_mode=chat"
     assert snapshot["execution_route_policy_applied"] is True
+
+
+@pytest.mark.asyncio
+async def test_recon_candidate_routes_to_scout_by_default() -> None:
+    """Scout-eligible classifier output delegates without an environment gate."""
+    facade, capture = _build_facade_with_branch_capture(
+        intent_classifier=_stub_recon_classifier(),
+    )
+
+    chat_inputs = ChatInputs(
+        task_id=8003,
+        user_id=1,
+        message="Scan ports on 10.0.0.10",
+        conversation_id="conv-8003",
+        history=[{"role": "user", "content": "Scan ports on 10.0.0.10"}],
+        api_key="test-key",
+        agent_mode=AgentMode.AGENT,
+    )
+
+    await facade.handle_turn(chat_inputs)
+
+    assert capture["branch"] is ChatBranch.RECON_AGENT
+    assert capture["execution_mode"] is ExecutionMode.SIMPLE_TOOL
+    assert capture["metadata_snapshot"]["subagent_routing"]["should_delegate"] is True
 
 
 @pytest.mark.asyncio

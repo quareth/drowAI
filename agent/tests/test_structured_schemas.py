@@ -23,6 +23,7 @@ from core.llm.structured_schemas import (
     TOOL_CATEGORY_SELECTOR_STRUCTURED_OUTPUT,
     TOOL_SELECTOR_STRUCTURED_OUTPUT,
     TOOL_OUTPUT_COMPRESSOR_STRUCTURED_OUTPUT,
+    build_intent_classifier_structured_output,
 )
 
 
@@ -97,11 +98,11 @@ def test_intent_classifier_turn_interpretation_requires_goal_and_task_seed() -> 
         "maxItems": 3,
     }
     assert "task_seed" in turn_interpretation["required"]
-
     base_payload = {
         "label": "direct_executor",
         "confidence": 0.95,
         "suggested_capabilities": ["network_scan"],
+        "agent_handoffs": [],
         "requested_output_format": None,
         "question_type": "multi_step",
         "answer_style": "normal",
@@ -161,6 +162,27 @@ def test_intent_classifier_turn_interpretation_requires_goal_and_task_seed() -> 
     ]
     with pytest.raises(ValidationError):
         validate(base_payload, schema)
+
+
+def test_intent_classifier_subagent_enum_is_registry_scoped() -> None:
+    spec = build_intent_classifier_structured_output(("scout", "analyst"))
+    subagent_schema = spec.schema["properties"]["agent_handoffs"]["items"][
+        "properties"
+    ]["subagent"]
+
+    assert subagent_schema == {
+        "type": "string",
+        "minLength": 1,
+        "enum": ["scout", "analyst"],
+    }
+    validate_openai_strict_schema(spec)
+
+
+def test_intent_classifier_disallows_handoffs_when_registry_is_empty() -> None:
+    spec = build_intent_classifier_structured_output(())
+
+    assert spec.schema["properties"]["agent_handoffs"]["maxItems"] == 0
+    validate_openai_strict_schema(spec)
 
 
 def test_tool_selector_schema_requires_candidate_tools_strategy_and_reasoning() -> None:

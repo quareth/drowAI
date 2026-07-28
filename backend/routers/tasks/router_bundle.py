@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from ...auth import get_current_user
 from ...database import get_db
 from ...models import User
+from .agent_runs import router as agent_runs_router
 from .container import router as container_router
 from .crud import router as crud_router
 from .files import router as files_router
@@ -37,6 +38,7 @@ router.include_router(crud_router)
 router.include_router(runtime_router)
 router.include_router(interrupts_router)
 router.include_router(interrupt_inbox_router)
+router.include_router(agent_runs_router)
 router.include_router(files_router)
 router.include_router(scope_router)
 router.include_router(logs_router)

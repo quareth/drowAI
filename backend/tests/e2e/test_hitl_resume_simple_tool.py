@@ -17,6 +17,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from agent.graph.graph_names import GRAPH_NAME_SCOUT_RECON
 from backend.database import Base
 from backend.models.core import Task, User
 from backend.models.hitl import InterruptTicket, InterruptTicketState, TurnWorkflow
@@ -268,6 +269,174 @@ def test_simple_tool_router_refresh_then_resume_with_edit(monkeypatch) -> None:
         assert captured["resume_kwargs"]["response"]["edited_parameters"] == {
             "command": "echo edited"
         }
+    finally:
+        verify.close()
+        engine.dispose()
+
+
+def test_scout_router_resume_uses_canonical_scout_ticket(monkeypatch) -> None:
+    """Scout graph resumes use the shared HITL route with child ticket identity."""
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    SessionFactory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+    db = SessionFactory()
+    user_id: int
+    task_id: int
+    username: str
+    child_thread_id = "a" * 32
+    try:
+        user, task, _parent_thread = _create_task_fixture(
+            db,
+            username="scout_owner",
+            email="scout@example.com",
+            tenant_slug="scout-hitl",
+            task_name="scout-hitl",
+        )
+
+        interrupt_id = "scout_recon:checkpoint:cp-scout-1"
+        ticket = InterruptTicket(
+            interrupt_id=interrupt_id,
+            task_id=task.id,
+            tenant_id=task.tenant_id,
+            graph_name=GRAPH_NAME_SCOUT_RECON,
+            interrupt_type="tool_approval",
+            checkpoint_id="cp-scout-1",
+            thread_id=format_graph_thread_id(child_thread_id, task_id=task.id),
+            turn_id=f"task-{task.id}-turn-scout-1",
+            turn_sequence=1,
+            state=InterruptTicketState.PENDING,
+            payload_snapshot={
+                "type": "tool_approval",
+                "turn_id": f"task-{task.id}-turn-scout-1",
+                "turn_sequence": 1,
+                "reserved_message_id": 991,
+                "conversation_id": "conv-scout",
+                "tool_id": "information_gathering.network_discovery.nmap",
+                "tool_name": "nmap",
+                "parameters": {"target": "10.0.0.10"},
+            },
+        )
+        db.add(ticket)
+        db.commit()
+        user_id = int(user.id)
+        task_id = int(task.id)
+        username = str(user.username)
+    finally:
+        db.close()
+
+    captured: Dict[str, Any] = {}
+    interrupt_calls: list[Dict[str, Any]] = []
+
+    class _ScoutInterruptStateService:
+        async def get_pending_interrupt(
+            self,
+            task_id: int,
+            graph_name: str | None = None,
+            **kwargs: Any,
+        ):
+            interrupt_calls.append(
+                {
+                    "task_id": task_id,
+                    "graph_name": graph_name,
+                    **kwargs,
+                }
+            )
+            return {
+                "has_interrupt": True,
+                "task_id": task_id,
+                "thread_id": format_graph_thread_id(child_thread_id, task_id=task_id),
+                "graph_name": GRAPH_NAME_SCOUT_RECON,
+                "interrupt_id": interrupt_id,
+                "checkpoint_id": "cp-scout-1",
+                "interrupt_type": "tool_approval",
+                "payload": {
+                    "type": "tool_approval",
+                    "tool_id": "information_gathering.network_discovery.nmap",
+                    "parameters": {"target": "10.0.0.10"},
+                },
+                "resumable": True,
+            }
+
+    def _capture_resume_generation(**kwargs):
+        captured["resume_kwargs"] = dict(kwargs)
+
+        async def _noop():
+            return None
+
+        return _noop()
+
+    app = FastAPI()
+    app.include_router(interrupts_routes.router, prefix="/api/tasks")
+    app.dependency_overrides[interrupts_routes.get_current_user] = (
+        lambda: SimpleNamespace(id=user_id, username=username, is_active=True)
+    )
+
+    def _db_override():
+        req_db: Session = SessionFactory()
+        try:
+            yield req_db
+        finally:
+            req_db.close()
+
+    app.dependency_overrides[interrupts_routes.get_db] = _db_override
+
+    monkeypatch.setattr(
+        "backend.services.langgraph_chat.checkpoint.interrupt_state_service.get_interrupt_state_service",
+        lambda: _ScoutInterruptStateService(),
+    )
+    monkeypatch.setattr(
+        "backend.services.langgraph_chat.execution.turn_service.run_resume_generation",
+        _capture_resume_generation,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/tasks/{task_id}/graph/resume",
+            json={
+                "interrupt_id": interrupt_id,
+                "interrupt_type": "tool_approval",
+                "graph_name": GRAPH_NAME_SCOUT_RECON,
+                "response": {"action": "approve"},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "status": "resumed",
+        "task_id": task_id,
+        "interrupt_id": interrupt_id,
+    }
+    assert interrupt_calls[0]["graph_name"] == GRAPH_NAME_SCOUT_RECON
+    assert interrupt_calls[0]["thread_id"] == format_graph_thread_id(
+        child_thread_id,
+        task_id=task_id,
+    )
+    assert captured["resume_kwargs"]["graph_name"] == GRAPH_NAME_SCOUT_RECON
+    assert captured["resume_kwargs"]["checkpoint_id"] == "cp-scout-1"
+    assert captured["resume_kwargs"]["interrupt_id"] == interrupt_id
+
+    verify = SessionFactory()
+    try:
+        persisted_ticket = (
+            verify.query(InterruptTicket)
+            .filter(
+                InterruptTicket.task_id == task_id,
+                InterruptTicket.interrupt_id == interrupt_id,
+            )
+            .one()
+        )
+        assert persisted_ticket.state == InterruptTicketState.RESUMING
+        workflow = (
+            verify.query(TurnWorkflow).filter(TurnWorkflow.task_id == task_id).one()
+        )
+        assert workflow.state == "RESUMED"
+        assert workflow.graph_name == GRAPH_NAME_SCOUT_RECON
+        assert workflow.resume_key == "cp-scout-1"
     finally:
         verify.close()
         engine.dispose()

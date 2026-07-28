@@ -1,0 +1,380 @@
+"""Tests for the Scout recon facade handler handoff."""
+
+from __future__ import annotations
+
+import asyncio
+import copy
+import os
+from typing import Any
+
+os.environ.setdefault("DATABASE_URL", "postgresql+psycopg2://test:test@localhost/test")
+
+import pytest
+
+from agent.graph.context.builder import (
+    METADATA_CONTEXT_BUNDLE_KEY,
+    build_conversation_context_bundle,
+)
+from backend.services.agent_runs.contracts import AgentResult
+from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
+from backend.services.langgraph_chat.execution.graph_executor import GraphExecutionResult
+from backend.services.langgraph_chat.contracts import (
+    ChatInputs,
+    ExecutionMode,
+    LangGraphRuntimeConfig,
+)
+from backend.services.langgraph_chat.facade import LangGraphChatFacade
+from backend.services.langgraph_chat.handlers.recon_agent_handler import (
+    ReconAgentHandler,
+)
+from backend.services.langgraph_chat.routing.selectors import ChatBranch, resolve_branch
+
+
+class _RecordingLauncher:
+    def __init__(self, registry: ProcessLocalAgentRunRegistry) -> None:
+        self.registry = registry
+        self.calls: list[dict[str, Any]] = []
+
+    async def launch(self, **kwargs: Any) -> asyncio.Task[AgentResult]:
+        self.calls.append(kwargs)
+        assignment = kwargs["assignment"]
+
+        async def _finish() -> AgentResult:
+            result = AgentResult(
+                agent_run_id=assignment.agent_run_id,
+                agent_kind="recon",
+                outcome="completed",
+                summary="Scout found HTTP.",
+                key_findings=("80/tcp open",),
+                tools_used=("information_gathering.network_discovery.nmap",),
+            )
+            await self.registry.mark_completed(
+                tenant_id=assignment.tenant_id,
+                task_id=assignment.task_id,
+                agent_run_id=assignment.agent_run_id,
+                result=result,
+            )
+            return result
+
+        return asyncio.create_task(_finish())
+
+
+class _FailingLauncher:
+    async def launch(self, **kwargs: Any) -> None:
+        raise RuntimeError("boom secret-free")
+
+
+class _CompletingExecutor:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+
+    async def stream_graph(
+        self,
+        compiled: Any,
+        graph_input: Any,
+        config: dict[str, Any],
+        task_id: int,
+        **kwargs: Any,
+    ) -> GraphExecutionResult:
+        self.calls.append(
+            {
+                "compiled": compiled,
+                "graph_input": graph_input,
+                "config": config,
+                "task_id": task_id,
+                "kwargs": kwargs,
+            }
+        )
+        graph_name = config["configurable"]["graph_name"]
+        if graph_name != "scout_recon":
+            final_state = copy.deepcopy(graph_input)
+            final_state["trace"]["final_text"] = "Main agent finalized Scout result."
+            return GraphExecutionResult(final_state=final_state)
+
+        agent_run_id = graph_input["facts"]["metadata"]["agent_run_id"]
+        return GraphExecutionResult(
+            final_state={
+                "facts": {
+                    "metadata": {
+                        "scout_result": {
+                            "agent_run_id": agent_run_id,
+                            "agent_kind": "recon",
+                            "outcome": "completed",
+                            "summary": "Scout found HTTP.",
+                            "tools_used": ["information_gathering.network_discovery.nmap"],
+                        }
+                    }
+                }
+            }
+        )
+
+
+class _FakeCheckpointerService:
+    def get_checkpointer(self, task_id: int) -> "_FakeCheckpointerContext":
+        assert task_id == 42
+        return _FakeCheckpointerContext()
+
+
+class _FakeCheckpointerContext:
+    async def __aenter__(self) -> object:
+        return object()
+
+    async def __aexit__(self, *_args: Any) -> None:
+        return None
+
+
+def _runtime_config() -> LangGraphRuntimeConfig:
+    chat_inputs = ChatInputs(
+        task_id=42,
+        user_id=3,
+        message="Scan ports on 10.0.0.10",
+        conversation_id="conv-42",
+        history=[],
+        requested_mode=ExecutionMode.SIMPLE_TOOL,
+        provider="openai",
+        model="gpt-5.2-mini",
+        reasoning_effort="medium",
+    )
+    return LangGraphRuntimeConfig(
+        chat_inputs=chat_inputs,
+        execution_mode=ExecutionMode.SIMPLE_TOOL,
+        metadata={
+            "tenant_id": 7,
+            "graph_thread_id": "00000000000040008000000000000042",
+            "runtime_placement_mode": "runner",
+            "workspace_id": "task-42",
+            "actor_type": "agent",
+            "actor_id": "langgraph",
+            "runner_id": "runner-1",
+            "execution_site_id": "site-1",
+            "turn_id": "task-42-turn-5",
+            "turn_number": 5,
+            "turn_sequence": 5,
+            "intent_classifier_label": "direct_executor",
+            "intent_hints": {
+                "classifier_label": "direct_executor",
+                "targets": ["10.0.0.10"],
+            },
+            "subagent_routing": {
+                "should_delegate": True,
+                "reason": "scout_owned",
+                "subagent_name": "scout",
+                "agent_kind": "recon",
+                "dispatch_branch": "recon_agent",
+                "capabilities": ["port_scan"],
+                "targets": ["10.0.0.10"],
+                "objective": "Scan ports on 10.0.0.10.",
+            },
+            "feature_flags": {"simple_tool_enabled": True},
+            METADATA_CONTEXT_BUNDLE_KEY: build_conversation_context_bundle(
+                conversation_id="conv-42",
+                turn_id="task-42-turn-5",
+                turn_sequence=5,
+                messages=[],
+                current_message="Scan ports on 10.0.0.10",
+            ),
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_recon_handler_waits_for_scout_and_runs_parent_finalizer() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    launcher = _RecordingLauncher(registry)
+    executor = _CompletingExecutor()
+    events: list[tuple[int, dict[str, Any]]] = []
+
+    async def _publish(task_id: int, event: dict[str, Any]) -> None:
+        events.append((task_id, event))
+
+    handler = ReconAgentHandler(
+        object(),
+        executor,
+        object(),
+        registry=registry,
+        launcher=launcher,
+        lifecycle_publisher=_publish,
+    )
+
+    result = await handler.handle(_runtime_config())
+
+    assert result.final_text == "Main agent finalized Scout result."
+    assert result.metadata["branch"] == "recon_agent"
+    assert result.metadata["handoff_agent_kind"] == "recon"
+    assert result.metadata["status"] == "completed"
+    assert len(launcher.calls) == 1
+    assignment = launcher.calls[0]["assignment"]
+    assert assignment.agent_kind == "recon"
+    assert assignment.objective == "Scan ports on 10.0.0.10."
+    assert assignment.targets == ("10.0.0.10",)
+    assert assignment.suggested_capabilities == ("port_scan",)
+    assert assignment.runtime_identity.tenant_id == 7
+    child_config = launcher.calls[0]["runtime_config"]
+    assert child_config["configurable"]["graph_name"] == "scout_recon"
+    assert child_config["configurable"]["agent_run_id"] == assignment.agent_run_id
+    assert child_config["configurable"]["thread_id"].startswith("graph-")
+    assert (
+        child_config["configurable"]["runtime_projection"]["runtime_placement_mode"]
+        == "runner"
+    )
+    assert "runtime_services" not in child_config["configurable"]
+    entries = await registry.list_task_runs(tenant_id=7, task_id=42)
+    assert len(entries) == 1
+    assert entries[0].status == "completed"
+    assert entries[0].result_consumed is True
+    assert [event[1]["agent_run"]["status"] for event in events] == [
+        "queued",
+        "running",
+    ]
+    assert events[0][1]["agent_run"]["assignment"]["agent_run_id"] == (
+        assignment.agent_run_id
+    )
+    assert "assignment" not in events[1][1]["agent_run"] or (
+        events[1][1]["agent_run"]["assignment"] is None
+    )
+
+
+@pytest.mark.asyncio
+async def test_recon_handler_attaches_live_runtime_services_only_at_launch() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    launcher = _RecordingLauncher(registry)
+    runtime_config = _runtime_config()
+    runtime_services = object()
+    runtime_config.runtime_services = runtime_services
+
+    async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
+        return None
+
+    handler = ReconAgentHandler(
+        object(),
+        _CompletingExecutor(),
+        object(),
+        registry=registry,
+        launcher=launcher,
+        lifecycle_publisher=_publish,
+    )
+
+    await handler.handle(runtime_config)
+
+    child_config = launcher.calls[0]["runtime_config"]
+    assert child_config["configurable"]["runtime_services"] is runtime_services
+
+
+@pytest.mark.asyncio
+async def test_recon_handler_emits_failed_lifecycle_when_launch_fails() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    events: list[dict[str, Any]] = []
+
+    async def _publish(task_id: int, event: dict[str, Any]) -> None:
+        events.append(event)
+
+    handler = ReconAgentHandler(
+        object(),
+        object(),
+        object(),
+        registry=registry,
+        launcher=_FailingLauncher(),
+        lifecycle_publisher=_publish,
+    )
+
+    result = await handler.handle(_runtime_config())
+
+    entries = await registry.list_task_runs(tenant_id=7, task_id=42)
+    assert len(entries) == 1
+    assert entries[0].status == "failed"
+    assert entries[0].safe_error == "Pathfinder launch failed"
+    assert result.metadata["status"] == "failed"
+    assert [event["agent_run"]["status"] for event in events] == [
+        "queued",
+        "running",
+        "failed",
+    ]
+    assert events[-1]["agent_run"]["safe_error"] == "Pathfinder launch failed"
+
+
+def test_facade_registers_recon_agent_handler() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    facade = LangGraphChatFacade(
+        agent_run_registry=registry,
+        scout_launcher=_RecordingLauncher(registry),
+        agent_run_lifecycle_publisher=lambda _task_id, _event: None,
+    )
+
+    assert isinstance(facade._handlers[ChatBranch.RECON_AGENT], ReconAgentHandler)
+
+
+@pytest.mark.asyncio
+async def test_recon_handler_default_launcher_runs_real_worker_to_completion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    executor = _CompletingExecutor()
+    events: list[dict[str, Any]] = []
+
+    async def _publish(task_id: int, event: dict[str, Any]) -> None:
+        events.append(event)
+
+    monkeypatch.setattr(
+        "backend.services.agent_runs.scout_worker.build_scout_recon_graph",
+        lambda *, checkpointer: {"compiled_with": checkpointer},
+    )
+    handler = ReconAgentHandler(
+        _FakeCheckpointerService(),
+        executor,
+        object(),
+        registry=registry,
+        lifecycle_publisher=_publish,
+    )
+
+    result = await handler.handle(_runtime_config())
+
+    assert result.metadata["status"] == "completed"
+
+    assert len(executor.calls) == 2
+    call = executor.calls[0]
+    assert call["config"]["configurable"]["graph_name"] == "scout_recon"
+    assert call["config"]["configurable"]["graph_runtime_context"]["tenant_id"] == 7
+    assert "credential_ref" not in call["config"]["configurable"]["graph_runtime_context"]
+    entries = await registry.list_task_runs(tenant_id=7, task_id=42)
+    assert len(entries) == 1
+    assert entries[0].status == "completed"
+    assert entries[0].result is not None
+    assert entries[0].result.summary == "Scout found HTTP."
+    assert entries[0].result_consumed is True
+    assert events[-1]["agent_run"]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_facade_active_registry_check_prevents_recon_branch() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    assignment = _build_assignment_for_active_run(_runtime_config())
+    await registry.register(assignment, graph_thread_id="graph-child-active")
+    await registry.mark_running(
+        tenant_id=assignment.tenant_id,
+        task_id=assignment.task_id,
+        agent_run_id=assignment.agent_run_id,
+    )
+
+    config = _runtime_config()
+    facade = LangGraphChatFacade(
+        agent_run_registry=registry,
+        scout_launcher=_RecordingLauncher(registry),
+    )
+    assert (await facade._active_recon_run_exists(config)) is True
+    assert (
+        resolve_branch(
+            config,
+            deep_reasoning_enabled=True,
+            simple_tool_enabled=True,
+            active_recon_run_exists=True,
+        )
+        is ChatBranch.SIMPLE_TOOL
+    )
+
+
+def _build_assignment_for_active_run(runtime_config: LangGraphRuntimeConfig) -> Any:
+    from backend.services.langgraph_chat.handlers.recon_agent_handler import (
+        _build_assignment,
+    )
+
+    return _build_assignment(runtime_config, parent_turn_id="task-42-turn-5")

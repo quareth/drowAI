@@ -42,13 +42,21 @@ from agent.providers.llm.core.identity import (
     ProviderModelRef,
 )
 from agent.providers.llm.profiles.registry import resolve_context_window_tokens
-from core.prompts.builders.intent_classifier import build_classifier_user_prompt
-from core.prompts.constants import CLASSIFIER_SYSTEM_PROMPT
+from core.prompts.builders.intent_classifier import (
+    build_classifier_system_prompt,
+    build_classifier_user_prompt,
+)
 from core.llm import LLM_TIMEOUT_INTENT_CLASSIFIER_SEC, wait_for_with_timeout
-from core.llm.structured_schemas import INTENT_CLASSIFIER_STRUCTURED_OUTPUT
+from core.llm.structured_schemas import (
+    build_intent_classifier_structured_output,
+)
 from core.prompts.route_labels import llm_facing_route_label
 from agent.graph.config.token_limits import LIMITS
 
+from backend.services.agent_runs.subagent_registry import (
+    SubagentRegistry,
+    get_subagent_registry,
+)
 from backend.services.langgraph_chat.contracts import (
     ExecutionMode,
     LangGraphRuntimeConfig,
@@ -111,6 +119,7 @@ _PRIOR_TURN_REFERENCE_KINDS = frozenset(
 _PRIOR_TURN_REFERENCE_SPEAKERS = frozenset(
     {"user", "assistant", "system", "tool", "unknown"}
 )
+_MAX_AGENT_HANDOFFS = 8
 
 _ROUTING_LABEL_ALIASES: Dict[str, str] = {
     "simple_chat": "simple_chat",
@@ -238,6 +247,38 @@ def _build_request_contract(parsed: Dict[str, Any], message: str) -> Dict[str, s
             contract["terminal_when"] = "all_steps_done"
 
     return contract
+
+
+def _normalize_agent_handoffs(parsed: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Normalize ordered required subagent requests from classifier output."""
+    raw_handoffs = parsed.get("agent_handoffs")
+    if not isinstance(raw_handoffs, list):
+        return []
+
+    normalized: List[Dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for raw_handoff in raw_handoffs:
+        if not isinstance(raw_handoff, dict):
+            continue
+        handoff = str(raw_handoff.get("agent_handoff") or "").strip().lower()
+        subagent = str(raw_handoff.get("subagent") or "").strip().lower()
+        objective = str(raw_handoff.get("objective") or "").strip()
+        if handoff != "required" or not subagent or not objective:
+            continue
+        identity = (subagent, objective)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        normalized.append(
+            {
+                "agent_handoff": "required",
+                "subagent": subagent,
+                "objective": objective,
+            }
+        )
+        if len(normalized) >= _MAX_AGENT_HANDOFFS:
+            break
+    return normalized
 
 
 def _normalize_intent_target_resolution(parsed: Dict[str, Any]) -> Dict[str, Any]:
@@ -679,8 +720,10 @@ def build_intent_classifier_request(
     environment: str,
     temperature: float,
     max_tokens: int,
+    subagent_registry: SubagentRegistry | None = None,
 ) -> IntentClassifierRequest:
     """Build the exact side-effect-free request consumed by the classifier."""
+    registry = subagent_registry or get_subagent_registry()
     hints = _collect_hints(metadata)
     history_text = _resolve_history_text(metadata)
     llm_facing_routes = [
@@ -688,7 +731,9 @@ def build_intent_classifier_request(
     ]
     return IntentClassifierRequest(
         call_settings=call_settings,
-        system_prompt=CLASSIFIER_SYSTEM_PROMPT,
+        system_prompt=build_classifier_system_prompt(
+            subagent_catalog=registry.classifier_catalog(),
+        ),
         user_prompt=build_classifier_user_prompt(
             history=history_text,
             tool_hints=hints["tool_hints"],
@@ -700,7 +745,9 @@ def build_intent_classifier_request(
         ),
         temperature=temperature,
         max_tokens=max_tokens,
-        structured_output=INTENT_CLASSIFIER_STRUCTURED_OUTPUT,
+        structured_output=build_intent_classifier_structured_output(
+            registry.names()
+        ),
     )
 
 
@@ -750,6 +797,7 @@ class IntentClassifier:
         client_timeout: float = LLM_TIMEOUT_INTENT_CLASSIFIER_SEC,
         client_factory: Optional[Callable[[RoleCallSettings], LLMClient]] = None,
         model_role_registry: Optional[ModelRoleRegistry] = None,
+        subagent_registry: SubagentRegistry | None = None,
     ) -> None:
         self._temperature = temperature
         self._max_tokens = (
@@ -758,6 +806,7 @@ class IntentClassifier:
         self._client_timeout = client_timeout
         self._client_factory = client_factory
         self._model_role_registry = model_role_registry or ModelRoleRegistry()
+        self._subagent_registry = subagent_registry or get_subagent_registry()
 
     def resolve_call_settings(
         self,
@@ -806,6 +855,7 @@ class IntentClassifier:
                 call_settings,
                 self._max_tokens,
             ),
+            subagent_registry=self._subagent_registry,
         )
 
     async def enrich_runtime_config(
@@ -1070,6 +1120,8 @@ class IntentClassifier:
         metadata["request_contract"] = _build_request_contract(
             parsed, chat_inputs.message
         )
+        agent_handoffs = _normalize_agent_handoffs(parsed)
+        metadata["intent_agent_handoffs"] = agent_handoffs
         target_resolution = _normalize_intent_target_resolution(parsed)
         target_continuity = _normalize_intent_target_continuity(parsed)
         prior_turn_reference = _normalize_prior_turn_reference(parsed)
@@ -1119,6 +1171,7 @@ class IntentClassifier:
 
         hints["classifier_label"] = signals.classifier_label
         hints["classifier_confidence"] = signals.classifier_confidence
+        hints["agent_handoffs"] = agent_handoffs
         resolved_target = target_resolution.get("resolved_target")
         if (
             target_resolution.get("target_status") == "resolved"

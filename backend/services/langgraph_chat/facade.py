@@ -13,6 +13,22 @@ from agent.graph.context.contracts import CLASSIFIER_TRANSCRIPT_WINDOW_KEY
 from agent.graph.context.transcript import select_full_transcript_window
 from backend.database import SessionLocal
 from backend.services.chat.conversation_history_reader import ConversationHistoryReader
+from backend.services.agent_runs.local_runtime import (
+    get_process_local_agent_run_registry,
+)
+from backend.services.agent_runs.result_projection import (
+    AgentRunResultProjector,
+    CompletedAgentResultHandoff,
+    attach_completed_agent_results_to_context,
+)
+from backend.services.agent_runs.registry import (
+    ACTIVE_AGENT_RUN_STATUSES,
+    ProcessLocalAgentRunRegistry,
+)
+from backend.services.agent_runs.subagent_registry import (
+    SubagentRegistry,
+    get_subagent_registry,
+)
 
 from backend.config import (
     ENABLE_LANGGRAPH_DEEP_REASONING,
@@ -47,7 +63,12 @@ from .contracts import (
 )
 from backend.services.langgraph_chat.runtime.state_container import ChatStateContainer
 from backend.services.langgraph_chat.execution.graph_executor import LangGraphExecutor
-from .handlers import DeepReasoningHandler, NormalChatHandler, SimpleToolHandler
+from .handlers import (
+    DeepReasoningHandler,
+    NormalChatHandler,
+    ReconAgentHandler,
+    SimpleToolHandler,
+)
 from backend.services.langgraph_chat.intent.briefs import (
     ensure_intent_brief_seed_present,
 )
@@ -104,10 +125,15 @@ class LangGraphChatFacade:
         prior_turn_reference_materializer: Optional[
             PriorTurnReferenceMaterializer
         ] = None,
+        agent_run_registry: Optional[ProcessLocalAgentRunRegistry] = None,
+        scout_launcher: Any = None,
+        agent_run_lifecycle_publisher: Any = None,
+        agent_run_result_projector: Optional[AgentRunResultProjector] = None,
         session_factory: Optional[Callable[[], Any]] = None,
         conversation_history_reader_factory: Optional[
             Callable[[Any], ConversationHistoryReader]
         ] = None,
+        subagent_registry: Optional[SubagentRegistry] = None,
     ) -> None:
         """Initialize facade with injected dependencies."""
         self._checkpointer_service = (
@@ -119,12 +145,21 @@ class LangGraphChatFacade:
         )
         self._intent_phase_streamer = IntentPhaseStreamer(self._streaming_adapter)
         self._context_builder = context_builder or LangGraphContextBuilder()
+        self._subagent_registry = subagent_registry or get_subagent_registry()
         self._intent_classifier = intent_classifier or IntentClassifier(
             client_timeout=LLM_TIMEOUT_INTENT_CLASSIFIER_SEC,
+            subagent_registry=self._subagent_registry,
         )
         self._turn_compression_service = turn_compression_service
         self._prior_turn_reference_materializer = (
             prior_turn_reference_materializer or PriorTurnReferenceMaterializer()
+        )
+        self._agent_run_registry = (
+            agent_run_registry or get_process_local_agent_run_registry()
+        )
+        self._agent_run_result_projector = (
+            agent_run_result_projector
+            or AgentRunResultProjector(registry=self._agent_run_registry)
         )
         self._session_factory = session_factory or SessionLocal
         self._conversation_history_reader_factory = (
@@ -142,7 +177,17 @@ class LangGraphChatFacade:
             ChatBranch.SIMPLE_TOOL: SimpleToolHandler(
                 self._checkpointer_service, self._executor, self._streaming_adapter
             ),
+            ChatBranch.RECON_AGENT: ReconAgentHandler(
+                self._checkpointer_service,
+                self._executor,
+                self._streaming_adapter,
+                registry=self._agent_run_registry,
+                launcher=scout_launcher,
+                lifecycle_publisher=agent_run_lifecycle_publisher,
+                result_projector=self._agent_run_result_projector,
+            ),
         }
+        self._validate_registered_subagent_handlers()
 
         self._continuation = CheckpointContinuationService(
             checkpointer_service=self._checkpointer_service,
@@ -156,6 +201,7 @@ class LangGraphChatFacade:
                 completion_callback.persist_chat_message_from_container
             ),
             build_result=facade_helpers.build_result,
+            agent_run_registry=self._agent_run_registry,
         )
 
     async def handle_turn(
@@ -176,6 +222,9 @@ class LangGraphChatFacade:
             metadata=metadata,
         )
         runtime_config.runtime_services = runtime_services
+        completed_agent_result_handoff = (
+            await self._project_completed_agent_results(runtime_config)
+        )
         deterministic_mode = bool(runtime_config.metadata.get("deterministic_mode"))
         logger.warning(
             "[FACADE] Runtime config built for task %s in %.2f ms",
@@ -370,6 +419,8 @@ class LangGraphChatFacade:
             runtime_config,
             deep_reasoning_enabled=ENABLE_LANGGRAPH_DEEP_REASONING,
             simple_tool_enabled=ENABLE_LANGGRAPH_SIMPLE_TOOL,
+            active_recon_run_exists=await self._active_recon_run_exists(runtime_config),
+            subagent_registry=self._subagent_registry,
         )
 
         handler = self._handlers.get(branch)
@@ -384,6 +435,10 @@ class LangGraphChatFacade:
             f"[FACADE] agent_mode in metadata: {runtime_config.metadata.get('agent_mode')}"
         )
         result = await handler.handle(runtime_config)
+        await self._mark_completed_agent_results_consumed(
+            runtime_config,
+            completed_agent_result_handoff,
+        )
         logger.warning(
             "[FACADE] Handler returned for task %s in %.2f ms, interrupted=%s",
             chat_inputs.task_id,
@@ -396,6 +451,100 @@ class LangGraphChatFacade:
             (time.perf_counter() - start_time) * 1000,
         )
         return result
+
+    async def _project_completed_agent_results(
+        self,
+        runtime_config: LangGraphRuntimeConfig,
+    ) -> CompletedAgentResultHandoff:
+        """Best-effort projection of completed Scout results into main context."""
+        try:
+            tenant_id = int(runtime_config.metadata.get("tenant_id"))
+        except (TypeError, ValueError):
+            return CompletedAgentResultHandoff(results=(), agent_run_ids=())
+        conversation_id = runtime_config.chat_inputs.conversation_id or ""
+        if not conversation_id:
+            return CompletedAgentResultHandoff(results=(), agent_run_ids=())
+        try:
+            handoff = await self._agent_run_result_projector.collect_for_context(
+                tenant_id=tenant_id,
+                task_id=runtime_config.chat_inputs.task_id,
+                conversation_id=conversation_id,
+            )
+            attach_completed_agent_results_to_context(
+                runtime_config.metadata,
+                handoff,
+            )
+            return handoff
+        except Exception:
+            logger.debug(
+                "Failed to project completed Scout results for task %s",
+                runtime_config.chat_inputs.task_id,
+                exc_info=True,
+            )
+            return CompletedAgentResultHandoff(results=(), agent_run_ids=())
+
+    async def _mark_completed_agent_results_consumed(
+        self,
+        runtime_config: LangGraphRuntimeConfig,
+        handoff: CompletedAgentResultHandoff,
+    ) -> None:
+        """Best-effort consume marking after the main handler accepts context."""
+        if not handoff.agent_run_ids:
+            return
+        try:
+            tenant_id = int(runtime_config.metadata.get("tenant_id"))
+        except (TypeError, ValueError):
+            return
+        try:
+            await self._agent_run_result_projector.mark_consumed(
+                tenant_id=tenant_id,
+                task_id=runtime_config.chat_inputs.task_id,
+                handoff=handoff,
+            )
+        except Exception:
+            logger.debug(
+                "Failed to mark completed Scout results consumed for task %s",
+                runtime_config.chat_inputs.task_id,
+                exc_info=True,
+            )
+
+    async def _active_recon_run_exists(
+        self,
+        runtime_config: LangGraphRuntimeConfig,
+    ) -> bool:
+        """Return whether this process already owns an active Scout for the task."""
+        tenant_id = runtime_config.metadata.get("tenant_id")
+        try:
+            resolved_tenant_id = int(tenant_id)
+        except (TypeError, ValueError):
+            return False
+        try:
+            entries = await self._agent_run_registry.list_task_runs(
+                tenant_id=resolved_tenant_id,
+                task_id=runtime_config.chat_inputs.task_id,
+            )
+        except Exception:
+            logger.debug(
+                "Failed to inspect local Scout registry for task %s",
+                runtime_config.chat_inputs.task_id,
+                exc_info=True,
+            )
+            return False
+        return any(entry.status in ACTIVE_AGENT_RUN_STATUSES for entry in entries)
+
+    def _validate_registered_subagent_handlers(self) -> None:
+        """Fail startup when an enabled registry entry has no wired handler."""
+        for spec in self._subagent_registry.specs():
+            try:
+                branch = ChatBranch(spec.dispatch_branch)
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"registered subagent has invalid dispatch branch: {spec.name}"
+                ) from exc
+            if branch not in self._handlers:
+                raise RuntimeError(
+                    f"registered subagent has no facade handler: {spec.name}"
+                )
 
     async def resume_from_interrupt(
         self,

@@ -6,7 +6,8 @@ runtime logic on wired LangGraph/backend paths.
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from copy import deepcopy
+from typing import Any, Dict, Sequence
 
 from agent.providers.llm.core.base import StructuredOutputSpec
 from backend.services.reporting.report_section_schema import (
@@ -212,6 +213,33 @@ INTENT_CLASSIFIER_STRUCTURED_OUTPUT = _spec(
                 "type": "array",
                 "items": {"type": "string"},
             },
+            "agent_handoffs": {
+                "type": "array",
+                "maxItems": 8,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "agent_handoff": {
+                            "type": "string",
+                            "enum": ["required"],
+                        },
+                        "subagent": {
+                            "type": "string",
+                            "minLength": 1,
+                        },
+                        "objective": {
+                            "type": "string",
+                            "minLength": 1,
+                        },
+                    },
+                    "required": [
+                        "agent_handoff",
+                        "subagent",
+                        "objective",
+                    ],
+                    "additionalProperties": False,
+                },
+            },
             "requested_output_format": {
                 "type": ["string", "null"],
                 "enum": ["json", "csv", "markdown", None],
@@ -338,6 +366,7 @@ INTENT_CLASSIFIER_STRUCTURED_OUTPUT = _spec(
             "label",
             "confidence",
             "suggested_capabilities",
+            "agent_handoffs",
             "requested_output_format",
             "question_type",
             "answer_style",
@@ -357,6 +386,27 @@ INTENT_CLASSIFIER_STRUCTURED_OUTPUT = _spec(
         "additionalProperties": False,
     },
 )
+
+
+def build_intent_classifier_structured_output(
+    subagent_names: Sequence[str],
+) -> StructuredOutputSpec:
+    """Build the classifier schema with registry-scoped subagent names."""
+    normalized_names = tuple(
+        dict.fromkeys(
+            name.strip().lower()
+            for name in subagent_names
+            if isinstance(name, str) and name.strip()
+        )
+    )
+    schema = deepcopy(INTENT_CLASSIFIER_STRUCTURED_OUTPUT.schema)
+    handoff_schema = schema["properties"]["agent_handoffs"]
+    subagent_schema = handoff_schema["items"]["properties"]["subagent"]
+    if normalized_names:
+        subagent_schema["enum"] = list(normalized_names)
+    else:
+        handoff_schema["maxItems"] = 0
+    return _spec("intent_classifier", schema)
 
 
 TOOL_CATEGORY_SELECTOR_STRUCTURED_OUTPUT = _spec(
@@ -957,6 +1007,7 @@ __all__ = [
     "ENGAGEMENT_REPORT_SECTION_STRUCTURED_OUTPUT",
     "GENERIC_CANDIDATE_EXTRACTOR_STRUCTURED_OUTPUT",
     "INTENT_CLASSIFIER_STRUCTURED_OUTPUT",
+    "build_intent_classifier_structured_output",
     "MEMORY_EXTRACTION_STRUCTURED_OUTPUT",
     "MEMORY_GATE_STRUCTURED_OUTPUT",
     "PLANNER_CONTRACT_STRUCTURED_OUTPUT",

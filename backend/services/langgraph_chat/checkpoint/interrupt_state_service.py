@@ -26,6 +26,7 @@ from backend.services.langgraph_chat.checkpoint.checkpointer_service import (
 from backend.services.langgraph_chat.hitl_constants import (
     DEFAULT_GRAPH_NAME,
     GRAPH_NAME_DEEP_REASONING,
+    GRAPH_NAME_SCOUT_RECON,
 )
 from backend.services.langgraph_chat.checkpoint.thread_identity import format_graph_thread_id
 
@@ -84,9 +85,13 @@ class InterruptStateService:
                 thread_id=thread_id,
             )
 
-        # Otherwise check BOTH graphs - simple_tool first, then deep_reasoning
+        # Otherwise check known HITL graphs - parent graphs first, then Scout.
         # This ensures we find interrupts regardless of which graph created them
-        for gname in [DEFAULT_GRAPH_NAME, GRAPH_NAME_DEEP_REASONING]:
+        for gname in [
+            DEFAULT_GRAPH_NAME,
+            GRAPH_NAME_DEEP_REASONING,
+            GRAPH_NAME_SCOUT_RECON,
+        ]:
             result = await self._check_graph_for_interrupt(
                 task_id,
                 gname,
@@ -121,6 +126,7 @@ class InterruptStateService:
         from agent.graph.builders.deep_reasoning_builder import (
             compile_deep_reasoning_graph,
         )
+        from agent.subagents.scout.graph import build_scout_recon_graph
 
         resolved_thread_id = (
             thread_id.strip()
@@ -134,6 +140,8 @@ class InterruptStateService:
                 # Build graph with checkpointer to enable state query
                 if graph_name == GRAPH_NAME_DEEP_REASONING:
                     compiled = compile_deep_reasoning_graph(checkpointer=checkpointer)
+                elif graph_name == GRAPH_NAME_SCOUT_RECON:
+                    compiled = build_scout_recon_graph(checkpointer=checkpointer)
                 else:
                     compiled = build_simple_tool_graph(checkpointer=checkpointer)
 
