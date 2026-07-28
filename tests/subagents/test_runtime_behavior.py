@@ -22,7 +22,6 @@ from agent.subagents.runtime.model import (
     SUBAGENT_EXECUTION_STRATEGY_KEY,
     SUBAGENT_OBSERVATION_TRANSCRIPT_KEY,
     SUBAGENT_RESULT_METADATA_KEY,
-    SubagentRuntimePromptAdapter,
     record_subagent_observation_and_budget,
     run_subagent_model_turn,
 )
@@ -37,6 +36,7 @@ from agent.subagents.runtime.state import (
     subagent_state_from_graph_state,
 )
 from agent.tools.tool_call_specs import make_function_name_for_tool
+from core.prompts.builders.subagent_runtime import SubagentRuntimePromptBuilder
 
 
 FPING_TOOL_ID = "information_gathering.network_discovery.fping"
@@ -242,8 +242,15 @@ def test_runtime_model_prompt_identity_and_boundaries_come_from_definition() -> 
         ),
     )
 
-    prompt = SubagentRuntimePromptAdapter(definition).build_system_prompt(
-        max_committed_tools_per_batch=2
+    prompt = SubagentRuntimePromptBuilder().build_system_prompt(
+        definition_id=definition.id,
+        display_name=definition.display_name,
+        role_prompt=definition.runtime_role_prompt or definition.instructions,
+        definition_instructions=definition.instructions,
+        ownership_boundary=definition.ownership_boundary,
+        boundary_rules=definition.runtime_boundary_rules
+        or (definition.ownership_boundary,),
+        max_committed_tools_per_batch=2,
     )
 
     assert prompt.startswith(

@@ -37,9 +37,6 @@ class PromptRegistry:
     _tool_planning_builders: Dict[str, BuilderFactory] = field(
         default_factory=dict, init=False
     )
-    _subagent_runtime_builders: Dict[str, BuilderFactory] = field(
-        default_factory=dict, init=False
-    )
     _singletons: Dict[Tuple[str, str], Any] = field(default_factory=dict, init=False)
     _singleton_lock: Lock = field(init=False, repr=False)
     _template_ids: Dict[TemplateId, TemplateRef] = field(
@@ -164,7 +161,6 @@ class PromptRegistry:
         from core.prompts.builders.deep_reasoning import DeepReasoningPromptBuilder
         from core.prompts.builders.post_tool import PostToolReasoningPromptBuilder
         from core.prompts.builders.simple_tool import SimpleToolPromptBuilder
-        from core.prompts.builders.subagent_runtime import SubagentRuntimePromptBuilder
         from core.prompts.builders.tool_planning import ToolPlanningPromptBuilder
 
         self.register_chat_builder("deep_reasoning", DeepReasoningPromptBuilder)
@@ -173,10 +169,6 @@ class PromptRegistry:
             "post_tool_reasoning", PostToolReasoningPromptBuilder
         )
         self.register_tool_planning_builder("tool_planning", ToolPlanningPromptBuilder)
-        self.register_subagent_runtime_builder(
-            "subagent_runtime",
-            SubagentRuntimePromptBuilder,
-        )
 
     # ------------------------------------------------------------------
     # Template getters
@@ -228,11 +220,6 @@ class PromptRegistry:
     ) -> None:
         self._tool_planning_builders[name] = factory
 
-    def register_subagent_runtime_builder(
-        self, name: str, factory: BuilderFactory
-    ) -> None:
-        self._subagent_runtime_builders[name] = factory
-
     # ------------------------------------------------------------------
     # Category-specific getters (singleton builders)
     # ------------------------------------------------------------------
@@ -245,13 +232,6 @@ class PromptRegistry:
 
     def get_tool_planning_builder(self, name: str) -> Any:
         return self._get_singleton("tool_planning", name, self._tool_planning_builders)
-
-    def get_subagent_runtime_builder(self, name: str) -> Any:
-        return self._get_singleton(
-            "subagent_runtime",
-            name,
-            self._subagent_runtime_builders,
-        )
 
     def _get_singleton(
         self,

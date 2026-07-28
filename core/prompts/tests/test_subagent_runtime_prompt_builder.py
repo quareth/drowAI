@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from core.prompts.builders.subagent_runtime import (
-    SUBAGENT_RUNTIME_PROMPT_FAMILY,
-    SUBAGENT_RUNTIME_PROMPT_TEMPLATE_IDS,
     SubagentRuntimePromptBuilder,
 )
 from core.prompts.tests._golden import assert_golden
@@ -96,24 +94,3 @@ def test_subagent_runtime_user_prompt_injects_assignment_tools_observations_and_
     assert "Remaining Limits:" in prompt
     assert "Bounded Prior Observations:" in prompt
     assert "...[truncated]" in prompt
-
-
-def test_subagent_runtime_prompt_metadata_is_stable() -> None:
-    rendered = SubagentRuntimePromptBuilder().build_prompts(
-        definition_id="pathfinder",
-        display_name="Pathfinder",
-        role_prompt="You are Pathfinder.",
-        definition_instructions="Stay within the assignment.",
-        ownership_boundary="Own recon only.",
-        boundary_rules=("Use approved scope only.",),
-        max_committed_tools_per_batch=1,
-        assignment={"objective": "Map target.", "targets": ["10.0.0.10"]},
-        tool_ids=["information_gathering.network_discovery.fping"],
-        remaining_limits={"remaining_iterations": 1},
-    )
-
-    assert rendered.prompt_family == SUBAGENT_RUNTIME_PROMPT_FAMILY
-    assert rendered.prompt_version == "v2"
-    assert rendered.prompt_template_ids == SUBAGENT_RUNTIME_PROMPT_TEMPLATE_IDS
-    assert rendered.system_prompt
-    assert rendered.user_prompt

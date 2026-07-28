@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
 from typing import Any
 
 from core.prompts.builders.tool_planning import ToolPlanningPromptBuilder
@@ -22,25 +21,10 @@ from core.runbooks.service import RunbookService
 SUBAGENT_RUNTIME_PROMPT_FAMILY = "subagent_runtime"
 SUBAGENT_RUNTIME_SYSTEM_PROMPT_ID = "subagent_runtime_system"
 SUBAGENT_RUNTIME_USER_PROMPT_ID = "subagent_runtime_user"
-SUBAGENT_RUNTIME_PROMPT_TEMPLATE_IDS = (
-    SUBAGENT_RUNTIME_SYSTEM_PROMPT_ID,
-    SUBAGENT_RUNTIME_USER_PROMPT_ID,
-)
 _MAX_PROMPT_STRING_CHARACTERS = 1_200
 _MAX_PROMPT_SEQUENCE_ITEMS = 12
 _MAX_PROMPT_MAPPING_ITEMS = 40
 _TRUNCATION_MARKER = "...[truncated]"
-
-
-@dataclass(frozen=True, slots=True)
-class RenderedSubagentRuntimePrompts:
-    """Prompt messages and version metadata for one subagent model turn."""
-
-    system_prompt: str
-    user_prompt: str
-    prompt_family: str
-    prompt_version: str
-    prompt_template_ids: tuple[str, str]
 
 
 class SubagentRuntimePromptBuilder:
@@ -132,51 +116,6 @@ class SubagentRuntimePromptBuilder:
         )
         return _ensure_trailing_newline(rendered)
 
-    def build_prompts(
-        self,
-        *,
-        definition_id: str,
-        display_name: str,
-        role_prompt: str,
-        definition_instructions: str,
-        ownership_boundary: str,
-        boundary_rules: Sequence[str],
-        max_committed_tools_per_batch: int,
-        assignment: Mapping[str, Any],
-        tool_ids: Sequence[str],
-        working_memory: Mapping[str, Any] | None = None,
-        previous_tool_summary: Mapping[str, Any] | None = None,
-        remaining_limits: Mapping[str, Any] | None = None,
-    ) -> RenderedSubagentRuntimePrompts:
-        """Return system/user prompts with the resolved prompt-family version."""
-
-        prompt_version = self._prompt_registry.get_latest_version(
-            SUBAGENT_RUNTIME_PROMPT_FAMILY
-        )
-        return RenderedSubagentRuntimePrompts(
-            system_prompt=self.build_system_prompt(
-                definition_id=definition_id,
-                display_name=display_name,
-                role_prompt=role_prompt,
-                definition_instructions=definition_instructions,
-                ownership_boundary=ownership_boundary,
-                boundary_rules=boundary_rules,
-                max_committed_tools_per_batch=max_committed_tools_per_batch,
-            ),
-            user_prompt=self.build_user_prompt(
-                display_name=display_name,
-                assignment=assignment,
-                tool_ids=tool_ids,
-                working_memory=working_memory,
-                previous_tool_summary=previous_tool_summary,
-                remaining_limits=remaining_limits,
-            ),
-            prompt_family=SUBAGENT_RUNTIME_PROMPT_FAMILY,
-            prompt_version=prompt_version,
-            prompt_template_ids=SUBAGENT_RUNTIME_PROMPT_TEMPLATE_IDS,
-        )
-
-
 def _build_tool_runbooks_section(
     runbook_service: RunbookService,
     tool_ids: Sequence[str],
@@ -246,9 +185,7 @@ def _ensure_trailing_newline(text: str) -> str:
 
 
 __all__ = [
-    "RenderedSubagentRuntimePrompts",
     "SUBAGENT_RUNTIME_PROMPT_FAMILY",
-    "SUBAGENT_RUNTIME_PROMPT_TEMPLATE_IDS",
     "SUBAGENT_RUNTIME_SYSTEM_PROMPT_ID",
     "SUBAGENT_RUNTIME_USER_PROMPT_ID",
     "SubagentRuntimePromptBuilder",

@@ -21,7 +21,7 @@ import logging
 import uuid
 from collections.abc import Callable, Mapping
 from copy import deepcopy
-from typing import Any, Sequence
+from typing import Any
 
 from agent.config import AgentConfig
 from agent.execution_strategy import ExecutionStrategy
@@ -71,58 +71,6 @@ class SubagentActionSelectionError(ValueError):
     """Raised when a subagent cannot produce a safe canonical tool batch."""
 
 
-class SubagentRuntimePromptAdapter:
-    """Bind one declarative definition to the generic runtime prompt family."""
-
-    def __init__(self, definition: SubagentDefinition) -> None:
-        self._definition = definition
-        self._delegate = SubagentRuntimePromptBuilder()
-
-    def build_system_prompt(
-        self,
-        *,
-        max_committed_tools_per_batch: int,
-    ) -> str:
-        """Return canonical shared guidance plus scheduling metadata."""
-
-        display_name = self._definition.display_name
-        role_prompt = self._definition.runtime_role_prompt
-        if role_prompt is None:
-            role_prompt = self._definition.instructions
-        boundary_rules = self._definition.runtime_boundary_rules
-        if not boundary_rules:
-            boundary_rules = (self._definition.ownership_boundary,)
-        return self._delegate.build_system_prompt(
-            definition_id=self._definition.id,
-            display_name=display_name,
-            role_prompt=role_prompt,
-            definition_instructions=self._definition.instructions,
-            ownership_boundary=self._definition.ownership_boundary,
-            boundary_rules=boundary_rules,
-            max_committed_tools_per_batch=max_committed_tools_per_batch,
-        )
-
-    def build_user_prompt(
-        self,
-        *,
-        assignment: Mapping[str, Any],
-        tool_ids: Sequence[str],
-        working_memory: Mapping[str, Any] | None = None,
-        previous_tool_summary: Mapping[str, Any] | None = None,
-        remaining_limits: Mapping[str, Any] | None = None,
-    ) -> str:
-        """Return bounded assignment context for the canonical builder rules."""
-
-        return self._delegate.build_user_prompt(
-            display_name=self._definition.display_name,
-            assignment=assignment,
-            tool_ids=tool_ids,
-            working_memory=working_memory,
-            previous_tool_summary=previous_tool_summary,
-            remaining_limits=remaining_limits,
-        )
-
-
 async def run_subagent_model_turn(
     definition: SubagentDefinition,
     state: Mapping[str, Any] | InteractiveState,
@@ -151,7 +99,11 @@ async def run_subagent_model_turn(
         function_to_tool_id = {}
         tool_choice = "none"
 
-    prompt_builder = SubagentRuntimePromptAdapter(definition)
+    prompt_builder = SubagentRuntimePromptBuilder()
+    role_prompt = definition.runtime_role_prompt or definition.instructions
+    boundary_rules = definition.runtime_boundary_rules or (
+        definition.ownership_boundary,
+    )
     resolver = llm_resolver or resolve_llm_client
     llm_client = resolver(
         interactive.facts.ensure_metadata(),
@@ -178,9 +130,16 @@ async def run_subagent_model_turn(
         result = await wait_for_with_timeout(
             llm_client.chat_with_tools_with_usage(
                 prompt_builder.build_system_prompt(
+                    definition_id=definition.id,
+                    display_name=definition.display_name,
+                    role_prompt=role_prompt,
+                    definition_instructions=definition.instructions,
+                    ownership_boundary=definition.ownership_boundary,
+                    boundary_rules=boundary_rules,
                     max_committed_tools_per_batch=max_committed_calls,
                 ),
                 prompt_builder.build_user_prompt(
+                    display_name=definition.display_name,
                     assignment=subagent.assignment.model_dump(mode="json"),
                     tool_ids=subagent.tool_profile.tool_ids,
                     working_memory=_bounded_mapping(
@@ -790,7 +749,6 @@ __all__ = [
     "SUBAGENT_OBSERVATION_TRANSCRIPT_KEY",
     "SUBAGENT_RESULT_METADATA_KEY",
     "SubagentActionSelectionError",
-    "SubagentRuntimePromptAdapter",
     "record_subagent_observation_and_budget",
     "run_subagent_model_turn",
 ]
