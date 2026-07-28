@@ -80,6 +80,10 @@ The Knowledge workspace does not own:
 - **Canonical fact compiler:** `runtime_shared/semantic/pentest_facts/*`
   - Validates semantic envelopes and compiles backend-free canonical pentest
     facts.
+- **Shared web identity authority:** `runtime_shared/semantic/web_common.py`
+  - Owns URL normalization, web origin keys, web response observation helpers,
+    and finding subject keys shared by runtime semantics, canonical fact
+    admission, Knowledge web-path projection, and web-surface query grouping.
 - **Knowledge fact bridge:** `backend/services/knowledge/pentest_facts/bridge.py`
   - Attaches archive-scoped evidence and backend lineage to compiled facts and
     creates normalized `ObservationCreate` values.
@@ -237,7 +241,9 @@ Canonical read models:
 - `KnowledgeService`: tenant/user-owned service records.
 - `KnowledgeFinding`: tenant/user-owned finding records.
 - `KnowledgeRelationship`: tenant/user-owned relationship records.
-- `KnowledgeWebPath`: tenant/user-owned canonical web path records.
+- `KnowledgeWebPath`: tenant/user-owned canonical web path records whose
+  canonical URL and origin identity come from shared web identity helpers, not
+  backend-local Knowledge helpers.
 
 Engagement lens tables:
 
@@ -303,8 +309,11 @@ flowchart LR
    execution, ingestion-run, archive, and timestamp context.
 4. The shared compiler validates deterministic semantic rows, applies durable
    masking, records accepted/duplicate/rejected/diagnostic counts, and returns
-   canonical facts. The Knowledge bridge attaches archive-scoped evidence
-   references and produces normalized `ObservationCreate` values.
+   canonical facts. Web URL, origin, and finding subject identity are delegated
+   to `runtime_shared/semantic/web_common.py`, which is also used by runtime
+   semantic emitters and Knowledge consumers. The Knowledge bridge attaches
+   archive-scoped evidence references and produces normalized
+   `ObservationCreate` values.
 5. Optional candidate extraction runs as a separate policy-controlled path. It
    may add candidate observations, but it is not a fallback deterministic fact
    authority.
@@ -315,7 +324,11 @@ flowchart LR
    `observation_count_by_type`, and projection counts.
 7. `KnowledgeProjectionService` resolves canonical identities and upserts
    assets, services, findings, relationships, web paths, and engagement link
-   rows through focused projectors.
+   rows through focused projectors. Web-path projection and web-surface query
+   grouping use `build_web_origin_key()` from
+   `runtime_shared.semantic.web_common`; the retired backend-local
+   `backend/services/knowledge/web_common.py` helper and retired Knowledge
+   deterministic adapters are not active wired owners.
 8. The query service reads the projected models and shapes tab payloads for the
    frontend.
 9. Local queued ingestion calls

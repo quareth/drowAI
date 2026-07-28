@@ -452,20 +452,47 @@ Consumer classification:
 Tools that produce durable deterministic Knowledge facts own the tool-specific
 work up to native parsing, semantic observation emission, and semantic evidence
 emission. They should emit final canonical semantic rows from parsed native
-results when the fact is supported by the tool's evidence and policy.
+results when the fact is supported by the shared evidence and admission policy.
 
 Backend Knowledge does not own tool-specific parsing or recovery. Runtime and
 replay ingestion consume the existing semantic input envelope through
-`KnowledgeIngestionService`, `runtime_shared/semantic/pentest_facts/*`, and
+`KnowledgeIngestionService`, `runtime_shared/semantic/pentest_facts/*`,
+`runtime_shared/semantic/web_common.py`, and
 `backend/services/knowledge/pentest_facts/bridge.py`. New or updated tools
 should not add per-tool Knowledge adapters, Knowledge-side metadata parsers,
 artifact-content fallbacks, compatibility shims, or tool-id branches in the
 compiler or bridge.
 
-The same compiled canonical fact set is the source for pentest deterministic
-compact projection. A tool that emits an already-supported fact family needs no
-Knowledge adapter, compact adapter, registry entry, or compressor import. If a
-new fact family is needed, extend the semantic contract, compiler policy,
+The semantic envelope is the shared input, and
+`runtime_shared.semantic.pentest_facts.compile_facts()` is the shared
+backend-free compiler authority. Backend Knowledge and pentest deterministic
+compact projection are independent production consumers of that input:
+`backend/services/knowledge/pentest_facts/bridge.py` compiles before emitting
+Knowledge observation DTOs, while `agent/graph/compression/compressor.py`
+builds its own envelope from runtime semantic inputs and compiles before compact
+fact-family projection. No shared compiled instance, Knowledge DTO, compact DTO,
+or consumer adapter crosses the backend/agent consumer boundary.
+
+`runtime_shared/semantic/pentest_facts/evidence.py` owns the closed semantic
+evidence vocabulary, per-type and global bounds, detail schemas, normalization,
+and secret-safe rejection diagnostics. New evidence types or evidence detail
+rules are added there rather than in tool emitters, Knowledge adapters, compact
+adapters, or raw/artifact fallback code.
+
+`runtime_shared/semantic/pentest_facts/policy.py` owns the exact supported
+observation/subject pairs, fact families, assertion levels, canonical subject
+invariants, and durable payload masking for admitted facts. New fact-family
+admission rules, canonical subject invariants, assertion behavior, or durable
+masking behavior are extended there before downstream consumers project the
+compiled facts.
+
+`runtime_shared/semantic/web_common.py` owns shared web URL, origin, path, and
+finding identity helpers used by runtime-image tool semantics and backend
+Knowledge projection/read paths without backend imports.
+
+A tool that emits an already-supported fact family needs no Knowledge adapter,
+compact adapter, registry entry, or compressor import. If a new fact family is
+needed, extend the semantic contract, evidence and policy authorities, compiler,
 Knowledge bridge, and compact fact-family presentation directly rather than
 adding tool-specific downstream interpretation.
 
@@ -496,10 +523,10 @@ Tool-specific validation maturity is documented in
 | `web_applications.web_crawlers.ffuf` | Uses a planner-facing schema and compiler, materializes inline wordlists, parses ffuf JSON/text into crawler metadata, emits semantic observations/evidence, and projects supported web-path facts through the canonical fact pipeline. |
 | `sniffing_spoofing.network_sniffers.tshark` | Uses bounded analysis modes, structured JSON capture, PCAP compaction, semantic observations/evidence, sanitized process rendering, and projects supported packet-derived facts through the canonical fact pipeline. |
 | `information_gathering.network_discovery.fping` | Parses liveness output into alive/unresponsive/diagnostic metadata, emits host-discovered observations, and projects supported asset facts through the canonical fact pipeline. |
-| `information_gathering.web_enumeration.http_request` | Builds argv-only curl commands, parses status/headers/body metadata, redacts sensitive output, persists artifacts when needed, and contributes bounded metadata to compact output when no supported semantic fact family applies. |
+| `information_gathering.web_enumeration.http_request` | Builds argv-only curl commands, parses status/headers/body metadata, redacts sensitive output, persists artifacts when needed, and emits a canonical web-path fact for confirmed HTTP responses plus host/service facts when the effective URL is IP-backed. |
 | `information_gathering.web_enumeration.http_download` | Enforces workspace-safe downloads, parses curl write-out metadata, validates runtime output files, verifies integrity fields, and contributes bounded metadata to compact output when no supported semantic fact family applies. |
 | `networking_utilities.network` | Exposes a finite non-shell utility surface, validates operation-specific args, parses bounded utility output, and uses generic metadata compact projection as a utility catalog-role tool. |
-| `exploitation_tools.metasploit.search_modules` / `inspect_module` / `run_exploit` | Use the narrow msfconsole wrapper surface and parse msfconsole output into module/session/error metadata. They are finished for the current narrow wrapper scope, not for full interactive session semantics. |
+| `exploitation_tools.metasploit.search_modules` / `inspect_module` / `run_exploit` | Use the narrow msfconsole wrapper surface and parse output into module/session/error metadata. Search and inspection stay metadata-only; `run_exploit` emits `finding.exploit_succeeded` and, when a source endpoint is known, `relationship.exploits` only after explicit success. They are finished for the current narrow wrapper scope, not for full interactive session semantics. |
 
 Visible support tools with deterministic projection:
 
@@ -522,7 +549,9 @@ Hidden tools with partial completion work already present:
 | --- | --- | --- |
 | `password_attacks.online_attacks.hydra` | Hidden from catalog; has parser and semantic observations. | Decide visibility policy, ensure planner schema/guidance is safe, add visible-catalog coverage tests before exposing, and verify supported credential facts compile through the canonical fact pipeline. |
 | `web_applications.web_application_fuzzers.ffuf` | Hidden; has parser, postprocess hook, semantic observations/evidence, and capture contract. | Decide visibility policy and verify its emitted fact families are supported by Knowledge and compact projection. |
+| `web_applications.web_crawlers.gobuster` | Hidden; has parser-owned metadata and emits canonical web-path observations from parsed Gobuster findings. | Decide visibility policy, confirm crawler scope/runbook guardrails, add visible-catalog coverage tests before exposing, and verify supported web-path facts compile through the canonical fact pipeline. |
 | `web_applications.web_vulnerability_scanners.nuclei` | Hidden; has JSONL capture, parser, semantic observations/evidence. | Decide visibility/runbook policy and verify supported finding facts compile through the canonical fact pipeline. |
+| `web_applications.web_vulnerability_scanners.sqlmap` | Hidden; has text-native parsing, semantic metadata fields, and confirmed SQL injection semantic observations. | Decide visibility/runbook policy, confirm planner schema/guidance is safe for injection testing, add visible-catalog coverage tests before exposing, and verify supported finding facts compile through the canonical fact pipeline. |
 | `information_gathering.network_discovery.masscan` | Hidden; has structured JSON capture, parser, and semantic observations. | Decide whether broad/high-speed scan behavior should be planner-visible and verify supported asset/service facts compile through the canonical fact pipeline. |
 
 ## How To Finish Another Tool
