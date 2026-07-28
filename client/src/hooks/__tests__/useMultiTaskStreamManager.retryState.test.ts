@@ -199,6 +199,42 @@ describe("useMultiTaskStreamManager retry_state handling", () => {
     });
   });
 
+  it("does not apply Scout child retry_state packets to the main retry store", async () => {
+    const resetSpy = vi.spyOn(chatStreamStore, "resetTaskStreamForResync");
+    renderHook(() =>
+      useMultiTaskStreamManager({ taskIds: [TASK_ID], enabled: true }),
+    );
+
+    expect(sockets).toHaveLength(1);
+    sockets[0].open();
+    sockets[0].emitMessage({ type: "subscribed", taskId: TASK_ID });
+
+    emitRetryState(sockets[0], 55, {
+      turn_id: "child-turn-1",
+      workflow_id: 14,
+      checkpoint_id: "ckpt-child",
+      retry_mode: "checkpoint",
+      retry_attempt: 1,
+      retry_max_attempts: 2,
+      graph_name: "scout_recon",
+      state: "started",
+      transcript_resync_required: true,
+      producer_type: "subagent",
+      agent_run_id: "scout-run-1",
+      agent_kind: "recon",
+      agent_display_name: "Scout",
+      parent_turn_id: "turn-parent",
+      parent_run_id: "parent-run-1",
+      lifecycle_version: 2,
+      internal_only: false,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(getRetryStateForTurn(TASK_ID, "child-turn-1")).toBeNull();
+    expect(resetSpy).not.toHaveBeenCalled();
+  });
+
   it("dispatches a task-retry-state compatibility event with canonical identity", async () => {
     renderHook(() =>
       useMultiTaskStreamManager({ taskIds: [TASK_ID], enabled: true }),

@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   applyStreamMessage,
@@ -16,6 +17,7 @@ import {
   setHistoryLoading,
   setTaskHistory,
   setTranscriptPaginationState,
+  terminalizeAgentRunStreams,
   tryStartHistoryLoading,
 } from "@/state/chat-stream-store";
 import type { Step } from "@/utils/reasoning-normalizer";
@@ -31,6 +33,219 @@ afterEach(() => {
 });
 
 describe("chat-stream-store persistence contracts", () => {
+  it("projects a parent assistant terminal into task run completion", () => {
+    const listener = vi.fn();
+    window.addEventListener("task-run-state", listener);
+
+    applyStreamMessage(TASK_ID, {
+      type: "assistant_final",
+      content: "finished",
+      metadata: {
+        id: "turn-parent",
+        subtype: "assistant_final",
+        streaming: false,
+      },
+    });
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect((listener.mock.calls[0][0] as CustomEvent).detail).toMatchObject({
+      taskId: TASK_ID,
+      state: "completed",
+      turnId: "turn-parent",
+    });
+    window.removeEventListener("task-run-state", listener);
+  });
+
+  it("does not project a child assistant terminal into parent run completion", () => {
+    const listener = vi.fn();
+    window.addEventListener("task-run-state", listener);
+
+    applyStreamMessage(TASK_ID, {
+      type: "assistant_final",
+      content: "child finished",
+      metadata: {
+        id: "turn-parent",
+        subtype: "assistant_final",
+        streaming: false,
+        producer_type: "subagent",
+        agent_run_id: "scout-1",
+      },
+    });
+
+    expect(listener).not.toHaveBeenCalled();
+    window.removeEventListener("task-run-state", listener);
+  });
+
+  it("closes only the matching subagent answer when its message section ends", () => {
+    const messageDelta = (agentRunId: string, content: string): Step => ({
+      type: "message_delta",
+      content,
+      metadata: {
+        id: "shared-parent-turn",
+        turn_sequence: 9,
+        step_type: "message_delta",
+        streaming: true,
+        producer_type: "subagent",
+        agent_run_id: agentRunId,
+        agent_kind: "recon",
+      },
+    });
+
+    applyStreamMessage(TASK_ID, messageDelta("scout-a", "first answer"));
+    applyStreamMessage(TASK_ID, messageDelta("scout-b", "second answer"));
+    applyStreamMessage(TASK_ID, {
+      type: "section_end",
+      content: "",
+      metadata: {
+        id: "shared-parent-turn",
+        turn_sequence: 9,
+        step_type: "message_section_end",
+        streaming: false,
+        producer_type: "subagent",
+        agent_run_id: "scout-a",
+        agent_kind: "recon",
+      },
+    });
+
+    let snapshot = getTaskStreamSnapshot(TASK_ID);
+    const scoutA = snapshot.items.find(
+      (item) => item.metadata?.agent_run_id === "scout-a" && item.type === "message_delta",
+    );
+    const scoutB = snapshot.items.find(
+      (item) => item.metadata?.agent_run_id === "scout-b" && item.type === "message_delta",
+    );
+    expect(scoutA?.isStreaming).toBe(false);
+    expect(scoutB?.isStreaming).toBe(true);
+    expect(snapshot.hasStreaming).toBe(true);
+
+    applyStreamMessage(TASK_ID, {
+      type: "section_end",
+      content: "",
+      metadata: {
+        id: "shared-parent-turn",
+        turn_sequence: 9,
+        step_type: "message_section_end",
+        streaming: false,
+      },
+    });
+    snapshot = getTaskStreamSnapshot(TASK_ID);
+    expect(
+      snapshot.items.find(
+        (item) => item.metadata?.agent_run_id === "scout-b" && item.type === "message_delta",
+      )?.isStreaming,
+    ).toBe(true);
+
+    applyStreamMessage(TASK_ID, {
+      type: "section_end",
+      content: "",
+      metadata: {
+        id: "shared-parent-turn",
+        turn_sequence: 9,
+        step_type: "message_section_end",
+        streaming: false,
+        producer_type: "subagent",
+        agent_run_id: "scout-b",
+        agent_kind: "recon",
+      },
+    });
+
+    snapshot = getTaskStreamSnapshot(TASK_ID);
+    expect(snapshot.hasStreaming).toBe(false);
+  });
+
+  it("terminalizes only open streams for the matching subagent run", () => {
+    const subagentStep = (
+      agentRunId: string,
+      type: string,
+      content: string,
+      extra: Record<string, unknown> = {},
+    ): Step => ({
+      type,
+      content,
+      metadata: {
+        id: "shared-child-turn",
+        turn_sequence: 9,
+        step_type: type,
+        streaming: true,
+        producer_type: "subagent",
+        agent_run_id: agentRunId,
+        agent_kind: "recon",
+        ...extra,
+      },
+      isStreaming: true,
+    });
+
+    applyStreamMessage(
+      TASK_ID,
+      subagentStep("scout-a", "reasoning_delta", "a reasoning", {
+        ind: 0,
+        reasoning_section_id: "scout-a:reasoning:0",
+      }),
+    );
+    applyStreamMessage(
+      TASK_ID,
+      subagentStep("scout-a", "message_delta", "a answer", { ind: 2 }),
+    );
+    applyStreamMessage(
+      TASK_ID,
+      subagentStep("scout-b", "observation_delta", "b observation", { ind: 3 }),
+    );
+
+    terminalizeAgentRunStreams(TASK_ID, "scout-a", 30);
+
+    const snapshot = getTaskStreamSnapshot(TASK_ID);
+    const scoutAItems = snapshot.items.filter(
+      item => item.metadata?.agent_run_id === "scout-a",
+    );
+    const scoutBObservation = snapshot.items.find(
+      item => item.metadata?.agent_run_id === "scout-b",
+    );
+    expect(scoutAItems.every(item => item.isStreaming !== true)).toBe(true);
+    expect(
+      scoutAItems.some(
+        item => item.metadata?.step_type === "reasoning_section_end" &&
+          item.metadata?.terminalized_by_agent_run_lifecycle === true,
+      ),
+    ).toBe(true);
+    expect(
+      scoutAItems.some(
+        item => item.metadata?.step_type === "message_section_end" &&
+          item.metadata?.terminalized_by_agent_run_lifecycle === true,
+      ),
+    ).toBe(true);
+    expect(scoutBObservation?.isStreaming).toBe(true);
+    expect(snapshot.hasStreaming).toBe(true);
+  });
+
+  it("keeps generic subagent run identities from merging stream keys", () => {
+    const genericReasoning = (agentRunId: string, agentKind: string, content: string): Step => ({
+      type: "reasoning_delta",
+      content,
+      metadata: {
+        id: "shared-child-turn",
+        turn_sequence: 11,
+        ind: 0,
+        step_type: "reasoning_delta",
+        reasoning_section_id: "shared-child-turn:reasoning:0",
+        streaming: true,
+        producer_type: "subagent",
+        agent_run_id: agentRunId,
+        agent_kind: agentKind,
+      },
+      isStreaming: true,
+    });
+
+    applyStreamMessage(TASK_ID, genericReasoning("research-run-1", "research", "researching"));
+    applyStreamMessage(TASK_ID, genericReasoning("review-run-1", "review", "reviewing"));
+
+    const reasoningItems = snapshotItems().filter(item => item.type === "reasoning_delta");
+    expect(reasoningItems).toHaveLength(2);
+    expect(reasoningItems.map(item => item.content).sort()).toEqual([
+      "researching",
+      "reviewing",
+    ]);
+  });
+
   it("treats assistant_final as a task-local terminal boundary", () => {
     applyStreamMessage(TASK_ID, {
       type: "reasoning_delta",

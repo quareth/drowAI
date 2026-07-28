@@ -443,6 +443,10 @@ function dispatchRuntimeCompatibilityEvent(
                       ? "todo_progress"
                       : null;
 
+  if (shouldSuppressChildMainCompatibilityEvent(metadata, eventKind)) {
+    return;
+  }
+
   const normalizeTodoStatus = (
     value: unknown,
   ): "pending" | "in_progress" | "completed" | "skipped" => {
@@ -693,6 +697,31 @@ function dispatchRuntimeCompatibilityEvent(
       }),
     );
   }
+}
+
+function shouldSuppressChildMainCompatibilityEvent(
+  metadata: Record<string, unknown>,
+  eventKind: string | null,
+): boolean {
+  if (!isScoutAgentRunMetadata(metadata)) {
+    return false;
+  }
+  return (
+    eventKind === "plan_created" ||
+    eventKind === "todo_progress" ||
+    eventKind === "retry_state" ||
+    eventKind === "checkpoint_rewind_state" ||
+    eventKind === "run_state"
+  );
+}
+
+function isScoutAgentRunMetadata(metadata: Record<string, unknown>): boolean {
+  return (
+    metadata.producer_type === "subagent" &&
+    typeof metadata.agent_run_id === "string" &&
+    metadata.agent_run_id.trim().length > 0 &&
+    metadata.agent_kind === "recon"
+  );
 }
 
 export function useMultiTaskStreamManager({

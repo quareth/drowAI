@@ -11,6 +11,7 @@ import {
   getTaskStreamSnapshot,
   setChatReadyState,
 } from "@/state/chat-stream-store";
+import { resetAgentRunStoreForTests } from "@/features/agent-runs/state/agent-stream-store";
 import {
   getContextCompactionGate,
   resetContextWindowStoreForTests,
@@ -125,6 +126,7 @@ beforeEach(() => {
 afterEach(() => {
   clearTaskState(TASK_ID);
   clearTaskState(TASK_B);
+  resetAgentRunStoreForTests();
   resetContextWindowStoreForTests();
   ensureTestLocalStorage().removeItem("access_token");
   vi.unstubAllGlobals();
@@ -528,6 +530,46 @@ describe("useMultiTaskStreamManager full packet ingestion", () => {
     window.removeEventListener("task-plan-created", listener);
   });
 
+  it("does not emit main plan compatibility events for Scout child plan packets", async () => {
+    renderHook(() => useMultiTaskStreamManager({ taskIds: [TASK_ID], enabled: true }));
+
+    expect(sockets).toHaveLength(1);
+    sockets[0].open();
+    sockets[0].emitMessage({ type: "subscribed", taskId: TASK_ID });
+
+    const listener = vi.fn();
+    window.addEventListener("task-plan-created", listener);
+
+    sockets[0].emitMessage({
+      type: "agent_reasoning",
+      taskId: TASK_ID,
+      sequence: 33,
+      packet: {
+        placement: { turn_index: 2, tab_index: 1 },
+        obj: {
+          type: "plan_created",
+          goal: "Child plan",
+          plan_steps: ["Scan"],
+          metadata: {
+            producer_type: "subagent",
+            agent_run_id: "scout-run-1",
+            agent_kind: "recon",
+            agent_display_name: "Scout",
+            parent_turn_id: "turn-parent",
+            parent_run_id: "parent-run-1",
+            lifecycle_version: 2,
+            internal_only: false,
+          },
+        },
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(listener).not.toHaveBeenCalled();
+    window.removeEventListener("task-plan-created", listener);
+  });
+
   it("emits task-todo-progress compatibility event for todo_progress packets", async () => {
     renderHook(() => useMultiTaskStreamManager({ taskIds: [TASK_ID], enabled: true }));
 
@@ -581,6 +623,66 @@ describe("useMultiTaskStreamManager full packet ingestion", () => {
     });
 
     window.removeEventListener("task-todo-progress", listener);
+  });
+
+  it("keeps Scout graph interrupts on the current task HITL event path", async () => {
+    renderHook(() => useMultiTaskStreamManager({ taskIds: [TASK_ID], enabled: true }));
+
+    expect(sockets).toHaveLength(1);
+    sockets[0].open();
+    sockets[0].emitMessage({ type: "subscribed", taskId: TASK_ID });
+
+    let eventDetail: Record<string, unknown> | null = null;
+    const listener = (event: Event) => {
+      eventDetail = (event as CustomEvent<Record<string, unknown>>).detail;
+    };
+    window.addEventListener("graph-interrupt", listener);
+
+    sockets[0].emitMessage({
+      type: "agent_reasoning",
+      taskId: TASK_ID,
+      sequence: 34,
+      packet: {
+        placement: { turn_index: 2, tab_index: 1 },
+        obj: {
+          type: "graph_interrupt",
+          task_id: TASK_ID,
+          thread_id: "graph-scout",
+          interrupt_id: "interrupt-1",
+          checkpoint_id: "checkpoint-1",
+          interrupt_type: "tool_approval",
+          graph_name: "scout_recon",
+          payload: {
+            type: "tool_approval",
+            items: [],
+            reason: "approval needed",
+          },
+          metadata: {
+            producer_type: "subagent",
+            agent_run_id: "scout-run-1",
+            agent_kind: "recon",
+            agent_display_name: "Scout",
+            parent_turn_id: "turn-parent",
+            parent_run_id: "parent-run-1",
+            lifecycle_version: 2,
+            internal_only: false,
+          },
+        },
+      },
+    });
+
+    await waitFor(() => {
+      expect(eventDetail).toMatchObject({
+        taskId: TASK_ID,
+        threadId: "graph-scout",
+        interruptId: "interrupt-1",
+        checkpointId: "checkpoint-1",
+        interruptType: "tool_approval",
+        graphName: "scout_recon",
+      });
+    });
+
+    window.removeEventListener("graph-interrupt", listener);
   });
 
   it("projects mixed task states when one task is subscribed and another is rejected", async () => {

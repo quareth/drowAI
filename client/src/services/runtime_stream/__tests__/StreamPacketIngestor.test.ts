@@ -5,6 +5,10 @@ import {
   getLastSequence,
   getTaskStreamSnapshot,
 } from "@/state/chat-stream-store";
+import {
+  getAgentRunSnapshot,
+  resetAgentRunStoreForTests,
+} from "@/features/agent-runs/state/agent-stream-store";
 import { groupMessages } from "@/hooks/useMessageGrouping";
 import type { RuntimeAgentReasoningEnvelope } from "../types";
 import { StreamPacketIngestor } from "../StreamPacketIngestor";
@@ -22,6 +26,7 @@ function envelope(packet: Record<string, unknown>, sequence = 10): RuntimeAgentR
 
 afterEach(() => {
   clearTaskState(TASK_ID);
+  resetAgentRunStoreForTests();
 });
 
 describe("StreamPacketIngestor", () => {
@@ -144,6 +149,125 @@ describe("StreamPacketIngestor", () => {
     expect(reasoning?.sequence).toBe(42);
     expect(reasoning?.task_id).toBe(TASK_ID);
     expect(getLastSequence(TASK_ID)).toBe(42);
+  });
+
+  it("hydrates Scout lifecycle into the agent store and leaves a main-card event", () => {
+    const ingestor = new StreamPacketIngestor();
+
+    const ok = ingestor.ingestEnvelope(
+      envelope(
+        {
+          type: "status",
+          content: "agent_run_lifecycle",
+          task_id: TASK_ID,
+          metadata: {
+            subtype: "agent_run_lifecycle",
+            producer_type: "subagent",
+            agent_run_id: "scout-run-1",
+            agent_kind: "recon",
+            agent_display_name: "Scout",
+            parent_turn_id: "turn-parent",
+            parent_run_id: "parent-run-1",
+            lifecycle_version: 1,
+            internal_only: false,
+          },
+          agent_run: {
+            agent_run_id: "scout-run-1",
+            agent_kind: "recon",
+            agent_display_name: "Scout",
+            status: "running",
+            lifecycle_version: 1,
+            task_id: TASK_ID,
+            conversation_id: "conv-1",
+            parent_turn_id: "turn-parent",
+            parent_run_id: "parent-run-1",
+            assignment: null,
+            result: null,
+            safe_error: null,
+          },
+        },
+        43,
+      ),
+    );
+
+    expect(ok).toBe(true);
+    const run = getAgentRunSnapshot(TASK_ID).runsById["scout-run-1"];
+    expect(run.status).toBe("running");
+    expect(run.lifecycleVersion).toBe(1);
+    expect(getAgentRunSnapshot(TASK_ID).presentation.isOpen).toBe(false);
+    expect(getTaskStreamSnapshot(TASK_ID).items.map((item) => item.type)).toContain("status");
+    expect(getLastSequence(TASK_ID)).toBe(43);
+  });
+
+  it("normalizes Scout activity through chat state while retaining agent attribution", () => {
+    const ingestor = new StreamPacketIngestor();
+
+    const ok = ingestor.ingestEnvelope(
+      envelope(
+        {
+          placement: { turn_index: 7, tab_index: 1 },
+          obj: {
+            type: "tool_start",
+            content: "running nmap",
+            metadata: {
+              id: "child-turn",
+              ind: 1,
+              step_type: "tool_start",
+              producer_type: "subagent",
+              agent_run_id: "scout-run-1",
+              agent_kind: "recon",
+              agent_display_name: "Scout",
+              parent_turn_id: "turn-parent",
+              parent_run_id: "parent-run-1",
+              tool_call_id: "tool-1",
+              lifecycle_version: 2,
+              internal_only: false,
+            },
+          },
+        },
+        44,
+      ),
+    );
+
+    expect(ok).toBe(true);
+    const run = getAgentRunSnapshot(TASK_ID).runsById["scout-run-1"];
+    expect(run.activity).toHaveLength(1);
+    expect(run.activity[0].sequence).toBe(44);
+    expect(getTaskStreamSnapshot(TASK_ID).items.map((item) => item.type)).toContain(
+      "tool_start",
+    );
+    expect(getLastSequence(TASK_ID)).toBe(44);
+  });
+
+  it("does not suppress malformed Scout attribution from the main transcript", () => {
+    const ingestor = new StreamPacketIngestor();
+
+    const ok = ingestor.ingestEnvelope(
+      envelope(
+        {
+          placement: { turn_index: 8, tab_index: 1 },
+          obj: {
+            type: "tool_start",
+            content: "running tool",
+            metadata: {
+              id: "turn-malformed",
+              ind: 1,
+              step_type: "tool_start",
+              producer_type: "subagent",
+              agent_kind: "recon",
+              agent_display_name: "Scout",
+              tool_call_id: "tool-malformed",
+            },
+          },
+        },
+        45,
+      ),
+    );
+
+    expect(ok).toBe(true);
+    expect(getAgentRunSnapshot(TASK_ID).runs).toHaveLength(0);
+    expect(getTaskStreamSnapshot(TASK_ID).items.map((item) => item.type)).toContain("tool_start");
+    expect(getLastSequence(TASK_ID)).toBe(45);
   });
 
   it("keeps live interleaved reasoning after observations in stream order", () => {

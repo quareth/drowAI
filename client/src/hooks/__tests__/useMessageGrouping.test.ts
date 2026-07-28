@@ -2,7 +2,7 @@ import type { ChatMessage } from '@/components/chat/types';
 import { describe, it, expect } from 'vitest';
 
 import { groupMessages } from '@/hooks/useMessageGrouping';
-import { STEP_COMPARATOR } from '@/utils/reasoning-normalizer';
+import { deriveStepKey, STEP_COMPARATOR } from '@/utils/reasoning-normalizer';
 import type { Step } from '@/utils/reasoning-normalizer';
 
 function buildMessage(
@@ -18,6 +18,29 @@ function buildMessage(
 }
 
 describe('groupMessages', () => {
+  it('namespaces valid Scout step keys by agent run id', () => {
+    const baseStep: Step = {
+      type: 'tool_start',
+      content: '',
+      metadata: {
+        step_type: 'tool_start',
+        tool_call_id: 'tool-1',
+      },
+    } as Step;
+    const scoutStep: Step = {
+      ...baseStep,
+      metadata: {
+        ...baseStep.metadata,
+        producer_type: 'subagent',
+        agent_run_id: 'scout-run-1',
+        agent_kind: 'recon',
+      },
+    } as Step;
+
+    expect(deriveStepKey(baseStep)).toBe('tool-tool-1-tool_start');
+    expect(deriveStepKey(scoutStep)).toBe('agent-run-scout-run-1::tool-tool-1-tool_start');
+  });
+
   it('orders groups by turn sequence and semantic phase (reasoning -> tool -> observation -> message)', () => {
     const messages: ChatMessage[] = [
       buildMessage({
