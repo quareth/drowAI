@@ -10,7 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 from agent.semantic.enrichment import validate_semantic_evidence_entries
-from agent.semantic.evidence_vocabulary import SemanticEvidenceType
+from runtime_shared.semantic.pentest_facts import SemanticEvidenceType
 from agent.tools.canonical_capture import CanonicalCaptureFormat, CaptureFamily
 from agent.tools.sniffing_spoofing.network_sniffers import tshark as tshark_module
 from agent.tools.sniffing_spoofing.network_sniffers import tshark_semantics

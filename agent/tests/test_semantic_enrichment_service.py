@@ -8,7 +8,7 @@ from agent.semantic.enrichment import (
     extract_runtime_semantic_inputs_with_fallback,
     validate_semantic_evidence_entries,
 )
-from agent.semantic.evidence_vocabulary import SemanticEvidenceType
+from runtime_shared.semantic.pentest_facts import SemanticEvidenceType
 
 
 def test_build_runtime_semantic_metadata_merges_parsed_existing_and_observations() -> None:

@@ -24,7 +24,7 @@ import ipaddress
 import xml.etree.ElementTree as ET
 from typing import TYPE_CHECKING, Any, Mapping, Optional
 
-from agent.semantic.evidence_vocabulary import SemanticEvidenceType
+from runtime_shared.semantic.pentest_facts import SemanticEvidenceType
 from runtime_shared.semantic.canonical_keys import build_finding_vulnerability_key
 from runtime_shared.semantic.network_common import normalize_service_version
 from runtime_shared.semantic.service_identity import build_service_socket_key

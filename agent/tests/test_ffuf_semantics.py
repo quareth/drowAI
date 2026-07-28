@@ -9,7 +9,7 @@ from types import SimpleNamespace
 
 from agent.context.tool_processor import UniversalToolProcessor
 from agent.semantic.enrichment import validate_semantic_evidence_entries
-from agent.semantic.evidence_vocabulary import SemanticEvidenceType
+from runtime_shared.semantic.pentest_facts import SemanticEvidenceType
 from agent.tool_runtime.result_enrichment import merge_semantic_emitter_metadata
 from agent.tools.information_gathering.web_enumeration.contracts import HttpRequestArgs
 from agent.tools.information_gathering.web_enumeration.http_request import HttpRequestTool

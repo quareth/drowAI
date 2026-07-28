@@ -1,9 +1,8 @@
-"""Contract tests for semantic evidence vocabulary and validator behavior."""
+"""Contract tests for shared semantic evidence and the agent adapter."""
 
 from __future__ import annotations
 
 from copy import deepcopy
-import inspect
 
 import pytest
 
@@ -12,11 +11,13 @@ from agent.semantic.enrichment import (
     render_semantic_observations_for_prompt,
     validate_semantic_evidence_entries,
 )
-from agent.semantic.evidence_vocabulary import (
+from runtime_shared.semantic.pentest_facts import (
+    FactDiagnostic,
     SemanticEvidenceType,
     get_evidence_detail_schema,
     get_evidence_per_type_limit,
     get_semantic_evidence_global_limit,
+    validate_semantic_evidence,
 )
 
 
@@ -84,7 +85,7 @@ def test_global_cap_respected(monkeypatch: pytest.MonkeyPatch) -> None:
         evidence_type: 100 for evidence_type in SemanticEvidenceType
     }
     monkeypatch.setattr(
-        "agent.semantic.evidence_vocabulary.EVIDENCE_PER_TYPE_LIMIT",
+        "runtime_shared.semantic.pentest_facts.evidence.EVIDENCE_PER_TYPE_LIMIT",
         patched_limits,
     )
     entries = [
@@ -266,11 +267,29 @@ def test_per_type_caps_fit_runtime_global_limit() -> None:
     )
 
 
-def test_policy_order_per_type_before_global_cap() -> None:
-    source = inspect.getsource(validate_semantic_evidence_entries)
-    per_type_guard = "if per_type_counts[entry_type] >= evidence_per_type_limit[entry_type]:"
-    global_guard = "if len(valid_entries) >= semantic_evidence_limit:"
-    assert source.index(per_type_guard) < source.index(global_guard)
+def test_policy_order_per_type_before_global_cap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    patched_limits = {
+        evidence_type: 100 for evidence_type in SemanticEvidenceType
+    }
+    patched_limits[SemanticEvidenceType.DIAGNOSTIC] = 0
+    monkeypatch.setattr(
+        "runtime_shared.semantic.pentest_facts.evidence.EVIDENCE_PER_TYPE_LIMIT",
+        patched_limits,
+    )
+    monkeypatch.setattr(
+        "runtime_shared.semantic.pentest_facts.evidence.SEMANTIC_EVIDENCE_GLOBAL_LIMIT",
+        0,
+    )
+
+    _, diagnostics = validate_semantic_evidence(
+        [{"type": "diagnostic", "name": "precedence", "value": "locked"}]
+    )
+
+    assert diagnostics == (
+        FactDiagnostic(0, "evidence_per_type_limit_exceeded"),
+    )
 
 
 def test_render_observations_empty_input_returns_empty_string() -> None:

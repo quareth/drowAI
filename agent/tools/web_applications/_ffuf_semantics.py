@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 from urllib.parse import urlparse, urlsplit
 
-from agent.semantic.evidence_vocabulary import SemanticEvidenceType
+from runtime_shared.semantic.pentest_facts import SemanticEvidenceType
 from runtime_shared.semantic.web_common import (
     build_web_response_observations,
     normalize_url,

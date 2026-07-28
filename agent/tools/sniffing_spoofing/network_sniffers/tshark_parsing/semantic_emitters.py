@@ -10,7 +10,7 @@ import json
 from collections.abc import Mapping
 from typing import Any
 
-from agent.semantic.evidence_vocabulary import SemanticEvidenceType
+from runtime_shared.semantic.pentest_facts import SemanticEvidenceType
 from agent.tools.sniffing_spoofing.network_sniffers.tshark_parsing.common import (
     DEFAULT_MAX_ROWS,
     _mapping_value,

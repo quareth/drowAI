@@ -217,7 +217,7 @@ class BaseTool(ABC):
         """Optionally emit bounded semantic evidence entries.
 
         Tools that return entries MUST use values from
-        `agent.semantic.evidence_vocabulary.SemanticEvidenceType`.
+        `runtime_shared.semantic.pentest_facts.SemanticEvidenceType`.
         Unknown types are dropped by the shared validator without raising.
         Default implementation is a no-op to preserve backward compatibility.
         """
