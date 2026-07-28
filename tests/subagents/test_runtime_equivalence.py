@@ -349,6 +349,27 @@ def test_runtime_completion_matches_current_scout_completion() -> None:
     ) == complete_scout_result(scout_interactive.as_graph_state())
 
 
+def test_current_scout_baseline_does_not_delegate_to_generic_runtime() -> None:
+    scout_paths = [
+        Path("agent/subagents/scout/state.py"),
+        Path("agent/subagents/scout/profile.py"),
+        Path("agent/subagents/scout/nodes/choose_action.py"),
+        Path("agent/subagents/scout/nodes/complete.py"),
+    ]
+    for path in scout_paths:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                assert all(
+                    not alias.name.startswith("agent.subagents.runtime")
+                    for alias in node.names
+                )
+            if isinstance(node, ast.ImportFrom):
+                assert node.module is None or not node.module.startswith(
+                    "agent.subagents.runtime"
+                )
+
+
 def test_runtime_modules_do_not_import_backend_services() -> None:
     runtime_root = Path("agent/subagents/runtime")
     for path in runtime_root.glob("*.py"):
