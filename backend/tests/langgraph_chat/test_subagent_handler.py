@@ -32,11 +32,6 @@ from backend.services.agent_runs.result_projection import (
     COMPLETED_AGENT_RESULTS_KEY,
     AgentRunResultProjector,
 )
-from backend.services.agent_runs.subagent_registry import (
-    SubagentRegistry,
-    SubagentSpec,
-    get_subagent_registry,
-)
 from backend.services.langgraph_chat.execution.graph_executor import GraphExecutionResult
 from backend.services.langgraph_chat.contracts import (
     ChatInputs,
@@ -461,10 +456,10 @@ async def test_subagent_handler_uses_registered_agent_identity_for_launch_failur
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     definition = _second_agent_definition()
-    backend_registry = SubagentRegistry([SubagentSpec.from_definition(definition)])
+    definition_registry = DefinitionSubagentRegistry([definition])
     monkeypatch.setattr(
         "agent.subagents.registry.get_subagent_registry",
-        lambda: DefinitionSubagentRegistry([definition]),
+        lambda: definition_registry,
     )
     registry = ProcessLocalAgentRunRegistry()
     events: list[dict[str, Any]] = []
@@ -479,7 +474,7 @@ async def test_subagent_handler_uses_registered_agent_identity_for_launch_failur
         registry=registry,
         launcher=_FailingLauncher(),
         lifecycle_publisher=_publish,
-        subagent_registry=backend_registry,
+        subagent_registry=definition_registry,
     )
 
     result = await handler.handle(_second_agent_runtime_config())
@@ -633,20 +628,15 @@ async def test_subagent_handler_launches_independent_handoffs_concurrently(
     launcher = _ControlledLauncher(registry)
     executor = _CompletingExecutor()
     second_definition = _second_agent_definition()
-    backend_registry = SubagentRegistry(
-        (
-            get_subagent_registry().require("pathfinder"),
-            SubagentSpec.from_definition(second_definition),
-        )
+    definition_registry = DefinitionSubagentRegistry(
+        [
+            get_definition_subagent_registry().require("pathfinder"),
+            second_definition,
+        ]
     )
     monkeypatch.setattr(
         "agent.subagents.registry.get_subagent_registry",
-        lambda: DefinitionSubagentRegistry(
-            [
-                get_definition_subagent_registry().require("pathfinder"),
-                second_definition,
-            ]
-        ),
+        lambda: definition_registry,
     )
 
     async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
@@ -659,7 +649,7 @@ async def test_subagent_handler_launches_independent_handoffs_concurrently(
         registry=registry,
         launcher=launcher,
         lifecycle_publisher=_publish,
-        subagent_registry=backend_registry,
+        subagent_registry=definition_registry,
     )
     runtime_config = _ordered_handoff_runtime_config(
         {
@@ -859,20 +849,15 @@ async def test_subagent_handler_settles_prior_batch_child_when_later_launch_fail
     registry = ProcessLocalAgentRunRegistry()
     launcher = _FailingSecondLaunchAfterCompletionLauncher(registry)
     second_definition = _second_agent_definition()
-    backend_registry = SubagentRegistry(
-        (
-            get_subagent_registry().require("pathfinder"),
-            SubagentSpec.from_definition(second_definition),
-        )
+    definition_registry = DefinitionSubagentRegistry(
+        [
+            get_definition_subagent_registry().require("pathfinder"),
+            second_definition,
+        ]
     )
     monkeypatch.setattr(
         "agent.subagents.registry.get_subagent_registry",
-        lambda: DefinitionSubagentRegistry(
-            [
-                get_definition_subagent_registry().require("pathfinder"),
-                second_definition,
-            ]
-        ),
+        lambda: definition_registry,
     )
 
     async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
@@ -885,7 +870,7 @@ async def test_subagent_handler_settles_prior_batch_child_when_later_launch_fail
         registry=registry,
         launcher=launcher,
         lifecycle_publisher=_publish,
-        subagent_registry=backend_registry,
+        subagent_registry=definition_registry,
     )
     runtime_config = _ordered_handoff_runtime_config(
         {

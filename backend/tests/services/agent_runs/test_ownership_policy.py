@@ -7,10 +7,7 @@ from dataclasses import replace
 from backend.services.agent_runs.ownership_policy import (
     resolve_subagent_handoff,
 )
-from backend.services.agent_runs.subagent_registry import (
-    SubagentRegistry,
-    get_subagent_registry,
-)
+from agent.subagents.registry import SubagentRegistry, get_subagent_registry
 
 
 def _metadata(
@@ -61,8 +58,7 @@ def test_policy_accepts_direct_executor_recon_capabilities_with_targets() -> Non
 def test_generic_policy_resolves_name_and_dispatch_from_injected_registry() -> None:
     probe = replace(
         get_subagent_registry().require("pathfinder"),
-        name="probe",
-        agent_id="probe",
+        id="probe",
         display_name="Probe",
     )
     metadata = _metadata(
@@ -92,8 +88,7 @@ def test_policy_accepts_ordered_multi_handoff_plan_from_registry() -> None:
     pathfinder = get_subagent_registry().require("pathfinder")
     probe = replace(
         pathfinder,
-        name="probe",
-        agent_id="probe",
+        id="probe",
         display_name="Probe",
     )
     metadata = _metadata(

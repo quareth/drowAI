@@ -140,7 +140,7 @@ def _build_simple_chat_messages(
                 "role": "system",
                 "content": (
                     completed_agent_results.strip()
-                    + "\n\nUse these same-process Pathfinder findings as bounded context. "
+                    + "\n\nUse these same-process subagent results as bounded context. "
                     "Do not claim raw tool output, hidden reasoning, or durable delivery."
                 ),
             }

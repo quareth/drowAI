@@ -6,12 +6,12 @@ from collections.abc import Mapping
 from enum import Enum
 import logging
 
+from agent.subagents.registry import SubagentRegistry
+from backend.services.agent_runs.ownership_policy import resolve_subagent_handoff
 from backend.services.langgraph_chat.contracts import (
     ExecutionMode,
     LangGraphRuntimeConfig,
 )
-from backend.services.agent_runs.ownership_policy import resolve_subagent_handoff
-from backend.services.agent_runs.subagent_registry import SubagentRegistry
 
 
 class ChatBranch(str, Enum):

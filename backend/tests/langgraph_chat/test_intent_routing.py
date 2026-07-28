@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from backend.services.agent_runs.subagent_registry import get_subagent_registry
+from agent.subagents.registry import get_subagent_registry
 from backend.services.langgraph_chat.contracts import (
     ChatInputs,
     ExecutionMode,

@@ -116,15 +116,16 @@ Route policy:
 - A direct-executor turn with supported required Pathfinder handoff entries
   routes to the generic subagent handler. `suggested_capabilities` remains
   advisory assignment context and is not delegation authority.
-- `backend/services/agent_runs/subagent_registry.py` is the control-plane source
-  of truth for enabled subagent names, purpose, ownership boundary, supported
-  and excluded task categories, target requirements, per-task concurrency, and
-  facade dispatch branch.
-- The intent prompt projects the enabled registry catalog at runtime, and the
-  structured-output schema constrains `subagent` to the same enabled names.
-  Deterministic routing resolves the emitted name back through that registry
-  and fails closed when the name, live availability, target requirements, or
-  registered facade branch do not match.
+- `agent/subagents/registry.py` is the source of truth for enabled declarative
+  subagent definitions and their classifier-safe projections: names, purpose,
+  ownership boundary, supported and excluded task categories, target
+  requirements, and per-task concurrency limits.
+- The intent prompt projects `registry.classifier_catalog()` at runtime, and
+  the structured-output schema constrains `subagent` to `registry.ids()`.
+  Deterministic routing validates each emitted name through the same registry
+  and fails closed when the name, live availability, or target requirements do
+  not match. Valid plans dispatch through the single generic `subagent` facade
+  branch.
 - Because the registry is currently small and process-static, the classifier
   receives direct catalog enumeration. Tool-based agent discovery is reserved
   for a materially larger or dynamically managed registry.

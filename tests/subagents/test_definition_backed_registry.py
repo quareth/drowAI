@@ -12,9 +12,6 @@ from agent.subagents.registry import (
     get_subagent_registry,
     load_subagent_registry,
 )
-from backend.services.agent_runs.subagent_registry import (
-    get_subagent_registry as get_control_plane_subagent_registry,
-)
 
 
 def _pathfinder_definition() -> SubagentDefinition:
@@ -33,26 +30,30 @@ def test_default_registry_loads_enabled_pathfinder_from_toml() -> None:
 
 def test_classifier_catalog_is_definition_backed_and_matches_legacy_metadata() -> None:
     registry = load_subagent_registry()
-    control_plane_projection = dict(
-        get_control_plane_subagent_registry()
-        .require("pathfinder")
-        .classifier_projection()
-    )
+    definition = registry.require("pathfinder")
     [catalog_projection] = [dict(entry) for entry in registry.classifier_catalog()]
 
-    assert control_plane_projection["name"] == "pathfinder"
     assert catalog_projection["name"] == "pathfinder"
-    assert catalog_projection["agent_id"] == "pathfinder"
-    for key in (
-        "display_name",
-        "purpose",
-        "ownership_boundary",
-        "supported_task_categories",
-        "excluded_task_categories",
-        "max_active_runs_per_task",
-        "requires_resolved_target",
-    ):
-        assert catalog_projection[key] == control_plane_projection[key]
+    assert catalog_projection["agent_id"] == definition.id
+    assert catalog_projection["display_name"] == definition.display_name
+    assert catalog_projection["purpose"] == definition.description
+    assert catalog_projection["ownership_boundary"] == definition.ownership_boundary
+    assert (
+        catalog_projection["supported_task_categories"]
+        == definition.supported_task_categories
+    )
+    assert (
+        catalog_projection["excluded_task_categories"]
+        == definition.excluded_task_categories
+    )
+    assert (
+        catalog_projection["max_active_runs_per_task"]
+        == definition.max_active_runs_per_task
+    )
+    assert (
+        catalog_projection["requires_resolved_target"]
+        == definition.requires_resolved_target
+    )
 
 
 def test_display_tool_and_limit_metadata_are_definition_projections() -> None:

@@ -11,6 +11,7 @@ from agent.context.token_counter_registry import estimate_llm_request_tokens
 from agent.graph.context.builder import METADATA_CONTEXT_BUNDLE_KEY
 from agent.graph.context.contracts import CLASSIFIER_TRANSCRIPT_WINDOW_KEY
 from agent.graph.context.transcript import select_full_transcript_window
+from agent.subagents.registry import SubagentRegistry, get_subagent_registry
 from backend.database import SessionLocal
 from backend.services.chat.conversation_history_reader import ConversationHistoryReader
 from backend.services.agent_runs.local_runtime import (
@@ -24,10 +25,6 @@ from backend.services.agent_runs.result_projection import (
 from backend.services.agent_runs.registry import (
     ACTIVE_AGENT_RUN_STATUSES,
     ProcessLocalAgentRunRegistry,
-)
-from backend.services.agent_runs.subagent_registry import (
-    SubagentRegistry,
-    get_subagent_registry,
 )
 
 from backend.config import (
@@ -542,16 +539,11 @@ class LangGraphChatFacade:
 
     def _validate_registered_subagent_handlers(self) -> None:
         """Fail startup when an enabled registry entry has no wired handler."""
-        for spec in self._subagent_registry.specs():
-            try:
-                branch = ChatBranch(spec.dispatch_branch)
-            except ValueError as exc:
-                raise RuntimeError(
-                    f"registered subagent has invalid dispatch branch: {spec.name}"
-                ) from exc
+        for definition in self._subagent_registry.definitions():
+            branch = ChatBranch.SUBAGENT
             if branch not in self._handlers:
                 raise RuntimeError(
-                    f"registered subagent has no facade handler: {spec.name}"
+                    f"registered subagent has no facade handler: {definition.id}"
                 )
 
     async def resume_from_interrupt(

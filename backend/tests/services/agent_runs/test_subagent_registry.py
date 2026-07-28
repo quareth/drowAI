@@ -1,25 +1,22 @@
-"""Tests for the canonical subagent registration and classifier projection."""
+"""Tests for canonical subagent registration and classifier projection."""
 
 from __future__ import annotations
 
 import pytest
 
-from backend.services.agent_runs.subagent_registry import (
-    SubagentRegistry,
-    SubagentSpec,
-    get_subagent_registry,
-)
+from dataclasses import replace
+
+from agent.subagents.registry import SubagentRegistry, get_subagent_registry
 from core.prompts.builders.intent_classifier import build_classifier_system_prompt
 
 
 def test_default_registry_exposes_pathfinder_as_the_only_available_subagent() -> None:
     registry = get_subagent_registry()
 
-    assert registry.names() == ("pathfinder",)
+    assert registry.ids() == ("pathfinder",)
     pathfinder = registry.require("pathfinder")
-    assert pathfinder.agent_id == "pathfinder"
-    assert pathfinder.agent_kind == "recon"
-    assert pathfinder.dispatch_branch == "subagent"
+    assert pathfinder.id == "pathfinder"
+    assert pathfinder.kind == "recon"
     assert pathfinder.requires_resolved_target is True
     assert pathfinder.max_active_runs_per_task == 1
     assert pathfinder.supported_task_categories == (
@@ -66,30 +63,26 @@ def test_classifier_catalog_is_derived_from_available_registry_specs() -> None:
 
 
 def test_registry_rejects_duplicate_names() -> None:
-    spec = get_subagent_registry().require("pathfinder")
+    definition = get_subagent_registry().require("pathfinder")
 
-    with pytest.raises(ValueError, match="duplicate subagent name"):
-        SubagentRegistry((spec, spec))
+    with pytest.raises(ValueError, match="duplicate subagent definition id"):
+        SubagentRegistry((definition, definition))
 
 
 def test_disabled_specs_are_not_projected_to_classifier() -> None:
-    disabled = SubagentSpec(
-        name="disabled_pathfinder",
-        agent_id="disabled_pathfinder",
+    disabled = replace(
+        get_subagent_registry().require("pathfinder"),
+        id="disabled_pathfinder",
         display_name="Disabled Pathfinder",
-        agent_kind="recon",
-        dispatch_branch="subagent",
-        purpose="Unavailable test agent.",
+        description="Unavailable test agent.",
         ownership_boundary="No current ownership.",
         supported_task_categories=("host_discovery",),
         excluded_task_categories=(),
         enabled=False,
-        max_active_runs_per_task=1,
-        requires_resolved_target=True,
     )
     registry = SubagentRegistry((disabled,))
 
-    assert registry.names() == ()
+    assert registry.ids() == ()
     assert registry.get("disabled_pathfinder") is None
     assert registry.classifier_catalog() == ()
 

@@ -11,13 +11,15 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from agent.subagents.registry import SubagentRegistry, get_subagent_registry
+
 from .contracts import AgentCapability
-from .subagent_registry import SubagentRegistry, get_subagent_registry
 
 
 MAX_ASSIGNMENT_TARGETS = 16
 MAX_TARGET_LENGTH = 512
 MAX_AGENT_HANDOFFS = 3
+SUBAGENT_DISPATCH_BRANCH = "subagent"
 
 _CAPABILITY_ALIASES: dict[str, AgentCapability] = {
     "discover_hosts": "host_discovery",
@@ -117,9 +119,9 @@ def resolve_subagent_handoff(
             return SubagentRoutingDecision(
                 False,
                 "subagent_unavailable",
-                agent_id=spec.agent_id,
-                agent_kind=spec.agent_kind,
-                dispatch_branch=spec.dispatch_branch,
+                agent_id=spec.id,
+                agent_kind=spec.kind,
+                dispatch_branch=SUBAGENT_DISPATCH_BRANCH,
                 objective=objective,
             )
 
@@ -127,9 +129,9 @@ def resolve_subagent_handoff(
             return SubagentRoutingDecision(
                 False,
                 "invalid_assignment_scope",
-                agent_id=spec.agent_id,
-                agent_kind=spec.agent_kind,
-                dispatch_branch=spec.dispatch_branch,
+                agent_id=spec.id,
+                agent_kind=spec.kind,
+                dispatch_branch=SUBAGENT_DISPATCH_BRANCH,
                 objective=objective,
             )
 
@@ -139,9 +141,9 @@ def resolve_subagent_handoff(
         )
         plan.append(
             SubagentPlanHandoff(
-                agent_id=spec.agent_id,
-                agent_kind=spec.agent_kind,
-                dispatch_branch=spec.dispatch_branch,
+                agent_id=spec.id,
+                agent_kind=spec.kind,
+                dispatch_branch=SUBAGENT_DISPATCH_BRANCH,
                 capabilities=tuple(capabilities),
                 targets=targets,
                 objective=objective,
@@ -305,6 +307,7 @@ __all__ = [
     "MAX_ASSIGNMENT_TARGETS",
     "MAX_AGENT_HANDOFFS",
     "MAX_TARGET_LENGTH",
+    "SUBAGENT_DISPATCH_BRANCH",
     "SubagentPlanHandoff",
     "SubagentRoutingDecision",
     "resolve_subagent_handoff",

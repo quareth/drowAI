@@ -34,6 +34,7 @@ from agent.graph.context.serialization import (
     SECTION_RECENT_TRANSCRIPT,
     serialize_projection_to_section_map,
 )
+from agent.graph.config.token_limits import LIMITS
 from agent.graph.infrastructure.state_models import CapabilityType, IntentSignals
 from agent.providers.llm.core.base import LLMClient
 from agent.providers.llm.core.exceptions import LLMProviderError, LLMRefusalError
@@ -42,6 +43,7 @@ from agent.providers.llm.core.identity import (
     ProviderModelRef,
 )
 from agent.providers.llm.profiles.registry import resolve_context_window_tokens
+from agent.subagents.registry import SubagentRegistry, get_subagent_registry
 from core.prompts.builders.intent_classifier import (
     build_classifier_system_prompt,
     build_classifier_user_prompt,
@@ -51,12 +53,6 @@ from core.llm.structured_schemas import (
     build_intent_classifier_structured_output,
 )
 from core.prompts.route_labels import llm_facing_route_label
-from agent.graph.config.token_limits import LIMITS
-
-from backend.services.agent_runs.subagent_registry import (
-    SubagentRegistry,
-    get_subagent_registry,
-)
 from backend.services.langgraph_chat.contracts import (
     ExecutionMode,
     LangGraphRuntimeConfig,
@@ -746,7 +742,7 @@ def build_intent_classifier_request(
         temperature=temperature,
         max_tokens=max_tokens,
         structured_output=build_intent_classifier_structured_output(
-            registry.names()
+            registry.ids()
         ),
     )
 

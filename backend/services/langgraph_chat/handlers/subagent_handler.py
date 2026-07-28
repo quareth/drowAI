@@ -20,6 +20,7 @@ from agent.graph import InteractiveState
 from agent.graph.builders.parent_handoff_builder import build_parent_handoff_graph
 from agent.graph.graph_names import GRAPH_NAME_SIMPLE_TOOL
 from agent.graph.streaming import build_agent_turn_metadata
+from agent.subagents.registry import SubagentRegistry, get_subagent_registry
 from backend.services.agent_runs.contracts import (
     AgentAssignment,
     AgentCapability,
@@ -53,10 +54,6 @@ from backend.services.agent_runs.registry import (
     ACTIVE_AGENT_RUN_STATUSES,
     LocalAgentRun,
     ProcessLocalAgentRunRegistry,
-)
-from backend.services.agent_runs.subagent_registry import (
-    SubagentRegistry,
-    get_subagent_registry,
 )
 from backend.services.agent_runs.worker import ProcessLocalAgentRunWorker
 from backend.services.chat.event_builders import attach_conversation_ids
@@ -868,7 +865,7 @@ def _build_dispatch_plan(
             raise RuntimeError(
                 f"subagent is not registered or enabled: {agent_id}"
             ) from exc
-        if raw_handoff.get("agent_kind") != spec.agent_kind:
+        if raw_handoff.get("agent_kind") != spec.kind:
             raise RuntimeError("Subagent branch agent kind does not match registry")
         if spec.requires_resolved_target and not _string_list(
             raw_handoff.get("targets")
@@ -930,7 +927,7 @@ def _build_assignment_from_handoff(
         assignment_id=f"assignment-{uuid4().hex}",
         agent_run_id=agent_run_id,
         agent_id=agent_id,
-        agent_kind=spec.agent_kind,
+        agent_kind=spec.kind,
         task_id=task_id,
         tenant_id=tenant_id,
         conversation_id=_required_string(

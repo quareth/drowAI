@@ -49,7 +49,7 @@ from backend.services.langgraph_chat.model_role_registry import (
     ModelRoleRegistry,
     RoleCallSettings,
 )
-from backend.services.agent_runs.subagent_registry import get_subagent_registry
+from agent.subagents.registry import get_subagent_registry
 from agent.providers.llm.core.exceptions import (
     LLMProfileNotFoundError,
     LLMRefusalError,

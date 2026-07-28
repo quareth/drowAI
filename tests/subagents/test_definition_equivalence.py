@@ -5,7 +5,7 @@ from __future__ import annotations
 from agent.config import AgentConfig
 from agent.subagents.definition import SubagentDefinition, load_subagent_definitions
 from agent.subagents.runtime.profile import resolve_subagent_tool_profile
-from backend.services.agent_runs.subagent_registry import get_subagent_registry
+from agent.subagents.registry import get_subagent_registry
 
 
 _SUPPORTED_CATEGORY_TO_PROFILE_CAPABILITY = {
@@ -25,19 +25,10 @@ def _pathfinder_definition() -> SubagentDefinition:
 
 def test_pathfinder_definition_matches_control_plane_registry_metadata() -> None:
     definition = _pathfinder_definition()
-    spec = get_subagent_registry().require("pathfinder")
+    registered = get_subagent_registry().require("pathfinder")
 
     assert definition.id == "pathfinder"
-    assert spec.name == "pathfinder"
-    assert definition.display_name == spec.display_name
-    assert definition.kind == spec.agent_kind
-    assert definition.description == spec.purpose
-    assert definition.ownership_boundary == spec.ownership_boundary
-    assert definition.supported_task_categories == spec.supported_task_categories
-    assert definition.excluded_task_categories == spec.excluded_task_categories
-    assert definition.enabled == spec.enabled
-    assert definition.max_active_runs_per_task == spec.max_active_runs_per_task
-    assert definition.requires_resolved_target == spec.requires_resolved_target
+    assert registered == definition
     assert definition.icon == "pathfinder"
 
 
