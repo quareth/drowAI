@@ -130,11 +130,6 @@ def _validate_result_identity(
 def _derived_outcome(metadata: Mapping[str, Any]) -> str:
     if metadata.get(SUBAGENT_FORCED_FINAL_METADATA_KEY) is True:
         return "partial"
-    router_outcome = metadata.get("router_outcome")
-    if isinstance(router_outcome, Mapping):
-        reason = str(router_outcome.get("reason") or "").lower()
-        if "budget" in reason or "stuck" in reason:
-            return "partial"
     if metadata.get("user_goal_achieved") is False:
         return "partial"
     return "completed"

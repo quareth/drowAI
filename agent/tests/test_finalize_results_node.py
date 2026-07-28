@@ -277,8 +277,8 @@ async def test_finalize_tool_results_includes_ptr_context_sections(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_finalize_results_selects_subagent_handoff_prompt(monkeypatch):
-    """Subagent attribution should select the child handoff prompt only."""
+async def test_finalize_results_keeps_main_prompt_for_subagent_metadata(monkeypatch):
+    """Subagent attribution no longer selects a child-only finalizer mode."""
     interactive = InteractiveState(
         facts=FactsState(
             task_id=42,
@@ -311,11 +311,10 @@ async def test_finalize_results_selects_subagent_handoff_prompt(monkeypatch):
     assert client.calls
     system_prompt = client.calls[-1][0]["content"]
     user_prompt = client.calls[-1][1]["content"]
-    assert "bounded assignment" in system_prompt.lower()
-    assert "parent agent" in system_prompt.lower()
-    assert "handoff" in user_prompt.lower()
+    assert "exactly the four `##` headings" in system_prompt.lower()
+    assert "## Recommended Next Action" in user_prompt
     assert any(
-        "subagent_handoff" in entry
+        "(simple_tool_execution)" in entry
         for entry in result["trace"]["reasoning"]
     )
 

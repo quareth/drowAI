@@ -23,8 +23,8 @@ from agent.subagents.runtime.model import (
     SUBAGENT_OBSERVATION_TRANSCRIPT_KEY,
     SUBAGENT_RESULT_METADATA_KEY,
     SubagentToolBuilderPromptBuilder,
-    choose_subagent_action,
     record_subagent_observation_and_budget,
+    run_subagent_model_turn,
 )
 from agent.subagents.runtime import model as runtime_model
 from agent.subagents.runtime.profile import (
@@ -290,7 +290,7 @@ def test_runtime_model_prompt_identity_and_boundaries_come_from_definition() -> 
 
 
 @pytest.mark.asyncio
-async def test_runtime_model_builder_records_generic_action_metadata_and_call_topology() -> None:
+async def test_runtime_model_records_generic_route_metadata_and_call_topology() -> None:
     calls = [
         _native_call(
             FPING_TOOL_ID,
@@ -302,7 +302,7 @@ async def test_runtime_model_builder_records_generic_action_metadata_and_call_to
     llm = _FakeBuilderLLM(calls)
     resolver_calls: list[dict[str, Any]] = []
 
-    update = await choose_subagent_action(
+    update = await run_subagent_model_turn(
         _pathfinder_definition(),
         _generic_state(),
         llm_resolver=lambda *args, **kwargs: (
@@ -364,7 +364,7 @@ async def test_runtime_model_builder_appends_one_usage_record_after_existing() -
     }
     state["trace"]["usage_records"] = [existing_usage]
 
-    update = await choose_subagent_action(
+    update = await run_subagent_model_turn(
         _pathfinder_definition(),
         state,
         llm_resolver=lambda *_args, **_kwargs: llm,
@@ -401,7 +401,7 @@ async def test_runtime_resolver_injection_avoids_global_cross_run_contamination(
 
     monkeypatch.setattr(runtime_model, "resolve_llm_client", _poison_resolver)
 
-    update = await choose_subagent_action(
+    update = await run_subagent_model_turn(
         _pathfinder_definition(),
         _generic_state(),
         llm_resolver=lambda *_args, **_kwargs: llm,
@@ -421,7 +421,7 @@ async def test_runtime_model_accepts_text_handoff_without_tool_call() -> None:
         content="Pathfinder found one live host and recommends service enumeration.",
     )
 
-    update = await choose_subagent_action(
+    update = await run_subagent_model_turn(
         _pathfinder_definition(),
         _generic_state(),
         llm_resolver=lambda *_args, **_kwargs: llm,
@@ -429,7 +429,7 @@ async def test_runtime_model_accepts_text_handoff_without_tool_call() -> None:
 
     metadata = update["facts"]["metadata"]
     action = metadata[SUBAGENT_ACTION_METADATA_KEY]
-    assert action["route"] == "complete"
+    assert action["route"] == "handoff"
     assert action["forced_final"] is False
     assert SUBAGENT_RESULT_METADATA_KEY not in metadata
     assert update["trace"]["final_text"] == (
@@ -466,7 +466,7 @@ async def test_runtime_model_forces_text_handoff_when_iteration_budget_exhausted
     }
     llm = _FakeBuilderLLM([], content="Budget exhausted after host discovery.")
 
-    update = await choose_subagent_action(
+    update = await run_subagent_model_turn(
         _pathfinder_definition(),
         state,
         llm_resolver=lambda *_args, **_kwargs: llm,
@@ -480,7 +480,7 @@ async def test_runtime_model_forces_text_handoff_when_iteration_budget_exhausted
         "max_tokens": 5000,
     }
     metadata = update["facts"]["metadata"]
-    assert metadata[SUBAGENT_ACTION_METADATA_KEY]["route"] == "complete"
+    assert metadata[SUBAGENT_ACTION_METADATA_KEY]["route"] == "handoff"
     assert metadata[SUBAGENT_OBSERVATION_TRANSCRIPT_KEY][-1]["summary"] == (
         "fping found one live host."
     )
@@ -545,7 +545,6 @@ def test_runtime_completion_projects_generic_result_metadata() -> None:
     interactive.facts.metadata["last_tool_result_compact"] = (
         interactive.facts.last_tool_result_compact
     )
-    interactive.facts.metadata["router_outcome"] = {"action": "finalize"}
     interactive.trace.executed_tools.append(
         ToolExecutionRecord(tool_id=FPING_TOOL_ID, status="success")
     )

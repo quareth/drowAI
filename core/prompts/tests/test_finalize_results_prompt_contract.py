@@ -20,7 +20,6 @@ from core.prompts.builders.finalize import (
     ADDENDUM_ANALYST,
     ADDENDUM_DR,
     ADDENDUM_RETRY,
-    SUBAGENT_SYSTEM_BASE,
     SYSTEM_BASE,
     build_finalize_prompts,
 )
@@ -82,29 +81,6 @@ def test_finalize_results_prompt_contract_no_intent_classifier_leak() -> None:
     assert "intent classifier decision" not in combined
     # Closer must be the operator-voice instructions, not the legacy summarizer.
     assert "summarize the engagement results above" not in combined
-
-
-def test_subagent_finalizer_prompt_is_a_bounded_handoff() -> None:
-    """Child finalization reuses evidence sections without impersonating the parent."""
-    system_prompt, user_prompt = build_finalize_prompts(
-        user_message="Scan 127.0.0.1 for PostgreSQL",
-        synthesized={
-            "tool": "nmap.scan",
-            "summary": "5432/tcp is closed",
-            "key_findings": ["5432/tcp closed"],
-        },
-        capability="simple_tool_execution",
-        finalizer_mode="subagent_handoff",
-    )
-
-    assert SUBAGENT_SYSTEM_BASE.strip() in system_prompt
-    assert SYSTEM_BASE.strip() not in system_prompt
-    assert "bounded assignment" in system_prompt.lower()
-    assert "parent agent" in system_prompt.lower()
-    assert "## User Request" in user_prompt
-    assert "## Tool Summary (nmap.scan)" in user_prompt
-    assert "exactly the four" not in user_prompt.lower()
-    assert "handoff" in user_prompt.lower()
 
 
 def test_main_finalizer_prompt_consumes_completed_agent_result() -> None:

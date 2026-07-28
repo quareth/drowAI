@@ -100,29 +100,27 @@ def test_generic_subagent_graph_topology_stays_locked() -> None:
 
     assert set(generic_graph.nodes) == {
         "initialize",
-        "choose_action",
+        "model",
         "approval_gate",
         "dispatch_tool",
         "tool_synthesizer",
-        "record_observation",
-        "complete",
+        "observation",
+        "handoff",
     }
     assert set(generic_graph.edges) == {
         ("__start__", "initialize"),
-        ("initialize", "choose_action"),
+        ("initialize", "model"),
         ("approval_gate", "dispatch_tool"),
         ("dispatch_tool", "tool_synthesizer"),
-        ("tool_synthesizer", "record_observation"),
-        ("record_observation", "choose_action"),
-        ("complete", "__end__"),
+        ("tool_synthesizer", "observation"),
+        ("observation", "model"),
+        ("handoff", "__end__"),
     }
-    assert set(generic_graph.branches) == {"choose_action"}
-    choose_branch = generic_graph.branches["choose_action"][
-        "_route_after_choose_action"
-    ]
-    assert choose_branch.ends == {
+    assert set(generic_graph.branches) == {"model"}
+    model_branch = generic_graph.branches["model"]["_route_after_model"]
+    assert model_branch.ends == {
         "approval_gate": "approval_gate",
-        "complete": "complete",
+        "handoff": "handoff",
     }
 
 
@@ -168,7 +166,6 @@ def test_generic_graph_terminal_result_projects_pathfinder_result() -> None:
     generic_interactive.facts.metadata["last_tool_result_compact"] = (
         generic_interactive.facts.last_tool_result_compact
     )
-    generic_interactive.facts.metadata["router_outcome"] = {"action": "finalize"}
     generic_interactive.trace.executed_tools.append(
         ToolExecutionRecord(tool_id=FPING_TOOL_ID, status="success")
     )

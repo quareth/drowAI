@@ -43,8 +43,8 @@ from agent.subagents.definition import SubagentDefinition
 from agent.subagents.runtime.complete import complete_subagent_result
 from agent.subagents.runtime.model import (
     SUBAGENT_ACTION_METADATA_KEY,
-    choose_subagent_action,
     record_subagent_observation_and_budget,
+    run_subagent_model_turn,
 )
 from agent.subagents.runtime.profile import resolve_subagent_tool_profile
 from agent.subagents.runtime.state import (
@@ -99,16 +99,16 @@ def initialize_subagent_state(
     return updated.model_dump(mode="json")
 
 
-def _route_after_choose_action(interactive: InteractiveState) -> str:
-    """Route a selected native call to execution or completion."""
+def _route_after_model(interactive: InteractiveState) -> str:
+    """Route a model turn to native tool execution or handoff completion."""
 
     action = interactive.facts.safe_metadata.get(SUBAGENT_ACTION_METADATA_KEY)
     route = action.get("route") if isinstance(action, dict) else None
     if route == "tool":
         return "approval_gate"
-    if route == "complete":
-        return "complete"
-    raise ValueError("Subagent choose_action did not write a valid route")
+    if route == "handoff":
+        return "handoff"
+    raise ValueError("Subagent model turn did not write a valid route")
 
 
 def build_subagent_graph(
@@ -126,8 +126,8 @@ def build_subagent_graph(
         wrap_with_context(_bind_initialize(definition)),
     )
     graph.add_node(
-        "choose_action",
-        wrap_with_context_async(_bind_choose_action(definition)),
+        "model",
+        wrap_with_context_async(_bind_model(definition)),
     )
     graph.add_node(
         "approval_gate",
@@ -142,29 +142,29 @@ def build_subagent_graph(
         wrap_with_context_async(synthesize_tool_output),
     )
     graph.add_node(
-        "record_observation",
+        "observation",
         wrap_with_context(_bind_record_observation(definition)),
     )
     graph.add_node(
-        "complete",
+        "handoff",
         wrap_with_context(_bind_complete(definition)),
     )
 
     graph.set_entry_point("initialize")
-    graph.add_edge("initialize", "choose_action")
+    graph.add_edge("initialize", "model")
     graph.add_conditional_edges(
-        "choose_action",
-        with_interactive_state(_route_after_choose_action),
+        "model",
+        with_interactive_state(_route_after_model),
         {
             "approval_gate": "approval_gate",
-            "complete": "complete",
+            "handoff": "handoff",
         },
     )
     graph.add_edge("approval_gate", "dispatch_tool")
     graph.add_edge("dispatch_tool", "tool_synthesizer")
-    graph.add_edge("tool_synthesizer", "record_observation")
-    graph.add_edge("record_observation", "choose_action")
-    graph.add_edge("complete", END)
+    graph.add_edge("tool_synthesizer", "observation")
+    graph.add_edge("observation", "model")
+    graph.add_edge("handoff", END)
 
     if build_only:
         return graph
@@ -209,14 +209,14 @@ def _bind_initialize(definition: SubagentDefinition) -> Any:
     return _initialize
 
 
-def _bind_choose_action(definition: SubagentDefinition) -> Any:
-    async def _choose_action(
+def _bind_model(definition: SubagentDefinition) -> Any:
+    async def _model(
         state: Mapping[str, Any] | InteractiveState,
         context: GraphRuntimeContext | None = None,
         config: Mapping[str, Any] | None = None,
         writer: Any = None,
     ) -> dict[str, Any]:
-        return await choose_subagent_action(
+        return await run_subagent_model_turn(
             definition,
             state,
             context=context,
@@ -224,7 +224,7 @@ def _bind_choose_action(definition: SubagentDefinition) -> Any:
             writer=writer,
         )
 
-    return _choose_action
+    return _model
 
 
 def _bind_complete(definition: SubagentDefinition) -> Any:

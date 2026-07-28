@@ -123,7 +123,7 @@ class SubagentToolBuilderPromptBuilder:
         )
 
 
-async def choose_subagent_action(
+async def run_subagent_model_turn(
     definition: SubagentDefinition,
     state: Mapping[str, Any] | InteractiveState,
     context: GraphRuntimeContext | None = None,
@@ -131,7 +131,7 @@ async def choose_subagent_action(
     writer: Any = None,
     llm_resolver: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
-    """Run one bounded subagent model turn and route to tools or completion."""
+    """Run one bounded subagent model turn and route to tools or handoff."""
 
     interactive = InteractiveState.from_mapping(state)
     subagent = subagent_state_from_graph_state(interactive, definition=definition)
@@ -170,8 +170,8 @@ async def choose_subagent_action(
     async with reasoning_section(
         writer,
         state=interactive,
-        step="subagent_action_selection",
-        label="Selecting reconnaissance tools and preparing the execution batch.",
+        step="subagent_model",
+        label="Running the subagent model turn.",
         config=config,
         context=context,
     ) as emitter:
@@ -377,7 +377,7 @@ def _apply_subagent_text_result(
     metadata.pop(SUBAGENT_RESULT_METADATA_KEY, None)
     metadata[SUBAGENT_FORCED_FINAL_METADATA_KEY] = forced_final
     metadata[SUBAGENT_ACTION_METADATA_KEY] = {
-        "route": "complete",
+        "route": "handoff",
         "agent_run_id": subagent.agent_run_id,
         "agent_id": subagent.agent_id,
         "forced_final": forced_final,
@@ -791,6 +791,6 @@ __all__ = [
     "SUBAGENT_RESULT_METADATA_KEY",
     "SubagentActionSelectionError",
     "SubagentToolBuilderPromptBuilder",
-    "choose_subagent_action",
     "record_subagent_observation_and_budget",
+    "run_subagent_model_turn",
 ]
