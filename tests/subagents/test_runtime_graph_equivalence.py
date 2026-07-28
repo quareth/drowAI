@@ -100,47 +100,29 @@ def test_generic_subagent_graph_topology_stays_locked() -> None:
 
     assert set(generic_graph.nodes) == {
         "initialize",
-        "update_working_memory",
-        "memory_retrieval",
         "choose_action",
         "approval_gate",
         "dispatch_tool",
         "tool_synthesizer",
-        "post_tool_reasoning",
-        "decision_router",
-        "think_more",
-        "reflect",
-        "finalize",
+        "record_observation",
         "complete",
     }
     assert set(generic_graph.edges) == {
         ("__start__", "initialize"),
-        ("initialize", "update_working_memory"),
-        ("update_working_memory", "memory_retrieval"),
-        ("memory_retrieval", "choose_action"),
+        ("initialize", "choose_action"),
         ("approval_gate", "dispatch_tool"),
         ("dispatch_tool", "tool_synthesizer"),
-        ("tool_synthesizer", "post_tool_reasoning"),
-        ("post_tool_reasoning", "decision_router"),
-        ("think_more", "post_tool_reasoning"),
-        ("reflect", "decision_router"),
-        ("finalize", "complete"),
+        ("tool_synthesizer", "record_observation"),
+        ("record_observation", "choose_action"),
         ("complete", "__end__"),
     }
-    assert set(generic_graph.branches) == {"choose_action", "decision_router"}
+    assert set(generic_graph.branches) == {"choose_action"}
     choose_branch = generic_graph.branches["choose_action"][
         "_route_after_choose_action"
     ]
-    router_branch = generic_graph.branches["decision_router"]["_route_after_router"]
     assert choose_branch.ends == {
         "approval_gate": "approval_gate",
-        "complete": "finalize",
-    }
-    assert router_branch.ends == {
-        "choose_action": "choose_action",
-        "think_more": "think_more",
-        "reflect": "reflect",
-        "complete": "finalize",
+        "complete": "complete",
     }
 
 

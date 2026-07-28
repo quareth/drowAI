@@ -21,7 +21,11 @@ from agent.graph.infrastructure.state_models import GraphRuntimeContext
 from agent.graph.state import InteractiveState
 from agent.subagents.contracts import AgentResult, AgentResultProjection
 from agent.subagents.definition import SubagentDefinition
-from agent.subagents.runtime.model import SUBAGENT_RESULT_METADATA_KEY
+from agent.subagents.runtime.model import (
+    SUBAGENT_FORCED_FINAL_METADATA_KEY,
+    SUBAGENT_OBSERVATION_TRANSCRIPT_KEY,
+    SUBAGENT_RESULT_METADATA_KEY,
+)
 from agent.subagents.runtime.state import (
     SubagentRuntimeState,
     subagent_state_from_graph_state,
@@ -124,6 +128,8 @@ def _validate_result_identity(
 
 
 def _derived_outcome(metadata: Mapping[str, Any]) -> str:
+    if metadata.get(SUBAGENT_FORCED_FINAL_METADATA_KEY) is True:
+        return "partial"
     router_outcome = metadata.get("router_outcome")
     if isinstance(router_outcome, Mapping):
         reason = str(router_outcome.get("reason") or "").lower()
@@ -150,6 +156,9 @@ def _derived_summary(interactive: InteractiveState) -> str:
 
 
 def _derived_key_findings(interactive: InteractiveState) -> list[str]:
+    transcript_findings = _transcript_key_findings(interactive.facts.safe_metadata)
+    if transcript_findings:
+        return transcript_findings
     synthesized = _mapping(interactive.facts.safe_metadata.get("synthesized_output"))
     compact = _mapping(interactive.facts.last_tool_result_compact)
     return _string_list(synthesized.get("key_findings")) or _string_list(
@@ -198,10 +207,15 @@ def _derived_tools_used(interactive: InteractiveState) -> list[str]:
 def _derived_limitations(metadata: Mapping[str, Any]) -> list[str]:
     limitations = _string_list(metadata.get("limitations"))
     limitations.extend(_string_list(metadata.get("tool_gaps")))
+    if metadata.get(SUBAGENT_FORCED_FINAL_METADATA_KEY) is True:
+        limitations.append("Subagent tool or iteration budget was exhausted.")
     return _dedupe(limitations)
 
 
 def _derived_next_steps(metadata: Mapping[str, Any]) -> list[str]:
+    transcript_steps = _transcript_next_steps(metadata)
+    if transcript_steps:
+        return transcript_steps
     synthesized = _mapping(metadata.get("synthesized_output"))
     compact = _mapping(metadata.get("last_tool_result_compact"))
     return _string_list(synthesized.get("next_actions")) or _string_list(
@@ -224,6 +238,28 @@ def _clear_pending_tool_plan(metadata: dict[str, Any]) -> None:
         "planned_execution_strategy",
     ):
         metadata.pop(key, None)
+
+
+def _transcript_key_findings(metadata: Mapping[str, Any]) -> list[str]:
+    transcript = metadata.get(SUBAGENT_OBSERVATION_TRANSCRIPT_KEY)
+    if not isinstance(transcript, list):
+        return []
+    findings: list[str] = []
+    for item in transcript:
+        if isinstance(item, Mapping):
+            findings.extend(_string_list(item.get("key_findings")))
+    return _dedupe(findings)
+
+
+def _transcript_next_steps(metadata: Mapping[str, Any]) -> list[str]:
+    transcript = metadata.get(SUBAGENT_OBSERVATION_TRANSCRIPT_KEY)
+    if not isinstance(transcript, list):
+        return []
+    steps: list[str] = []
+    for item in transcript:
+        if isinstance(item, Mapping):
+            steps.extend(_string_list(item.get("next_actions")))
+    return _dedupe(steps)
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:

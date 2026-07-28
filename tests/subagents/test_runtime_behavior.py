@@ -20,9 +20,11 @@ from agent.subagents.runtime.complete import complete_subagent_result
 from agent.subagents.runtime.model import (
     SUBAGENT_ACTION_METADATA_KEY,
     SUBAGENT_EXECUTION_STRATEGY_KEY,
+    SUBAGENT_OBSERVATION_TRANSCRIPT_KEY,
     SUBAGENT_RESULT_METADATA_KEY,
     SubagentToolBuilderPromptBuilder,
     choose_subagent_action,
+    record_subagent_observation_and_budget,
 )
 from agent.subagents.runtime import model as runtime_model
 from agent.subagents.runtime.profile import (
@@ -58,8 +60,14 @@ class _FakeUsage:
 class _FakeBuilderLLM:
     """Return configured native calls and capture the builder request."""
 
-    def __init__(self, calls: list[ProviderToolCall]) -> None:
+    def __init__(
+        self,
+        calls: list[ProviderToolCall] | None = None,
+        *,
+        content: str | None = None,
+    ) -> None:
         self.calls = calls
+        self.content = content
         self.requests: list[dict[str, Any]] = []
 
     async def chat_with_tools_with_usage(
@@ -76,7 +84,7 @@ class _FakeBuilderLLM:
             }
         )
         return ToolCallResult(
-            content=None,
+            content=self.content,
             tool_calls=self.calls,
             raw=None,
             usage=_FakeUsage(),
@@ -312,7 +320,7 @@ async def test_runtime_model_builder_records_generic_action_metadata_and_call_to
     assert metadata["planner_plan"]["tool_batch"]["tool_calls"][0][
         "tool_call_id"
     ].startswith("subagent-call-")
-    assert update["trace"]["usage_records"][0]["source"] == "subagent_tool_builder"
+    assert update["trace"]["usage_records"][0]["source"] == "subagent_runtime_model"
     assert len(resolver_calls) == 1
     assert resolver_calls[0]["kwargs"]["role"] == "reasoning_main"
     assert len(llm.requests) == 1
@@ -322,7 +330,7 @@ async def test_runtime_model_builder_records_generic_action_metadata_and_call_to
         NMAP_TOOL_ID,
     ]
     assert request["kwargs"] == {
-        "tool_choice": "required",
+        "tool_choice": "auto",
         "parallel_tool_calls": True,
         "temperature": 0.1,
         "max_tokens": 5000,
@@ -365,7 +373,7 @@ async def test_runtime_model_builder_appends_one_usage_record_after_existing() -
     assert update["trace"]["usage_records"] == [
         existing_usage,
         {
-            "source": "subagent_tool_builder",
+            "source": "subagent_runtime_model",
             "prompt_tokens": 10,
             "completion_tokens": 5,
             "total_tokens": 15,
@@ -404,6 +412,123 @@ async def test_runtime_resolver_injection_avoids_global_cross_run_contamination(
     assert update["facts"]["metadata"][SUBAGENT_ACTION_METADATA_KEY][
         "tool_batch_id"
     ].startswith("subagent-batch-")
+
+
+@pytest.mark.asyncio
+async def test_runtime_model_accepts_text_handoff_without_tool_call() -> None:
+    llm = _FakeBuilderLLM(
+        [],
+        content="Pathfinder found one live host and recommends service enumeration.",
+    )
+
+    update = await choose_subagent_action(
+        _pathfinder_definition(),
+        _generic_state(),
+        llm_resolver=lambda *_args, **_kwargs: llm,
+    )
+
+    metadata = update["facts"]["metadata"]
+    action = metadata[SUBAGENT_ACTION_METADATA_KEY]
+    assert action["route"] == "complete"
+    assert action["forced_final"] is False
+    assert SUBAGENT_RESULT_METADATA_KEY not in metadata
+    assert update["trace"]["final_text"] == (
+        "Pathfinder found one live host and recommends service enumeration."
+    )
+
+    completed = complete_subagent_result(_pathfinder_definition(), update)
+    result = completed["facts"]["metadata"][SUBAGENT_RESULT_METADATA_KEY]
+    assert result["outcome"] == "completed"
+    assert result["summary"] == update["trace"]["final_text"]
+
+
+@pytest.mark.asyncio
+async def test_runtime_model_forces_text_handoff_when_iteration_budget_exhausted() -> None:
+    state = _generic_state()
+    state["facts"]["iterations"] = _pathfinder_definition().max_iterations
+    state["facts"]["last_tool_result_compact"] = {
+        "tool": FPING_TOOL_ID,
+        "status": "success",
+        "success": True,
+        "summary": "fping found one live host.",
+        "key_findings": ["10.0.0.10 is alive."],
+    }
+    state["facts"]["metadata"]["last_tool_result_compact"] = state["facts"][
+        "last_tool_result_compact"
+    ]
+    state["facts"]["metadata"]["synthesized_output"] = {
+        "tool": FPING_TOOL_ID,
+        "status": "success",
+        "success": True,
+        "summary": "fping found one live host.",
+        "key_findings": ["10.0.0.10 is alive."],
+        "next_actions": ["Run service enumeration next."],
+    }
+    llm = _FakeBuilderLLM([], content="Budget exhausted after host discovery.")
+
+    update = await choose_subagent_action(
+        _pathfinder_definition(),
+        state,
+        llm_resolver=lambda *_args, **_kwargs: llm,
+    )
+
+    request = _request_projection(llm.requests[0])
+    assert request["tool_ids"] == []
+    assert request["kwargs"] == {
+        "tool_choice": "none",
+        "temperature": 0.1,
+        "max_tokens": 5000,
+    }
+    metadata = update["facts"]["metadata"]
+    assert metadata[SUBAGENT_ACTION_METADATA_KEY]["route"] == "complete"
+    assert metadata[SUBAGENT_OBSERVATION_TRANSCRIPT_KEY][-1]["summary"] == (
+        "fping found one live host."
+    )
+
+    completed = complete_subagent_result(_pathfinder_definition(), update)
+    result = completed["facts"]["metadata"][SUBAGENT_RESULT_METADATA_KEY]
+    assert result["outcome"] == "partial"
+    assert result["key_findings"] == ["10.0.0.10 is alive."]
+    assert result["limitations"] == [
+        "Subagent tool or iteration budget was exhausted."
+    ]
+    assert result["recommended_next_steps"] == ["Run service enumeration next."]
+
+
+def test_runtime_records_completed_execution_budget_once_by_batch_identity() -> None:
+    state = _generic_state()
+    state["facts"]["metadata"][SUBAGENT_ACTION_METADATA_KEY] = {
+        "route": "tool",
+        "agent_run_id": "run-1",
+        "agent_id": "pathfinder",
+        "tool_batch_id": "batch-1",
+    }
+    state["facts"]["metadata"]["last_tool_result_compact"] = {
+        "tool": FPING_TOOL_ID,
+        "status": "success",
+        "success": True,
+        "summary": "same observation",
+        "key_findings": ["same finding"],
+    }
+    state["facts"]["metadata"]["synthesized_output"] = {
+        "tool": FPING_TOOL_ID,
+        "status": "success",
+        "success": True,
+        "summary": "same observation",
+        "key_findings": ["same finding"],
+    }
+
+    first = record_subagent_observation_and_budget(_pathfinder_definition(), state)
+    second = record_subagent_observation_and_budget(_pathfinder_definition(), first)
+    second["facts"]["metadata"][SUBAGENT_ACTION_METADATA_KEY]["tool_batch_id"] = (
+        "batch-2"
+    )
+    third = record_subagent_observation_and_budget(_pathfinder_definition(), second)
+
+    assert first["facts"]["iterations"] == 1
+    assert second["facts"]["iterations"] == 1
+    assert third["facts"]["iterations"] == 2
+    assert len(third["facts"]["metadata"][SUBAGENT_OBSERVATION_TRANSCRIPT_KEY]) == 1
 
 
 def test_runtime_completion_projects_generic_result_metadata() -> None:

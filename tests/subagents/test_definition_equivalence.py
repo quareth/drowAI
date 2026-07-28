@@ -88,7 +88,8 @@ def test_pathfinder_definition_matches_current_prompt_sections() -> None:
     assert_golden("subagent_tool_builder__system.txt", prompt)
     assert prompt.startswith(
         f"You are {definition.display_name}, a bounded recon subagent.\n"
-        "Emit native tool calls only."
+        "Use native tool calls when more evidence is needed; otherwise return a "
+        "concise parent handoff."
     )
     assert (
         f"Call between 1 and {definition.max_tool_calls_per_iteration} "

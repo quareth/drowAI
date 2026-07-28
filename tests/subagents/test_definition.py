@@ -58,7 +58,8 @@ def test_loads_builtin_pathfinder_definition_from_package_data() -> None:
     assert pathfinder.icon == "pathfinder"
     assert pathfinder.tool_builder_role_prompt == (
         "You are Pathfinder, a bounded recon subagent.\n"
-        "Emit native tool calls only."
+        "Use native tool calls when more evidence is needed; otherwise return a "
+        "concise parent handoff."
     )
     assert pathfinder.tool_builder_boundary_rules == (
         "Use only the targets, objective, scope, and constraints in the assignment "

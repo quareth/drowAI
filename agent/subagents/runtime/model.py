@@ -1,15 +1,17 @@
-"""Definition-configured native tool-batch model builder node.
+"""Definition-configured subagent model/tool loop node.
 
 Purpose
 -------
-Build one provider-native tool batch for a declarative subagent using its
-resolved tool profile and the shared tool execution contract.
+Run one bounded model turn for a declarative subagent, allowing provider-native
+tool calls while budget remains and accepting a concise text handoff when the
+assignment is complete.
 
 Responsibility boundary
 -----------------------
-This module owns LLM prompt construction and native tool-call validation only.
-It does not execute tools, mutate control-plane state, depend on control-plane
-services, or choose between legacy and generic runtime paths.
+This module owns LLM prompt construction, native tool-call validation, and
+terminal handoff projection only. It does not execute tools, mutate
+control-plane state, depend on control-plane services, or choose between legacy
+and generic runtime paths.
 """
 
 from __future__ import annotations
@@ -49,6 +51,11 @@ logger = logging.getLogger(__name__)
 SUBAGENT_ACTION_METADATA_KEY = "subagent_action"
 SUBAGENT_RESULT_METADATA_KEY = "subagent_result"
 SUBAGENT_EXECUTION_STRATEGY_KEY = "_execution_strategy"
+SUBAGENT_OBSERVATION_TRANSCRIPT_KEY = "subagent_observation_transcript"
+SUBAGENT_FORCED_FINAL_METADATA_KEY = "subagent_forced_final"
+SUBAGENT_ITERATION_MARKERS_KEY = "subagent_completed_iteration_markers"
+_MAX_SUBAGENT_OBSERVATIONS = 6
+_MAX_OBSERVATION_FINDINGS = 8
 
 _SUBAGENT_EXECUTION_STRATEGY_SCHEMA: dict[str, Any] = {
     "type": "string",
@@ -124,15 +131,26 @@ async def choose_subagent_action(
     writer: Any = None,
     llm_resolver: Callable[..., Any] | None = None,
 ) -> dict[str, Any]:
-    """Build one bounded subagent tool batch from all visible profile tools."""
+    """Run one bounded subagent model turn and route to tools or completion."""
 
     interactive = InteractiveState.from_mapping(state)
     subagent = subagent_state_from_graph_state(interactive, definition=definition)
-    if not subagent.tool_profile.tools:
-        raise SubagentActionSelectionError("Subagent tool profile is empty")
+    _refresh_subagent_observation_transcript(interactive)
 
-    max_committed_calls = AgentConfig().max_committed_tools_per_batch
-    tool_specs, function_to_tool_id = _build_subagent_function_specs(subagent)
+    max_committed_calls = _max_committed_calls(definition)
+    can_call_tools = (
+        bool(subagent.tool_profile.tools)
+        and _remaining_iterations(definition, interactive) > 0
+        and max_committed_calls > 0
+    )
+    if can_call_tools:
+        tool_specs, function_to_tool_id = _build_subagent_function_specs(subagent)
+        tool_choice = "auto"
+    else:
+        tool_specs = []
+        function_to_tool_id = {}
+        tool_choice = "none"
+
     prompt_builder = SubagentToolBuilderPromptBuilder(definition)
     resolver = llm_resolver or resolve_llm_client
     llm_client = resolver(
@@ -141,6 +159,14 @@ async def choose_subagent_action(
         config=config,
         role="reasoning_main",
     )
+    request_kwargs: dict[str, Any] = {
+        "tool_choice": tool_choice,
+        "temperature": 0.1,
+        "max_tokens": NATIVE_BUILDER_MAX_OUTPUT_TOKENS,
+    }
+    if can_call_tools:
+        request_kwargs["parallel_tool_calls"] = True
+
     async with reasoning_section(
         writer,
         state=interactive,
@@ -160,9 +186,7 @@ async def choose_subagent_action(
                     working_memory=_bounded_mapping(
                         interactive.facts.safe_metadata.get("working_memory")
                     ),
-                    previous_tool_summary=_bounded_mapping(
-                        interactive.facts.last_tool_result_compact
-                    ),
+                    previous_tool_summary=_build_previous_tool_context(interactive),
                     remaining_limits=_build_remaining_limits(
                         definition,
                         interactive,
@@ -170,10 +194,7 @@ async def choose_subagent_action(
                     ),
                 ),
                 tools=tool_specs,
-                tool_choice="required",
-                parallel_tool_calls=True,
-                temperature=0.1,
-                max_tokens=NATIVE_BUILDER_MAX_OUTPUT_TOKENS,
+                **request_kwargs,
             ),
             timeout_sec=LLM_TIMEOUT_PLANNER_PARAMETER_RESOLUTION_SEC,
             component="SUBAGENT",
@@ -184,6 +205,21 @@ async def choose_subagent_action(
         )
 
         _append_usage(interactive, result)
+        if not result.tool_calls:
+            update = _apply_subagent_text_result(
+                interactive,
+                subagent,
+                result,
+                forced_final=not can_call_tools,
+            )
+            if emitter is not None:
+                emitter.emit_reasoning_delta("Subagent prepared parent handoff.")
+            return update
+
+        if not can_call_tools:
+            raise SubagentActionSelectionError(
+                "Subagent returned tool calls after tool budget was exhausted"
+            )
         batch = _build_tool_batch_from_result(
             result,
             subagent=subagent,
@@ -322,6 +358,42 @@ def _build_tool_batch_from_result(
     )
 
 
+def _apply_subagent_text_result(
+    interactive: InteractiveState,
+    subagent: SubagentRuntimeState,
+    result: ToolCallResult,
+    *,
+    forced_final: bool,
+) -> dict[str, Any]:
+    """Project a model text response into terminal handoff state."""
+
+    summary = _clean_text(result.content)
+    if not summary:
+        raise SubagentActionSelectionError(
+            "Subagent model turn returned neither tool calls nor handoff text"
+        )
+
+    metadata = interactive.facts.ensure_metadata()
+    metadata.pop(SUBAGENT_RESULT_METADATA_KEY, None)
+    metadata[SUBAGENT_FORCED_FINAL_METADATA_KEY] = forced_final
+    metadata[SUBAGENT_ACTION_METADATA_KEY] = {
+        "route": "complete",
+        "agent_run_id": subagent.agent_run_id,
+        "agent_id": subagent.agent_id,
+        "forced_final": forced_final,
+    }
+    interactive.trace.final_text = summary
+    interactive.trace.history.append(
+        {
+            "type": "subagent_model_handoff",
+            "agent_run_id": subagent.agent_run_id,
+            "agent_id": subagent.agent_id,
+            "forced_final": forced_final,
+        }
+    )
+    return interactive.as_graph_update()
+
+
 def _call_name_and_arguments(call: Any) -> tuple[str, Any]:
     """Return normalized provider function name and raw arguments."""
 
@@ -455,6 +527,22 @@ def _apply_subagent_tool_batch(
     return interactive.as_graph_update()
 
 
+def record_subagent_observation_and_budget(
+    definition: SubagentDefinition,
+    state: Mapping[str, Any] | InteractiveState,
+    context: GraphRuntimeContext | None = None,
+    config: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Record compact observations and advance completed execution budget once."""
+
+    _ = (context, config)
+    interactive = InteractiveState.from_mapping(state)
+    subagent = subagent_state_from_graph_state(interactive, definition=definition)
+    _refresh_subagent_observation_transcript(interactive)
+    _advance_completed_execution_iteration(interactive, subagent)
+    return interactive.as_graph_update()
+
+
 def _serialize_tool_batch(batch: ToolBatch) -> dict[str, Any]:
     """Serialize the canonical batch for checkpoint-safe runtime dispatch."""
 
@@ -476,11 +564,11 @@ def _serialize_tool_batch(batch: ToolBatch) -> dict[str, Any]:
 
 
 def _append_usage(interactive: InteractiveState, result: ToolCallResult) -> None:
-    """Append the single builder call to normal usage accounting."""
+    """Append the single subagent model call to normal usage accounting."""
 
     usage = _usage_to_dict(
         result.usage,
-        "subagent_tool_builder",
+        "subagent_runtime_model",
         request_mode="non_streaming",
     )
     if usage is None:
@@ -498,6 +586,24 @@ def _bounded_mapping(value: Any) -> dict[str, Any]:
     return dict(value)
 
 
+def _max_committed_calls(definition: SubagentDefinition) -> int:
+    """Return the per-turn native call cap allowed for this definition."""
+
+    configured = max(int(AgentConfig().max_committed_tools_per_batch), 0)
+    definition_limit = max(int(definition.max_tool_calls_per_iteration), 0)
+    return min(configured, definition_limit) if configured else definition_limit
+
+
+def _remaining_iterations(
+    definition: SubagentDefinition,
+    interactive: InteractiveState,
+) -> int:
+    """Return remaining tool-capable model turns for this child session."""
+
+    completed_iterations = max(int(interactive.facts.iterations or 0), 0)
+    return max(max(int(definition.max_iterations), 1) - completed_iterations, 0)
+
+
 def _build_remaining_limits(
     definition: SubagentDefinition,
     interactive: InteractiveState,
@@ -511,17 +617,180 @@ def _build_remaining_limits(
     return {
         "completed_iterations": completed_iterations,
         "max_iterations": max_iterations,
-        "remaining_iterations": max(max_iterations - completed_iterations, 0),
+        "remaining_iterations": _remaining_iterations(definition, interactive),
         "max_tool_calls_per_iteration": int(definition.max_tool_calls_per_iteration),
         "remaining_tool_calls_this_iteration": int(max_committed_calls),
     }
 
 
+def _build_previous_tool_context(interactive: InteractiveState) -> dict[str, Any]:
+    """Return bounded prior observations for the next model turn."""
+
+    metadata = interactive.facts.safe_metadata
+    compact = _bounded_mapping(interactive.facts.last_tool_result_compact)
+    transcript = metadata.get(SUBAGENT_OBSERVATION_TRANSCRIPT_KEY)
+    if not isinstance(transcript, list) or not transcript:
+        return compact
+    return {
+        "last_tool_result": compact,
+        "subagent_observations": list(transcript)[-_MAX_SUBAGENT_OBSERVATIONS:],
+    }
+
+
+def _refresh_subagent_observation_transcript(interactive: InteractiveState) -> None:
+    """Append the latest compact synthesis to a bounded in-session transcript."""
+
+    metadata = interactive.facts.ensure_metadata()
+    observation = _current_observation(metadata, interactive.facts.selected_tool)
+    if observation is None:
+        return
+
+    transcript = metadata.get(SUBAGENT_OBSERVATION_TRANSCRIPT_KEY)
+    if not isinstance(transcript, list):
+        transcript = []
+    else:
+        transcript = [
+            item
+            for item in transcript
+            if isinstance(item, Mapping)
+        ]
+    if not transcript or dict(transcript[-1]) != observation:
+        transcript.append(observation)
+    metadata[SUBAGENT_OBSERVATION_TRANSCRIPT_KEY] = [
+        dict(item) for item in transcript[-_MAX_SUBAGENT_OBSERVATIONS:]
+    ]
+
+
+def _current_observation(
+    metadata: Mapping[str, Any],
+    selected_tool: Any,
+) -> dict[str, Any] | None:
+    """Return a prompt-safe observation from current compact synthesis metadata."""
+
+    synthesized = _bounded_mapping(metadata.get("synthesized_output"))
+    compact = _bounded_mapping(metadata.get("last_tool_result_compact"))
+    summary = _clean_text(synthesized.get("summary") or compact.get("summary"))
+    findings = _string_list(
+        synthesized.get("key_findings") or compact.get("key_findings")
+    )[:_MAX_OBSERVATION_FINDINGS]
+    if not summary and not findings:
+        return None
+
+    tool = _clean_text(
+        synthesized.get("tool") or compact.get("tool") or selected_tool
+    )
+    status = _clean_text(synthesized.get("status") or compact.get("status"))
+    observation: dict[str, Any] = {
+        "summary": summary,
+        "key_findings": findings,
+    }
+    if tool:
+        observation["tool"] = tool
+    if status:
+        observation["status"] = status
+    if "success" in synthesized or "success" in compact:
+        observation["success"] = bool(
+            synthesized.get("success", compact.get("success"))
+        )
+    next_actions = _string_list(
+        synthesized.get("next_actions") or compact.get("report_recommendations")
+    )[:_MAX_OBSERVATION_FINDINGS]
+    if next_actions:
+        observation["next_actions"] = next_actions
+    return observation
+
+
+def _advance_completed_execution_iteration(
+    interactive: InteractiveState,
+    subagent: SubagentRuntimeState,
+) -> None:
+    """Advance iteration budget once for each completed tool batch identity."""
+
+    metadata = interactive.facts.ensure_metadata()
+    marker = _completed_execution_marker(metadata, subagent)
+    if not marker:
+        return
+
+    markers = metadata.get(SUBAGENT_ITERATION_MARKERS_KEY)
+    if not isinstance(markers, list):
+        markers = []
+    normalized_markers = [str(item) for item in markers if str(item).strip()]
+    if marker in normalized_markers:
+        metadata[SUBAGENT_ITERATION_MARKERS_KEY] = normalized_markers
+        return
+
+    normalized_markers.append(marker)
+    metadata[SUBAGENT_ITERATION_MARKERS_KEY] = normalized_markers[
+        -_MAX_SUBAGENT_OBSERVATIONS:
+    ]
+    interactive.facts.iterations = max(int(interactive.facts.iterations or 0), 0) + 1
+
+
+def _completed_execution_marker(
+    metadata: Mapping[str, Any],
+    subagent: SubagentRuntimeState,
+) -> str:
+    """Return the stable completed batch/run marker for checkpoint idempotence."""
+
+    action = metadata.get(SUBAGENT_ACTION_METADATA_KEY)
+    if isinstance(action, Mapping):
+        batch_id = _clean_text(action.get("tool_batch_id"))
+        if batch_id:
+            return f"{subagent.agent_run_id}:{batch_id}"
+    compact_batch = _bounded_mapping(metadata.get("last_tool_result_compact_batch"))
+    batch_id = _clean_text(compact_batch.get("tool_batch_id"))
+    if batch_id:
+        return f"{subagent.agent_run_id}:{batch_id}"
+    compact = _bounded_mapping(metadata.get("last_tool_result_compact"))
+    execution_id = _clean_text(compact.get("execution_id") or compact.get("id"))
+    tool = _clean_text(compact.get("tool"))
+    if execution_id:
+        return f"{subagent.agent_run_id}:{execution_id}"
+    if tool:
+        status = _clean_text(compact.get("status"))
+        return f"{subagent.agent_run_id}:{tool}:{status}:{_compact_signature(compact)}"
+    return ""
+
+
+def _compact_signature(compact: Mapping[str, Any]) -> str:
+    """Return a deterministic compact signature for legacy single-call results."""
+
+    return json.dumps(
+        {
+            "summary": _clean_text(compact.get("summary")),
+            "key_findings": _string_list(compact.get("key_findings")),
+            "errors": _string_list(compact.get("errors")),
+        },
+        ensure_ascii=True,
+        sort_keys=True,
+    )
+
+
+def _string_list(value: Any) -> list[str]:
+    """Return non-empty strings from a list-like value."""
+
+    if not isinstance(value, list | tuple):
+        return []
+    return [text for item in value if (text := _clean_text(item))]
+
+
+def _clean_text(value: Any) -> str:
+    """Normalize nullable prompt/result text to a stripped string."""
+
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
 __all__ = [
     "SUBAGENT_ACTION_METADATA_KEY",
     "SUBAGENT_EXECUTION_STRATEGY_KEY",
+    "SUBAGENT_FORCED_FINAL_METADATA_KEY",
+    "SUBAGENT_ITERATION_MARKERS_KEY",
+    "SUBAGENT_OBSERVATION_TRANSCRIPT_KEY",
     "SUBAGENT_RESULT_METADATA_KEY",
     "SubagentActionSelectionError",
     "SubagentToolBuilderPromptBuilder",
     "choose_subagent_action",
+    "record_subagent_observation_and_budget",
 ]
