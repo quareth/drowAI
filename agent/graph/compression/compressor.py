@@ -357,7 +357,7 @@ def _build_metadata_compact_output(
             source="deterministic",
             model=None,
             token_usage=None,
-            fallback_reason="deterministic_adapter_retired",
+            fallback_reason="deterministic_adapter_skipped",
         ),
     )
 

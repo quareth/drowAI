@@ -1603,6 +1603,54 @@ async def test_compress_tool_output_utility_catalog_role_uses_processor_path(
 
 
 @pytest.mark.asyncio
+async def test_non_pentest_metadata_secondary_preserves_skipped_fallback_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Generic non-pentest metadata keeps its pre-refactor envelope marker."""
+
+    async def _process_output_stub(
+        self: object,
+        tool_name: str,
+        raw_output: str,
+        metadata: Dict[str, Any],
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            summary="Processor utility summary.",
+            key_findings=[],
+            next_actions=[],
+            structured_signals=[],
+            decision_evidence=[],
+            lossiness_risk="low",
+            analysis_source="deterministic",
+            usage=None,
+        )
+
+    monkeypatch.setattr(
+        "agent.graph.compression.compressor.UniversalToolProcessor.process_output",
+        _process_output_stub,
+    )
+
+    result = await compress_tool_output(
+        tool_name="service_access.ftp_login",
+        raw_result=_base_raw_result(
+            metadata={"compact_summary": "Metadata utility summary."}
+        ),
+        artifact_path=None,
+        execution_id="exec-utility-metadata",
+        llm_client=None,
+    )
+
+    deterministic = result.deterministic_compact_output
+    assert deterministic is not None
+    assert deterministic.summary == "Metadata utility summary."
+    assert deterministic.compression is not None
+    assert (
+        deterministic.compression.fallback_reason
+        == "deterministic_adapter_skipped"
+    )
+
+
+@pytest.mark.asyncio
 async def test_compress_tool_output_complete_adapter_augments_processor_and_keeps_metadata_first(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

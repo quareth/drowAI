@@ -2,7 +2,7 @@
 
 This module is the single semantic mapping authority for both ffuf variants
 (`web_application_fuzzers.ffuf` and `web_crawlers.ffuf`). It emits:
-- canonical semantic observations (`web.path_discovered`) for crawler results
+- canonical host, service, and web-path observations for confirmed responses
 - bounded semantic evidence entries using the locked shared vocabulary
 
 Result-summary policy:
@@ -19,7 +19,10 @@ from typing import Any, Mapping
 from urllib.parse import urlparse, urlsplit
 
 from agent.semantic.evidence_vocabulary import SemanticEvidenceType
-from runtime_shared.semantic.web_common import normalize_url
+from runtime_shared.semantic.web_common import (
+    build_web_response_observations,
+    normalize_url,
+)
 
 FFUF_VARIANT_CRAWLER = "crawler"
 FFUF_VARIANT_FUZZER = "fuzzer"
@@ -155,7 +158,7 @@ def build_ffuf_semantic_observations(
     metadata: Mapping[str, Any],
     args: Any,
 ) -> list[dict[str, Any]]:
-    """Emit final `web.path_discovered` observations for supported ffuf rows."""
+    """Emit canonical web-response observations for supported ffuf rows."""
     metadata_dict = dict(metadata) if isinstance(metadata, Mapping) else {}
     variant = detect_ffuf_variant(metadata_dict)
     source = _FFUF_SOURCE_BY_VARIANT[variant]
@@ -167,24 +170,28 @@ def build_ffuf_semantic_observations(
     )
 
     observations: list[dict[str, Any]] = []
-    seen: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
+    seen: set[tuple[str, str, str, tuple[tuple[str, str], ...]]] = set()
     for row in rows:
-        subject_key = str(row.pop("_subject_key"))
-        marker = (
-            subject_key,
-            tuple(sorted((str(key), str(value)) for key, value in row.items())),
-        )
-        if marker in seen:
-            continue
-        seen.add(marker)
-        observations.append(
-            {
-                "observation_type": "web.path_discovered",
-                "subject_type": "web.path",
-                "subject_key": subject_key,
-                "payload": row,
-            }
-        )
+        canonical_url = str(row.pop("_subject_key")).removeprefix("web.path:")
+        for observation in build_web_response_observations(
+            url=canonical_url,
+            source=row.get("source"),
+            target_url=row.get("target_url"),
+            status_code=row.get("status_code"),
+            response_size=row.get("response_size"),
+            calibrated=bool(row.get("calibrated")),
+        ):
+            payload = _as_mapping(observation.get("payload"))
+            marker = (
+                str(observation.get("observation_type") or ""),
+                str(observation.get("subject_type") or ""),
+                str(observation.get("subject_key") or ""),
+                tuple(sorted((str(key), str(value)) for key, value in payload.items())),
+            )
+            if marker in seen:
+                continue
+            seen.add(marker)
+            observations.append(observation)
 
     return observations
 

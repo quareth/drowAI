@@ -42,6 +42,7 @@ from backend.services.knowledge.contracts import ObservationCreate as _Observati
 from backend.services.knowledge.projection_service import KnowledgeProjectionService
 from backend.services.knowledge.query_service import KnowledgeQueryService
 from runtime_shared.semantic.pentest_facts import SemanticFactEnvelope
+from runtime_shared.semantic.web_common import build_web_response_observations
 
 ObservationCreate = partial(_ObservationCreate, user_id=1)
 
@@ -714,6 +715,127 @@ def test_projection_service_web_path_projection_reports_counters() -> None:
         assert result.web_path_insert_count == 1
         assert db.query(KnowledgeWebPath).count() == 1
         assert db.query(EngagementWebPathLink).count() == 1
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_projection_service_projects_ip_web_response_without_prior_network_scan() -> None:
+    engine, db = _build_session()
+    try:
+        engagement = _seed_engagement(db)
+        semantic_rows = build_web_response_observations(
+            url="http://198.51.100.24/ip",
+            source="web_applications.web_crawlers.ffuf",
+            target_url="http://198.51.100.24/FUZZ",
+            status_code=200,
+            response_size=17455,
+        )
+        bridge_result = build_knowledge_observations(
+            envelope=SemanticFactEnvelope(
+                semantic_schema_version="ffuf.v1",
+                capability_family="web_discovery",
+                observations=tuple(semantic_rows),
+                evidence=(),
+            ),
+            context=KnowledgeFactContext(
+                tenant_id=1,
+                user_id=int(engagement.user_id),
+                engagement_id=int(engagement.id),
+                task_id=None,
+                source_execution_id="exec-ffuf-ip-web-response",
+                ingestion_run_id="run-ffuf-ip-web-response",
+                observed_at=None,
+                artifact_summaries=(),
+                evidence_archives=(),
+            ),
+        )
+
+        result = KnowledgeProjectionService(db).project_observations(
+            engagement_id=engagement.id,
+            observations=bridge_result.observations,
+        )
+
+        assert result.asset_insert_count == 1
+        assert result.service_insert_count == 1
+        assert result.web_path_insert_count == 1
+        assert db.query(EngagementAssetLink).count() == 1
+        assert db.query(EngagementServiceLink).count() == 1
+        assert db.query(EngagementWebPathLink).count() == 1
+
+        overlap_result = build_knowledge_observations(
+            envelope=SemanticFactEnvelope(
+                semantic_schema_version="nmap.v1",
+                capability_family="network_discovery",
+                observations=(
+                    {
+                        "observation_type": "network.host_discovered",
+                        "subject_type": "host.ip",
+                        "subject_key": "host.ip:198.51.100.24",
+                        "payload": {
+                            "ip": "198.51.100.24",
+                            "source": "network_discovery.network_scanners.nmap",
+                        },
+                    },
+                    {
+                        "observation_type": "network.open_port",
+                        "subject_type": "service.socket",
+                        "subject_key": "service.socket:198.51.100.24/tcp/80",
+                        "payload": {
+                            "ip": "198.51.100.24",
+                            "port": 80,
+                            "protocol": "tcp",
+                            "service_name": "http",
+                            "source": "network_discovery.network_scanners.nmap",
+                        },
+                    },
+                ),
+                evidence=(),
+            ),
+            context=KnowledgeFactContext(
+                tenant_id=1,
+                user_id=int(engagement.user_id),
+                engagement_id=int(engagement.id),
+                task_id=None,
+                source_execution_id="exec-nmap-overlapping-web-service",
+                ingestion_run_id="run-nmap-overlapping-web-service",
+                observed_at=None,
+                artifact_summaries=(),
+                evidence_archives=(),
+            ),
+        )
+        overlap_projection = KnowledgeProjectionService(db).project_observations(
+            engagement_id=engagement.id,
+            observations=overlap_result.observations,
+        )
+
+        assert overlap_projection.asset_insert_count == 0
+        assert overlap_projection.service_insert_count == 0
+        assert db.query(KnowledgeAsset).count() == 1
+        assert db.query(KnowledgeService).count() == 1
+        assert db.query(KnowledgeWebPath).count() == 1
+        assert db.query(EngagementAssetLink).count() == 1
+        assert db.query(EngagementServiceLink).count() == 1
+        assert db.query(EngagementWebPathLink).count() == 1
+
+        web_surface = KnowledgeQueryService(db).list_service_web_surface_origins(
+            user_id=int(engagement.user_id),
+            tenant_id=1,
+            engagement_id=int(engagement.id),
+            service_key="service.socket:198.51.100.24/tcp/80",
+        )
+        assert web_surface["items"] == [
+            {
+                "origin_key": "http://198.51.100.24",
+                "total_paths": 1,
+                "visible_paths": 1,
+                "hidden_noisy": 0,
+                "calibrated_warnings": 0,
+                "producers": ["web_applications.web_crawlers.ffuf"],
+                "first_seen_at": web_surface["items"][0]["first_seen_at"],
+                "last_seen_at": web_surface["items"][0]["last_seen_at"],
+            }
+        ]
     finally:
         db.close()
         engine.dispose()

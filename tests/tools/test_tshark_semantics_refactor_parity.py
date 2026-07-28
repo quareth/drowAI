@@ -263,7 +263,7 @@ FIELD_PROFILE_STDOUT = "\n".join(
                 "tcp.stream": "9",
                 "frame.len": "74",
                 "ftp.request.command": "USER",
-                "ftp.request.arg": "nathan",
+                "ftp.request.arg": "demo-user",
             },
         ),
         _field_row(
@@ -279,7 +279,7 @@ FIELD_PROFILE_STDOUT = "\n".join(
                 "tcp.stream": "9",
                 "frame.len": "86",
                 "ftp.request.command": "PASS",
-                "ftp.request.arg": "Buck3tH4TF0RM3!",
+                "ftp.request.arg": "synthetic-password!",
             },
         ),
         _field_row(
@@ -1923,7 +1923,7 @@ def test_refactored_ftp_field_parser_matches_legacy_request_response_metadata() 
             "tcp.len": "18",
             "frame.len": "74",
             "ftp.request.command": "USER",
-            "ftp.request.arg": "nathan",
+            "ftp.request.arg": "demo-user",
         },
         {
             "frame.number": "61",
@@ -1937,7 +1937,7 @@ def test_refactored_ftp_field_parser_matches_legacy_request_response_metadata() 
             "tcp.len": "22",
             "frame.len": "86",
             "ftp.request.command": "PASS",
-            "ftp.request.arg": "Buck3tH4TF0RM3!",
+            "ftp.request.arg": "synthetic-password!",
         },
         {
             "frame.number": "62",
@@ -1978,7 +1978,7 @@ def test_refactored_ftp_field_parser_matches_legacy_request_response_metadata() 
             "src_port": "51521",
             "dst_port": "21",
             "request_command": "USER",
-            "request_arg": "nathan",
+            "request_arg": "demo-user",
             "response_code": None,
             "response_arg": None,
             "tcp_len": "18",
@@ -1993,7 +1993,7 @@ def test_refactored_ftp_field_parser_matches_legacy_request_response_metadata() 
             "src_port": "51521",
             "dst_port": "21",
             "request_command": "PASS",
-            "request_arg": "Buck3tH4TF0RM3!",
+            "request_arg": "synthetic-password!",
             "response_code": None,
             "response_arg": None,
             "tcp_len": "22",
@@ -3007,7 +3007,7 @@ def test_facade_snapshot_field_survey_and_protocol_rows() -> None:
             "src_port": "49154",
             "dst_port": "21",
             "request_command": "USER",
-            "request_arg": "nathan",
+            "request_arg": "demo-user",
             "response_code": None,
             "response_arg": None,
             "tcp_len": None,
@@ -3022,7 +3022,7 @@ def test_facade_snapshot_field_survey_and_protocol_rows() -> None:
             "src_port": "49154",
             "dst_port": "21",
             "request_command": "PASS",
-            "request_arg": "Buck3tH4TF0RM3!",
+            "request_arg": "synthetic-password!",
             "response_code": None,
             "response_arg": None,
             "tcp_len": None,
@@ -3044,6 +3044,39 @@ def test_facade_snapshot_field_survey_and_protocol_rows() -> None:
             "frame_len": "70",
         },
     ]
+
+
+def test_facade_field_security_mode_emits_masked_ftp_credential_finding() -> None:
+    metadata = _facade_parse(
+        FIELD_PROFILE_STDOUT,
+        "",
+        analysis_mode="find_security_relevant_artifacts",
+        fields=FIELD_PROFILE_FIELDS,
+        artifact_sha256="sha",
+        max_rows=20,
+    )
+
+    ftp_exposures = [
+        item
+        for item in metadata.get("secret_exposure", [])
+        if item.get("protocol") == "ftp" and item.get("field") == "ftp.request.arg"
+    ]
+    assert len(ftp_exposures) == 1
+
+    observations = tshark_semantics.build_tshark_semantic_observations(metadata, args=None)
+    ftp_findings = [
+        item
+        for item in observations
+        if item["observation_type"] == "finding.vulnerability_detected"
+        and item["payload"].get("protocol") == "ftp"
+    ]
+
+    assert len(ftp_findings) == 1
+    assert ftp_findings[0]["payload"]["subject_key"] == (
+        "service.socket:203.0.113.21/tcp/21"
+    )
+    assert "<DURABLE_SECRET_MASK:secret>" in ftp_findings[0]["payload"]["proof_excerpt"]
+    assert "synthetic-password!" not in str(ftp_findings)
 
 
 def test_facade_snapshot_mail_field_rows_emit_auth_security_signals() -> None:

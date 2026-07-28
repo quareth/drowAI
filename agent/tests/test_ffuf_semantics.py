@@ -11,6 +11,8 @@ from agent.context.tool_processor import UniversalToolProcessor
 from agent.semantic.enrichment import validate_semantic_evidence_entries
 from agent.semantic.evidence_vocabulary import SemanticEvidenceType
 from agent.tool_runtime.result_enrichment import merge_semantic_emitter_metadata
+from agent.tools.information_gathering.web_enumeration.contracts import HttpRequestArgs
+from agent.tools.information_gathering.web_enumeration.http_request import HttpRequestTool
 from agent.tools.web_applications._ffuf_semantics import (
     build_ffuf_semantic_evidence,
     build_ffuf_semantic_observations,
@@ -182,6 +184,127 @@ def test_ffuf_crawler_emits_path_discovered_when_results_present() -> None:
     assert observation["observation_type"] == "web.path_discovered"
     assert observation["subject_key"] == "web.path:https://example.com/admin"
     assert observation["payload"]["path"] == "/admin"
+
+
+def test_ffuf_ip_response_emits_complete_web_surface_fact_set() -> None:
+    observations = build_ffuf_semantic_observations(
+        {
+            "ffuf_variant": "crawler",
+            "config": {"url": "http://198.51.100.24/FUZZ"},
+            "results": [
+                {"url": "http://198.51.100.24/ip", "status": 200, "length": 17455},
+                {"url": "http://198.51.100.24/capture", "status": 302, "length": 220},
+            ],
+        },
+        CrawlerArgs(
+            target="http://198.51.100.24/FUZZ",
+            inline_wordlist=["ip", "capture"],
+        ),
+    )
+
+    identities = [
+        (
+            observation["observation_type"],
+            observation["subject_type"],
+            observation["subject_key"],
+        )
+        for observation in observations
+    ]
+    assert identities == [
+        ("network.host_discovered", "host.ip", "host.ip:198.51.100.24"),
+        (
+            "network.service_observed",
+            "service.socket",
+            "service.socket:198.51.100.24/tcp/80",
+        ),
+        (
+            "web.path_discovered",
+            "web.path",
+            "web.path:http://198.51.100.24/ip",
+        ),
+        (
+            "web.path_discovered",
+            "web.path",
+            "web.path:http://198.51.100.24/capture",
+        ),
+    ]
+    service_payload = observations[1]["payload"]
+    assert service_payload["service_name"] == "http"
+    assert service_payload["application_protocol"] == "http"
+
+
+def test_http_request_and_ffuf_emit_same_shared_web_response_facts() -> None:
+    url = "http://198.51.100.10/download/1"
+    ffuf_observations = build_ffuf_semantic_observations(
+        {
+            "ffuf_variant": "crawler",
+            "config": {"url": "http://198.51.100.10/download/FUZZ"},
+            "results": [{"url": url, "status": 200, "length": 24}],
+        },
+        CrawlerArgs(
+            target="http://198.51.100.10/download/FUZZ",
+            inline_wordlist=["1"],
+        ),
+    )
+
+    http_args = HttpRequestArgs(target=url, method="GET")
+    http_stdout = (
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: application/vnd.tcpdump.pcap\r\n"
+        "Content-Length: 24\r\n\r\n"
+        "mock-body\n"
+        "__DROWAI_HTTP_META__200\thttp://198.51.100.10/download/1\t"
+        "application/vnd.tcpdump.pcap\t24\t0\t0.125"
+    )
+    http_tool = HttpRequestTool()
+    enriched_http_metadata = merge_semantic_emitter_metadata(
+        tool=http_tool,
+        args=http_args,
+        stdout=http_stdout,
+        stderr="",
+        exit_code=0,
+        existing_metadata={},
+    )
+    http_observations = enriched_http_metadata["semantic_observations"]
+
+    ignored_payload_keys = {"source", "target_url", "evidence_source"}
+
+    def shared_domain_view(
+        observations: list[dict[str, object]],
+    ) -> list[tuple[object, ...]]:
+        return sorted(
+            (
+                observation["observation_type"],
+                observation["subject_type"],
+                observation["subject_key"],
+                tuple(
+                    sorted(
+                        (key, str(value))
+                        for key, value in observation["payload"].items()
+                        if key not in ignored_payload_keys
+                    )
+                ),
+            )
+            for observation in observations
+        )
+
+    assert shared_domain_view(http_observations) == shared_domain_view(ffuf_observations)
+
+
+def test_http_request_without_confirmed_response_emits_no_web_facts() -> None:
+    args = HttpRequestArgs(target="http://198.51.100.10/download/1", method="GET")
+
+    assert HttpRequestTool().emit_semantic_observations(
+        "",
+        "connection refused",
+        7,
+        args,
+        {
+            "effective_url": args.target,
+            "status_code": None,
+            "content_length": None,
+        },
+    ) == []
 
 
 def test_ffuf_variants_emit_same_web_path_contract_for_equivalent_results() -> None:

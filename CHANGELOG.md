@@ -21,6 +21,9 @@ The format is based on
 
 ### Fixed
 
+- Canonical pentest facts now preserve FFUF and HTTP web surfaces, TShark
+  credential-exposure findings, compact omission accounting, and linked
+  Knowledge details across deterministic processing and Territory views.
 - Amass now reuses serialized task-scoped v5 state across enumeration and
   result queries, returns stored partial results after bounded enumeration,
   and distinguishes parser status, enumeration status, completeness, and
