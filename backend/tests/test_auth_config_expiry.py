@@ -14,6 +14,8 @@ import secrets
 
 import pytest
 
+_VALID_JWT_SECRET = "test-jwt-secret-at-least-32-bytes"
+
 
 @pytest.fixture(autouse=True)
 def _isolate_generated_config(
@@ -45,7 +47,7 @@ def _reload_auth_modules(monkeypatch: pytest.MonkeyPatch) -> tuple[object, objec
 
 def test_auth_access_token_expiry_minutes_honors_env(monkeypatch) -> None:
     monkeypatch.setenv("ACCESS_TOKEN_EXPIRE_MINUTES", "123")
-    monkeypatch.setenv("JWT_SECRET", "test-jwt-secret")
+    monkeypatch.setenv("JWT_SECRET", _VALID_JWT_SECRET)
 
     config_module, auth_module = _reload_auth_modules(monkeypatch)
 
@@ -54,11 +56,18 @@ def test_auth_access_token_expiry_minutes_honors_env(monkeypatch) -> None:
 
 
 def test_auth_jwt_secret_uses_jwt_secret_env(monkeypatch) -> None:
-    monkeypatch.setenv("JWT_SECRET", "jwt-secret-value")
+    monkeypatch.setenv("JWT_SECRET", _VALID_JWT_SECRET)
 
     _, auth_module = _reload_auth_modules(monkeypatch)
 
-    assert secrets.compare_digest(auth_module.SECRET_KEY, "jwt-secret-value")
+    assert secrets.compare_digest(auth_module.SECRET_KEY, _VALID_JWT_SECRET)
+
+
+def test_auth_jwt_secret_rejects_keys_shorter_than_32_bytes(monkeypatch) -> None:
+    monkeypatch.setenv("JWT_SECRET", "short-jwt-secret")
+
+    with pytest.raises(RuntimeError, match="at least 32 bytes"):
+        _reload_auth_modules(monkeypatch)
 
 
 def test_auth_jwt_secret_warns_for_development_default_in_debug(
@@ -98,7 +107,7 @@ def test_auth_jwt_secret_raises_when_dev_default_in_production(monkeypatch) -> N
 
 def test_auth_jwt_algorithm_is_internal_constant(monkeypatch) -> None:
     monkeypatch.setenv("JWT_ALGORITHM", "none")
-    monkeypatch.setenv("JWT_SECRET", "test-jwt-secret")
+    monkeypatch.setenv("JWT_SECRET", _VALID_JWT_SECRET)
 
     _, auth_module = _reload_auth_modules(monkeypatch)
 

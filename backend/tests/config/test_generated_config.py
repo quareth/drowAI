@@ -24,6 +24,8 @@ from backend.config.generated_config import (
     validate_encryption_key,
 )
 
+_VALID_JWT_SECRET = "generated-jwt-secret-at-least-32-bytes"
+
 
 @pytest.fixture
 def generated_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> GeneratedConfigPaths:
@@ -63,9 +65,19 @@ def test_resolve_config_value_prefers_process_env(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     bootstrap_generated_config(profile="single_host", docker=False, paths=generated_paths)
-    monkeypatch.setenv(JWT_SECRET_ENV, "dev-override-secret")
+    monkeypatch.setenv(JWT_SECRET_ENV, _VALID_JWT_SECRET)
 
-    assert resolve_config_value(JWT_SECRET_ENV) == "dev-override-secret"
+    assert resolve_config_value(JWT_SECRET_ENV) == _VALID_JWT_SECRET
+
+
+def test_bootstrap_rejects_jwt_secret_shorter_than_32_bytes(
+    generated_paths: GeneratedConfigPaths,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(JWT_SECRET_ENV, "short-jwt-secret")
+
+    with pytest.raises(ValueError, match="JWT_SECRET must be at least 32 bytes"):
+        bootstrap_generated_config(profile="single_host", docker=False, paths=generated_paths)
 
 
 def test_bootstrap_rejects_placeholder_jwt_secret(
@@ -113,6 +125,20 @@ def test_resolved_backend_env_repairs_invalid_generated_secret_files(
 
     assert not env[JWT_SECRET_ENV].startswith("<")
     validate_encryption_key(env[ENCRYPTION_KEY_ENV])
+
+
+def test_resolved_backend_env_repairs_short_generated_jwt_secret(
+    generated_paths: GeneratedConfigPaths,
+) -> None:
+    bootstrap_generated_config(profile="single_host", docker=False, paths=generated_paths)
+    generated_paths.jwt_secret_path.write_text("short-jwt-secret\n", encoding="utf-8")
+
+    env = resolved_backend_env(profile="single_host", docker=False)
+
+    repaired_secret = generated_paths.jwt_secret_path.read_text(encoding="utf-8").strip()
+    assert len(repaired_secret.encode("utf-8")) >= 32
+    assert env[JWT_SECRET_ENV] == repaired_secret
+    assert read_backend_env(generated_paths.backend_env_path)[JWT_SECRET_ENV] == repaired_secret
 
 
 def test_resolved_backend_env_reconciles_existing_profile_without_rotating_secrets(
