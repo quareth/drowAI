@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from agent.graph.graph_names import GRAPH_NAME_SCOUT_RECON
+from agent.graph.graph_names import GRAPH_NAME_SUBAGENT
 from agent.graph.infrastructure.state_models import checkpoint_safe_llm_runtime_selection
 from backend.services.langgraph_chat.checkpoint.thread_identity import (
     format_graph_thread_id,
@@ -64,7 +64,7 @@ async def build_child_execution_config(
             child_graph_thread_id,
             task_id=assignment.task_id,
         ),
-        "graph_name": GRAPH_NAME_SCOUT_RECON,
+        "graph_name": GRAPH_NAME_SUBAGENT,
         "graph_thread_id": child_graph_thread_id,
         "producer_type": "subagent",
         "agent_run_id": assignment.agent_run_id,

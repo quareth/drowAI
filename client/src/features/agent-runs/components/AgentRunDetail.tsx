@@ -43,6 +43,7 @@ const ACTIVE_STATUSES = new Set<AgentRunRecord["status"]>([
   "running",
   "waiting_for_approval",
 ]);
+const SUBAGENT_GRAPH_NAME = "subagent";
 
 function formatDuration(run: AgentRunRecord): string {
   const end = run.completedAt ?? run.updatedAt;
@@ -66,7 +67,7 @@ function shouldShowApproval(
     run.status === "waiting_for_approval" &&
     controls?.interrupt != null &&
     controls.interrupt.taskId === run.taskId &&
-    controls.interrupt.graphName === "scout_recon"
+    controls.interrupt.graphName === SUBAGENT_GRAPH_NAME
   );
 }
 

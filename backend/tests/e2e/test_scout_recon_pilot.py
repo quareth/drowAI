@@ -19,6 +19,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql+psycopg2://test:test@localhost
 
 import pytest
 
+from agent.graph.graph_names import GRAPH_NAME_SUBAGENT
 from agent.graph.context.builder import (
     METADATA_CONTEXT_BUNDLE_KEY,
     build_conversation_context_bundle,
@@ -227,7 +228,7 @@ def _chat_inputs(message: str) -> ChatInputs:
 
 
 @pytest.mark.asyncio
-async def test_scout_recon_pilot_hands_result_back_to_original_parent_turn(
+async def test_subagent_pilot_hands_result_back_to_original_parent_turn(
 ) -> None:
     registry = ProcessLocalAgentRunRegistry()
     worker = _DelayedScoutWorker()
@@ -260,7 +261,7 @@ async def test_scout_recon_pilot_hands_result_back_to_original_parent_turn(
     assert assignment.targets == ("10.0.0.10",)
     assert assignment.suggested_capabilities == ("service_enumeration",)
     child_config = worker_call["runtime_config"]["configurable"]
-    assert child_config["graph_name"] == "scout_recon"
+    assert child_config["graph_name"] == GRAPH_NAME_SUBAGENT
     assert child_config["thread_id"] != (
         "graph-00000000000040008000000000000042"
     )

@@ -17,7 +17,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from agent.graph.graph_names import GRAPH_NAME_SCOUT_RECON
+from agent.graph.graph_names import GRAPH_NAME_SUBAGENT
 from backend.database import Base
 from backend.models.core import Task, User
 from backend.models.hitl import InterruptTicket, InterruptTicketState, TurnWorkflow
@@ -274,8 +274,8 @@ def test_simple_tool_router_refresh_then_resume_with_edit(monkeypatch) -> None:
         engine.dispose()
 
 
-def test_scout_router_resume_uses_canonical_scout_ticket(monkeypatch) -> None:
-    """Scout graph resumes use the shared HITL route with child ticket identity."""
+def test_subagent_router_resume_uses_canonical_child_ticket(monkeypatch) -> None:
+    """Subagent graph resumes use the shared HITL route with child ticket identity."""
     engine = create_engine(
         "sqlite://",
         connect_args={"check_same_thread": False},
@@ -298,12 +298,12 @@ def test_scout_router_resume_uses_canonical_scout_ticket(monkeypatch) -> None:
             task_name="scout-hitl",
         )
 
-        interrupt_id = "scout_recon:checkpoint:cp-scout-1"
+        interrupt_id = "subagent:checkpoint:cp-scout-1"
         ticket = InterruptTicket(
             interrupt_id=interrupt_id,
             task_id=task.id,
             tenant_id=task.tenant_id,
-            graph_name=GRAPH_NAME_SCOUT_RECON,
+            graph_name=GRAPH_NAME_SUBAGENT,
             interrupt_type="tool_approval",
             checkpoint_id="cp-scout-1",
             thread_id=format_graph_thread_id(child_thread_id, task_id=task.id),
@@ -332,7 +332,7 @@ def test_scout_router_resume_uses_canonical_scout_ticket(monkeypatch) -> None:
     captured: Dict[str, Any] = {}
     interrupt_calls: list[Dict[str, Any]] = []
 
-    class _ScoutInterruptStateService:
+    class _SubagentInterruptStateService:
         async def get_pending_interrupt(
             self,
             task_id: int,
@@ -350,7 +350,7 @@ def test_scout_router_resume_uses_canonical_scout_ticket(monkeypatch) -> None:
                 "has_interrupt": True,
                 "task_id": task_id,
                 "thread_id": format_graph_thread_id(child_thread_id, task_id=task_id),
-                "graph_name": GRAPH_NAME_SCOUT_RECON,
+                "graph_name": GRAPH_NAME_SUBAGENT,
                 "interrupt_id": interrupt_id,
                 "checkpoint_id": "cp-scout-1",
                 "interrupt_type": "tool_approval",
@@ -387,7 +387,7 @@ def test_scout_router_resume_uses_canonical_scout_ticket(monkeypatch) -> None:
 
     monkeypatch.setattr(
         "backend.services.langgraph_chat.checkpoint.interrupt_state_service.get_interrupt_state_service",
-        lambda: _ScoutInterruptStateService(),
+        lambda: _SubagentInterruptStateService(),
     )
     monkeypatch.setattr(
         "backend.services.langgraph_chat.execution.turn_service.run_resume_generation",
@@ -400,7 +400,7 @@ def test_scout_router_resume_uses_canonical_scout_ticket(monkeypatch) -> None:
             json={
                 "interrupt_id": interrupt_id,
                 "interrupt_type": "tool_approval",
-                "graph_name": GRAPH_NAME_SCOUT_RECON,
+                "graph_name": GRAPH_NAME_SUBAGENT,
                 "response": {"action": "approve"},
             },
         )
@@ -411,12 +411,12 @@ def test_scout_router_resume_uses_canonical_scout_ticket(monkeypatch) -> None:
         "task_id": task_id,
         "interrupt_id": interrupt_id,
     }
-    assert interrupt_calls[0]["graph_name"] == GRAPH_NAME_SCOUT_RECON
+    assert interrupt_calls[0]["graph_name"] == GRAPH_NAME_SUBAGENT
     assert interrupt_calls[0]["thread_id"] == format_graph_thread_id(
         child_thread_id,
         task_id=task_id,
     )
-    assert captured["resume_kwargs"]["graph_name"] == GRAPH_NAME_SCOUT_RECON
+    assert captured["resume_kwargs"]["graph_name"] == GRAPH_NAME_SUBAGENT
     assert captured["resume_kwargs"]["checkpoint_id"] == "cp-scout-1"
     assert captured["resume_kwargs"]["interrupt_id"] == interrupt_id
 
@@ -435,7 +435,7 @@ def test_scout_router_resume_uses_canonical_scout_ticket(monkeypatch) -> None:
             verify.query(TurnWorkflow).filter(TurnWorkflow.task_id == task_id).one()
         )
         assert workflow.state == "RESUMED"
-        assert workflow.graph_name == GRAPH_NAME_SCOUT_RECON
+        assert workflow.graph_name == GRAPH_NAME_SUBAGENT
         assert workflow.resume_key == "cp-scout-1"
     finally:
         verify.close()

@@ -25,7 +25,6 @@ from agent.graph.nodes.reflect import reflect_node
 from agent.graph.nodes.think_more import think_more_node
 from agent.graph.nodes.tool_synthesizer import synthesize_tool_output
 from agent.graph.nodes.working_memory import update_working_memory_node
-from agent.graph.graph_names import GRAPH_NAME_SCOUT_RECON
 from agent.graph.infrastructure.graph_registry import (
     GraphRegistry,
     get_default_graph_registry,
@@ -45,6 +44,8 @@ from agent.subagents.scout.nodes.complete import complete_scout_result
 from agent.subagents.scout.nodes.initialize import initialize_scout_state
 
 logger = logging.getLogger(__name__)
+
+GRAPH_NAME_SCOUT_RECON = "scout_recon"
 
 
 def _route_after_choose_action(interactive: InteractiveState) -> str:

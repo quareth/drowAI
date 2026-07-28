@@ -1,4 +1,4 @@
-"""Tests for safe Scout child LangGraph execution config construction."""
+"""Tests for safe subagent child LangGraph execution config construction."""
 
 from __future__ import annotations
 
@@ -10,9 +10,10 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
 import pytest
 
-from agent.graph.graph_names import GRAPH_NAME_SCOUT_RECON
-from agent.subagents.scout.nodes.initialize import initialize_scout_state
-from agent.subagents.scout.state import build_scout_initial_state
+from agent.graph.graph_names import GRAPH_NAME_SUBAGENT
+from agent.subagents.definition import load_subagent_definitions
+from agent.subagents.runtime.graph import initialize_subagent_state
+from agent.subagents.runtime.state import build_subagent_initial_state
 from backend.services.agent_runs.contracts import (
     AgentAssignment,
     AgentCredentialReference,
@@ -154,7 +155,7 @@ async def test_child_execution_config_inherits_runner_identity_without_live_obje
         child_graph_thread_id,
         task_id=42,
     )
-    assert configurable["graph_name"] == GRAPH_NAME_SCOUT_RECON
+    assert configurable["graph_name"] == GRAPH_NAME_SUBAGENT
     assert configurable["producer_type"] == "subagent"
     assert configurable["agent_run_id"] == "scout-run-1"
     assert configurable["agent_kind"] == "recon"
@@ -254,7 +255,7 @@ async def test_child_execution_config_fails_when_child_thread_not_registered() -
 
 
 @pytest.mark.asyncio
-async def test_child_execution_config_thread_id_initializes_scout_state() -> None:
+async def test_child_execution_config_thread_id_initializes_subagent_state() -> None:
     registry = ProcessLocalAgentRunRegistry()
     assignment = _assignment()
     child_graph_thread_id = generate_graph_thread_id()
@@ -266,11 +267,17 @@ async def test_child_execution_config_thread_id_initializes_scout_state() -> Non
         registry=registry,
         graph_thread_id=child_graph_thread_id,
     )
-    state = build_scout_initial_state(
+    definition = next(
+        definition
+        for definition in load_subagent_definitions()
+        if definition.id == "pathfinder"
+    )
+    state = build_subagent_initial_state(
+        definition=definition,
         assignment=assignment,
         graph_thread_id=child_graph_thread_id,
     )
 
-    update = initialize_scout_state(state, config=config)
+    update = initialize_subagent_state(definition, state, config=config)
 
     assert update["facts"]["metadata"]["graph_thread_id"] == child_graph_thread_id

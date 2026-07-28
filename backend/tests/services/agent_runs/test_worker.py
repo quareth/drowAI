@@ -15,20 +15,12 @@ from agent.subagents.definition import SubagentDefinition, load_subagent_definit
 from agent.subagents.registry import SubagentRegistry
 from agent.subagents.runtime.model import SUBAGENT_RESULT_METADATA_KEY
 from agent.subagents.runtime.state import build_subagent_initial_state
-from agent.subagents.scout.state import build_scout_initial_state
 from backend.services.agent_runs.contracts import (
     AgentAssignment,
     AgentResult,
     AgentRuntimeIdentity,
 )
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
-from backend.services.agent_runs.scout_worker import (
-    _prepare_child_config as prepare_legacy_scout_child_config,
-)
-from backend.services.agent_runs.scout_worker import (
-    SCOUT_RESULT_METADATA_KEY,
-    extract_scout_result_from_state,
-)
 from backend.services.agent_runs.worker import (
     ProcessLocalAgentRunWorker,
     extract_subagent_result_from_state,
@@ -108,16 +100,6 @@ def _final_state() -> dict[str, Any]:
     }
 
 
-def _legacy_scout_final_state() -> dict[str, Any]:
-    return {
-        "facts": {
-            "metadata": {
-                SCOUT_RESULT_METADATA_KEY: _result().model_dump(mode="json")
-            }
-        }
-    }
-
-
 class _FakeCheckpointerService:
     def __init__(self) -> None:
         self.task_ids: list[int] = []
@@ -157,7 +139,7 @@ class _FakeExecutor:
 
 
 @pytest.mark.asyncio
-async def test_generic_worker_matches_scout_graph_input_config_and_result(
+async def test_generic_worker_builds_definition_configured_graph_input_config_and_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import backend.services.agent_runs.worker as worker_module
@@ -215,22 +197,6 @@ async def test_generic_worker_matches_scout_graph_input_config_and_result(
         assignment=assignment,
         graph_thread_id="child-thread-1",
     )
-    assert call["graph_input"] == build_scout_initial_state(
-        assignment=assignment,
-        graph_thread_id="child-thread-1",
-    )
-    assert call["config"] == prepare_legacy_scout_child_config(
-        {
-            "configurable": {
-                "runtime_projection": {
-                    "tenant_id": 7,
-                    "credential_ref": {"credential_id": "must-not-cross"},
-                }
-            }
-        },
-        assignment=assignment,
-        graph_thread_id="child-thread-1",
-    )
     assert call["config"] == prepare_subagent_child_config(
         {
             "configurable": {
@@ -279,18 +245,13 @@ def test_generic_worker_rejects_missing_assignment_agent_id() -> None:
         )
 
 
-def test_generic_result_extraction_matches_current_scout_result_extraction() -> None:
+def test_generic_result_extraction_reads_definition_owned_result() -> None:
     assert extract_subagent_result_from_state(
         _final_state(),
         expected_agent_run_id="run-1",
         expected_agent_id="pathfinder",
         expected_agent_kind="recon",
-    ) == extract_scout_result_from_state(
-        _legacy_scout_final_state(),
-        expected_agent_run_id="run-1",
-        expected_agent_id="pathfinder",
-        expected_agent_kind="recon",
-    )
+    ) == _result()
 
 
 async def _not_cancelled() -> bool:

@@ -20,13 +20,14 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
+from backend.services.agent_runs.continuation import is_subagent_graph_name
 from backend.services.langgraph_chat.checkpoint.checkpointer_service import (
     CheckpointerService,
 )
 from backend.services.langgraph_chat.hitl_constants import (
     DEFAULT_GRAPH_NAME,
     GRAPH_NAME_DEEP_REASONING,
-    GRAPH_NAME_SCOUT_RECON,
+    GRAPH_NAME_SUBAGENT,
 )
 from backend.services.langgraph_chat.checkpoint.thread_identity import format_graph_thread_id
 
@@ -90,7 +91,7 @@ class InterruptStateService:
         for gname in [
             DEFAULT_GRAPH_NAME,
             GRAPH_NAME_DEEP_REASONING,
-            GRAPH_NAME_SCOUT_RECON,
+            GRAPH_NAME_SUBAGENT,
         ]:
             result = await self._check_graph_for_interrupt(
                 task_id,
@@ -141,7 +142,7 @@ class InterruptStateService:
                 # Build graph with checkpointer to enable state query
                 if graph_name == GRAPH_NAME_DEEP_REASONING:
                     compiled = compile_deep_reasoning_graph(checkpointer=checkpointer)
-                elif graph_name == GRAPH_NAME_SCOUT_RECON:
+                elif is_subagent_graph_name(graph_name):
                     definitions = get_subagent_registry().definitions()
                     if len(definitions) != 1:
                         raise RuntimeError(

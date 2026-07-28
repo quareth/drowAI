@@ -652,7 +652,7 @@ describe("useMultiTaskStreamManager full packet ingestion", () => {
           interrupt_id: "interrupt-1",
           checkpoint_id: "checkpoint-1",
           interrupt_type: "tool_approval",
-          graph_name: "scout_recon",
+          graph_name: "subagent",
           payload: {
             type: "tool_approval",
             items: [],
@@ -680,7 +680,7 @@ describe("useMultiTaskStreamManager full packet ingestion", () => {
         interruptId: "interrupt-1",
         checkpointId: "checkpoint-1",
         interruptType: "tool_approval",
-        graphName: "scout_recon",
+        graphName: "subagent",
       });
     });
 

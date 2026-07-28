@@ -302,7 +302,7 @@ function scoutApprovalInterrupt(): ToolApprovalInterruptDetail {
     interruptId: "approval-scout-1",
     checkpointId: "checkpoint-scout-1",
     interruptType: "tool_approval",
-    graphName: "scout_recon",
+    graphName: "subagent",
     payload: {
       type: "tool_approval",
       interrupt_id: "approval-scout-1",

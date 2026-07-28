@@ -216,7 +216,7 @@ describe("useMultiTaskStreamManager retry_state handling", () => {
       retry_mode: "checkpoint",
       retry_attempt: 1,
       retry_max_attempts: 2,
-      graph_name: "scout_recon",
+      graph_name: "subagent",
       state: "started",
       transcript_resync_required: true,
       producer_type: "subagent",

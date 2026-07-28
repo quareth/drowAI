@@ -5,8 +5,8 @@ from agent.graph.graph_names import (
     GRAPH_NAME_DEEP_REASONING,
     GRAPH_NAME_INTERRUPT_RESUME,
     GRAPH_NAME_NORMAL_CHAT,
-    GRAPH_NAME_SCOUT_RECON,
     GRAPH_NAME_SIMPLE_TOOL,
+    GRAPH_NAME_SUBAGENT,
 )
 
 # Maximum number of cumulative node transitions allowed across the entire
@@ -20,7 +20,7 @@ __all__ = [
     "GRAPH_NAME_DEEP_REASONING",
     "GRAPH_NAME_INTERRUPT_RESUME",
     "GRAPH_NAME_NORMAL_CHAT",
-    "GRAPH_NAME_SCOUT_RECON",
     "GRAPH_NAME_SIMPLE_TOOL",
+    "GRAPH_NAME_SUBAGENT",
     "GRAPH_RECURSION_LIMIT",
 ]

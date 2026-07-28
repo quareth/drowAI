@@ -1,4 +1,4 @@
-"""Tests for the Scout recon facade handler handoff."""
+"""Tests for the generic subagent facade handler handoff."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ os.environ.setdefault("DATABASE_URL", "postgresql+psycopg2://test:test@localhost
 
 import pytest
 
+from agent.graph.graph_names import GRAPH_NAME_SUBAGENT
 from agent.graph.context.builder import (
     METADATA_CONTEXT_BUNDLE_KEY,
     build_conversation_context_bundle,
@@ -94,7 +95,7 @@ class _CompletingExecutor:
             }
         )
         graph_name = config["configurable"]["graph_name"]
-        if graph_name != "scout_recon":
+        if graph_name != GRAPH_NAME_SUBAGENT:
             final_state = copy.deepcopy(graph_input)
             final_state["trace"]["final_text"] = "Main agent finalized Scout result."
             return GraphExecutionResult(final_state=final_state)
@@ -302,7 +303,7 @@ async def test_subagent_handler_waits_for_pathfinder_and_runs_parent_finalizer()
     assert assignment.suggested_capabilities == ("port_scanning",)
     assert assignment.runtime_identity.tenant_id == 7
     child_config = launcher.calls[0]["runtime_config"]
-    assert child_config["configurable"]["graph_name"] == "scout_recon"
+    assert child_config["configurable"]["graph_name"] == GRAPH_NAME_SUBAGENT
     assert child_config["configurable"]["agent_run_id"] == assignment.agent_run_id
     assert child_config["configurable"]["thread_id"].startswith("graph-")
     assert (
@@ -424,7 +425,7 @@ async def test_subagent_handler_default_launcher_runs_real_worker_to_completion(
 
     assert len(executor.calls) == 2
     call = executor.calls[0]
-    assert call["config"]["configurable"]["graph_name"] == "scout_recon"
+    assert call["config"]["configurable"]["graph_name"] == GRAPH_NAME_SUBAGENT
     assert call["config"]["configurable"]["graph_runtime_context"]["tenant_id"] == 7
     assert "credential_ref" not in call["config"]["configurable"]["graph_runtime_context"]
     entries = await registry.list_task_runs(tenant_id=7, task_id=42)

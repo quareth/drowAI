@@ -21,6 +21,7 @@ from typing import Any
 
 from langgraph.graph import END, StateGraph
 
+from agent.graph.graph_names import GRAPH_NAME_SUBAGENT
 from agent.graph.builders.common_edges import (
     with_interactive_state,
     wrap_with_context,
@@ -61,8 +62,6 @@ from agent.subagents.runtime.state import (
 )
 
 logger = logging.getLogger(__name__)
-
-GRAPH_NAME_SUBAGENT = "subagent"
 
 
 def initialize_subagent_state(
@@ -260,9 +259,10 @@ def get_compiled_subagent_graph(
 
 
 def graph_name_for_definition(definition: SubagentDefinition) -> str:
-    """Return a stable registry key for a definition-configured child graph."""
+    """Return the stable graph type name for definition-configured child graphs."""
 
-    return f"{GRAPH_NAME_SUBAGENT}:{definition.id}"
+    _ = definition
+    return GRAPH_NAME_SUBAGENT
 
 
 def _bind_initialize(definition: SubagentDefinition) -> Any:

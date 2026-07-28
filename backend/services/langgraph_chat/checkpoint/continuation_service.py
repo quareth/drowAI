@@ -17,6 +17,7 @@ from backend.database import SessionLocal
 from backend.services.agent_runs.continuation import (
     SubagentContinuationContext,
     SubagentContinuationError,
+    is_subagent_graph_name,
     mark_subagent_running,
     mark_subagent_waiting_for_approval,
     prepare_subagent_resume,
@@ -33,7 +34,6 @@ from backend.services.langgraph_chat.hitl_constants import (
     DEFAULT_GRAPH_NAME,
     GRAPH_NAME_DEEP_REASONING,
     GRAPH_NAME_INTERRUPT_RESUME,
-    GRAPH_NAME_SCOUT_RECON,
     GRAPH_NAME_SIMPLE_TOOL,
 )
 from backend.services.langgraph_chat.execution.scenario_factory import get_scenario_graph
@@ -777,7 +777,7 @@ class CheckpointContinuationService:
             return get_scenario_graph(GRAPH_NAME_INTERRUPT_RESUME, checkpointer)
         if graph_name == GRAPH_NAME_DEEP_REASONING:
             return compile_deep_reasoning_graph(checkpointer=checkpointer)
-        if graph_name == GRAPH_NAME_SCOUT_RECON:
+        if is_subagent_graph_name(graph_name):
             definition_registry = get_subagent_registry()
             if subagent_agent_id is None:
                 definitions = definition_registry.definitions()
@@ -800,7 +800,7 @@ class CheckpointContinuationService:
         interrupt_id: Optional[str],
         checkpoint_id: Optional[int | str],
     ) -> SubagentContinuationContext | None:
-        if graph_name != GRAPH_NAME_SCOUT_RECON:
+        if not is_subagent_graph_name(graph_name):
             return None
         try:
             return await prepare_subagent_resume(

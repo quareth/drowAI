@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from agent.graph.graph_names import GRAPH_NAME_SCOUT_RECON
+from agent.graph.graph_names import GRAPH_NAME_SUBAGENT
 from backend.database import SessionLocal
 from backend.models.hitl import InterruptTicket
 from backend.services.langgraph_chat.checkpoint.thread_identity import (
@@ -29,6 +29,8 @@ SUBAGENT_RECOVERY_ERROR = (
     "Subagent approval cannot be resumed because the live process-local registry "
     "entry is missing. Start a new subagent run."
 )
+_LEGACY_SCOUT_GRAPH_NAME = "scout_recon"
+_SUBAGENT_GRAPH_NAMES = frozenset({GRAPH_NAME_SUBAGENT, _LEGACY_SCOUT_GRAPH_NAME})
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +67,7 @@ async def prepare_subagent_resume(
 ) -> SubagentContinuationContext | None:
     """Verify a subagent resume and return the canonical child checkpoint identity."""
 
-    if graph_name != GRAPH_NAME_SCOUT_RECON:
+    if not is_subagent_graph_name(graph_name):
         return None
     if tenant_id is None:
         raise SubagentContinuationError("Subagent resume requires tenant identity")
@@ -79,7 +81,7 @@ async def prepare_subagent_resume(
         task_id=task_id,
         interrupt_id=interrupt_id.strip(),
     )
-    if ticket is None or ticket.graph_name != GRAPH_NAME_SCOUT_RECON:
+    if ticket is None or not is_subagent_graph_name(ticket.graph_name):
         raise SubagentContinuationError(SUBAGENT_RECOVERY_ERROR)
 
     graph_thread_id = _normalize_ticket_thread_id(ticket.thread_id)
@@ -195,11 +197,18 @@ def _normalize_ticket_thread_id(thread_id: str | None) -> str | None:
     return normalize_graph_thread_id(normalized)
 
 
+def is_subagent_graph_name(graph_name: str | None) -> bool:
+    """Return whether a graph name refers to the generic subagent child graph."""
+
+    return isinstance(graph_name, str) and graph_name.strip() in _SUBAGENT_GRAPH_NAMES
+
+
 __all__ = [
     "SUBAGENT_RECOVERY_ERROR",
     "SubagentContinuationContext",
     "SubagentContinuationError",
     "SubagentInterruptTicketSnapshot",
+    "is_subagent_graph_name",
     "mark_subagent_running",
     "mark_subagent_waiting_for_approval",
     "prepare_subagent_resume",

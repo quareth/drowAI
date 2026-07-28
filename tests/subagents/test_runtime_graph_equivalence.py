@@ -18,12 +18,8 @@ from agent.subagents.runtime.graph import (
     initialize_subagent_state,
 )
 from agent.subagents.runtime.model import SUBAGENT_RESULT_METADATA_KEY
+from agent.subagents.runtime.profile import SubagentToolProfile, SubagentToolSpec
 from agent.subagents.runtime.state import build_subagent_initial_state
-from agent.subagents.scout.graph import build_scout_recon_graph
-from agent.subagents.scout.nodes.complete import complete_scout_result
-from agent.subagents.scout.nodes.initialize import initialize_scout_state
-from agent.subagents.scout.profile import ScoutToolProfile, ScoutToolSpec
-from agent.subagents.scout.state import build_scout_initial_state
 
 
 FPING_TOOL_ID = "information_gathering.network_discovery.fping"
@@ -77,10 +73,10 @@ def _assignment() -> AgentAssignment:
     )
 
 
-def _profile() -> ScoutToolProfile:
-    return ScoutToolProfile(
+def _profile() -> SubagentToolProfile:
+    return SubagentToolProfile(
         tools=(
-            ScoutToolSpec(
+            SubagentToolSpec(
                 tool_id=FPING_TOOL_ID,
                 display_name="fping",
                 scout_capabilities=("host_discovery",),
@@ -98,20 +94,10 @@ def _generic_state() -> dict[str, Any]:
     )
 
 
-def _legacy_state() -> dict[str, Any]:
-    return build_scout_initial_state(
-        assignment=_assignment(),
-        graph_thread_id="child-thread-1",
-        tool_profile=_profile(),
-    )
-
-
-def test_generic_subagent_graph_topology_matches_current_scout_graph() -> None:
+def test_generic_subagent_graph_topology_stays_locked() -> None:
     definition = _pathfinder_definition()
     generic_graph = build_subagent_graph(definition, build_only=True)
-    scout_graph = build_scout_recon_graph(build_only=True)
 
-    assert set(generic_graph.nodes) == set(scout_graph.nodes)
     assert set(generic_graph.nodes) == {
         "initialize",
         "update_working_memory",
@@ -127,48 +113,103 @@ def test_generic_subagent_graph_topology_matches_current_scout_graph() -> None:
         "finalize",
         "complete",
     }
-    assert set(generic_graph.edges) == set(scout_graph.edges)
+    assert set(generic_graph.edges) == {
+        ("__start__", "initialize"),
+        ("initialize", "update_working_memory"),
+        ("update_working_memory", "memory_retrieval"),
+        ("memory_retrieval", "choose_action"),
+        ("approval_gate", "dispatch_tool"),
+        ("dispatch_tool", "tool_synthesizer"),
+        ("tool_synthesizer", "post_tool_reasoning"),
+        ("post_tool_reasoning", "decision_router"),
+        ("think_more", "post_tool_reasoning"),
+        ("reflect", "decision_router"),
+        ("finalize", "complete"),
+        ("complete", "__end__"),
+    }
+    assert set(generic_graph.branches) == {"choose_action", "decision_router"}
+    choose_branch = generic_graph.branches["choose_action"][
+        "_route_after_choose_action"
+    ]
+    router_branch = generic_graph.branches["decision_router"]["_route_after_router"]
+    assert choose_branch.ends == {
+        "approval_gate": "approval_gate",
+        "complete": "finalize",
+    }
+    assert router_branch.ends == {
+        "choose_action": "choose_action",
+        "think_more": "think_more",
+        "reflect": "reflect",
+        "complete": "finalize",
+    }
 
 
-def test_generic_initialize_matches_current_scout_initialize() -> None:
+def test_generic_initialize_preserves_assignment_and_tool_identity() -> None:
     definition = _pathfinder_definition()
     config = {"configurable": {"thread_id": "graph-child-thread-1"}}
 
-    assert initialize_subagent_state(
+    update = initialize_subagent_state(
         definition,
         _generic_state(),
         config=config,
-    ) == initialize_scout_state(_legacy_state(), config=config)
+    )
+
+    metadata = update["facts"]["metadata"]
+    subagent_metadata = metadata["scout"]
+    assert metadata["agent_id"] == "pathfinder"
+    assert metadata["agent_kind"] == "recon"
+    assert metadata["graph_thread_id"] == "child-thread-1"
+    assert subagent_metadata["agent_id"] == "pathfinder"
+    assert subagent_metadata["graph_thread_id"] == "child-thread-1"
+    assert update["facts"]["tool_ids"] == [FPING_TOOL_ID]
+    assert update["facts"]["tool_candidates"] == [FPING_TOOL_ID]
+    assert update["trace"]["history"][-1] == {
+        "type": "scout_initialize",
+        "agent_run_id": "run-1",
+        "agent_id": "pathfinder",
+        "agent_kind": "recon",
+        "tool_ids": [FPING_TOOL_ID],
+    }
 
 
-def test_generic_graph_terminal_result_matches_current_scout_result() -> None:
+def test_generic_graph_terminal_result_projects_pathfinder_result() -> None:
     generic_interactive = InteractiveState.from_mapping(_generic_state())
-    scout_interactive = InteractiveState.from_mapping(_legacy_state())
-    for interactive in (generic_interactive, scout_interactive):
-        interactive.facts.last_tool_result_compact = {
-            "tool": FPING_TOOL_ID,
-            "status": "success",
-            "success": True,
-            "summary": "fping found one live host.",
-            "key_findings": ["10.0.0.10 is alive."],
-            "report_recommendations": ["Run service enumeration next."],
-            "artifact_refs": [{"path": "/workspace/fping.json", "label": "fping"}],
-        }
-        interactive.facts.metadata["last_tool_result_compact"] = (
-            interactive.facts.last_tool_result_compact
-        )
-        interactive.facts.metadata["router_outcome"] = {"action": "finalize"}
-        interactive.trace.executed_tools.append(
-            ToolExecutionRecord(tool_id=FPING_TOOL_ID, status="success")
-        )
+    generic_interactive.facts.last_tool_result_compact = {
+        "tool": FPING_TOOL_ID,
+        "status": "success",
+        "success": True,
+        "summary": "fping found one live host.",
+        "key_findings": ["10.0.0.10 is alive."],
+        "report_recommendations": ["Run service enumeration next."],
+        "artifact_refs": [{"path": "/workspace/fping.json", "label": "fping"}],
+    }
+    generic_interactive.facts.metadata["last_tool_result_compact"] = (
+        generic_interactive.facts.last_tool_result_compact
+    )
+    generic_interactive.facts.metadata["router_outcome"] = {"action": "finalize"}
+    generic_interactive.trace.executed_tools.append(
+        ToolExecutionRecord(tool_id=FPING_TOOL_ID, status="success")
+    )
 
-    assert complete_subagent_result(
+    update = complete_subagent_result(
         _pathfinder_definition(),
         generic_interactive.as_graph_state(),
-    ) == complete_scout_result(scout_interactive.as_graph_state())
+    )
+
+    result = update["facts"]["metadata"][SUBAGENT_RESULT_METADATA_KEY]
+    assert result["agent_run_id"] == "run-1"
+    assert result["agent_id"] == "pathfinder"
+    assert result["agent_kind"] == "recon"
+    assert result["outcome"] == "completed"
+    assert result["summary"] == "fping found one live host."
+    assert result["key_findings"] == ["10.0.0.10 is alive."]
+    assert result["evidence_refs"] == [
+        {"path": "/workspace/fping.json", "label": "fping"}
+    ]
+    assert result["tools_used"] == [FPING_TOOL_ID]
 
 
-def test_generic_graph_registry_uses_definition_scoped_name(
+def test_generic_graph_registry_uses_single_child_graph_type_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import agent.subagents.runtime.graph as runtime_graph
@@ -199,9 +240,9 @@ def test_generic_graph_registry_uses_definition_scoped_name(
     registry = GraphRegistry()
     compiled = get_compiled_subagent_graph(definition, registry=registry)
 
-    assert graph_name_for_definition(definition) == "subagent:pathfinder"
+    assert graph_name_for_definition(definition) == "subagent"
     assert compiled == ("compiled-subagent", "checkpoint")
-    assert registry.get("subagent:pathfinder") == compiled
+    assert registry.get("subagent") == compiled
     assert calls == [("pathfinder", True)]
 
 
