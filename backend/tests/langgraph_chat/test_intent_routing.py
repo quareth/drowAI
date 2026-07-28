@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from backend.services.agent_runs.subagent_registry import get_subagent_registry
 from backend.services.langgraph_chat.contracts import (
     ChatInputs,
     ExecutionMode,
@@ -41,6 +42,10 @@ def test_select_branch_simple_tool() -> None:
 
 
 def test_resolve_branch_routes_scout_owned_direct_executor_by_default() -> None:
+    registry = get_subagent_registry()
+    scout_name = registry.classifier_catalog()[0]["name"]
+    assert scout_name == "scout"
+
     config = _runtime_config(ExecutionMode.SIMPLE_TOOL)
     config.metadata.update(
         {
@@ -50,7 +55,7 @@ def test_resolve_branch_routes_scout_owned_direct_executor_by_default() -> None:
                 "agent_handoffs": [
                     {
                         "agent_handoff": "required",
-                        "subagent": "scout",
+                        "subagent": scout_name,
                         "objective": "Scan ports and enumerate services on 10.0.0.10.",
                     }
                 ],

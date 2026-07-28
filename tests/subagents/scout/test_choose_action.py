@@ -21,6 +21,7 @@ from agent.subagents.scout.state import build_scout_initial_state
 from agent.tools.tool_call_specs import make_function_name_for_tool
 from core.prompts.builders.scout_tool_builder import ScoutToolBuilderPromptBuilder
 from core.prompts.builders.tool_planning import ToolPlanningPromptBuilder
+from core.prompts.tests._golden import assert_golden
 
 
 FPING_TOOL_ID = "information_gathering.network_discovery.fping"
@@ -452,3 +453,11 @@ def test_scout_prompt_reuses_only_selector_independent_builder_sections() -> Non
     assert "Commit rules:" in scout_prompt
     assert "upstream selector" not in scout_prompt
     assert "Selector Decision" not in scout_prompt
+
+
+def test_scout_prompt_exact_current_system_rendering_is_locked() -> None:
+    scout_prompt = ScoutToolBuilderPromptBuilder().build_system_prompt(
+        max_committed_tools_per_batch=3,
+    )
+
+    assert_golden("scout_tool_builder__system.txt", scout_prompt)
