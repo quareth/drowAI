@@ -23,6 +23,7 @@ from agent.subagents.contracts import (
     JsonValue,
     ReconCapability,
     agent_display_name,
+    agent_icon_key,
 )
 
 __all__ = [
@@ -40,4 +41,5 @@ __all__ = [
     "JsonValue",
     "ReconCapability",
     "agent_display_name",
+    "agent_icon_key",
 ]

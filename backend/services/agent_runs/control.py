@@ -17,6 +17,7 @@ from .contracts import (
     AgentResultProjection,
     AgentRunStatus,
     agent_display_name,
+    agent_icon_key,
 )
 from .registry import (
     ACTIVE_AGENT_RUN_STATUSES,
@@ -56,6 +57,7 @@ class LocalAgentRunStatusProjection(BaseModel):
     agent_id: str
     agent_kind: AgentKind
     agent_display_name: str
+    agent_icon_key: str
     status: AgentRunStatus
     lifecycle_version: int
     task_id: int
@@ -77,6 +79,7 @@ class LocalAgentRunStatusProjection(BaseModel):
             agent_id=entry.agent_id,
             agent_kind=entry.agent_kind,
             agent_display_name=agent_display_name(entry.agent_id),
+            agent_icon_key=agent_icon_key(entry.agent_id),
             status=entry.status,
             lifecycle_version=entry.lifecycle_version,
             task_id=entry.task_id,

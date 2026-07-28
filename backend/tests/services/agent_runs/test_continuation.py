@@ -115,7 +115,7 @@ async def test_prepare_subagent_resume_uses_ticket_thread_and_updates_status(
 
 
 @pytest.mark.asyncio
-async def test_prepare_subagent_resume_accepts_legacy_scout_ticket_identity(
+async def test_prepare_subagent_resume_rejects_legacy_scout_ticket_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry = ProcessLocalAgentRunRegistry()
@@ -138,19 +138,16 @@ async def test_prepare_subagent_resume_accepts_legacy_scout_ticket_identity(
         ),
     )
 
-    context = await prepare_subagent_resume(
-        registry=registry,
-        tenant_id=7,
-        task_id=42,
-        graph_name=GRAPH_NAME_SUBAGENT,
-        interrupt_id="interrupt-1",
-        checkpoint_id=None,
-    )
-
-    assert context is not None
-    assert context.entry.agent_id == "pathfinder"
-    assert context.graph_thread_id == child_thread
-    assert context.checkpoint_id == "cp-ticket"
+    assert not continuation.is_subagent_graph_name("scout_recon")
+    with pytest.raises(SubagentContinuationError, match=SUBAGENT_RECOVERY_ERROR):
+        await prepare_subagent_resume(
+            registry=registry,
+            tenant_id=7,
+            task_id=42,
+            graph_name=GRAPH_NAME_SUBAGENT,
+            interrupt_id="interrupt-1",
+            checkpoint_id=None,
+        )
 
 
 @pytest.mark.asyncio

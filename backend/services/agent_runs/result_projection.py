@@ -133,6 +133,7 @@ class AgentRunResultProjector:
             "agent_run_id": _bounded_text(
                 projection["agent_run_id"], max_chars=self._max_evidence_value_chars
             ),
+            "agent_id": projection["agent_id"],
             "agent_kind": projection["agent_kind"],
             "agent_display_name": projection["agent_display_name"],
             "outcome": projection["outcome"],

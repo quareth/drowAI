@@ -15,6 +15,7 @@ from backend.services.agent_runs.contracts import (
     AgentRunLifecycleProjection,
     AgentResultProjection,
     agent_display_name,
+    agent_icon_key,
 )
 from backend.services.agent_runs.registry import LocalAgentRun
 from backend.services.chat.event_builders import attach_conversation_ids
@@ -26,6 +27,7 @@ AGENT_RUN_METADATA_KEYS: tuple[str, ...] = (
     "agent_id",
     "agent_kind",
     "agent_display_name",
+    "agent_icon_key",
     "parent_turn_id",
     "parent_run_id",
     "internal_only",
@@ -46,11 +48,13 @@ def build_agent_run_lifecycle_event(
         else AgentResultProjection.from_result(entry.result)
     )
     display_name = agent_display_name(entry.agent_id)
+    icon_key = agent_icon_key(entry.agent_id)
     projection = AgentRunLifecycleProjection(
         agent_run_id=entry.agent_run_id,
         agent_id=entry.agent_id,
         agent_kind=entry.agent_kind,
         agent_display_name=display_name,
+        agent_icon_key=icon_key,
         status=entry.status,
         lifecycle_version=entry.lifecycle_version,
         task_id=entry.task_id,
@@ -69,6 +73,7 @@ def build_agent_run_lifecycle_event(
             "agent_id": entry.agent_id,
             "agent_kind": entry.agent_kind,
             "agent_display_name": display_name,
+            "agent_icon_key": icon_key,
             "parent_turn_id": entry.parent_turn_id,
             "parent_run_id": parent_run_id,
             "internal_only": False,
@@ -125,9 +130,10 @@ def _agent_metadata_source(raw_event: Mapping[str, Any]) -> dict[str, Any]:
     if display_name is not None:
         source["agent_display_name"] = display_name
     elif source.get("agent_display_name") is None:
-        source["agent_display_name"] = (
-            _format_agent_kind(source.get("agent_kind"))
-        )
+        source["agent_display_name"] = _format_agent_kind(source.get("agent_kind"))
+    icon_key = registered_agent_icon_key(source.get("agent_id"))
+    if icon_key is not None:
+        source["agent_icon_key"] = icon_key
     return source
 
 
@@ -165,6 +171,18 @@ def registered_agent_display_name(value: Any) -> str | None:
         return None
 
 
+def registered_agent_icon_key(value: Any) -> str | None:
+    """Resolve icon metadata from the shared definition-owned registry."""
+
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    try:
+        return agent_icon_key(normalized)
+    except KeyError:
+        return None
+
+
 def _format_agent_kind(value: Any) -> str | None:
     if not isinstance(value, str):
         return None
@@ -179,4 +197,5 @@ __all__ = [
     "apply_agent_run_metadata",
     "build_agent_run_lifecycle_event",
     "registered_agent_display_name",
+    "registered_agent_icon_key",
 ]

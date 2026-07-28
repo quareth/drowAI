@@ -131,6 +131,7 @@ async def test_collect_projects_completed_unconsumed_results_for_conversation() 
     assert handoff.agent_run_ids == ("run-1",)
     assert len(handoff.results) == 1
     projected = handoff.results[0]
+    assert projected["agent_id"] == "pathfinder"
     assert projected["agent_display_name"] == "Pathfinder"
     assert projected["summary"] == "Scout found HTTP with <REDACTED>"
     assert projected["key_findings"] == [
@@ -191,6 +192,7 @@ def test_attach_completed_agent_results_updates_metadata_and_context_bundle() ->
             "results": (
                 {
                     "agent_run_id": "run-1",
+                    "agent_id": "pathfinder",
                     "agent_kind": "recon",
                     "agent_display_name": "Scout",
                     "outcome": "completed",

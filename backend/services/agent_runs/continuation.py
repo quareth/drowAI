@@ -29,8 +29,7 @@ SUBAGENT_RECOVERY_ERROR = (
     "Subagent approval cannot be resumed because the live process-local registry "
     "entry is missing. Start a new subagent run."
 )
-_LEGACY_SCOUT_GRAPH_NAME = "scout_recon"
-_SUBAGENT_GRAPH_NAMES = frozenset({GRAPH_NAME_SUBAGENT, _LEGACY_SCOUT_GRAPH_NAME})
+_SUBAGENT_GRAPH_NAMES = frozenset({GRAPH_NAME_SUBAGENT})
 
 
 @dataclass(frozen=True, slots=True)

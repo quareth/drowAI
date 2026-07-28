@@ -55,13 +55,16 @@ async def test_lifecycle_event_carries_agent_identity_in_metadata() -> None:
     assert event["content"] == "agent_run_lifecycle"
     assert metadata["producer_type"] == "subagent"
     assert metadata["agent_run_id"] == "scout-run-1"
+    assert metadata["agent_id"] == "pathfinder"
     assert metadata["agent_kind"] == "recon"
     assert metadata["agent_display_name"] == "Pathfinder"
+    assert metadata["agent_icon_key"] == "pathfinder"
     assert metadata["parent_turn_id"] == "turn-1"
     assert metadata["parent_run_id"] == "parent-run-1"
     assert metadata["internal_only"] is False
     assert metadata["lifecycle_version"] == 1
     assert event["agent_run"]["assignment"]["agent_run_id"] == "scout-run-1"
+    assert event["agent_run"]["agent_icon_key"] == "pathfinder"
 
 
 def test_apply_agent_run_metadata_preserves_generic_subagent_identity() -> None:
@@ -74,6 +77,7 @@ def test_apply_agent_run_metadata_preserves_generic_subagent_identity() -> None:
             "producer_type": "subagent",
             "agent_run_id": "review-run-1",
             "agent_kind": "review",
+            "agent_icon_key": "reviewer",
             "parent_turn_id": "turn-parent",
         },
     )
@@ -84,6 +88,7 @@ def test_apply_agent_run_metadata_preserves_generic_subagent_identity() -> None:
     assert metadata["agent_run_id"] == "review-run-1"
     assert metadata["agent_kind"] == "review"
     assert metadata["agent_display_name"] == "Review"
+    assert metadata["agent_icon_key"] == "reviewer"
 
 
 def test_apply_agent_run_metadata_canonicalizes_registered_display_name() -> None:
@@ -102,6 +107,7 @@ def test_apply_agent_run_metadata_canonicalizes_registered_display_name() -> Non
                 "agent_id": "pathfinder",
                 "agent_kind": "recon",
                 "agent_display_name": "Spoofed",
+                "agent_icon_key": "spoofed",
                 "parent_turn_id": "turn-parent",
             },
         },
@@ -110,3 +116,4 @@ def test_apply_agent_run_metadata_canonicalizes_registered_display_name() -> Non
     metadata = processed["metadata"]
     assert isinstance(metadata, dict)
     assert metadata["agent_display_name"] == "Pathfinder"
+    assert metadata["agent_icon_key"] == "pathfinder"

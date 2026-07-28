@@ -413,6 +413,7 @@ class AgentRunLifecycleProjection(_StrictContract):
     agent_id: AgentId
     agent_kind: AgentKind
     agent_display_name: str
+    agent_icon_key: str
     status: AgentRunStatus
     lifecycle_version: int
     task_id: int
@@ -427,6 +428,7 @@ class AgentRunLifecycleProjection(_StrictContract):
         "agent_run_id",
         "agent_id",
         "agent_display_name",
+        "agent_icon_key",
         "conversation_id",
         "parent_turn_id",
         "parent_run_id",
@@ -449,6 +451,9 @@ class AgentRunLifecycleProjection(_StrictContract):
         expected = agent_display_name(self.agent_id)
         if self.agent_display_name != expected:
             raise ValueError("agent_display_name must match agent_id display metadata")
+        expected_icon = agent_icon_key(self.agent_id)
+        if self.agent_icon_key != expected_icon:
+            raise ValueError("agent_icon_key must match agent_id display metadata")
         if self.assignment is not None and self.assignment.agent_id != self.agent_id:
             raise ValueError("assignment.agent_id must match lifecycle projection")
         if self.result is not None and self.result.agent_run_id != self.agent_run_id:
@@ -529,6 +534,17 @@ def agent_display_name(agent_id: AgentId) -> str:
         raise KeyError(f"unknown subagent definition id: {agent_id}") from exc
 
 
+def agent_icon_key(agent_id: AgentId) -> str:
+    """Return presentation icon key for a declarative agent identity."""
+    normalized = _validate_non_empty(str(agent_id), "agent_id").lower()
+    try:
+        from agent.subagents.registry import get_subagent_registry
+
+        return get_subagent_registry().display_metadata(normalized).icon
+    except Exception as exc:
+        raise KeyError(f"unknown subagent definition id: {agent_id}") from exc
+
+
 __all__ = [
     "AgentAssignment",
     "AgentCapability",
@@ -544,4 +560,5 @@ __all__ = [
     "JsonValue",
     "ReconCapability",
     "agent_display_name",
+    "agent_icon_key",
 ]

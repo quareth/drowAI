@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from agent.subagents.contracts import agent_display_name
+from agent.subagents.contracts import agent_display_name, agent_icon_key
 
 
 AGENT_RUN_ATTRIBUTION_KEYS: tuple[str, ...] = (
@@ -19,6 +19,7 @@ AGENT_RUN_ATTRIBUTION_KEYS: tuple[str, ...] = (
     "agent_id",
     "agent_kind",
     "agent_display_name",
+    "agent_icon_key",
     "parent_turn_id",
     "parent_run_id",
     "internal_only",
@@ -50,9 +51,10 @@ def resolve_agent_run_attribution(
     if display_name is not None:
         source["agent_display_name"] = display_name
     elif source.get("agent_display_name") is None:
-        source["agent_display_name"] = (
-            _format_agent_kind(source.get("agent_kind"))
-        )
+        source["agent_display_name"] = _format_agent_kind(source.get("agent_kind"))
+    icon_key = _registered_agent_icon_key(source.get("agent_id"))
+    if icon_key is not None:
+        source["agent_icon_key"] = icon_key
 
     attribution: dict[str, Any] = {}
     for key in AGENT_RUN_ATTRIBUTION_KEYS:
@@ -106,6 +108,16 @@ def _registered_agent_display_name(value: Any) -> str | None:
     normalized = value.strip()
     try:
         return agent_display_name(normalized)
+    except KeyError:
+        return None
+
+
+def _registered_agent_icon_key(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    try:
+        return agent_icon_key(normalized)
     except KeyError:
         return None
 

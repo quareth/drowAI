@@ -19,7 +19,7 @@ from backend.services.langgraph_chat.checkpoint.thread_identity import (
 from backend.services.langgraph_chat.contracts import LangGraphRuntimeConfig
 
 from .contracts import AgentAssignment, AgentRuntimeIdentity
-from .contracts import agent_display_name
+from .contracts import agent_display_name, agent_icon_key
 from .registry import ProcessLocalAgentRunRegistry
 
 
@@ -71,6 +71,7 @@ async def build_child_execution_config(
         "agent_id": assignment.agent_id,
         "agent_kind": assignment.agent_kind,
         "agent_display_name": agent_display_name(assignment.agent_id),
+        "agent_icon_key": agent_icon_key(assignment.agent_id),
         "parent_turn_id": assignment.parent_turn_id,
         "parent_run_id": parent_run_id,
         "parent_graph_thread_id": assignment.parent_graph_thread_id,

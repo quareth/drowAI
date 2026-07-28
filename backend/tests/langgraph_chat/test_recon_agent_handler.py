@@ -21,6 +21,7 @@ from agent.subagents.registry import SubagentRegistry as DefinitionSubagentRegis
 from agent.subagents.runtime.model import SUBAGENT_RESULT_METADATA_KEY
 from backend.services.agent_runs.contracts import AgentResult
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
+from backend.services.agent_runs.result_projection import COMPLETED_AGENT_RESULTS_KEY
 from backend.services.agent_runs.subagent_registry import (
     SubagentRegistry,
     SubagentSpec,
@@ -288,7 +289,8 @@ async def test_subagent_handler_waits_for_pathfinder_and_runs_parent_finalizer()
         lifecycle_publisher=_publish,
     )
 
-    result = await handler.handle(_runtime_config())
+    runtime_config = _runtime_config()
+    result = await handler.handle(runtime_config)
 
     assert result.final_text == "Main agent finalized Scout result."
     assert result.metadata["branch"] == "subagent"
@@ -305,6 +307,7 @@ async def test_subagent_handler_waits_for_pathfinder_and_runs_parent_finalizer()
     child_config = launcher.calls[0]["runtime_config"]
     assert child_config["configurable"]["graph_name"] == GRAPH_NAME_SUBAGENT
     assert child_config["configurable"]["agent_run_id"] == assignment.agent_run_id
+    assert child_config["configurable"]["agent_icon_key"] == "pathfinder"
     assert child_config["configurable"]["thread_id"].startswith("graph-")
     assert (
         child_config["configurable"]["runtime_projection"]["runtime_placement_mode"]
@@ -325,6 +328,9 @@ async def test_subagent_handler_waits_for_pathfinder_and_runs_parent_finalizer()
     assert "assignment" not in events[1][1]["agent_run"] or (
         events[1][1]["agent_run"]["assignment"] is None
     )
+    completed_results = runtime_config.metadata[COMPLETED_AGENT_RESULTS_KEY]
+    assert completed_results[0]["agent_id"] == "pathfinder"
+    assert completed_results[0]["agent_run_id"] == assignment.agent_run_id
 
 
 @pytest.mark.asyncio

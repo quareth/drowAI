@@ -167,6 +167,7 @@ def test_contracts_reject_post_validation_mutation_of_safe_payloads() -> None:
         agent_id="pathfinder",
         agent_kind="recon",
         agent_display_name="Pathfinder",
+        agent_icon_key="pathfinder",
         status="completed",
         lifecycle_version=3,
         task_id=42,
@@ -220,6 +221,7 @@ def test_result_and_lifecycle_projections_exclude_raw_activity() -> None:
         agent_id="pathfinder",
         agent_kind="recon",
         agent_display_name="Pathfinder",
+        agent_icon_key="pathfinder",
         status="completed",
         lifecycle_version=3,
         task_id=42,
@@ -246,6 +248,23 @@ def test_lifecycle_projection_requires_display_metadata_match() -> None:
             agent_id="pathfinder",
             agent_kind="recon",
             agent_display_name="Recon",
+            agent_icon_key="pathfinder",
+            status="running",
+            lifecycle_version=1,
+            task_id=42,
+            conversation_id="conversation-1",
+            parent_turn_id="turn-1",
+        )
+
+
+def test_lifecycle_projection_requires_icon_metadata_match() -> None:
+    with pytest.raises(ValidationError, match="icon_key"):
+        AgentRunLifecycleProjection(
+            agent_run_id="run-1",
+            agent_id="pathfinder",
+            agent_kind="recon",
+            agent_display_name="Pathfinder",
+            agent_icon_key="generic",
             status="running",
             lifecycle_version=1,
             task_id=42,
