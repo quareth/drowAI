@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from .deep_reasoning import DeepReasoningPromptBuilder as DeepReasoningPromptBuilder
     from .post_tool import PostToolReasoningPromptBuilder as PostToolReasoningPromptBuilder
     from .simple_tool import SimpleToolPromptBuilder as SimpleToolPromptBuilder
+    from .subagent_runtime import SubagentRuntimePromptBuilder as SubagentRuntimePromptBuilder
     from .tool_planning import ToolPlanningPromptBuilder as ToolPlanningPromptBuilder
 
 
@@ -22,6 +23,7 @@ __all__ = [
     "DeepReasoningPromptBuilder",
     "PostToolReasoningPromptBuilder",
     "SimpleToolPromptBuilder",
+    "SubagentRuntimePromptBuilder",
     "ToolPlanningPromptBuilder",
 ]
 
@@ -39,6 +41,10 @@ def __getattr__(name: str) -> Any:  # pragma: no cover
         from .simple_tool import SimpleToolPromptBuilder
 
         return SimpleToolPromptBuilder
+    if name == "SubagentRuntimePromptBuilder":
+        from .subagent_runtime import SubagentRuntimePromptBuilder
+
+        return SubagentRuntimePromptBuilder
     if name == "ToolPlanningPromptBuilder":
         from .tool_planning import ToolPlanningPromptBuilder
 

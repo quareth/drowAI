@@ -41,9 +41,7 @@ from agent.tools.builder_intent import split_builder_intent
 from agent.tools.tool_call_specs import build_function_tool_specs_for
 from agent.tools.tool_registry import get_tool
 from core.llm import LLM_TIMEOUT_PLANNER_PARAMETER_RESOLUTION_SEC, wait_for_with_timeout
-from core.prompts.builders.tool_planning import ToolPlanningPromptBuilder
-from core.runbooks.models import RunbookStage
-from core.runbooks.service import RunbookService
+from core.prompts.builders.subagent_runtime import SubagentRuntimePromptBuilder
 
 
 logger = logging.getLogger(__name__)
@@ -52,7 +50,6 @@ SUBAGENT_ACTION_METADATA_KEY = "subagent_action"
 SUBAGENT_RESULT_METADATA_KEY = "subagent_result"
 SUBAGENT_EXECUTION_STRATEGY_KEY = "_execution_strategy"
 
-_RUNBOOK_SERVICE = RunbookService()
 _SUBAGENT_EXECUTION_STRATEGY_SCHEMA: dict[str, Any] = {
     "type": "string",
     "enum": ["parallel", "sequential"],
@@ -72,6 +69,7 @@ class SubagentToolBuilderPromptBuilder:
 
     def __init__(self, definition: SubagentDefinition) -> None:
         self._definition = definition
+        self._delegate = SubagentRuntimePromptBuilder()
 
     def build_system_prompt(
         self,
@@ -87,25 +85,15 @@ class SubagentToolBuilderPromptBuilder:
         boundary_rules = self._definition.tool_builder_boundary_rules
         if not boundary_rules:
             boundary_rules = (self._definition.ownership_boundary,)
-        shared_guidance = (
-            ToolPlanningPromptBuilder().build_native_tool_call_shared_guidance(
-                max_committed_tools_per_batch=max_committed_tools_per_batch,
-            )
+        return self._delegate.build_system_prompt(
+            definition_id=self._definition.id,
+            display_name=display_name,
+            role_prompt=role_prompt,
+            definition_instructions=self._definition.instructions,
+            ownership_boundary=self._definition.ownership_boundary,
+            boundary_rules=boundary_rules,
+            max_committed_tools_per_batch=max_committed_tools_per_batch,
         )
-        return f"""{role_prompt}
-
-{shared_guidance}
-
-{display_name} batch strategy metadata (`_execution_strategy`):
-- Every native tool call must include `_execution_strategy` as either "parallel" or "sequential".
-- `_execution_strategy` is scheduling metadata, not a tool parameter.
-- Use the same `_execution_strategy` value on every call in the batch.
-- Use "sequential" when committing one call.
-- For multiple calls, choose the strategy using the exact execution-strategy guidance above.
-
-{display_name} boundaries:
-{_to_prompt_bullets(boundary_rules)}
-"""
 
     def build_user_prompt(
         self,
@@ -114,42 +102,18 @@ class SubagentToolBuilderPromptBuilder:
         tool_ids: Sequence[str],
         working_memory: Mapping[str, Any] | None = None,
         previous_tool_summary: Mapping[str, Any] | None = None,
+        remaining_limits: Mapping[str, Any] | None = None,
     ) -> str:
         """Return bounded assignment context for the canonical builder rules."""
 
-        display_name = self._definition.display_name
-        objective = str(assignment.get("objective") or "").strip()
-        targets = list(assignment.get("targets") or [])
-        scope_summary = assignment.get("scope_summary")
-        tool_runbooks = _RUNBOOK_SERVICE.render_for_tools(
-            selected_tools=list(tool_ids),
-            stage=RunbookStage.TOOL_PARAMETERS,
+        return self._delegate.build_user_prompt(
+            display_name=self._definition.display_name,
+            assignment=assignment,
+            tool_ids=tool_ids,
+            working_memory=working_memory,
+            previous_tool_summary=previous_tool_summary,
+            remaining_limits=remaining_limits,
         )
-        runbooks_section = (
-            f"\nTool Runbooks:\n{tool_runbooks}\n" if tool_runbooks else ""
-        )
-        return f"""Current Turn Input:
-
-Turn Execution Brief:
-- Overall goal: {objective}
-- Next operational goal: {objective}
-- Success condition: {objective}
-- Targets: {_to_prompt_json(targets)}
-- Explicit constraints: {_to_prompt_json([scope_summary] if scope_summary else [])}
-
-Candidate Tools (complete {display_name} profile; no selection step):
-{_to_prompt_json(list(tool_ids))}
-{runbooks_section}
-
-Assignment:
-{_to_prompt_json(assignment)}
-
-Previous Tool Executed:
-{_to_prompt_json(previous_tool_summary or {})}
-
-Working Memory Snapshot:
-{_to_prompt_json(working_memory or {})}
-"""
 
 
 async def choose_subagent_action(
@@ -198,6 +162,11 @@ async def choose_subagent_action(
                     ),
                     previous_tool_summary=_bounded_mapping(
                         interactive.facts.last_tool_result_compact
+                    ),
+                    remaining_limits=_build_remaining_limits(
+                        definition,
+                        interactive,
+                        max_committed_calls=max_committed_calls,
                     ),
                 ),
                 tools=tool_specs,
@@ -529,16 +498,23 @@ def _bounded_mapping(value: Any) -> dict[str, Any]:
     return dict(value)
 
 
-def _to_prompt_json(value: Any) -> str:
-    """Serialize prompt context deterministically without provider objects."""
+def _build_remaining_limits(
+    definition: SubagentDefinition,
+    interactive: InteractiveState,
+    *,
+    max_committed_calls: int,
+) -> dict[str, int]:
+    """Return prompt-facing limits that bound this subagent turn."""
 
-    return json.dumps(value, ensure_ascii=True, sort_keys=True, default=str)
-
-
-def _to_prompt_bullets(values: Sequence[str]) -> str:
-    """Render definition-owned prompt bullets without changing their text."""
-
-    return "\n".join(f"- {value}" for value in values)
+    completed_iterations = max(int(interactive.facts.iterations or 0), 0)
+    max_iterations = max(int(definition.max_iterations), 1)
+    return {
+        "completed_iterations": completed_iterations,
+        "max_iterations": max_iterations,
+        "remaining_iterations": max(max_iterations - completed_iterations, 0),
+        "max_tool_calls_per_iteration": int(definition.max_tool_calls_per_iteration),
+        "remaining_tool_calls_this_iteration": int(max_committed_calls),
+    }
 
 
 __all__ = [

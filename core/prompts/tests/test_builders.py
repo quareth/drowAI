@@ -469,6 +469,7 @@ def test_post_tool_articulation_prompt_includes_structured_tool_intent() -> None
 def test_prompt_registry_template_and_builder_access() -> None:
     from core.prompts.constants import CLASSIFIER_SYSTEM_PROMPT, SIMPLE_CHAT_DEFAULT_SYSTEM_PROMPT
     from core.prompts.builders.deep_reasoning import DeepReasoningPromptBuilder
+    from core.prompts.builders.subagent_runtime import SubagentRuntimePromptBuilder
     from core.prompts.registry import PromptRegistry
 
     registry = PromptRegistry()
@@ -510,7 +511,17 @@ def test_prompt_registry_template_and_builder_access() -> None:
     assert "include evidence excerpts that directly support the vulnerability claim." in (
         candidate_user_template
     )
+    assert registry.get_template("subagent_runtime_system").startswith(
+        "{role_prompt}\n\nDefinition Instructions:"
+    )
+    assert "Bounded Prior Observations:" in registry.get_template(
+        "subagent_runtime_user"
+    )
 
     assert isinstance(registry.get_chat_builder("deep_reasoning"), DeepReasoningPromptBuilder)
     assert registry.get_tool_planning_builder("tool_planning") is not None
     assert registry.get_post_tool_builder("post_tool_reasoning") is not None
+    assert isinstance(
+        registry.get_subagent_runtime_builder("subagent_runtime"),
+        SubagentRuntimePromptBuilder,
+    )

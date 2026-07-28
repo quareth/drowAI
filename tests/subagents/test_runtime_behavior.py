@@ -327,6 +327,9 @@ async def test_runtime_model_builder_records_generic_action_metadata_and_call_to
         "temperature": 0.1,
         "max_tokens": 5000,
     }
+    assert "Remaining Limits:" in request["user_prompt"]
+    assert '"remaining_iterations": 3' in request["user_prompt"]
+    assert '"remaining_tool_calls_this_iteration": 3' in request["user_prompt"]
     assert all(
         SUBAGENT_EXECUTION_STRATEGY_KEY in required
         for required in request["required"]
