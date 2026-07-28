@@ -11,7 +11,7 @@ into one of four graph branches:
 - normal chat
 - simple tool execution
 - deep reasoning
-- subagent handoff (currently Scout recon)
+- subagent handoff (currently Pathfinder recon)
 
 The backend facade owns branch selection. Graph builders own node topology.
 Graph nodes own local state transitions and emitted stream events.
@@ -82,7 +82,7 @@ flowchart TD
     Normal[NormalChatHandler]
     Simple[SimpleToolHandler]
     Deep[DeepReasoningHandler]
-    Scout[ReconAgentHandler]
+    Subagent[SubagentHandler]
 
     ChatAPI --> Context
     Context --> Intent
@@ -90,7 +90,7 @@ flowchart TD
     Selector --> Normal
     Selector --> Simple
     Selector --> Deep
-    Selector --> Scout
+    Selector --> Subagent
 ```
 
 Selection inputs:
@@ -110,8 +110,8 @@ Route policy:
   mode for approval behavior.
 - Agent/full-access without plan mode can route through classifier-derived
   execution mode.
-- A direct-executor turn with one supported required Scout handoff routes to
-  the recon handler. `suggested_capabilities` remains advisory assignment
+- A direct-executor turn with one supported required Pathfinder handoff routes
+  to the generic subagent handler. `suggested_capabilities` remains advisory assignment
   context and is not delegation authority.
 - `backend/services/agent_runs/subagent_registry.py` is the control-plane source
   of truth for enabled subagent names, purpose, ownership boundary, supported
@@ -127,7 +127,7 @@ Route policy:
   for a materially larger or dynamically managed registry.
 - The classifier contract represents handoffs as an ordered array so future
   registered subagents can be added without another schema-shape change.
-  Current execution supports one Scout handoff and fails closed for unsupported
+  Current execution supports one subagent handoff and fails closed for unsupported
   multi-handoff cardinality; parallel fan-out is not claimed until the parent
   graph owns an explicit fan-out and result-reduction step.
 

@@ -29,6 +29,11 @@ The format is based on
   from its divider or toolbar control, and reopened from the expanded
   conversation header without remounting the chat.
 
+### Changed
+
+- Pathfinder subagent execution now runs through the declarative generic
+  subagent runtime without the old Scout-specific runtime modules.
+
 ### Fixed
 
 - Repeated subagent invocations in one conversation now remain separate drawer
@@ -45,7 +50,7 @@ The format is based on
   available as advisory assignment context. Enabled agent names, ownership
   boundaries, target requirements, concurrency, classifier catalog entries,
   schema constraints, and dispatch branches now come from one subagent
-  registry instead of prompt-local Scout rules.
+  registry instead of hardcoded prompt-local rules.
 - Subagent calls now participate in the parent turn's ordered activity chain by
   run identity and stream sequence, regardless of the implemented subagent kind,
   and completed-turn summaries count each distinct run as an agent.
