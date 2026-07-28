@@ -49,6 +49,7 @@ class LocalAgentRun:
     task_handle: asyncio.Task[Any] | None
     cancel_requested: bool
     result_consumed: bool
+    accounted_usage_record_count: int
 
 
 class ActiveAgentRunExistsError(RuntimeError):
@@ -133,6 +134,7 @@ class ProcessLocalAgentRunRegistry:
                 task_handle=None,
                 cancel_requested=False,
                 result_consumed=False,
+                accounted_usage_record_count=0,
             )
             self._runs[key] = entry
             return entry
@@ -198,6 +200,7 @@ class ProcessLocalAgentRunRegistry:
         tenant_id: int,
         task_id: int,
         agent_run_id: str,
+        accounted_usage_record_count: int | None = None,
     ) -> LocalAgentRun:
         """Transition an active local run to the shared approval wait state."""
         async with self._lock:
@@ -206,11 +209,17 @@ class ProcessLocalAgentRunRegistry:
             )
             if _is_terminal(entry) or entry.status == "waiting_for_approval":
                 return entry
+            accounted_count = (
+                entry.accounted_usage_record_count
+                if accounted_usage_record_count is None
+                else max(0, int(accounted_usage_record_count))
+            )
             return self._store(
                 replace(
                     entry,
                     status="waiting_for_approval",
                     lifecycle_version=entry.lifecycle_version + 1,
+                    accounted_usage_record_count=accounted_count,
                 )
             )
 

@@ -20,6 +20,10 @@ from agent.subagents.definition import SubagentDefinition
 from agent.subagents.registry import SubagentRegistry as DefinitionSubagentRegistry
 from agent.subagents.runtime.model import SUBAGENT_RESULT_METADATA_KEY
 from backend.services.agent_runs.contracts import AgentResult
+from backend.services.agent_runs.completion import (
+    AgentRunCompletion,
+    build_agent_run_completion,
+)
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
 from backend.services.agent_runs.result_projection import COMPLETED_AGENT_RESULTS_KEY
 from backend.services.agent_runs.subagent_registry import (
@@ -36,6 +40,10 @@ from backend.services.langgraph_chat.facade import LangGraphChatFacade
 from backend.services.langgraph_chat.handlers.subagent_handler import (
     SubagentHandler,
 )
+from backend.services.agent_runs.launcher import (
+    SubagentRunCancelled,
+    SubagentRunPaused,
+)
 from backend.services.langgraph_chat.routing.selectors import ChatBranch, resolve_branch
 
 
@@ -44,11 +52,12 @@ class _RecordingLauncher:
         self.registry = registry
         self.calls: list[dict[str, Any]] = []
 
-    async def launch(self, **kwargs: Any) -> asyncio.Task[AgentResult]:
+    async def launch(self, **kwargs: Any) -> asyncio.Task[AgentRunCompletion]:
         self.calls.append(kwargs)
         assignment = kwargs["assignment"]
+        graph_thread_id = kwargs["graph_thread_id"]
 
-        async def _finish() -> AgentResult:
+        async def _finish() -> AgentRunCompletion:
             result = AgentResult(
                 agent_run_id=assignment.agent_run_id,
                 agent_id=assignment.agent_id,
@@ -64,7 +73,14 @@ class _RecordingLauncher:
                 agent_run_id=assignment.agent_run_id,
                 result=result,
             )
-            return result
+            return build_agent_run_completion(
+                result=result,
+                assignment=assignment,
+                graph_thread_id=graph_thread_id,
+                final_state=_subagent_final_state(
+                    agent_run_id=assignment.agent_run_id,
+                ),
+            )
 
         return asyncio.create_task(_finish())
 
@@ -72,6 +88,30 @@ class _RecordingLauncher:
 class _FailingLauncher:
     async def launch(self, **kwargs: Any) -> None:
         raise RuntimeError("boom secret-free")
+
+
+class _CancellingLauncher:
+    async def launch(self, **_kwargs: Any) -> asyncio.Task[AgentRunCompletion]:
+        async def _cancel() -> AgentRunCompletion:
+            raise SubagentRunCancelled(
+                execution_result=GraphExecutionResult(
+                    final_state=_subagent_final_state(agent_run_id="agent-run-cancelled")
+                )
+            )
+
+        return asyncio.create_task(_cancel())
+
+
+class _PausingLauncher:
+    async def launch(self, **_kwargs: Any) -> asyncio.Task[AgentRunCompletion]:
+        async def _pause() -> AgentRunCompletion:
+            raise SubagentRunPaused(
+                execution_result=GraphExecutionResult(
+                    final_state=_subagent_final_state(agent_run_id="agent-run-paused")
+                )
+            )
+
+        return asyncio.create_task(_pause())
 
 
 class _CompletingExecutor:
@@ -116,20 +156,7 @@ class _CompletingExecutor:
 
         agent_run_id = graph_input["facts"]["metadata"]["agent_run_id"]
         return GraphExecutionResult(
-            final_state={
-                "facts": {
-                    "metadata": {
-                        SUBAGENT_RESULT_METADATA_KEY: {
-                            "agent_run_id": agent_run_id,
-                            "agent_id": "pathfinder",
-                            "agent_kind": "recon",
-                            "outcome": "completed",
-                            "summary": "Pathfinder found HTTP.",
-                            "tools_used": ["information_gathering.network_discovery.nmap"],
-                        }
-                    }
-                }
-            }
+            final_state=_subagent_final_state(agent_run_id=agent_run_id)
         )
 
 
@@ -199,6 +226,38 @@ def _runtime_config() -> LangGraphRuntimeConfig:
             ),
         },
     )
+
+
+def _subagent_final_state(*, agent_run_id: str) -> dict[str, Any]:
+    return {
+        "facts": {
+            "metadata": {
+                SUBAGENT_RESULT_METADATA_KEY: {
+                    "agent_run_id": agent_run_id,
+                    "agent_id": "pathfinder",
+                    "agent_kind": "recon",
+                    "outcome": "completed",
+                    "summary": "Pathfinder found HTTP.",
+                    "tools_used": ["information_gathering.network_discovery.nmap"],
+                }
+            }
+        },
+        "trace": {
+            "usage_records": [
+                {
+                    "source": "subagent_runtime_model",
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                    "provider": "openai",
+                    "model": "gpt-5.2-mini",
+                    "api_surface": "responses",
+                    "request_mode": "non_streaming",
+                    "cache_reporting": "reported",
+                }
+            ]
+        },
+    }
 
 
 def _second_agent_definition() -> SubagentDefinition:
@@ -344,14 +403,18 @@ async def test_subagent_handler_waits_for_pathfinder_and_runs_parent_finalizer()
     completed_results = runtime_config.metadata[COMPLETED_AGENT_RESULTS_KEY]
     assert completed_results[0]["agent_id"] == "pathfinder"
     assert completed_results[0]["agent_run_id"] == assignment.agent_run_id
-    assert result.total_tokens == 29
+    assert result.total_tokens == 44
     assert result.usage is not None
-    assert len(result.usage) == 1
-    [usage_record] = result.usage
-    assert usage_record.usage.total_tokens == 29
-    assert usage_record.metadata.execution_branch == "subagent_parent_finalizer"
-    assert usage_record.metadata.role == "finalizer"
-    assert usage_record.metadata.node_name == "finalize_tool_results"
+    assert len(result.usage) == 2
+    child_usage, parent_usage = result.usage
+    assert child_usage.usage.total_tokens == 15
+    assert child_usage.metadata.execution_branch == "subagent_child"
+    assert child_usage.metadata.role == "subagent"
+    assert child_usage.metadata.node_name == "subagent_runtime_model"
+    assert parent_usage.usage.total_tokens == 29
+    assert parent_usage.metadata.execution_branch == "subagent_parent_finalizer"
+    assert parent_usage.metadata.role == "finalizer"
+    assert parent_usage.metadata.node_name == "finalize_tool_results"
 
 
 @pytest.mark.asyncio
@@ -383,6 +446,7 @@ async def test_subagent_handler_attaches_live_runtime_services_only_at_launch() 
 @pytest.mark.asyncio
 async def test_subagent_handler_emits_failed_lifecycle_when_launch_fails() -> None:
     registry = ProcessLocalAgentRunRegistry()
+    executor = _CompletingExecutor()
     events: list[dict[str, Any]] = []
 
     async def _publish(task_id: int, event: dict[str, Any]) -> None:
@@ -390,7 +454,7 @@ async def test_subagent_handler_emits_failed_lifecycle_when_launch_fails() -> No
 
     handler = SubagentHandler(
         object(),
-        object(),
+        executor,
         object(),
         registry=registry,
         launcher=_FailingLauncher(),
@@ -404,12 +468,72 @@ async def test_subagent_handler_emits_failed_lifecycle_when_launch_fails() -> No
     assert entries[0].status == "failed"
     assert entries[0].safe_error == "Pathfinder launch failed"
     assert result.metadata["status"] == "failed"
+    assert result.usage is None
+    assert executor.calls == []
     assert [event["agent_run"]["status"] for event in events] == [
         "queued",
         "running",
         "failed",
     ]
     assert events[-1]["agent_run"]["safe_error"] == "Pathfinder launch failed"
+
+
+@pytest.mark.asyncio
+async def test_subagent_handler_child_cancellation_returns_partial_child_usage() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    executor = _CompletingExecutor()
+
+    async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
+        return None
+
+    handler = SubagentHandler(
+        object(),
+        executor,
+        object(),
+        registry=registry,
+        launcher=_CancellingLauncher(),
+        lifecycle_publisher=_publish,
+    )
+
+    result = await handler.handle(_runtime_config())
+
+    assert result.metadata["status"] == "cancelled"
+    assert result.usage is not None
+    assert len(result.usage) == 1
+    [usage] = result.usage
+    assert usage.usage.total_tokens == 15
+    assert usage.metadata.execution_branch == "subagent_child"
+    assert usage.metadata.node_name == "subagent_runtime_model"
+    assert executor.calls == []
+
+
+@pytest.mark.asyncio
+async def test_subagent_handler_hitl_pause_returns_partial_child_usage() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    executor = _CompletingExecutor()
+
+    async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
+        return None
+
+    handler = SubagentHandler(
+        object(),
+        executor,
+        object(),
+        registry=registry,
+        launcher=_PausingLauncher(),
+        lifecycle_publisher=_publish,
+    )
+
+    result = await handler.handle(_runtime_config())
+
+    assert result.metadata["status"] == "waiting_for_approval"
+    assert result.usage is not None
+    assert len(result.usage) == 1
+    [usage] = result.usage
+    assert usage.usage.total_tokens == 15
+    assert usage.metadata.execution_branch == "subagent_child"
+    assert usage.metadata.node_name == "subagent_runtime_model"
+    assert executor.calls == []
 
 
 def test_facade_registers_subagent_handler() -> None:
@@ -469,8 +593,10 @@ async def test_subagent_handler_default_launcher_runs_real_worker_to_completion(
     assert events[-1]["agent_run"]["status"] == "completed"
     assert result.usage is not None
     assert [record.metadata.execution_branch for record in result.usage] == [
+        "subagent_child",
         "subagent_parent_finalizer"
     ]
+    assert [record.usage.total_tokens for record in result.usage] == [15, 29]
 
 
 @pytest.mark.asyncio

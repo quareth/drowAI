@@ -23,6 +23,7 @@ from backend.services.agent_runs.continuation import (
 )
 from backend.services.agent_runs.contracts import AgentAssignment, AgentRuntimeIdentity
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
+from backend.services.agent_runs.worker import mark_subagent_completed_from_state
 from agent.subagents.runtime.model import SUBAGENT_RESULT_METADATA_KEY
 from backend.services.langgraph_chat.checkpoint.continuation_service import (
     CheckpointContinuationService,
@@ -79,6 +80,7 @@ async def test_prepare_subagent_resume_uses_ticket_thread_and_updates_status(
         tenant_id=7,
         task_id=42,
         agent_run_id="pathfinder-run-1",
+        accounted_usage_record_count=1,
     )
 
     monkeypatch.setattr(
@@ -126,6 +128,7 @@ async def test_prepare_subagent_resume_rejects_legacy_scout_ticket_identity(
         tenant_id=7,
         task_id=42,
         agent_run_id="pathfinder-run-1",
+        accounted_usage_record_count=1,
     )
 
     monkeypatch.setattr(
@@ -328,6 +331,7 @@ async def test_resume_from_interrupt_marks_subagent_completed_on_success(
         tenant_id=7,
         task_id=42,
         agent_run_id="pathfinder-run-1",
+        accounted_usage_record_count=1,
     )
     monkeypatch.setattr(
         continuation,
@@ -359,6 +363,30 @@ async def test_resume_from_interrupt_marks_subagent_completed_on_success(
                 }
             },
             final_text="Pathfinder found HTTP on port 80.",
+            usage_records=[
+                {
+                    "source": "subagent_runtime_model",
+                    "prompt_tokens": 50,
+                    "completion_tokens": 50,
+                    "total_tokens": 100,
+                    "provider": "openai",
+                    "model": "gpt-5.2-mini",
+                    "api_surface": "responses",
+                    "request_mode": "non_streaming",
+                    "cache_reporting": "reported",
+                },
+                {
+                    "source": "subagent_runtime_model",
+                    "prompt_tokens": 11,
+                    "completion_tokens": 4,
+                    "total_tokens": 15,
+                    "provider": "openai",
+                    "model": "gpt-5.2-mini",
+                    "api_surface": "responses",
+                    "request_mode": "non_streaming",
+                    "cache_reporting": "reported",
+                }
+            ],
         ),
         interrupted=False,
     )
@@ -388,6 +416,76 @@ async def test_resume_from_interrupt_marks_subagent_completed_on_success(
     assert entry.result is not None
     assert entry.result.agent_run_id == "pathfinder-run-1"
     assert entry.result.final_checkpoint_id == "cp-final"
+    assert result.usage is not None
+    assert len(result.usage) == 1
+    [usage] = result.usage
+    assert usage.usage.total_tokens == 15
+    assert usage.usage.model == "gpt-5.2-mini"
+    assert usage.metadata.execution_branch == "subagent_child"
+    assert usage.metadata.role == "subagent"
+    assert usage.metadata.node_name == "subagent_runtime_model"
+
+
+@pytest.mark.asyncio
+async def test_mark_subagent_completed_from_state_returns_usage_identity_envelope() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    child_thread = "a" * 32
+    assignment = _assignment()
+    entry = await registry.register(assignment, graph_thread_id=child_thread)
+    final_state = _interactive_state(
+        metadata={
+            SUBAGENT_RESULT_METADATA_KEY: {
+                "agent_run_id": "pathfinder-run-1",
+                "agent_id": "pathfinder",
+                "agent_kind": "recon",
+                "outcome": "completed",
+                "summary": "Pathfinder found HTTP on port 80.",
+            }
+        },
+        final_text="Pathfinder found HTTP on port 80.",
+        usage_records=[
+            {
+                "source": "subagent_runtime_model",
+                "prompt_tokens": 7,
+                "completion_tokens": 3,
+                "total_tokens": 10,
+            }
+        ],
+    )
+
+    completion = await mark_subagent_completed_from_state(
+        registry=registry,
+        entry=entry,
+        final_state=final_state,
+    )
+
+    assert completion.result.agent_run_id == "pathfinder-run-1"
+    assert completion.tenant_id == 7
+    assert completion.task_id == 42
+    assert completion.user_id == 3
+    assert completion.conversation_id == "conv-42"
+    assert completion.agent_id == "pathfinder"
+    assert completion.agent_run_id == "pathfinder-run-1"
+    assert completion.graph_thread_id == child_thread
+    assert completion.usage_records == (
+        {
+            "source": "subagent_runtime_model",
+            "prompt_tokens": 7,
+            "completion_tokens": 3,
+            "total_tokens": 10,
+            "tenant_id": 7,
+            "task_id": 42,
+            "user_id": 3,
+            "conversation_id": "conv-42",
+            "provider": "unknown",
+            "model": "unknown",
+            "agent_id": "pathfinder",
+            "agent_kind": "recon",
+            "agent_run_id": "pathfinder-run-1",
+            "graph_thread_id": child_thread,
+            "parent_turn_id": "turn-42",
+        },
+    )
 
 
 @pytest.mark.asyncio
@@ -456,6 +554,7 @@ def _interactive_state(
     *,
     metadata: dict[str, Any] | None = None,
     final_text: str | None = None,
+    usage_records: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "facts": {
@@ -466,6 +565,7 @@ def _interactive_state(
         },
         "trace": {
             "final_text": final_text,
+            "usage_records": usage_records or [],
         },
     }
 

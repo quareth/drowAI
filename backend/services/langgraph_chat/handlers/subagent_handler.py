@@ -27,11 +27,18 @@ from backend.services.agent_runs.contracts import (
     AgentRuntimeIdentity,
     agent_display_name,
 )
+from backend.services.agent_runs.completion import (
+    AgentRunCompletion,
+    build_agent_run_completion,
+    child_usage_records_from_state,
+    usage_envelopes_from_child_records,
+)
 from backend.services.agent_runs.event_projection import build_agent_run_lifecycle_event
 from backend.services.agent_runs.execution_config import build_child_execution_config
 from backend.services.agent_runs.launcher import (
     AgentRunLauncher,
     AgentRunWorker,
+    SubagentRunCancelled,
     SubagentRunPaused,
 )
 from backend.services.agent_runs.result_projection import (
@@ -202,8 +209,20 @@ class SubagentHandler(BaseLangGraphHandler):
             )
 
         try:
-            child_result = await _require_child_task(child_task)
-        except SubagentRunPaused:
+            child_completion = await _require_child_task(
+                child_task,
+                assignment=assignment,
+                graph_thread_id=child_graph_thread_id,
+            )
+        except SubagentRunPaused as exc:
+            usage = _usage_from_child_execution_result(
+                exc.execution_result,
+                assignment=assignment,
+                graph_thread_id=child_graph_thread_id,
+                turn_index=(
+                    turn.turn_number if isinstance(turn.turn_number, int) else None
+                ),
+            )
             return _ack_result(
                 runtime_config,
                 turn_id=str(turn.turn_id),
@@ -216,6 +235,30 @@ class SubagentHandler(BaseLangGraphHandler):
                 agent_display_name=display_name,
                 graph_thread_id=child_graph_thread_id,
                 status="waiting_for_approval",
+                usage=usage,
+            )
+        except SubagentRunCancelled as exc:
+            usage = _usage_from_child_execution_result(
+                exc.execution_result,
+                assignment=assignment,
+                graph_thread_id=child_graph_thread_id,
+                turn_index=(
+                    turn.turn_number if isinstance(turn.turn_number, int) else None
+                ),
+            )
+            return _ack_result(
+                runtime_config,
+                turn_id=str(turn.turn_id),
+                turn_sequence=(
+                    turn.turn_number if isinstance(turn.turn_number, int) else None
+                ),
+                agent_run_id=assignment.agent_run_id,
+                agent_id=assignment.agent_id,
+                agent_kind=assignment.agent_kind,
+                agent_display_name=display_name,
+                graph_thread_id=child_graph_thread_id,
+                status="cancelled",
+                usage=usage,
             )
         except asyncio.CancelledError:
             return _ack_result(
@@ -252,6 +295,7 @@ class SubagentHandler(BaseLangGraphHandler):
                 status="failed",
             )
 
+        child_result = child_completion.result
         handoff = CompletedAgentResultHandoff(
             results=(self._result_projector.project_result(child_result),),
             agent_run_ids=(assignment.agent_run_id,),
@@ -260,7 +304,7 @@ class SubagentHandler(BaseLangGraphHandler):
         parent_result = await self._finalize_parent_handoff(
             runtime_config,
             turn=turn,
-            child_result=child_result,
+            child_completion=child_completion,
             child_graph_thread_id=child_graph_thread_id,
         )
         await self._consume_completed_handoff(
@@ -274,7 +318,7 @@ class SubagentHandler(BaseLangGraphHandler):
         runtime_config: LangGraphRuntimeConfig,
         *,
         turn: Any,
-        child_result: AgentResult,
+        child_completion: AgentRunCompletion,
         child_graph_thread_id: str,
     ) -> LangGraphChatResult:
         """Run the canonical main finalizer over one completed child result."""
@@ -370,9 +414,9 @@ class SubagentHandler(BaseLangGraphHandler):
                 "mode": ExecutionMode.SIMPLE_TOOL.value,
                 "branch": "subagent",
                 "status": "completed",
-                "handoff_agent_run_id": child_result.agent_run_id,
-                "handoff_agent_id": child_result.agent_id,
-                "handoff_agent_kind": child_result.agent_kind,
+                "handoff_agent_run_id": child_completion.result.agent_run_id,
+                "handoff_agent_id": child_completion.result.agent_id,
+                "handoff_agent_kind": child_completion.result.agent_kind,
                 "handoff_graph_thread_id": child_graph_thread_id,
             },
             chat_inputs.conversation_id or "",
@@ -382,13 +426,18 @@ class SubagentHandler(BaseLangGraphHandler):
             if value is not None:
                 result_metadata[key] = value
 
-        usage = _extract_usage_from_state(
+        turn_index = turn.turn_number if isinstance(turn.turn_number, int) else None
+        parent_usage = _extract_usage_from_state(
             interactive_state,
             execution_branch="subagent_parent_finalizer",
-            turn_index=(
-                turn.turn_number if isinstance(turn.turn_number, int) else None
-            ),
+            turn_index=turn_index,
         )
+        child_usage = usage_envelopes_from_child_records(
+            child_completion.usage_records,
+            execution_branch="subagent_child",
+            turn_index=turn_index,
+        )
+        usage = [*child_usage, *(parent_usage or [])] or None
         result = build_result(
             final_text=final_text,
             conversation_id=chat_inputs.conversation_id,
@@ -439,14 +488,25 @@ class SubagentHandler(BaseLangGraphHandler):
         await self._publish_lifecycle(entry.task_id, event)
 
 
-async def _require_child_task(value: Any) -> AgentResult:
+async def _require_child_task(
+    value: Any,
+    *,
+    assignment: AgentAssignment,
+    graph_thread_id: str,
+) -> AgentRunCompletion:
     """Await and validate the launcher's terminal subagent result."""
     if not isinstance(value, Awaitable):
         raise RuntimeError("Subagent launcher did not return an awaitable result task")
     result = await value
-    if not isinstance(result, AgentResult):
-        raise RuntimeError("Subagent launcher returned an invalid terminal result")
-    return result
+    if isinstance(result, AgentRunCompletion):
+        return result
+    if isinstance(result, AgentResult):
+        return build_agent_run_completion(
+            result=result,
+            assignment=assignment,
+            graph_thread_id=graph_thread_id,
+        )
+    raise RuntimeError("Subagent launcher returned an invalid terminal result")
 
 
 async def _publish_lifecycle_to_hub(task_id: int, event: dict[str, Any]) -> None:
@@ -548,6 +608,7 @@ def _ack_result(
     agent_display_name: str,
     graph_thread_id: str,
     status: str,
+    usage: list[Any] | None = None,
 ) -> LangGraphChatResult:
     conversation_id = runtime_config.chat_inputs.conversation_id
     metadata = attach_conversation_ids(
@@ -581,6 +642,29 @@ def _ack_result(
         }.get(status, f"{display_name} subagent status changed."),
         conversation_id=conversation_id,
         metadata=metadata,
+        usage=usage,
+    )
+
+
+def _usage_from_child_execution_result(
+    execution_result: Any,
+    *,
+    assignment: AgentAssignment,
+    graph_thread_id: str,
+    turn_index: int | None,
+) -> list[Any] | None:
+    records = child_usage_records_from_state(
+        getattr(execution_result, "final_state", None),
+        assignment=assignment,
+        graph_thread_id=graph_thread_id,
+    )
+    return (
+        usage_envelopes_from_child_records(
+            records,
+            execution_branch="subagent_child",
+            turn_index=turn_index,
+        )
+        or None
     )
 
 

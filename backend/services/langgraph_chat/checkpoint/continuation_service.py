@@ -24,6 +24,11 @@ from backend.services.agent_runs.continuation import (
 )
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
 from backend.services.agent_runs.worker import mark_subagent_completed_from_state
+from backend.services.agent_runs.completion import (
+    AgentRunCompletion,
+    child_usage_records_from_state,
+    usage_envelopes_from_child_records,
+)
 from backend.services.chat.message_service import ChatMessageService
 from backend.services.langgraph_chat.checkpoint.runtime_selection_resolver import (
     resolve_checkpoint_runtime_selection,
@@ -490,9 +495,15 @@ class CheckpointContinuationService:
 
         if execution_result.interrupted:
             if subagent_continuation_context is not None:
+                usage_records = child_usage_records_from_state(
+                    execution_result.final_state,
+                    assignment=subagent_continuation_context.entry.assignment,
+                    graph_thread_id=subagent_continuation_context.graph_thread_id,
+                )
                 await mark_subagent_waiting_for_approval(
                     registry=self._require_agent_run_registry(),
                     context=subagent_continuation_context,
+                    accounted_usage_record_count=len(usage_records),
                 )
             logger.info(
                 "[HITL] Continuation hit another interrupt for task %s", task_id
@@ -545,8 +556,9 @@ class CheckpointContinuationService:
         # Success path: parse failure raised above for non-interrupt paths,
         # so ``interactive_state`` is guaranteed non-None here.
         assert interactive_state is not None
+        subagent_completion: AgentRunCompletion | None = None
         if subagent_continuation_context is not None:
-            await mark_subagent_completed_from_state(
+            subagent_completion = await mark_subagent_completed_from_state(
                 registry=self._require_agent_run_registry(),
                 entry=subagent_continuation_context.entry,
                 final_state=execution_result.final_state,
@@ -608,11 +620,19 @@ class CheckpointContinuationService:
             if graph_name == GRAPH_NAME_SIMPLE_TOOL
             else "unknown"
         )
-        usage = _extract_usage_from_state(
-            interactive_state,
-            execution_branch=resume_execution_branch,
-            turn_index=turn_number if isinstance(turn_number, int) else None,
-        )
+        turn_index = turn_number if isinstance(turn_number, int) else None
+        if subagent_completion is not None:
+            usage = usage_envelopes_from_child_records(
+                subagent_completion.usage_records,
+                execution_branch="subagent_child",
+                turn_index=turn_index,
+            )
+        else:
+            usage = _extract_usage_from_state(
+                interactive_state,
+                execution_branch=resume_execution_branch,
+                turn_index=turn_index,
+            )
         if usage:
             logger.info(
                 "[HITL] Extracted %s usage records for task %s, total_tokens=%s",

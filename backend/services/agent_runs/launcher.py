@@ -13,7 +13,8 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Coroutine, Protocol
 
-from .contracts import AgentAssignment, AgentResult
+from .contracts import AgentAssignment
+from .completion import AgentRunCompletion, child_usage_records_from_state
 from .event_projection import build_agent_run_lifecycle_event
 from .registry import LocalAgentRun, ProcessLocalAgentRunRegistry
 
@@ -30,11 +31,13 @@ class AgentRunWorker(Protocol):
         runtime_config: Any,
         graph_thread_id: str,
         is_cancel_requested: Callable[[], Awaitable[bool]],
-    ) -> AgentResult:
+    ) -> AgentRunCompletion:
         """Run subagent work and return a safe terminal result."""
 
 
-TaskFactory = Callable[[Coroutine[Any, Any, AgentResult]], asyncio.Task[AgentResult]]
+TaskFactory = Callable[
+    [Coroutine[Any, Any, AgentRunCompletion]], asyncio.Task[AgentRunCompletion]
+]
 LifecyclePublisher = Callable[[int, dict[str, Any]], Awaitable[None]]
 
 
@@ -43,6 +46,14 @@ class SubagentRunPaused(RuntimeError):
 
     def __init__(self, execution_result: Any) -> None:
         super().__init__("Subagent run paused for approval")
+        self.execution_result = execution_result
+
+
+class SubagentRunCancelled(asyncio.CancelledError):
+    """Raised by a worker when cancellation occurs after child graph execution."""
+
+    def __init__(self, execution_result: Any) -> None:
+        super().__init__("Subagent run cancelled after graph execution")
         self.execution_result = execution_result
 
 
@@ -69,7 +80,7 @@ class AgentRunLauncher:
         runtime_config: Any,
         graph_thread_id: str,
         parent_run_id: str | None = None,
-    ) -> asyncio.Task[AgentResult]:
+    ) -> asyncio.Task[AgentRunCompletion]:
         """Create the local subagent task and attach its handle to the registry."""
         task_coro = self._run_worker(
             assignment=assignment,
@@ -96,6 +107,7 @@ class AgentRunLauncher:
             lambda completed: self._schedule_completion(
                 assignment,
                 completed,
+                graph_thread_id=graph_thread_id,
                 parent_run_id=parent_run_id,
             )
         )
@@ -142,7 +154,7 @@ class AgentRunLauncher:
         assignment: AgentAssignment,
         runtime_config: Any,
         graph_thread_id: str,
-    ) -> AgentResult:
+    ) -> AgentRunCompletion:
         return await self._worker(
             assignment=assignment,
             runtime_config=runtime_config,
@@ -153,14 +165,16 @@ class AgentRunLauncher:
     def _schedule_completion(
         self,
         assignment: AgentAssignment,
-        completed: asyncio.Task[AgentResult],
+        completed: asyncio.Task[AgentRunCompletion],
         *,
+        graph_thread_id: str,
         parent_run_id: str | None,
     ) -> None:
         cleanup = asyncio.create_task(
             self._complete_task(
                 assignment,
                 completed,
+                graph_thread_id=graph_thread_id,
                 parent_run_id=parent_run_id,
             )
         )
@@ -171,12 +185,21 @@ class AgentRunLauncher:
     async def _complete_task(
         self,
         assignment: AgentAssignment,
-        completed: asyncio.Task[AgentResult],
+        completed: asyncio.Task[AgentRunCompletion],
         *,
+        graph_thread_id: str,
         parent_run_id: str | None,
     ) -> None:
         try:
-            result = completed.result()
+            completion = completed.result()
+        except SubagentRunCancelled:
+            entry = await self._registry.mark_cancelled(
+                tenant_id=assignment.tenant_id,
+                task_id=assignment.task_id,
+                agent_run_id=assignment.agent_run_id,
+            )
+            await self._publish_terminal_lifecycle(entry, parent_run_id=parent_run_id)
+            return
         except asyncio.CancelledError:
             entry = await self._registry.mark_cancelled(
                 tenant_id=assignment.tenant_id,
@@ -185,11 +208,17 @@ class AgentRunLauncher:
             )
             await self._publish_terminal_lifecycle(entry, parent_run_id=parent_run_id)
             return
-        except SubagentRunPaused:
+        except SubagentRunPaused as exc:
+            usage_records = child_usage_records_from_state(
+                getattr(exc.execution_result, "final_state", None),
+                assignment=assignment,
+                graph_thread_id=graph_thread_id,
+            )
             entry = await self._registry.mark_waiting_for_approval(
                 tenant_id=assignment.tenant_id,
                 task_id=assignment.task_id,
                 agent_run_id=assignment.agent_run_id,
+                accounted_usage_record_count=len(usage_records),
             )
             await self._publish_terminal_lifecycle(entry, parent_run_id=parent_run_id)
             return
@@ -214,7 +243,7 @@ class AgentRunLauncher:
             tenant_id=assignment.tenant_id,
             task_id=assignment.task_id,
             agent_run_id=assignment.agent_run_id,
-            result=result,
+            result=completion.result,
         )
         await self._publish_terminal_lifecycle(entry, parent_run_id=parent_run_id)
 
@@ -260,7 +289,7 @@ async def _unavailable_worker(
     runtime_config: Any,
     graph_thread_id: str,
     is_cancel_requested: Callable[[], Awaitable[bool]],
-) -> AgentResult:
+) -> AgentRunCompletion:
     _ = (assignment, runtime_config, graph_thread_id, is_cancel_requested)
     raise RuntimeError("Subagent worker is not configured")
 
@@ -269,5 +298,6 @@ __all__ = [
     "AgentRunLauncher",
     "AgentRunWorker",
     "LifecyclePublisher",
+    "SubagentRunCancelled",
     "SubagentRunPaused",
 ]

@@ -27,8 +27,15 @@ from agent.subagents.runtime.graph import build_subagent_graph
 from agent.subagents.runtime.model import SUBAGENT_RESULT_METADATA_KEY
 from agent.subagents.runtime.state import build_subagent_initial_state
 from backend.services.agent_runs.contracts import AgentAssignment, AgentResult
+from backend.services.agent_runs.completion import (
+    AgentRunCompletion,
+    build_agent_run_completion,
+)
 from backend.services.agent_runs.event_projection import build_agent_run_lifecycle_event
-from backend.services.agent_runs.launcher import SubagentRunPaused
+from backend.services.agent_runs.launcher import (
+    SubagentRunCancelled,
+    SubagentRunPaused,
+)
 from backend.services.agent_runs.registry import LocalAgentRun, ProcessLocalAgentRunRegistry
 from backend.services.langgraph_chat.checkpoint.checkpointer_service import (
     CheckpointerService,
@@ -69,7 +76,7 @@ class ProcessLocalAgentRunWorker:
         runtime_config: Any,
         graph_thread_id: str,
         is_cancel_requested: Callable[[], Awaitable[bool]],
-    ) -> AgentResult:
+    ) -> AgentRunCompletion:
         """Execute a subagent until terminal result, cancellation, or HITL pause."""
 
         definition = resolve_definition_for_assignment(
@@ -106,16 +113,20 @@ class ProcessLocalAgentRunWorker:
             )
 
         if await is_cancel_requested():
-            raise asyncio.CancelledError
+            raise SubagentRunCancelled(execution_result)
         if execution_result.interrupted:
             raise SubagentRunPaused(execution_result)
         if not execution_result.final_state:
             raise RuntimeError("Subagent graph completed without final state")
-        return extract_subagent_result_from_state(
+        result = extract_subagent_result_from_state(
             execution_result.final_state,
-            expected_agent_run_id=assignment.agent_run_id,
-            expected_agent_id=assignment.agent_id,
-            expected_agent_kind=assignment.agent_kind,
+            assignment=assignment,
+        )
+        return build_agent_run_completion(
+            result=result,
+            assignment=assignment,
+            graph_thread_id=graph_thread_id,
+            final_state=execution_result.final_state,
         )
 
     async def _verify_registered_child(
@@ -141,23 +152,28 @@ async def mark_subagent_completed_from_state(
     entry: LocalAgentRun,
     final_state: Mapping[str, Any],
     parent_run_id: str | None = None,
-) -> LocalAgentRun:
-    """Store and publish a terminal subagent result after HITL continuation."""
+) -> AgentRunCompletion:
+    """Store, publish, and return terminal subagent completion after HITL resume."""
 
     result = extract_subagent_result_from_state(
         final_state,
-        expected_agent_run_id=entry.agent_run_id,
-        expected_agent_id=entry.agent_id,
-        expected_agent_kind=entry.agent_kind,
+        assignment=entry.assignment,
+    )
+    completion = build_agent_run_completion(
+        result=result,
+        assignment=entry.assignment,
+        graph_thread_id=entry.graph_thread_id,
+        final_state=final_state,
+        skip_usage_records=entry.accounted_usage_record_count,
     )
     completed = await registry.mark_completed(
         tenant_id=entry.tenant_id,
         task_id=entry.task_id,
         agent_run_id=entry.agent_run_id,
-        result=result,
+        result=completion.result,
     )
     await _publish_lifecycle_to_hub(completed, parent_run_id=parent_run_id)
-    return completed
+    return completion
 
 
 def resolve_definition_for_assignment(
@@ -191,9 +207,10 @@ def resolve_definition_for_assignment(
 def extract_subagent_result_from_state(
     final_state: Mapping[str, Any],
     *,
-    expected_agent_run_id: str,
-    expected_agent_id: str,
-    expected_agent_kind: str,
+    assignment: AgentAssignment | None = None,
+    expected_agent_run_id: str | None = None,
+    expected_agent_id: str | None = None,
+    expected_agent_kind: str | None = None,
 ) -> AgentResult:
     """Read a generic subagent terminal result from final graph metadata."""
 
@@ -207,6 +224,10 @@ def extract_subagent_result_from_state(
     if not isinstance(result_payload, Mapping):
         raise RuntimeError("Subagent graph completed without a terminal result")
     result = AgentResult.model_validate(dict(result_payload))
+    if assignment is not None:
+        expected_agent_run_id = assignment.agent_run_id
+        expected_agent_id = assignment.agent_id
+        expected_agent_kind = assignment.agent_kind
     if result.agent_run_id != expected_agent_run_id:
         raise RuntimeError("Subagent result agent_run_id does not match assignment")
     if result.agent_id != expected_agent_id:

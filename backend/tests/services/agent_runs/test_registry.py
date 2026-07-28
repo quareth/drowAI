@@ -99,6 +99,7 @@ async def test_register_creates_queued_process_local_entry() -> None:
     assert entry.task_handle is None
     assert entry.cancel_requested is False
     assert entry.result_consumed is False
+    assert entry.accounted_usage_record_count == 0
 
 
 @pytest.mark.asyncio

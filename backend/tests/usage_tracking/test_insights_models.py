@@ -205,6 +205,10 @@ class TestRoleAndNodeFromSource:
             "planner",
             "post_tool_reasoning_dr",
         )
+        assert role_and_node_from_source("subagent_runtime_model") == (
+            "subagent",
+            "subagent_runtime_model",
+        )
 
 
 class TestBuildUsageMetadataFromTraceRecord:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -13,6 +14,10 @@ from backend.services.agent_runs.contracts import (
     AgentAssignment,
     AgentResult,
     AgentRuntimeIdentity,
+)
+from backend.services.agent_runs.completion import (
+    AgentRunCompletion,
+    build_agent_run_completion,
 )
 from backend.services.agent_runs.launcher import AgentRunLauncher, SubagentRunPaused
 from backend.services.agent_runs.registry import (
@@ -80,6 +85,30 @@ def _result(agent_run_id: str = "run-1") -> AgentResult:
     )
 
 
+def _completion(
+    assignment: AgentAssignment,
+    *,
+    graph_thread_id: str = "child-thread-1",
+) -> AgentRunCompletion:
+    return build_agent_run_completion(
+        result=_result(assignment.agent_run_id),
+        assignment=assignment,
+        graph_thread_id=graph_thread_id,
+        final_state={
+            "trace": {
+                "usage_records": [
+                    {
+                        "source": "subagent_runtime_model",
+                        "prompt_tokens": 10,
+                        "completion_tokens": 5,
+                        "total_tokens": 15,
+                    }
+                ]
+            }
+        },
+    )
+
+
 @pytest.mark.asyncio
 async def test_launch_attaches_task_and_completion_callback_stores_result() -> None:
     registry = ProcessLocalAgentRunRegistry()
@@ -87,12 +116,12 @@ async def test_launch_attaches_task_and_completion_callback_stores_result() -> N
     await registry.register(assignment, graph_thread_id="child-thread-1")
     release_worker = asyncio.Event()
 
-    async def _worker(**kwargs: Any) -> AgentResult:
+    async def _worker(**kwargs: Any) -> AgentRunCompletion:
         assert kwargs["assignment"] == assignment
         assert kwargs["graph_thread_id"] == "child-thread-1"
         assert await kwargs["is_cancel_requested"]() is False
         await release_worker.wait()
-        return _result("run-1")
+        return _completion(assignment)
 
     launcher = AgentRunLauncher(registry=registry, worker=_worker)
 
@@ -108,7 +137,9 @@ async def test_launch_attaches_task_and_completion_callback_stores_result() -> N
     assert task.done() is False
 
     release_worker.set()
-    assert await task == _result("run-1")
+    completion = await task
+    assert completion.result == _result("run-1")
+    assert completion.usage_records[0]["agent_run_id"] == "run-1"
     completed = await _wait_for_status(
         registry, tenant_id=7, task_id=42, agent_run_id="run-1", status="completed"
     )
@@ -127,8 +158,8 @@ async def test_terminal_completion_publishes_attributed_lifecycle_event() -> Non
     async def _publish(task_id: int, event: dict[str, Any]) -> None:
         events.append((task_id, event))
 
-    async def _worker(**_kwargs: Any) -> AgentResult:
-        return _result("run-1")
+    async def _worker(**_kwargs: Any) -> AgentRunCompletion:
+        return _completion(assignment)
 
     launcher = AgentRunLauncher(
         registry=registry,
@@ -143,7 +174,7 @@ async def test_terminal_completion_publishes_attributed_lifecycle_event() -> Non
         parent_run_id="parent-run-1",
     )
 
-    assert await task == _result("run-1")
+    assert (await task).result == _result("run-1")
     await _wait_for_status(
         registry, tenant_id=7, task_id=42, agent_run_id="run-1", status="completed"
     )
@@ -169,7 +200,7 @@ async def test_worker_failure_is_sanitized_and_contained() -> None:
     assignment = _assignment()
     await registry.register(assignment, graph_thread_id="child-thread-1")
 
-    async def _worker(**_kwargs: Any) -> AgentResult:
+    async def _worker(**_kwargs: Any) -> AgentRunCompletion:
         raise RuntimeError("secret token=abc123")
 
     launcher = AgentRunLauncher(registry=registry, worker=_worker)
@@ -199,11 +230,11 @@ async def test_cancellation_signal_is_scoped_to_exact_local_run() -> None:
     await registry.register(first, graph_thread_id="child-thread-1")
     await registry.register(second, graph_thread_id="child-thread-2")
 
-    async def _worker(**kwargs: Any) -> AgentResult:
+    async def _worker(**kwargs: Any) -> AgentRunCompletion:
         while not await kwargs["is_cancel_requested"]():
             await asyncio.sleep(0.01)
         await asyncio.sleep(60)
-        return _result(kwargs["assignment"].agent_run_id)
+        return _completion(kwargs["assignment"], graph_thread_id=kwargs["graph_thread_id"])
 
     launcher = AgentRunLauncher(registry=registry, worker=_worker)
     first_task = await launcher.launch(
@@ -257,8 +288,23 @@ async def test_paused_approval_cancellation_becomes_terminal_and_publishes() -> 
     async def _publish(task_id: int, event: dict[str, Any]) -> None:
         events.append((task_id, event))
 
-    async def _worker(**_kwargs: Any) -> AgentResult:
-        raise SubagentRunPaused(execution_result={"interrupt_id": "interrupt-1"})
+    async def _worker(**_kwargs: Any) -> AgentRunCompletion:
+        raise SubagentRunPaused(
+            execution_result=SimpleNamespace(
+                final_state={
+                    "trace": {
+                        "usage_records": [
+                            {
+                                "source": "subagent_runtime_model",
+                                "prompt_tokens": 10,
+                                "completion_tokens": 5,
+                                "total_tokens": 15,
+                            }
+                        ]
+                    }
+                }
+            )
+        )
 
     launcher = AgentRunLauncher(
         registry=registry,
@@ -281,6 +327,7 @@ async def test_paused_approval_cancellation_becomes_terminal_and_publishes() -> 
 
     assert task.done() is True
     assert waiting.task_handle is task
+    assert waiting.accounted_usage_record_count == 1
 
     cancelled = await launcher.request_cancellation(
         tenant_id=7,
@@ -306,10 +353,10 @@ async def test_create_task_failure_does_not_attach_local_handle() -> None:
     assignment = _assignment()
     await registry.register(assignment, graph_thread_id="child-thread-1")
 
-    async def _worker(**_kwargs: Any) -> AgentResult:
-        return _result("run-1")
+    async def _worker(**_kwargs: Any) -> AgentRunCompletion:
+        return _completion(assignment)
 
-    def _failing_task_factory(_coro: Any) -> asyncio.Task[AgentResult]:
+    def _failing_task_factory(_coro: Any) -> asyncio.Task[AgentRunCompletion]:
         raise RuntimeError("create task failed")
 
     launcher = AgentRunLauncher(

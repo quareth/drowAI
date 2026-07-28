@@ -25,6 +25,10 @@ from agent.graph.context.builder import (
     build_conversation_context_bundle,
 )
 from backend.services.agent_runs.contracts import AgentAssignment, AgentResult
+from backend.services.agent_runs.completion import (
+    AgentRunCompletion,
+    build_agent_run_completion,
+)
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
 from backend.services.langgraph_chat.contracts import (
     AgentMode,
@@ -152,7 +156,7 @@ class _DelayedSubagentWorker:
         runtime_config: dict[str, Any],
         graph_thread_id: str,
         is_cancel_requested: Any,
-    ) -> AgentResult:
+    ) -> AgentRunCompletion:
         self.calls.append(
             {
                 "assignment": assignment,
@@ -163,7 +167,7 @@ class _DelayedSubagentWorker:
         self.started.set()
         await self.release.wait()
         assert not await is_cancel_requested()
-        return AgentResult(
+        result = AgentResult(
             agent_run_id=assignment.agent_run_id,
             agent_id="pathfinder",
             agent_kind="recon",
@@ -181,6 +185,11 @@ class _DelayedSubagentWorker:
             limitations=["Single approved target only."],
             recommended_next_steps=["Review the HTTPS service banner."],
             final_checkpoint_id="cp-pathfinder-final",
+        )
+        return build_agent_run_completion(
+            result=result,
+            assignment=assignment,
+            graph_thread_id=graph_thread_id,
         )
 
 

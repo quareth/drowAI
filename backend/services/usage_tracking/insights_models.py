@@ -222,6 +222,8 @@ _SOURCE_ROLE_MAP: Dict[str, tuple[str, str]] = {
     "post_tool_reasoning": ("planner", "post_tool_reasoning"),
     "post_tool_reasoning_simple": ("planner", "post_tool_reasoning_simple"),
     "post_tool_reasoning_dr": ("planner", "post_tool_reasoning_dr"),
+    # Generic declarative subagent child loop
+    "subagent_runtime_model": ("subagent", "subagent_runtime_model"),
 }
 
 

@@ -96,7 +96,17 @@ def _final_state() -> dict[str, Any]:
             "metadata": {
                 SUBAGENT_RESULT_METADATA_KEY: _result().model_dump(mode="json")
             }
-        }
+        },
+        "trace": {
+            "usage_records": [
+                {
+                    "source": "subagent_runtime_model",
+                    "prompt_tokens": 10,
+                    "completion_tokens": 5,
+                    "total_tokens": 15,
+                }
+            ]
+        },
     }
 
 
@@ -173,7 +183,7 @@ async def test_generic_worker_builds_definition_configured_graph_input_config_an
         executor=executor,
     )
 
-    result = await worker(
+    completion = await worker(
         assignment=assignment,
         runtime_config={
             "configurable": {
@@ -187,7 +197,17 @@ async def test_generic_worker_builds_definition_configured_graph_input_config_an
         is_cancel_requested=_not_cancelled,
     )
 
-    assert result == _result()
+    assert completion.result == _result()
+    assert completion.agent_run_id == "run-1"
+    assert completion.graph_thread_id == "child-thread-1"
+    assert completion.provider == "openai"
+    assert completion.model == "gpt-5.2-mini"
+    assert completion.usage_records[0]["agent_run_id"] == "run-1"
+    assert completion.usage_records[0]["tenant_id"] == 7
+    assert completion.usage_records[0]["task_id"] == 42
+    assert completion.usage_records[0]["user_id"] == 3
+    assert completion.usage_records[0]["conversation_id"] == "conversation-1"
+    assert completion.usage_records[0]["turn_sequence"] == 4
     assert checkpointers.task_ids == [42]
     assert build_calls == [("pathfinder", "checkpoint")]
     [call] = executor.calls

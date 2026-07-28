@@ -128,6 +128,7 @@ async def mark_subagent_waiting_for_approval(
     *,
     registry: ProcessLocalAgentRunRegistry,
     context: SubagentContinuationContext | None,
+    accounted_usage_record_count: int | None = None,
 ) -> None:
     """Record that a continued subagent run paused again on the shared HITL gate."""
 
@@ -137,6 +138,7 @@ async def mark_subagent_waiting_for_approval(
         tenant_id=context.entry.tenant_id,
         task_id=context.entry.task_id,
         agent_run_id=context.entry.agent_run_id,
+        accounted_usage_record_count=accounted_usage_record_count,
     )
 
 
