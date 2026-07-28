@@ -13,6 +13,7 @@ import { isStreamPacket, type StreamEvent, type StreamPacket } from "@/types/pac
 
 import {
   CLOSED_AGENT_RUN_PRESENTATION_STATE,
+  isAgentRunTerminalStatus,
   readAgentRunActivityIdentity,
   readAgentRunLifecycleProjection,
   readStreamSequence,
@@ -131,12 +132,7 @@ function compareRuns(a: AgentRunRecord, b: AgentRunRecord): number {
 
 function cloneState(state: AgentRunsTaskState): AgentRunsTaskState {
   return {
-    runs: new Map(
-      Array.from(state.runs.entries()).map(([runId, run]) => [
-        runId,
-        { ...run, activity: [...run.activity] },
-      ]),
-    ),
+    runs: new Map(state.runs),
     presentation: { ...state.presentation },
     version: state.version,
   };
@@ -186,7 +182,7 @@ export function applyAgentRunLifecycleUpdate(
       return { changed: false };
     }
     const now = Date.now();
-    const terminal = isTerminalStatus(projection.status);
+    const terminal = isAgentRunTerminalStatus(projection.status);
     const next: AgentRunRecord = {
       taskId,
       agentRunId: projection.agent_run_id,
@@ -221,7 +217,7 @@ export function applyAgentRunLifecycleUpdate(
     draft.runs.set(next.agentRunId, next);
     return { changed: true };
   });
-  if (isTerminalStatus(projection.status)) {
+  if (isAgentRunTerminalStatus(projection.status)) {
     terminalizeAgentRunStreams(taskId, projection.agent_run_id, streamSequence);
   }
 }
@@ -304,7 +300,7 @@ export function reconcileAgentRunsWithLocalStatus(
     let changed = false;
     const now = Date.now();
     for (const [agentRunId, run] of draft.runs.entries()) {
-      if (localRunsById.has(agentRunId) || isTerminalStatus(run.status)) {
+      if (localRunsById.has(agentRunId) || isAgentRunTerminalStatus(run.status)) {
         continue;
       }
       draft.runs.set(agentRunId, {
@@ -432,20 +428,6 @@ export function getAgentRunSnapshot(taskId: number | null | undefined): AgentRun
   return snapshot;
 }
 
-export function getAgentRun(
-  taskId: number | null | undefined,
-  agentRunId: string | null | undefined,
-): AgentRunRecord | null {
-  if (typeof taskId !== "number" || !Number.isFinite(taskId) || taskId <= 0) {
-    return null;
-  }
-  const normalizedAgentRunId = typeof agentRunId === "string" ? agentRunId.trim() : "";
-  if (!normalizedAgentRunId) {
-    return null;
-  }
-  return taskStates.get(taskId)?.runs.get(normalizedAgentRunId) ?? null;
-}
-
 export function clearAgentRunStateForTask(taskId: number): void {
   if (!taskStates.has(taskId)) {
     return;
@@ -564,15 +546,6 @@ function maxKnownSequence(current: number | null, incoming: number | null): numb
     return incoming;
   }
   return Math.max(current, incoming);
-}
-
-function isTerminalStatus(status: AgentRunStatus): boolean {
-  return (
-    status === "completed" ||
-    status === "failed" ||
-    status === "cancelled" ||
-    status === "interrupted"
-  );
 }
 
 function sameRunRecord(a: AgentRunRecord, b: AgentRunRecord): boolean {

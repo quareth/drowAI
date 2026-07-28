@@ -10,10 +10,9 @@ import { apiFetch } from "@/lib/api-config";
 import { advanceStreamSequence, applyStreamMessage } from "@/state/chat-stream-store";
 import type { StreamEvent, StreamPacket } from "@/types/packets";
 
-import type {
-  AgentRunLifecycleStatus,
-  LocalAgentRunListResponse,
-  LocalAgentRunStatusProjection,
+import {
+  readLocalAgentRuns,
+  type LocalAgentRunStatusProjection,
 } from "../contracts/agent-run";
 import {
   applyAgentRunActivityPayload,
@@ -159,56 +158,6 @@ function readReplaySequence(value: unknown): number | null {
     readNonNegativeInt(record.sequence) ??
     readNonNegativeInt(record.obj?.metadata?.sequence) ??
     readNonNegativeInt(record.metadata?.sequence)
-  );
-}
-
-function readLocalAgentRuns(
-  payload: unknown,
-  taskId: number,
-): LocalAgentRunStatusProjection[] | null {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    return null;
-  }
-  const response = payload as Partial<LocalAgentRunListResponse>;
-  if (response.task_id !== taskId || !Array.isArray(response.agent_runs)) {
-    return null;
-  }
-  return response.agent_runs.filter(isLocalAgentRunStatusProjection);
-}
-
-function isLocalAgentRunStatusProjection(value: unknown): value is LocalAgentRunStatusProjection {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const run = value as Partial<LocalAgentRunStatusProjection>;
-  return (
-    isNonEmptyString(run.agent_run_id) &&
-    isNonEmptyString(run.agent_id) &&
-    isNonEmptyString(run.agent_kind) &&
-    isNonEmptyString(run.agent_display_name) &&
-    isLifecycleStatus(run.status) &&
-    typeof run.lifecycle_version === "number" &&
-    Number.isFinite(run.lifecycle_version) &&
-    run.lifecycle_version > 0 &&
-    typeof run.task_id === "number" &&
-    Number.isFinite(run.task_id) &&
-    typeof run.conversation_id === "string" &&
-    typeof run.parent_turn_id === "string"
-  );
-}
-
-function isNonEmptyString(value: unknown): value is string {
-  return typeof value === "string" && value.trim().length > 0;
-}
-
-function isLifecycleStatus(status: unknown): status is AgentRunLifecycleStatus {
-  return (
-    status === "queued" ||
-    status === "running" ||
-    status === "waiting_for_approval" ||
-    status === "completed" ||
-    status === "failed" ||
-    status === "cancelled"
   );
 }
 

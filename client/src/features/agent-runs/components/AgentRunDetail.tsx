@@ -14,6 +14,7 @@ import type { ChatMessage } from "@/components/chat/types";
 import { Button } from "@/components/ui/button";
 import type { ToolApprovalInterruptDetail } from "@/types/hitl";
 
+import { isAgentRunTerminalStatus } from "../contracts/agent-run";
 import type { AgentRunRecord } from "../state/agent-stream-store";
 import { AgentActivityTimeline } from "./AgentActivityTimeline";
 
@@ -38,11 +39,6 @@ interface AgentRunDetailProps {
   onStop: (run: AgentRunRecord) => Promise<void> | void;
 }
 
-const ACTIVE_STATUSES = new Set<AgentRunRecord["status"]>([
-  "queued",
-  "running",
-  "waiting_for_approval",
-]);
 const SUBAGENT_GRAPH_NAME = "subagent";
 
 function formatDuration(run: AgentRunRecord): string {
@@ -80,7 +76,7 @@ export function AgentRunDetail({
 }: AgentRunDetailProps) {
   const [isStopping, setIsStopping] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
-  const canStop = ACTIVE_STATUSES.has(run.status) && !isStopping;
+  const canStop = !isAgentRunTerminalStatus(run.status) && !isStopping;
   const visibleApprovalControls = shouldShowApproval(run, approvalControls)
     ? approvalControls
     : null;

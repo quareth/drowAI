@@ -10,6 +10,7 @@ import { useEffect, useRef } from "react";
 
 import { cn } from "@/lib/utils";
 
+import { isAgentRunTerminalStatus } from "../contracts/agent-run";
 import type { AgentRunRecord } from "../state/agent-stream-store";
 import { AgentIdentityIcon } from "./AgentIdentityIcon";
 
@@ -21,15 +22,8 @@ interface AgentRunListProps {
   onSelectRun: (agentRunId: string) => void;
 }
 
-const TERMINAL_STATUSES = new Set<AgentRunRecord["status"]>([
-  "completed",
-  "failed",
-  "cancelled",
-  "interrupted",
-]);
-
 function isActiveRun(run: AgentRunRecord): boolean {
-  return !TERMINAL_STATUSES.has(run.status);
+  return !isAgentRunTerminalStatus(run.status);
 }
 
 function formatRelativeTime(timestamp: number): string {

@@ -28,6 +28,15 @@ export type AgentRunStatus =
 
 export type AgentRunLifecycleStatus = Exclude<AgentRunStatus, "interrupted">;
 
+export function isAgentRunTerminalStatus(status: AgentRunStatus): boolean {
+  return (
+    status === "completed" ||
+    status === "failed" ||
+    status === "cancelled" ||
+    status === "interrupted"
+  );
+}
+
 export type AgentRunOutcome =
   | "completed"
   | "partial"
@@ -127,6 +136,20 @@ export interface LocalAgentRunStatusProjection extends AgentRunLifecycleProjecti
 export interface LocalAgentRunListResponse {
   task_id: number;
   agent_runs: LocalAgentRunStatusProjection[];
+}
+
+export function readLocalAgentRuns(
+  payload: unknown,
+  taskId: number,
+): LocalAgentRunStatusProjection[] | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return null;
+  }
+  const response = payload as Partial<LocalAgentRunListResponse>;
+  if (response.task_id !== taskId || !Array.isArray(response.agent_runs)) {
+    return null;
+  }
+  return response.agent_runs.filter(isLocalAgentRunStatusProjection);
 }
 
 export interface LocalAgentRunCancelResponse {
@@ -413,4 +436,27 @@ function readLifecycleStatus(value: unknown): AgentRunLifecycleStatus | null {
     default:
       return null;
   }
+}
+
+function isLocalAgentRunStatusProjection(
+  value: unknown,
+): value is LocalAgentRunStatusProjection {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const run = value as Partial<LocalAgentRunStatusProjection>;
+  return (
+    readString(run.agent_run_id) !== null &&
+    readString(run.agent_id) !== null &&
+    readString(run.agent_kind) !== null &&
+    readString(run.agent_display_name) !== null &&
+    readLifecycleStatus(run.status) !== null &&
+    typeof run.lifecycle_version === "number" &&
+    Number.isFinite(run.lifecycle_version) &&
+    run.lifecycle_version > 0 &&
+    typeof run.task_id === "number" &&
+    Number.isFinite(run.task_id) &&
+    typeof run.conversation_id === "string" &&
+    typeof run.parent_turn_id === "string"
+  );
 }
