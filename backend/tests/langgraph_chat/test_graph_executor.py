@@ -239,6 +239,62 @@ class TestGraphExecutorStreaming:
             assert call_args[1]["event"]["type"] == "processed"
 
     @pytest.mark.asyncio
+    async def test_graph_executor_stamps_scout_attribution_on_custom_events(self):
+        """Scout child config stamps raw custom events outside tool runtime internals."""
+        mock_adapter = MagicMock()
+        mock_adapter.process_streaming_event.return_value = {
+            "type": "processed",
+            "metadata": {},
+        }
+        executor = LangGraphExecutor(streaming_adapter=mock_adapter)
+        mock_graph = AsyncMock()
+
+        async def mock_astream(input_state, config, stream_mode):
+            yield (
+                "custom",
+                {
+                    "type": "tool_end",
+                    "tool": "information_gathering.network_discovery.nmap",
+                    "conversation_id": "conv-42",
+                    "turn_id": "parent-turn-1",
+                    "status": "success",
+                },
+            )
+            yield ("values", {"facts": {}, "trace": {}})
+
+        mock_graph.astream = mock_astream
+
+        with patch.object(executor, "_stream_hub") as mock_hub:
+            mock_hub.publish = AsyncMock()
+            await executor.stream_graph(
+                compiled_graph=mock_graph,
+                graph_input={},
+                config={
+                    "configurable": {
+                        "thread_id": "graph-child",
+                        "agent_run_id": "scout-run-1",
+                        "agent_kind": "recon",
+                        "parent_turn_id": "parent-turn-1",
+                        "parent_run_id": "parent-run-1",
+                        "internal_only": False,
+                        "lifecycle_version": 2,
+                    }
+                },
+                task_id=42,
+            )
+
+        raw_event = mock_adapter.process_streaming_event.call_args.args[0]
+        assert raw_event["type"] == "tool_end"
+        assert raw_event["producer_type"] == "subagent"
+        assert raw_event["agent_run_id"] == "scout-run-1"
+        assert raw_event["agent_kind"] == "recon"
+        assert raw_event["agent_display_name"] == "Pathfinder"
+        assert raw_event["parent_turn_id"] == "parent-turn-1"
+        assert raw_event["parent_run_id"] == "parent-run-1"
+        assert raw_event["internal_only"] is False
+        assert raw_event["lifecycle_version"] == 2
+
+    @pytest.mark.asyncio
     async def test_graph_executor_emits_interrupt_event(self):
         """Test that executor emits interrupt events to stream hub."""
         executor = LangGraphExecutor()

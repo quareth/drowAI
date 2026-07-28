@@ -29,6 +29,10 @@ if TYPE_CHECKING:
 from agent.graph.utils.provider_model_resolution import resolve_graph_provider_model_ref
 from backend.database import SessionLocal
 from backend.core.time_utils import format_iso, utc_now
+from backend.services.agent_runs.event_projection import (
+    AGENT_RUN_METADATA_KEYS,
+    registered_agent_display_name,
+)
 from backend.services.chat import event_builders
 from backend.services.streaming.in_memory_hub import get_in_memory_stream_hub
 from backend.services.metrics.utils import safe_inc
@@ -198,6 +202,7 @@ class LangGraphExecutor:
                     
                     # Process CUSTOM event through adapter (validation, enrichment)
                     if isinstance(chunk, dict) and "type" in chunk:
+                        chunk = self._with_configured_agent_run_metadata(chunk, config)
                         if self._streaming_adapter:
                             processed_event = self._streaming_adapter.process_streaming_event(
                                 chunk, state_container=state_container
@@ -265,6 +270,36 @@ class LangGraphExecutor:
             logger.error(f"[STREAMING] Stream error for task {task_id}: {exc}", exc_info=True)
             safe_inc("langgraph_streaming_sessions_failed")
             raise
+
+    @staticmethod
+    def _with_configured_agent_run_metadata(
+        event: Dict[str, Any],
+        config: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """Stamp configured subagent identity onto custom events that lack it."""
+        configurable = config.get("configurable") if isinstance(config, Mapping) else None
+        if not isinstance(configurable, Mapping):
+            return event
+
+        attribution = {
+            key: configurable[key]
+            for key in AGENT_RUN_METADATA_KEYS
+            if key in configurable
+        }
+        if not attribution.get("agent_run_id"):
+            return event
+        attribution.setdefault("producer_type", "subagent")
+        display_name = registered_agent_display_name(attribution.get("agent_kind"))
+        if display_name is not None:
+            attribution.setdefault("agent_display_name", display_name)
+
+        raw_metadata = event.get("metadata")
+        metadata = raw_metadata if isinstance(raw_metadata, Mapping) else {}
+        enriched = dict(event)
+        for key, value in attribution.items():
+            if key not in enriched and key not in metadata:
+                enriched[key] = value
+        return enriched
 
     async def _observe_context_window_checkpoint(
         self,

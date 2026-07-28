@@ -241,7 +241,14 @@ class StreamEventMetadata(BaseModel):
     failure_category: Optional[str] = None
     error: Optional[str] = None
     subtype: Optional[str] = None
+    producer_type: Optional[str] = None
+    agent_run_id: Optional[str] = None
+    agent_kind: Optional[str] = None
+    agent_display_name: Optional[str] = None
+    parent_turn_id: Optional[str] = None
+    parent_run_id: Optional[str] = None
     internal_only: Optional[bool] = None
+    lifecycle_version: Optional[int] = None
     requires_user_action: Optional[bool] = None
     role: Optional[str] = None
     message_type: Optional[str] = None

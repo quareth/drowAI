@@ -11,6 +11,8 @@ import pytest
 from agent.graph.nodes.simple_chat import _build_simple_chat_messages
 from backend.services.langgraph_chat.contracts import ChatInputs, ExecutionMode, LangGraphRuntimeConfig
 from backend.services.langgraph_chat.intent.classifier import IntentClassifier
+from backend.services.agent_runs.subagent_registry import get_subagent_registry
+from core.prompts.builders.intent_classifier import build_classifier_system_prompt
 from core.prompts.constants import CLASSIFIER_SYSTEM_PROMPT, PROMPT_TEMPLATE
 from core.prompts.loader import TemplateLoader
 from core.prompts.registry import PromptRegistry
@@ -149,7 +151,9 @@ async def test_intent_classifier_payload_contract_uses_rendered_prompt_template(
     assert result is not None
     assert len(recording_client.calls) == 1
     payload = recording_client.calls[0]
-    assert payload["system_prompt"] == CLASSIFIER_SYSTEM_PROMPT
+    assert payload["system_prompt"] == build_classifier_system_prompt(
+        subagent_catalog=get_subagent_registry().classifier_catalog()
+    )
     assert "Run targeted enumeration on 10.0.0.5." in payload["user_prompt"]
     # Shared serializer (agent/graph/context/serialization.py) renders
     # each message inside a bounded ``<turn n=N role=R>…</turn>`` block
