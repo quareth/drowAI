@@ -69,6 +69,7 @@ agent = [
 ]
 core = [
     "prompts/versions/*/*.txt",
+    "prompts/versions/*/*.md",
     "prompts/versions/*/*/*.txt",
     "prompts/versions/*/*/*.md",
     "runbooks/builtin/tool_runbooks/*/RUNBOOK.md",
