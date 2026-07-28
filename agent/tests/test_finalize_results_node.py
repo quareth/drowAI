@@ -233,13 +233,16 @@ async def test_finalize_tool_results_includes_ptr_context_sections(monkeypatch):
         turn_sequence=12,
         source="tool",
         payload={
-            "kind": "http_request",
-            "target": "http://10.0.0.5/",
-            "action": "GET /",
-            "status": "success",
-            "result": "positive",
-            "summary": "Homepage discovered linked routes.",
-            "terminal_for_hypothesis": False,
+            "sections": [
+                {
+                    "heading": "Tool Output Summary",
+                    "body": "Homepage discovered linked routes.",
+                },
+                {
+                    "heading": "Key Findings",
+                    "body": "HTTP 200 from http://10.0.0.5/.",
+                },
+            ],
         },
     )
 

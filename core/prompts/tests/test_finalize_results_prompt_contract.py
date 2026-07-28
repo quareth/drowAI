@@ -214,13 +214,16 @@ def test_finalize_results_prompt_contract_analyst_context_sections() -> None:
         turn_sequence=12,
         source="tool",
         payload={
-            "kind": "http_request",
-            "target": "http://10.0.0.5/",
-            "action": "GET /",
-            "status": "success",
-            "result": "positive",
-            "summary": "Homepage reveals navigation links.",
-            "terminal_for_hypothesis": False,
+            "sections": [
+                {
+                    "heading": "Tool Output Summary",
+                    "body": "Homepage reveals navigation links.",
+                },
+                {
+                    "heading": "Key Findings",
+                    "body": "HTTP 200 from http://10.0.0.5/.",
+                },
+            ],
         },
     )
     system_prompt, user_prompt = build_finalize_prompts(
