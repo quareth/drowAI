@@ -25,10 +25,12 @@ from typing import Any
 
 from agent.config import AgentConfig
 from agent.execution_strategy import ExecutionStrategy
+from agent.graph.context.builder import METADATA_CONTEXT_BUNDLE_KEY
 from agent.graph.emission.reasoning_section import reasoning_section
 from agent.graph.infrastructure.state_models import GraphRuntimeContext
 from agent.graph.nodes.node_utils import _usage_to_dict
 from agent.graph.state import InteractiveState
+from agent.graph.utils import iteration_memory
 from agent.graph.utils.llm_resolver import resolve_llm_client
 from agent.providers.llm.contracts.tool_contracts import FunctionToolSpec
 from agent.providers.llm.core.base import ToolCallResult
@@ -51,11 +53,7 @@ logger = logging.getLogger(__name__)
 SUBAGENT_ACTION_METADATA_KEY = "subagent_action"
 SUBAGENT_RESULT_METADATA_KEY = "subagent_result"
 SUBAGENT_EXECUTION_STRATEGY_KEY = "_execution_strategy"
-SUBAGENT_OBSERVATION_TRANSCRIPT_KEY = "subagent_observation_transcript"
 SUBAGENT_FORCED_FINAL_METADATA_KEY = "subagent_forced_final"
-SUBAGENT_ITERATION_MARKERS_KEY = "subagent_completed_iteration_markers"
-_MAX_SUBAGENT_OBSERVATIONS = 6
-_MAX_OBSERVATION_FINDINGS = 8
 
 _SUBAGENT_EXECUTION_STRATEGY_SCHEMA: dict[str, Any] = {
     "type": "string",
@@ -83,7 +81,6 @@ async def run_subagent_model_turn(
 
     interactive = InteractiveState.from_mapping(state)
     subagent = subagent_state_from_graph_state(interactive, definition=definition)
-    _refresh_subagent_observation_transcript(interactive)
 
     max_committed_calls = _max_committed_calls(definition)
     can_call_tools = (
@@ -142,8 +139,8 @@ async def run_subagent_model_turn(
                     display_name=definition.display_name,
                     assignment=subagent.assignment.model_dump(mode="json"),
                     tool_ids=subagent.tool_profile.tool_ids,
-                    working_memory=_bounded_mapping(
-                        interactive.facts.safe_metadata.get("working_memory")
+                    working_memory=_working_memory_prompt_context(
+                        interactive.facts.safe_metadata
                     ),
                     previous_tool_summary=_build_previous_tool_context(interactive),
                     remaining_limits=_build_remaining_limits(
@@ -492,13 +489,12 @@ def record_subagent_observation_and_budget(
     context: GraphRuntimeContext | None = None,
     config: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Record compact observations and advance completed execution budget once."""
+    """Synchronize completed execution budget from canonical phase memory."""
 
     _ = (context, config)
     interactive = InteractiveState.from_mapping(state)
-    subagent = subagent_state_from_graph_state(interactive, definition=definition)
-    _refresh_subagent_observation_transcript(interactive)
-    _advance_completed_execution_iteration(interactive, subagent)
+    subagent_state_from_graph_state(interactive, definition=definition)
+    _sync_completed_execution_iterations(interactive)
     return interactive.as_graph_update()
 
 
@@ -545,6 +541,15 @@ def _bounded_mapping(value: Any) -> dict[str, Any]:
     return dict(value)
 
 
+def _working_memory_prompt_context(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the existing bounded runtime-state projection for the child prompt."""
+
+    bundle = metadata.get(METADATA_CONTEXT_BUNDLE_KEY)
+    if not isinstance(bundle, Mapping):
+        return {}
+    return _bounded_mapping(bundle.get("runtime_state"))
+
+
 def _max_committed_calls(definition: SubagentDefinition) -> int:
     """Return the per-turn native call cap allowed for this definition."""
 
@@ -583,154 +588,57 @@ def _build_remaining_limits(
 
 
 def _build_previous_tool_context(interactive: InteractiveState) -> dict[str, Any]:
-    """Return bounded prior observations for the next model turn."""
+    """Return latest compact result plus canonical phase memory for the prompt."""
 
     metadata = interactive.facts.safe_metadata
-    compact = _bounded_mapping(interactive.facts.last_tool_result_compact)
-    transcript = metadata.get(SUBAGENT_OBSERVATION_TRANSCRIPT_KEY)
-    if not isinstance(transcript, list) or not transcript:
-        return compact
-    return {
-        "last_tool_result": compact,
-        "subagent_observations": list(transcript)[-_MAX_SUBAGENT_OBSERVATIONS:],
-    }
+    compact = _bounded_mapping(interactive.facts.last_tool_result_compact) or (
+        _bounded_mapping(metadata.get("last_tool_result_compact"))
+    )
+    phase_memory = iteration_memory.render_phase_memory_section(
+        dict(metadata),
+        turn_sequence=_phase_memory_turn_sequence(metadata),
+    )
+
+    context: dict[str, Any] = {}
+    if compact:
+        context["last_tool_result"] = compact
+    if phase_memory:
+        context["current_turn_phase_memory"] = phase_memory
+    return context
 
 
-def _refresh_subagent_observation_transcript(interactive: InteractiveState) -> None:
-    """Append the latest compact synthesis to a bounded in-session transcript."""
+def _sync_completed_execution_iterations(interactive: InteractiveState) -> None:
+    """Set completed iterations from canonical tool phase records."""
 
-    metadata = interactive.facts.ensure_metadata()
-    observation = _current_observation(metadata, interactive.facts.selected_tool)
-    if observation is None:
+    tool_phase_count = _completed_tool_phase_count(interactive.facts.safe_metadata)
+    if tool_phase_count <= 0:
         return
-
-    transcript = metadata.get(SUBAGENT_OBSERVATION_TRANSCRIPT_KEY)
-    if not isinstance(transcript, list):
-        transcript = []
-    else:
-        transcript = [
-            item
-            for item in transcript
-            if isinstance(item, Mapping)
-        ]
-    if not transcript or dict(transcript[-1]) != observation:
-        transcript.append(observation)
-    metadata[SUBAGENT_OBSERVATION_TRANSCRIPT_KEY] = [
-        dict(item) for item in transcript[-_MAX_SUBAGENT_OBSERVATIONS:]
-    ]
+    interactive.facts.iterations = max(
+        max(int(interactive.facts.iterations or 0), 0),
+        tool_phase_count,
+    )
 
 
-def _current_observation(
-    metadata: Mapping[str, Any],
-    selected_tool: Any,
-) -> dict[str, Any] | None:
-    """Return a prompt-safe observation from current compact synthesis metadata."""
+def _completed_tool_phase_count(metadata: Mapping[str, Any]) -> int:
+    """Return canonical completed tool iterations from current-turn phase memory."""
 
-    synthesized = _bounded_mapping(metadata.get("synthesized_output"))
-    compact = _bounded_mapping(metadata.get("last_tool_result_compact"))
-    summary = _clean_text(synthesized.get("summary") or compact.get("summary"))
-    findings = _string_list(
-        synthesized.get("key_findings") or compact.get("key_findings")
-    )[:_MAX_OBSERVATION_FINDINGS]
-    if not summary and not findings:
+    return sum(
+        1
+        for record in iteration_memory.get_ledger(dict(metadata))
+        if record.get("source") == "tool"
+    )
+
+
+def _phase_memory_turn_sequence(metadata: Mapping[str, Any]) -> int | None:
+    """Return the active phase-memory turn scope when present."""
+
+    working_memory = metadata.get("working_memory")
+    if not isinstance(working_memory, Mapping):
         return None
-
-    tool = _clean_text(
-        synthesized.get("tool") or compact.get("tool") or selected_tool
-    )
-    status = _clean_text(synthesized.get("status") or compact.get("status"))
-    observation: dict[str, Any] = {
-        "summary": summary,
-        "key_findings": findings,
-    }
-    if tool:
-        observation["tool"] = tool
-    if status:
-        observation["status"] = status
-    if "success" in synthesized or "success" in compact:
-        observation["success"] = bool(
-            synthesized.get("success", compact.get("success"))
-        )
-    next_actions = _string_list(
-        synthesized.get("next_actions") or compact.get("report_recommendations")
-    )[:_MAX_OBSERVATION_FINDINGS]
-    if next_actions:
-        observation["next_actions"] = next_actions
-    return observation
-
-
-def _advance_completed_execution_iteration(
-    interactive: InteractiveState,
-    subagent: SubagentRuntimeState,
-) -> None:
-    """Advance iteration budget once for each completed tool batch identity."""
-
-    metadata = interactive.facts.ensure_metadata()
-    marker = _completed_execution_marker(metadata, subagent)
-    if not marker:
-        return
-
-    markers = metadata.get(SUBAGENT_ITERATION_MARKERS_KEY)
-    if not isinstance(markers, list):
-        markers = []
-    normalized_markers = [str(item) for item in markers if str(item).strip()]
-    if marker in normalized_markers:
-        metadata[SUBAGENT_ITERATION_MARKERS_KEY] = normalized_markers
-        return
-
-    normalized_markers.append(marker)
-    metadata[SUBAGENT_ITERATION_MARKERS_KEY] = normalized_markers[
-        -_MAX_SUBAGENT_OBSERVATIONS:
-    ]
-    interactive.facts.iterations = max(int(interactive.facts.iterations or 0), 0) + 1
-
-
-def _completed_execution_marker(
-    metadata: Mapping[str, Any],
-    subagent: SubagentRuntimeState,
-) -> str:
-    """Return the stable completed batch/run marker for checkpoint idempotence."""
-
-    action = metadata.get(SUBAGENT_ACTION_METADATA_KEY)
-    if isinstance(action, Mapping):
-        batch_id = _clean_text(action.get("tool_batch_id"))
-        if batch_id:
-            return f"{subagent.agent_run_id}:{batch_id}"
-    compact_batch = _bounded_mapping(metadata.get("last_tool_result_compact_batch"))
-    batch_id = _clean_text(compact_batch.get("tool_batch_id"))
-    if batch_id:
-        return f"{subagent.agent_run_id}:{batch_id}"
-    compact = _bounded_mapping(metadata.get("last_tool_result_compact"))
-    execution_id = _clean_text(compact.get("execution_id") or compact.get("id"))
-    tool = _clean_text(compact.get("tool"))
-    if execution_id:
-        return f"{subagent.agent_run_id}:{execution_id}"
-    if tool:
-        status = _clean_text(compact.get("status"))
-        return f"{subagent.agent_run_id}:{tool}:{status}:{_compact_signature(compact)}"
-    return ""
-
-
-def _compact_signature(compact: Mapping[str, Any]) -> str:
-    """Return a deterministic compact signature for legacy single-call results."""
-
-    return json.dumps(
-        {
-            "summary": _clean_text(compact.get("summary")),
-            "key_findings": _string_list(compact.get("key_findings")),
-            "errors": _string_list(compact.get("errors")),
-        },
-        ensure_ascii=True,
-        sort_keys=True,
-    )
-
-
-def _string_list(value: Any) -> list[str]:
-    """Return non-empty strings from a list-like value."""
-
-    if not isinstance(value, list | tuple):
-        return []
-    return [text for item in value if (text := _clean_text(item))]
+    turn_sequence = working_memory.get("current_turn_phase_turn")
+    if isinstance(turn_sequence, int) and not isinstance(turn_sequence, bool):
+        return turn_sequence
+    return None
 
 
 def _clean_text(value: Any) -> str:
@@ -745,8 +653,6 @@ __all__ = [
     "SUBAGENT_ACTION_METADATA_KEY",
     "SUBAGENT_EXECUTION_STRATEGY_KEY",
     "SUBAGENT_FORCED_FINAL_METADATA_KEY",
-    "SUBAGENT_ITERATION_MARKERS_KEY",
-    "SUBAGENT_OBSERVATION_TRANSCRIPT_KEY",
     "SUBAGENT_RESULT_METADATA_KEY",
     "SubagentActionSelectionError",
     "record_subagent_observation_and_budget",

@@ -17,21 +17,27 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from agent.graph.context.builder import (
     METADATA_CONTEXT_BUNDLE_KEY,
     build_conversation_context_bundle,
 )
+from agent.graph.context.runtime_state import refresh_bundle_from_working_memory
 from agent.graph.infrastructure.state_models import GraphRuntimeContext
+from agent.graph.memory.memory_manager import MemoryManager
 from agent.graph.state import FactsState, InteractiveState, TraceState
 from agent.subagents.contracts import AgentAssignment, AgentKind, AgentRuntimeIdentity
 from agent.subagents.definition import SubagentDefinition
-from agent.subagents.runtime.profile import SubagentToolProfile
+from agent.subagents.runtime.profile import (
+    SubagentToolProfile,
+    resolve_subagent_tool_profile,
+)
 
 
 SUBAGENT_METADATA_KEY = "subagent"
 SUBAGENT_GRAPH_CAPABILITY = "simple_tool_execution"
+SUPPORTED_AGENT_MODES = frozenset({"agent", "full_access", "plan", "chat"})
 
 
 class SubagentToolState(BaseModel):
@@ -90,13 +96,7 @@ class SubagentRuntimeState(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     assignment: AgentAssignment
-    runtime_identity: AgentRuntimeIdentity
     graph_thread_id: str
-    agent_run_id: str
-    agent_id: str
-    agent_kind: AgentKind
-    parent_turn_id: str
-    parent_graph_thread_id: str
     tool_profile: SubagentToolProfileState = Field(
         default_factory=SubagentToolProfileState
     )
@@ -125,15 +125,45 @@ class SubagentRuntimeState(BaseModel):
 
         return cls(
             assignment=assignment,
-            runtime_identity=assignment.runtime_identity,
             graph_thread_id=graph_thread_id,
-            agent_run_id=assignment.agent_run_id,
-            agent_id=assignment.agent_id,
-            agent_kind=assignment.agent_kind,
-            parent_turn_id=assignment.parent_turn_id,
-            parent_graph_thread_id=assignment.parent_graph_thread_id,
             tool_profile=profile_state,
         )
+
+    @property
+    def runtime_identity(self) -> AgentRuntimeIdentity:
+        """Return runtime identity from the canonical assignment payload."""
+
+        return self.assignment.runtime_identity
+
+    @property
+    def agent_run_id(self) -> str:
+        """Return child run identity from the canonical assignment payload."""
+
+        return self.assignment.agent_run_id
+
+    @property
+    def agent_id(self) -> str:
+        """Return subagent definition identity from the assignment payload."""
+
+        return self.assignment.agent_id
+
+    @property
+    def agent_kind(self) -> AgentKind:
+        """Return subagent kind from the assignment payload."""
+
+        return self.assignment.agent_kind
+
+    @property
+    def parent_turn_id(self) -> str:
+        """Return parent turn identity from the assignment payload."""
+
+        return self.assignment.parent_turn_id
+
+    @property
+    def parent_graph_thread_id(self) -> str:
+        """Return parent graph thread identity from the assignment payload."""
+
+        return self.assignment.parent_graph_thread_id
 
     @field_validator("graph_thread_id", mode="before")
     @classmethod
@@ -145,28 +175,10 @@ class SubagentRuntimeState(BaseModel):
             raise ValueError("graph_thread_id must not be empty")
         return normalized
 
-    @model_validator(mode="after")
-    def _duplicates_match_assignment(self) -> "SubagentRuntimeState":
-        if self.runtime_identity != self.assignment.runtime_identity:
-            raise ValueError("runtime_identity must match assignment.runtime_identity")
-        if self.agent_run_id != self.assignment.agent_run_id:
-            raise ValueError("agent_run_id must match assignment.agent_run_id")
-        if self.agent_id != self.assignment.agent_id:
-            raise ValueError("agent_id must match assignment.agent_id")
-        if self.agent_kind != self.assignment.agent_kind:
-            raise ValueError("agent_kind must match assignment.agent_kind")
-        if self.parent_turn_id != self.assignment.parent_turn_id:
-            raise ValueError("parent_turn_id must match assignment.parent_turn_id")
-        if self.parent_graph_thread_id != self.assignment.parent_graph_thread_id:
-            raise ValueError(
-                "parent_graph_thread_id must match assignment.parent_graph_thread_id"
-            )
-        return self
-
     def as_metadata(self) -> dict[str, Any]:
         """Return JSON-serializable metadata for graph checkpoints."""
 
-        return self.model_dump(mode="json")
+        return self.model_dump(mode="json", exclude={"graph_thread_id", "tool_profile"})
 
 
 def build_subagent_initial_state(
@@ -185,6 +197,8 @@ def build_subagent_initial_state(
         tool_profile=tool_profile,
     )
     metadata = _metadata_from_subagent_state(definition, subagent)
+    metadata["working_memory"] = _initial_working_memory(definition, subagent)
+    refresh_bundle_from_working_memory(metadata)
     facts = FactsState(
         task_id=assignment.task_id,
         conversation_id=assignment.conversation_id,
@@ -203,6 +217,65 @@ def build_subagent_initial_state(
     return _as_json_graph_state(InteractiveState(facts=facts, trace=TraceState()))
 
 
+def _initial_working_memory(
+    definition: SubagentDefinition,
+    subagent: SubagentRuntimeState,
+) -> dict[str, Any]:
+    """Seed canonical child memory through the turn-start reducer."""
+
+    assignment = subagent.assignment
+    turn_sequence = assignment.relevant_context.get("turn_sequence")
+    normalized_turn_sequence = (
+        turn_sequence
+        if isinstance(turn_sequence, int) and not isinstance(turn_sequence, bool)
+        else 0
+    )
+    return MemoryManager.reduce_turn_start(
+        previous=None,
+        user_message=assignment.objective,
+        conversation_history_tail=[],
+        runtime_ids={
+            "tenant_id": assignment.tenant_id,
+            "task_id": assignment.task_id,
+            "conversation_id": assignment.conversation_id,
+            "turn_id": assignment.parent_turn_id,
+            "turn_sequence": normalized_turn_sequence,
+            "parent_turn_id": assignment.parent_turn_id,
+            "parent_graph_thread_id": assignment.parent_graph_thread_id,
+            "graph_thread_id": subagent.graph_thread_id,
+            "agent_run_id": subagent.agent_run_id,
+            "agent_id": subagent.agent_id,
+            "agent_kind": subagent.agent_kind,
+        },
+        route=SUBAGENT_GRAPH_CAPABILITY,
+        constraints=_initial_memory_constraints(definition, subagent),
+        intent_hints={
+            "target": assignment.targets[0] if assignment.targets else None,
+            "targets": list(assignment.targets),
+            "agent_id": assignment.agent_id,
+            "agent_kind": assignment.agent_kind,
+            "suggested_capabilities": list(assignment.suggested_capabilities),
+        },
+        intent_target_continuity={"status": "disallow"},
+        intent_turn_interpretation={
+            "next_operational_goal": assignment.objective,
+            "execution_readiness": "ready",
+            "blocking_reason": "",
+        },
+    )
+
+
+def _initial_memory_constraints(
+    definition: SubagentDefinition,
+    subagent: SubagentRuntimeState,
+) -> dict[str, Any]:
+    """Return bounded assignment constraints for child working memory."""
+
+    _ = definition
+    assignment = subagent.assignment
+    return {"scope": [assignment.scope_summary] if assignment.scope_summary else []}
+
+
 def subagent_state_from_graph_state(
     state: Mapping[str, Any] | InteractiveState,
     *,
@@ -214,10 +287,27 @@ def subagent_state_from_graph_state(
     payload = interactive.facts.safe_metadata.get(_metadata_key(definition))
     if not isinstance(payload, Mapping):
         raise ValueError("Subagent graph state is missing subagent metadata")
-    subagent = SubagentRuntimeState.model_validate(dict(payload))
+    normalized_payload = dict(payload)
+    if "graph_thread_id" not in normalized_payload:
+        normalized_payload["graph_thread_id"] = interactive.facts.safe_metadata.get(
+            "graph_thread_id"
+        )
+    subagent = SubagentRuntimeState.model_validate(normalized_payload)
     if subagent.agent_kind != definition.kind:
         raise ValueError("Subagent graph state kind does not match definition")
-    return subagent
+    if subagent.tool_profile.tools:
+        return subagent
+    return SubagentRuntimeState.from_assignment(
+        definition=definition,
+        assignment=subagent.assignment,
+        graph_thread_id=subagent.graph_thread_id,
+        tool_profile=resolve_subagent_tool_profile(
+            definition,
+            interactive.facts.tool_candidates
+            or interactive.facts.tool_ids
+            or definition.tool_ids,
+        ),
+    )
 
 
 def apply_subagent_state_to_interactive(
@@ -242,6 +332,7 @@ def _metadata_from_subagent_state(
     definition: SubagentDefinition,
     subagent: SubagentRuntimeState,
 ) -> dict[str, Any]:
+    approval_metadata = _approval_metadata_from_assignment(subagent.assignment)
     turn_sequence = subagent.assignment.relevant_context.get("turn_sequence")
     normalized_turn_sequence = (
         turn_sequence
@@ -258,7 +349,7 @@ def _metadata_from_subagent_state(
         "parent_graph_thread_id": subagent.parent_graph_thread_id,
         "graph_thread_id": subagent.graph_thread_id,
         "internal_only": False,
-        "lifecycle_version": 1,
+        **approval_metadata,
         "graph_runtime_context": _graph_runtime_context_from_subagent_state(subagent),
         METADATA_CONTEXT_BUNDLE_KEY: build_conversation_context_bundle(
             conversation_id=subagent.assignment.conversation_id,
@@ -274,6 +365,26 @@ def _metadata_from_subagent_state(
         metadata["parent_run_id"] = parent_run_id.strip()
     if isinstance(turn_sequence, int) and not isinstance(turn_sequence, bool):
         metadata["turn_sequence"] = turn_sequence
+    return metadata
+
+
+def _approval_metadata_from_assignment(
+    assignment: AgentAssignment,
+) -> dict[str, Any]:
+    """Restore the parent HITL policy required by the shared approval gate."""
+
+    context = assignment.relevant_context
+    agent_mode = context.get("agent_mode")
+    if agent_mode not in SUPPORTED_AGENT_MODES:
+        raise ValueError("Subagent assignment is missing a valid agent_mode")
+
+    metadata: dict[str, Any] = {"agent_mode": agent_mode}
+    reserved_message_id = context.get("reserved_message_id")
+    if isinstance(reserved_message_id, int) and not isinstance(
+        reserved_message_id,
+        bool,
+    ):
+        metadata["reserved_message_id"] = reserved_message_id
     return metadata
 
 

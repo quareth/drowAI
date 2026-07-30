@@ -23,7 +23,6 @@ from agent.subagents.contracts import AgentResult, AgentResultProjection
 from agent.subagents.definition import SubagentDefinition
 from agent.subagents.runtime.model import (
     SUBAGENT_FORCED_FINAL_METADATA_KEY,
-    SUBAGENT_OBSERVATION_TRANSCRIPT_KEY,
     SUBAGENT_RESULT_METADATA_KEY,
 )
 from agent.subagents.runtime.state import (
@@ -130,6 +129,8 @@ def _validate_result_identity(
 def _derived_outcome(metadata: Mapping[str, Any]) -> str:
     if metadata.get(SUBAGENT_FORCED_FINAL_METADATA_KEY) is True:
         return "partial"
+    if _compact_reports_failure(metadata):
+        return "partial"
     if metadata.get("user_goal_achieved") is False:
         return "partial"
     return "completed"
@@ -151,18 +152,31 @@ def _derived_summary(interactive: InteractiveState) -> str:
 
 
 def _derived_key_findings(interactive: InteractiveState) -> list[str]:
-    transcript_findings = _transcript_key_findings(interactive.facts.safe_metadata)
-    if transcript_findings:
-        return transcript_findings
-    synthesized = _mapping(interactive.facts.safe_metadata.get("synthesized_output"))
+    metadata = interactive.facts.safe_metadata
+    synthesized = _mapping(metadata.get("synthesized_output"))
     compact = _mapping(interactive.facts.last_tool_result_compact)
-    return _string_list(synthesized.get("key_findings")) or _string_list(
-        compact.get("key_findings")
-    )
+    findings = _working_memory_tool_findings(metadata)
+    findings.extend(_working_memory_available_findings(metadata))
+    findings.extend(_string_list(synthesized.get("key_findings")))
+    findings.extend(_string_list(compact.get("key_findings")))
+    return _dedupe(findings)
 
 
 def _derived_evidence_refs(interactive: InteractiveState) -> list[dict[str, str]]:
-    compact = _mapping(interactive.facts.last_tool_result_compact)
+    metadata = interactive.facts.safe_metadata
+    compact = _mapping(interactive.facts.last_tool_result_compact) or _mapping(
+        metadata.get("last_tool_result_compact")
+    )
+    batch = _mapping(metadata.get("last_tool_result_compact_batch"))
+    refs = _artifact_refs_from_compact(compact)
+    for row in _list_items(batch.get("results")):
+        refs.extend(
+            _artifact_refs_from_compact(_mapping(row.get("compact_tool_result")))
+        )
+    return _dedupe_evidence_refs(refs)
+
+
+def _artifact_refs_from_compact(compact: Mapping[str, Any]) -> list[dict[str, str]]:
     refs = compact.get("artifact_refs")
     if not isinstance(refs, list):
         return []
@@ -179,6 +193,18 @@ def _derived_evidence_refs(interactive: InteractiveState) -> list[dict[str, str]
         if ref:
             normalized.append(ref)
     return normalized
+
+
+def _dedupe_evidence_refs(refs: list[dict[str, str]]) -> list[dict[str, str]]:
+    deduped: list[dict[str, str]] = []
+    seen: set[tuple[tuple[str, str], ...]] = set()
+    for ref in refs:
+        key = tuple(sorted(ref.items()))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(ref)
+    return deduped
 
 
 def _derived_tools_used(interactive: InteractiveState) -> list[str]:
@@ -200,22 +226,114 @@ def _derived_tools_used(interactive: InteractiveState) -> list[str]:
 
 
 def _derived_limitations(metadata: Mapping[str, Any]) -> list[str]:
+    synthesized = _mapping(metadata.get("synthesized_output"))
+    compact = _mapping(metadata.get("last_tool_result_compact"))
+    batch = _mapping(metadata.get("last_tool_result_compact_batch"))
     limitations = _string_list(metadata.get("limitations"))
+    limitations.extend(_string_list(metadata.get("model_limitations")))
     limitations.extend(_string_list(metadata.get("tool_gaps")))
+    limitations.extend(_string_list(synthesized.get("limitations")))
+    limitations.extend(_string_list(synthesized.get("tool_gaps")))
+    limitations.extend(_string_list(compact.get("limitations")))
+    limitations.extend(_string_list(compact.get("tool_gaps")))
+    limitations.extend(_compact_error_limitations(compact))
+    limitations.extend(_batch_error_limitations(batch))
     if metadata.get(SUBAGENT_FORCED_FINAL_METADATA_KEY) is True:
         limitations.append("Subagent tool or iteration budget was exhausted.")
     return _dedupe(limitations)
 
 
+def _compact_error_limitations(compact: Mapping[str, Any]) -> list[str]:
+    limitations = _string_list(compact.get("errors"))
+    status = _clean_string(compact.get("status")).lower()
+    if compact.get("success") is False or status in {"failed", "error", "partial"}:
+        if status:
+            limitations.append(f"Latest compact tool result status was {status}.")
+        elif not limitations:
+            limitations.append("Latest compact tool result was unsuccessful.")
+    return limitations
+
+
+def _compact_reports_failure(metadata: Mapping[str, Any]) -> bool:
+    compact = _mapping(metadata.get("last_tool_result_compact"))
+    status = _clean_string(compact.get("status")).lower()
+    if compact.get("success") is False or status in {"failed", "error"}:
+        return True
+    batch = _mapping(metadata.get("last_tool_result_compact_batch"))
+    batch_status = _clean_string(batch.get("status")).lower()
+    if batch.get("success") is False or batch_status in {
+        "completed_with_errors",
+        "failed",
+        "denied",
+        "cancelled",
+        "error",
+    }:
+        return True
+    return any(
+        row.get("success") is False
+        or _clean_string(row.get("status")).lower()
+        in {"failed", "denied", "cancelled", "error"}
+        for row in _list_items(batch.get("results"))
+    )
+
+
+def _batch_error_limitations(batch: Mapping[str, Any]) -> list[str]:
+    limitations: list[str] = []
+    status = _clean_string(batch.get("status")).lower()
+    if batch.get("success") is False or status in {
+        "completed_with_errors",
+        "failed",
+        "denied",
+        "cancelled",
+        "error",
+    }:
+        if status:
+            limitations.append(f"Latest compact tool batch status was {status}.")
+        else:
+            limitations.append("Latest compact tool batch was unsuccessful.")
+
+    for row in _list_items(batch.get("results")):
+        row_status = _clean_string(row.get("status")).lower()
+        if row.get("success") is not False and row_status not in {
+            "failed",
+            "denied",
+            "cancelled",
+            "error",
+        }:
+            continue
+        limitations.append(_batch_row_limitation(row, row_status=row_status))
+    return limitations
+
+
+def _batch_row_limitation(
+    row: Mapping[str, Any],
+    *,
+    row_status: str,
+) -> str:
+    tool_id = _clean_string(row.get("tool_id")) or "unknown tool"
+    call_id = _clean_string(row.get("tool_call_id"))
+    detail = _clean_string(row.get("error_message"))
+    if not detail:
+        detail = _clean_string(row.get("failure_category"))
+    if not detail:
+        compact = _mapping(row.get("compact_tool_result"))
+        detail = "; ".join(_string_list(compact.get("errors")))
+    status = row_status or "unsuccessful"
+    label = f"{tool_id} ({call_id})" if call_id else tool_id
+    if detail:
+        return f"Tool call {label} reported {status}: {detail}"
+    return f"Tool call {label} reported {status}."
+
+
 def _derived_next_steps(metadata: Mapping[str, Any]) -> list[str]:
-    transcript_steps = _transcript_next_steps(metadata)
-    if transcript_steps:
-        return transcript_steps
     synthesized = _mapping(metadata.get("synthesized_output"))
     compact = _mapping(metadata.get("last_tool_result_compact"))
-    return _string_list(synthesized.get("next_actions")) or _string_list(
-        compact.get("report_recommendations")
-    )
+    next_steps = _string_list(synthesized.get("recommended_next_steps"))
+    next_steps.extend(_string_list(synthesized.get("next_actions")))
+    next_steps.extend(_string_list(compact.get("recommended_next_steps")))
+    next_steps.extend(_string_list(compact.get("next_actions")))
+    next_steps.extend(_string_list(compact.get("report_recommendations")))
+    return _dedupe(next_steps)
 
 
 def _checkpoint_id_from_metadata(metadata: Mapping[str, Any]) -> str | None:
@@ -235,30 +353,49 @@ def _clear_pending_tool_plan(metadata: dict[str, Any]) -> None:
         metadata.pop(key, None)
 
 
-def _transcript_key_findings(metadata: Mapping[str, Any]) -> list[str]:
-    transcript = metadata.get(SUBAGENT_OBSERVATION_TRANSCRIPT_KEY)
-    if not isinstance(transcript, list):
+def _working_memory_tool_findings(metadata: Mapping[str, Any]) -> list[str]:
+    working_memory = metadata.get("working_memory")
+    if not isinstance(working_memory, Mapping):
         return []
     findings: list[str] = []
-    for item in transcript:
-        if isinstance(item, Mapping):
-            findings.extend(_string_list(item.get("key_findings")))
+    for item in _list_items(working_memory.get("tool_runs")):
+        findings.extend(_string_list(item.get("key_findings")))
     return _dedupe(findings)
 
 
-def _transcript_next_steps(metadata: Mapping[str, Any]) -> list[str]:
-    transcript = metadata.get(SUBAGENT_OBSERVATION_TRANSCRIPT_KEY)
-    if not isinstance(transcript, list):
+def _working_memory_available_findings(metadata: Mapping[str, Any]) -> list[str]:
+    working_memory = metadata.get("working_memory")
+    if not isinstance(working_memory, Mapping):
         return []
-    steps: list[str] = []
-    for item in transcript:
-        if isinstance(item, Mapping):
-            steps.extend(_string_list(item.get("next_actions")))
-    return _dedupe(steps)
+    findings: list[str] = []
+    for item in _list_items(working_memory.get("available_findings")):
+        if text := _available_finding_summary(item):
+            findings.append(text)
+    return _dedupe(findings)
+
+
+def _available_finding_summary(item: Mapping[str, Any]) -> str:
+    details = _mapping(item.get("details"))
+    for key in ("summary", "description", "observation"):
+        value = _clean_string(details.get(key))
+        if value:
+            return value
+
+    kind = _clean_string(item.get("kind"))
+    subject = _clean_string(item.get("subject")) or _clean_string(item.get("target"))
+    if kind and subject:
+        return f"{kind}: {subject}"
+    return ""
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
     return value if isinstance(value, Mapping) else {}
+
+
+def _list_items(value: Any) -> list[Mapping[str, Any]]:
+    if not isinstance(value, list | tuple):
+        return []
+    return [item for item in value if isinstance(item, Mapping)]
 
 
 def _string_list(value: Any) -> list[str]:
