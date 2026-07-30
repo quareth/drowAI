@@ -64,7 +64,14 @@ Not owned by graph builders:
   - Compiles `compile_deep_reasoning_graph`.
 - `backend/services/langgraph_chat/handlers/subagent_handler.py`
   - Validates classifier handoff arrays, launches generic subagent runs, and
-    runs the parent handoff finalizer once over completed child results.
+    hands terminal child results to the parent handoff coordinator.
+- `backend/services/agent_runs/parent_handoff_coordinator.py`
+  - Claims ready process-local child results, snapshots active runs, serializes
+    parent continuation, and applies or releases claims through the registry.
+- `agent/graph/builders/parent_handoff_builder.py`
+  - Compiles the parent continuation graph that routes claimed child handoffs
+    through post-action reasoning before finalization or backend-owned parent
+    controls.
 - `backend/services/langgraph_chat/execution/graph_executor.py`
   - Runs compiled graphs with `astream(..., stream_mode=["custom", "values"])`.
 - `agent/graph/graph_builder.py`
@@ -132,9 +139,11 @@ Route policy:
 - The classifier contract represents handoffs as an ordered array. The handler
   validates every handoff against the live registry before launching any run,
   caps the plan through `MAX_AGENT_HANDOFFS`, runs allowed entries in
-  concurrency-limited ordered batches, preserves one immutable run/thread per
-  invocation, and runs the parent handoff finalizer once after successful child
-  completion.
+  concurrency-limited ordered batches, and preserves one immutable run/thread
+  per invocation. Terminal child results are claimed from the process-local
+  registry and enter parent post-action reasoning before the parent can
+  finalize, delegate follow-up work, call a direct tool, think, reflect, or
+  wait for still-active child runs.
 
 ### Pre-classifier context compaction
 
@@ -174,8 +183,8 @@ turn. Immediately before non-deterministic classification, the facade replaces
 only that field when a compacted candidate is validated and persisted. The
 intent-classifier projection never falls back to the shared bounded window and
 invokes the exact full-or-compacted request that was accounted. Planner,
-category-selection, and articulation continue to read the unchanged shared
-bounded `transcript_window`.
+category-selection, and post-action reasoning continue to read the unchanged
+shared bounded `transcript_window`.
 Candidate validation reduces only by complete turns from five through three;
 if the three-turn candidate still exceeds the selected model's hard limit, the
 facade exits before classifier invocation with `context_uncompactable`.
@@ -371,6 +380,10 @@ Important boundaries:
   simple-tool.
 - `observation_adapter` converts post-tool findings into compact observations
   before returning to `decision_router`.
+- PTR obtains the visible Observation and exactly one internal `ptr_commit`
+  tool from the same provider-neutral streamed model turn. Provider adapters
+  stream only assistant text, buffer tool arguments until completion, and then
+  normalize the completed route call for the existing `decision_router`.
 - Terminal path is `finalize -> fallback_finalize -> END`.
 
 ## Subagent Child Graph
@@ -398,11 +411,83 @@ Important boundaries:
   either to shared tool execution or directly to handoff text.
 - `approval_gate`, `dispatch_tool`, and `tool_synthesizer` reuse the existing
   shared tool execution subgraph.
-- `observation` records a bounded in-session observation transcript and budget
-  marker before returning to the same model session.
-- `handoff` projects the terminal state into the generic `AgentResult`
-  contract. Child PTR, decision-router, think-more, reflect, and separate
-  child-finalizer nodes are not part of the subagent graph.
+- `observation` syncs the completed tool-iteration budget from canonical
+  `working_memory.current_turn_phases` records before returning to the same
+  model session.
+- `handoff` derives the terminal state from canonical working memory, compact
+  tool results, executed-tool records, and model handoff text, then projects it
+  into the generic `AgentResult` contract. Child PTR, decision-router,
+  think-more, reflect, and separate child-finalizer nodes are not part of the
+  subagent graph.
+
+## Parent Handoff Continuation Graph
+
+Builder: `agent/graph/builders/parent_handoff_builder.py::build_parent_handoff_graph`
+
+```mermaid
+flowchart TD
+    prepare_handoff_context --> post_action_reasoning
+    post_action_reasoning --> decision_router
+    decision_router --> select_tool_categories
+    decision_router --> think_more
+    decision_router --> reflect
+    decision_router --> synthesis
+    decision_router --> format_results
+    decision_router --> delegate_subagent
+    decision_router --> wait_for_subagents
+    select_tool_categories --> prepare_tool_plan
+    prepare_tool_plan --> articulation
+    prepare_tool_plan --> approval_gate
+    prepare_tool_plan --> prepare_direct_tool_context
+    articulation --> approval_gate
+    approval_gate --> dispatch_tool
+    dispatch_tool --> tool_synthesizer
+    tool_synthesizer --> prepare_direct_tool_context
+    prepare_direct_tool_context --> post_action_reasoning
+    think_more --> post_action_reasoning
+    reflect --> decision_router
+    synthesis --> format_results
+    format_results --> finalize
+    finalize --> END
+    delegate_subagent --> END
+    wait_for_subagents --> END
+```
+
+Important boundaries:
+
+- The coordinator calls this graph only after
+  `ProcessLocalAgentRunRegistry.claim_ready_handoffs` returns a claimed
+  terminal-result batch for the same tenant, task, and conversation.
+- `prepare_handoff_context` marks the first reasoning input as
+  `post_action_outcome_source="subagent_handoff_batch"` and removes direct-tool
+  synthesized output from metadata before entering the existing
+  `post_tool_reasoning` node under its post-action role.
+- If parent PAR chooses a direct tool, the graph reuses the same
+  `select_tool_categories -> prepare_tool_plan -> approval_gate ->
+  dispatch_tool -> tool_synthesizer` path as the simple-tool graph, then marks
+  the next reasoning input as `post_action_outcome_source="direct_tool"`.
+- `delegate_subagent` and `wait_for_subagents` are backend-owned coordination
+  outcomes. The graph records the router outcome and stops at `END`; the
+  coordinator validates follow-up handoffs through the shared ownership policy
+  and assignment builder, or waits on the registry for the next ready handoff
+  or inactive state.
+- `decision_router` remains the deterministic route authority. It rejects
+  malformed `delegate_subagent`, rejects `wait_for_subagents` without relevant
+  active runs, and converts finalization into an explicit wait when relevant
+  active child runs remain.
+
+Coordination source of truth:
+
+- `backend/services/agent_runs/registry.py` owns process-local run lifecycle,
+  ready-result claims, acknowledgement, release, and active-run snapshots.
+- `backend/services/agent_runs/parent_handoff_coordinator.py` serializes one
+  parent continuation per tenant/task key, including parent cycles from
+  different turns of the same task. A claimed batch is
+  acknowledged only after parent state processing succeeds; errors and
+  cancellations release the claim for retry.
+- Runtime side effects remain in graph tool execution and runtime-provider/tool
+  boundaries. Backend coordination never injects service objects, DB sessions,
+  SDK clients, or decrypted secrets into graph state.
 
 ## Shared Tool Execution Subgraph
 

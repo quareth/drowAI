@@ -33,9 +33,34 @@ The format is based on
 
 - Pathfinder subagent execution now runs through the declarative generic
   subagent runtime without the old Scout-specific runtime modules.
+- Completed subagent handoffs now pass through parent post-action reasoning
+  before the parent finalizes, delegates follow-up work, calls a tool, or waits
+  for active runs.
 
 ### Fixed
 
+- Subagent tool calls now inherit the parent Agent or Full Access approval
+  policy, reuse the existing main conversation approval card, and show only a
+  waiting indicator in the subagent drawer.
+- Parent continuation after a completed subagent handoff now preserves its
+  remaining execution budget, allowing required follow-up tools to run without
+  resetting safety limits between handoff cycles.
+- Persisted tool results from both parent and subagent execution now trigger
+  durable knowledge ingestion at shared tool completion, independent of whether
+  parent post-action reasoning receives the child execution state.
+- Post-action Observations now stream as ordinary assistant text from the same
+  model turn that commits the next graph route, preventing completed subagent
+  work from being described as an action that is still about to run.
+- Each parent post-action phase now receives a distinct Observation stream
+  identity, so later phases no longer overwrite or reorder an earlier card.
+- Parent post-action reasoning now uses one provider-portable internal commit
+  schema for all routes, avoiding six duplicated function definitions while
+  preserving strict runtime validation across model providers.
+- Parent reasoning now receives completed handoff evidence from the canonical
+  context bundle, preventing redundant delegation after a subagent has already
+  completed the requested work.
+- Pathfinder now returns a parent handoff after successful tool evidence instead
+  of treating remaining iteration budget as a requirement to run the tool again.
 - Repeated subagent invocations in one conversation now remain separate drawer
   rows keyed by run identity, with each row opening only its own transcript.
 - Pathfinder now shows its real pre-tool action-selection step as an attributed,
@@ -54,9 +79,9 @@ The format is based on
 - Subagent calls now participate in the parent turn's ordered activity chain by
   run identity and stream sequence, regardless of the implemented subagent kind,
   and completed-turn summaries count each distinct run as an agent.
-- Pathfinder handoff responses now stop their streaming indicator when the answer
-  section closes, return a bounded child result from the generic runtime loop,
-  and hand it to the unchanged main finalizer to produce the chat answer.
+- Pathfinder handoff responses now stop their streaming indicator when the
+  answer section closes and return a bounded child result from the generic
+  runtime loop for parent reasoning.
 - JWT signing now rejects configured HS256 secrets shorter than 32 bytes and
   automatically repairs legacy short generated secrets during bootstrap.
 - Amass now reuses serialized task-scoped v5 state across enumeration and
