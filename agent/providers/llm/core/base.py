@@ -7,6 +7,7 @@ Clients may be used as async context managers for deterministic resource cleanup
 Response Types:
     - LLMResponse: Container for content + usage from non-streaming calls
     - LLMStreamingResponse: Container for streaming iterator + final usage accessor
+    - LLMToolStreamingResponse: Text stream plus completed tool-call accessors
 """
 
 from __future__ import annotations
@@ -200,6 +201,20 @@ class LLMStreamingResponse:
         - Returns None if usage is unavailable or iteration incomplete
     """
     content_iterator: AsyncIterator[str]
+    get_final_usage: Callable[[], Optional["UsageData"]]
+
+
+@dataclass(slots=True)
+class LLMToolStreamingResponse:
+    """Stream assistant text while buffering provider tool calls until complete.
+
+    Provider adapters must never expose partial tool-call arguments through the
+    content iterator. Callers consume ordinary assistant text as it arrives,
+    then read normalized tool calls only after the iterator is exhausted.
+    """
+
+    content_iterator: AsyncIterator[str]
+    get_final_tool_calls: Callable[[], Optional[List[ToolCall]]]
     get_final_usage: Callable[[], Optional["UsageData"]]
 
 
@@ -454,6 +469,38 @@ class LLMClient(ABC):
         """
         raise NotImplementedError
 
+    async def stream_chat_with_tools_with_usage(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        tools: List[ToolSpecInput],
+        tool_choice: ToolChoiceInput = "auto",
+        **kwargs: Any,
+    ) -> LLMToolStreamingResponse:
+        """Stream assistant text and expose only completed normalized tool calls.
+
+        The default implementation preserves compatibility for providers that
+        support tool calling but not native tool streaming. Native adapters
+        should override this method to yield text deltas in real time.
+        """
+        result = await self.chat_with_tools_with_usage(
+            system_prompt,
+            user_prompt,
+            tools,
+            tool_choice=tool_choice,
+            **kwargs,
+        )
+
+        async def content_generator() -> AsyncIterator[str]:
+            if result.content:
+                yield result.content
+
+        return LLMToolStreamingResponse(
+            content_iterator=content_generator(),
+            get_final_tool_calls=lambda: result.tool_calls,
+            get_final_usage=lambda: result.usage,
+        )
+
 
 __all__ = [
     "ChatMessage",
@@ -461,6 +508,7 @@ __all__ = [
     "LLMClient",
     "LLMResponse",
     "LLMStreamingResponse",
+    "LLMToolStreamingResponse",
     "StructuredOutputSpec",
     "ToolChoiceInput",
     "ToolCall",

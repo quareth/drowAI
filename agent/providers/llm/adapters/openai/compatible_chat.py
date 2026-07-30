@@ -26,6 +26,7 @@ from ...core.base import (
     LLMCallOptions,
     LLMResponse,
     LLMStreamingResponse,
+    LLMToolStreamingResponse,
     StructuredOutputSpec,
     ToolCallResult,
     ToolChoiceInput,
@@ -403,6 +404,53 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
             tools,
             tool_choice=tool_choice,
             **call_kwargs,
+        )
+
+    async def stream_chat_with_tools_with_usage(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        tools: list[ToolSpecInput],
+        tool_choice: ToolChoiceInput = "auto",
+        **kwargs: Any,
+    ) -> LLMToolStreamingResponse:
+        """Stream a normalized tool call when the compatible dialect supports it."""
+        try:
+            call_kwargs = self._validate_tool_call(
+                kwargs,
+                tool_choice=tool_choice,
+                require_usage=True,
+            )
+            call_kwargs = self._validate_call(
+                call_kwargs,
+                allowed_legacy=_STREAM_CALL_OPTIONS | _TOOL_CALL_OPTIONS,
+                required_capabilities=(
+                    LLMCapability.CHAT,
+                    LLMCapability.TOOLS,
+                    LLMCapability.STREAMING,
+                    LLMCapability.STREAMING_USAGE_REPORTING,
+                ),
+                include_stream_usage=True,
+                allow_retries=False,
+                tool_choice_mode=_tool_choice_mode(tool_choice),
+            )
+        except LLMCapabilityNotSupportedError as exc:
+            raise _dialect_policy_required("streaming tool calls") from exc
+        request_options = _REQUEST_OPTIONS.get()
+        response = await super().stream_chat_with_tools_with_usage(
+            system_prompt,
+            user_prompt,
+            tools,
+            tool_choice=tool_choice,
+            **call_kwargs,
+        )
+        return LLMToolStreamingResponse(
+            content_iterator=_with_request_options(
+                response.content_iterator,
+                request_options,
+            ),
+            get_final_tool_calls=response.get_final_tool_calls,
+            get_final_usage=response.get_final_usage,
         )
 
     def _validate_tool_call(

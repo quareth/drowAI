@@ -123,3 +123,38 @@ def test_openai_strict_schema_validation_rejects_missing_required_key() -> None:
         validate_openai_strict_schema(invalid)
 
     assert exc_info.value.reason == "missing_required_properties"
+
+
+def test_openai_strict_schema_validation_rejects_unsupported_all_of() -> None:
+    invalid = StructuredOutputSpec(
+        name="conditional",
+        schema={
+            "type": "object",
+            "properties": {
+                "action": {"type": "string"},
+                "details": {"type": ["object", "null"]},
+            },
+            "required": ["action", "details"],
+            "allOf": [
+                {
+                    "if": {
+                        "properties": {
+                            "action": {"const": "delegate"},
+                        },
+                    },
+                    "then": {
+                        "properties": {
+                            "details": {"type": "object"},
+                        },
+                    },
+                },
+            ],
+            "additionalProperties": False,
+        },
+    )
+
+    with pytest.raises(StructuredOutputSchemaError) as exc_info:
+        validate_openai_strict_schema(invalid)
+
+    assert exc_info.value.reason == "unsupported_schema_keyword"
+    assert "allOf" in str(exc_info.value)

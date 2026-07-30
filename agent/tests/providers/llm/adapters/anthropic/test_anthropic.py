@@ -347,6 +347,53 @@ async def test_stream_chat_messages_with_usage_streams_text_and_final_usage(
 
 
 @pytest.mark.asyncio
+async def test_stream_tool_call_keeps_text_and_completed_route_separate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Visible text streams while the normalized tool call appears only at end."""
+    final_message = SimpleNamespace(
+        id="msg_route",
+        stop_reason="tool_use",
+        content=[
+            SimpleNamespace(type="text", text="Completed evidence review."),
+            SimpleNamespace(
+                type="tool_use",
+                id="toolu_route",
+                name="ptr_commit",
+                input={"action_reasoning": "The request is resolved."},
+            ),
+        ],
+        usage=SimpleNamespace(input_tokens=9, output_tokens=5),
+    )
+    client, messages = _client(monkeypatch, final_message)
+    messages.stream_response = _FakeStream(
+        ["Completed ", "evidence review."],
+        final_message,
+    )
+    tool = FunctionToolSpec(
+        tool_id="ptr_commit",
+        name="ptr_commit",
+        description="Finish",
+        parameters_schema={"type": "object", "properties": {}},
+    )
+
+    response = await client.stream_chat_with_tools_with_usage(
+        "system",
+        "user",
+        [tool],
+        tool_choice=ToolChoice(mode="required"),
+    )
+    chunks = [chunk async for chunk in response.content_iterator]
+
+    assert chunks == ["Completed ", "evidence review."]
+    assert response.get_final_tool_calls()[0].name == "ptr_commit"
+    assert response.get_final_tool_calls()[0].arguments == (
+        '{"action_reasoning":"The request is resolved."}'
+    )
+    assert response.get_final_usage().total_tokens == 14
+
+
+@pytest.mark.asyncio
 async def test_stream_chat_messages_with_usage_wraps_sdk_errors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

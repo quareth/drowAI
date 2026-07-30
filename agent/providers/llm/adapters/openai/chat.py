@@ -23,6 +23,7 @@ from ...core.base import (
     LLMClient,
     LLMResponse,
     LLMStreamingResponse,
+    LLMToolStreamingResponse,
     StructuredOutputSpec,
     ToolCall,
     ToolChoiceInput,
@@ -881,6 +882,121 @@ class OpenAIChatClient(LLMClient):
         
         raise last_error if last_error else LLMAPIError(
             "OpenAI tool call failed", provider="OpenAI"
+        )
+
+    async def stream_chat_with_tools_with_usage(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        tools: List[ToolSpecInput],
+        tool_choice: ToolChoiceInput = "auto",
+        **kwargs: Any,
+    ) -> LLMToolStreamingResponse:
+        """Stream visible Chat Completions text and buffer tool-call deltas."""
+        final_usage: List[Optional["UsageData"]] = [None]
+        final_tool_calls: List[Optional[List[ToolCall]]] = [None]
+        tool_buffers: Dict[int, Dict[str, str]] = {}
+
+        async def content_generator() -> AsyncIterator[str]:
+            partial_chunks: List[str] = []
+            refusal_parts: List[str] = []
+            refusal_chunk: Any = None
+            response_chunk: Any = None
+            try:
+                request_kwargs = build_openai_chat_request(
+                    wire_model_id=self._model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=kwargs.get("temperature", DEFAULT_TEMPERATURE),
+                    max_tokens=kwargs.get("max_tokens", DEFAULT_MAX_TOKENS),
+                    stream=True,
+                    include_stream_usage=True,
+                )
+                request_kwargs["tools"] = [
+                    normalize_openai_chat_tool_spec(tool) for tool in tools
+                ]
+                if tool_choice is not None:
+                    request_kwargs["tool_choice"] = normalize_openai_chat_tool_choice(
+                        tool_choice
+                    )
+                if kwargs.get("parallel_tool_calls") is not None:
+                    request_kwargs["parallel_tool_calls"] = kwargs[
+                        "parallel_tool_calls"
+                    ]
+
+                stream = await self._client.chat.completions.create(**request_kwargs)
+                async for chunk in stream:
+                    if getattr(chunk, "usage", None):
+                        final_usage[0] = self._extract_usage_from_response(chunk)
+                    if getattr(chunk, "id", None):
+                        response_chunk = chunk
+
+                    choice = chunk.choices[0] if getattr(chunk, "choices", None) else None
+                    delta = getattr(choice, "delta", None) if choice is not None else None
+                    if delta is not None:
+                        content = _final_text_content(getattr(delta, "content", None))
+                        if content:
+                            partial_chunks.append(content)
+                            yield content
+                        for call_delta in getattr(delta, "tool_calls", None) or []:
+                            index = int(getattr(call_delta, "index", 0) or 0)
+                            buffer = tool_buffers.setdefault(
+                                index,
+                                {"id": "", "name": "", "arguments": ""},
+                            )
+                            call_id = getattr(call_delta, "id", None)
+                            if call_id:
+                                buffer["id"] = str(call_id)
+                            function = getattr(call_delta, "function", None)
+                            name = getattr(function, "name", None)
+                            arguments = getattr(function, "arguments", None)
+                            if name:
+                                buffer["name"] += str(name)
+                            if arguments:
+                                buffer["arguments"] += str(arguments)
+
+                    refusal_count = len(refusal_parts)
+                    refusal_detected = inspect_openai_chat_stream_chunk(
+                        chunk,
+                        refusal_parts=refusal_parts,
+                    )
+                    if len(refusal_parts) > refusal_count or refusal_detected:
+                        refusal_chunk = chunk
+
+                if refusal_chunk is not None:
+                    raise_for_openai_chat_stream_refusal(
+                        response_chunk or refusal_chunk,
+                        model=self._model,
+                        refusal_parts=refusal_parts,
+                        usage=final_usage[0],
+                        partial_content="".join(partial_chunks),
+                        refusal_detected=True,
+                    )
+                final_tool_calls[0] = [
+                    ToolCall(
+                        id=buffer["id"] or f"stream-tool-{index}",
+                        name=buffer["name"],
+                        arguments=buffer["arguments"],
+                    )
+                    for index, buffer in sorted(tool_buffers.items())
+                    if buffer["name"]
+                ] or None
+            except (APIError, APIConnectionError, RateLimitError, APIStatusError) as exc:
+                raise self._wrap_api_error(exc) from exc
+            except LLMRefusalError:
+                raise
+            except Exception as exc:
+                raise LLMAPIError(
+                    f"Streaming tool call failed: {exc}",
+                    provider="OpenAI",
+                ) from exc
+
+        return LLMToolStreamingResponse(
+            content_iterator=content_generator(),
+            get_final_tool_calls=lambda: final_tool_calls[0],
+            get_final_usage=lambda: final_usage[0],
         )
     
     async def chat_with_tools_with_usage(

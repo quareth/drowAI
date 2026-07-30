@@ -1002,6 +1002,66 @@ class TestOpenAIResponsesClientStreaming:
     """Tests for the stream_chat_messages() method."""
 
     @pytest.mark.asyncio
+    async def test_stream_tool_call_separates_text_from_completed_route(
+        self, client_with_mock
+    ) -> None:
+        """Only output text is yielded; the final response owns tool arguments."""
+        client, mock = client_with_mock
+        final_response = MockResponsesResponse(
+            output_text="The scan is complete.",
+            output=[
+                {
+                    "type": "function_call",
+                    "call_id": "call_route",
+                    "name": "ptr_commit",
+                    "arguments": '{"action_reasoning":"The request is resolved."}',
+                }
+            ],
+        )
+        final_response.usage = MagicMock(
+            input_tokens=10,
+            output_tokens=4,
+            total_tokens=14,
+            input_tokens_details=None,
+            output_tokens_details=None,
+        )
+        mock.responses.stream.return_value = MockAsyncContextManager(
+            [
+                MockStreamEvent(delta="The scan "),
+                MockStreamEvent(
+                    event_type="response.function_call_arguments.delta",
+                    delta='{"action_reasoning":',
+                ),
+                MockStreamEvent(delta="is complete."),
+                MockStreamEvent(
+                    event_type="response.completed",
+                    response=final_response,
+                ),
+            ]
+        )
+        tool = FunctionToolSpec(
+            tool_id="ptr_commit",
+            name="ptr_commit",
+            description="Finish",
+            parameters_schema={"type": "object", "properties": {}},
+        )
+
+        response = await client.stream_chat_with_tools_with_usage(
+            "system",
+            "user",
+            [tool],
+            tool_choice=ToolChoice(mode="required"),
+        )
+        chunks = [chunk async for chunk in response.content_iterator]
+
+        assert chunks == ["The scan ", "is complete."]
+        assert response.get_final_tool_calls()[0].name == "ptr_commit"
+        assert response.get_final_tool_calls()[0].arguments == (
+            '{"action_reasoning":"The request is resolved."}'
+        )
+        assert response.get_final_usage().total_tokens == 14
+
+    @pytest.mark.asyncio
     async def test_stream_yields_chunks(self, client_with_mock) -> None:
         """Test that streaming yields text chunks."""
         client, mock = client_with_mock
