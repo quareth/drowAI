@@ -48,6 +48,17 @@ def normalize_url(value: Any) -> str:
     return sanitize_token(raw)
 
 
+def build_web_origin_key(url: Any) -> str:
+    """Return canonical web origin key derived from URL input."""
+    normalized = normalize_url(url)
+    if not normalized:
+        return ""
+    parts = urlsplit(normalized)
+    if not parts.scheme or not parts.netloc:
+        return ""
+    return f"{parts.scheme}://{parts.netloc}"
+
+
 def build_web_response_observations(
     *,
     url: Any,

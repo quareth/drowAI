@@ -20,6 +20,7 @@ from urllib.parse import urlparse, urlsplit
 
 from runtime_shared.semantic.pentest_facts import SemanticEvidenceType
 from runtime_shared.semantic.web_common import (
+    build_web_origin_key,
     build_web_response_observations,
     normalize_url,
 )
@@ -269,7 +270,7 @@ def _apply_per_origin_cap(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     grouped: dict[str, list[dict[str, Any]]] = {}
     for row in rows:
         url_value = str(row.get("url") or "")
-        origin_key = _web_origin_key(url_value)
+        origin_key = build_web_origin_key(url_value)
         if not origin_key:
             continue
         grouped.setdefault(origin_key, []).append(row)
@@ -286,16 +287,6 @@ def _apply_per_origin_cap(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         )
         capped_rows.extend(ranked_rows[:_MAX_PATHS_PER_ORIGIN])
     return capped_rows
-
-
-def _web_origin_key(url_value: str) -> str:
-    normalized = normalize_url(url_value)
-    if not normalized:
-        return ""
-    parts = urlsplit(normalized)
-    if not parts.scheme or not parts.netloc:
-        return ""
-    return f"{parts.scheme}://{parts.netloc}"
 
 
 def _status_rank(item: Mapping[str, Any]) -> int:

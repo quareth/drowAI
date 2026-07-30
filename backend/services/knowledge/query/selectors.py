@@ -25,7 +25,7 @@ from ....models import (
     KnowledgeService,
     KnowledgeWebPath,
 )
-from ..web_common import build_web_origin_key
+from runtime_shared.semantic.web_common import build_web_origin_key
 from .contracts import WEB_SURFACE_NOISY_HIDE_THRESHOLD
 
 
