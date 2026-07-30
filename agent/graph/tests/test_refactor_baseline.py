@@ -90,11 +90,18 @@ class TestPostToolReasoningConstants:
     """Verify constants have expected values."""
 
     def test_valid_actions(self):
-        """VALID_POST_TOOL_ACTIONS contains exactly 4 actions."""
+        """VALID_POST_TOOL_ACTIONS contains expected actions."""
         from agent.graph.nodes.post_tool_reasoning import VALID_POST_TOOL_ACTIONS
 
         assert VALID_POST_TOOL_ACTIONS == frozenset(
-            {"call_tool", "think_more", "reflect", "finalize"}
+            {
+                "call_tool",
+                "think_more",
+                "reflect",
+                "finalize",
+                "delegate_subagent",
+                "wait_for_subagents",
+            }
         )
 
     def test_valid_todo_statuses(self):
@@ -270,7 +277,15 @@ class TestDecisionRouterValidActions:
         """VALID_ACTIONS contains expected actions."""
         from agent.graph.nodes.decision_router import VALID_ACTIONS
 
-        assert VALID_ACTIONS == {"think_more", "call_tool", "reflect", "finalize", "synthesis"}
+        assert VALID_ACTIONS == {
+            "think_more",
+            "call_tool",
+            "reflect",
+            "finalize",
+            "synthesis",
+            "delegate_subagent",
+            "wait_for_subagents",
+        }
 
 
 class TestDecisionRouterConsecutiveReflections:
@@ -467,6 +482,5 @@ class TestGuardrailsIntegration:
         from agent.graph.builders.common_edges import increment_stuck_counter
 
         assert callable(increment_stuck_counter)
-
 
 

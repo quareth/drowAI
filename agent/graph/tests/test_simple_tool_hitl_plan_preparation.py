@@ -26,12 +26,30 @@ from agent.graph.subgraphs.tool_execution import (
 )
 
 
-def _base_state(*, prepared: bool = False) -> dict:
-    planner_plan = {
+def _planner_plan(command: str = "echo ok") -> dict:
+    return {
         "selected_tools": ["shell.exec"],
-        "tool_parameters": {"shell.exec": {"command": "echo ok"}},
+        "tool_parameters": {"shell.exec": {"command": command}},
         "execution_strategy": "sequential",
+        "tool_batch": {
+            "tool_batch_id": "tb-shell-exec",
+            "requested_execution_strategy": "sequential",
+            "tool_calls": [
+                {
+                    "tool_call_id": "tc-shell-exec",
+                    "tool_id": "shell.exec",
+                    "parameters": {"command": command},
+                    "intent": "Run the prepared shell command.",
+                }
+            ],
+            "deferred_followups": [],
+            "selection_rationale": "Selected shell.exec for the echo command.",
+        },
     }
+
+
+def _base_state(*, prepared: bool = False) -> dict:
+    planner_plan = _planner_plan()
     metadata = {
         "agent_mode": "agent",
         "planner_plan": planner_plan,
@@ -185,11 +203,7 @@ async def test_prepare_tool_execution_plan_retry_context_invalidates_stale_plan(
         assert "do not repeat the same failing call unchanged" in retry_hint
         assert "Bearer sk-LEAK-ME" not in retry_hint
 
-        metadata["planner_plan"] = {
-            "selected_tools": ["shell.exec"],
-            "tool_parameters": {"shell.exec": {"command": "echo corrected"}},
-            "execution_strategy": "sequential",
-        }
+        metadata["planner_plan"] = _planner_plan("echo corrected")
         interactive.facts.selected_tool = "shell.exec"
         interactive.facts.tool_parameters = {
             "shell.exec": {"command": "echo corrected"}
@@ -269,11 +283,7 @@ async def test_run_tool_execution_retry_context_replans_before_dispatch() -> Non
         metadata = request.metadata or {}
         assert "planner_plan" not in metadata
         assert "tool_plan_prepared" not in metadata
-        metadata["planner_plan"] = {
-            "selected_tools": ["shell.exec"],
-            "tool_parameters": {"shell.exec": {"command": "echo corrected"}},
-            "execution_strategy": "sequential",
-        }
+        metadata["planner_plan"] = _planner_plan("echo corrected")
         interactive.facts.selected_tool = "shell.exec"
         interactive.facts.tool_parameters = {
             "shell.exec": {"command": "echo corrected"}
@@ -442,7 +452,9 @@ async def test_dispatch_duplicate_resume_reexecutes_with_fresh_call_identity() -
     metadata = dict(interactive.facts.metadata or {})
     metadata["tool_approval_gate_completed"] = True
     metadata["tool_approval_response"] = {"action": "approve"}
-    metadata[_TOOL_CALL_ID_KEY] = "tc-idempotent-test"
+    metadata["planner_plan"]["tool_batch"]["tool_calls"][0][
+        "tool_call_id"
+    ] = "tc-idempotent-test"
     interactive.facts.metadata = metadata
     prepared_state = interactive.as_graph_state()
 
@@ -475,7 +487,12 @@ async def test_dispatch_duplicate_resume_reexecutes_with_fresh_call_identity() -
     assert first_compact.get("tool") == "shell.exec"
     assert first_compact.get("success") is True
 
-    # Second dispatch with same state (simulates duplicate resume)
+    # Second dispatch with reminted canonical call identity.
+    second_metadata = dict(first_interactive.facts.metadata or {})
+    second_metadata["planner_plan"]["tool_batch"]["tool_calls"][0][
+        "tool_call_id"
+    ] = "tc-idempotent-test-2"
+    first_interactive.facts.metadata = second_metadata
     second_state = first_interactive.as_graph_state()
     run_mock.reset_mock()
     with patch(

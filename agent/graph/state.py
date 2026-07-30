@@ -320,7 +320,9 @@ class FactsState(BaseModel):
             "snapshots, not semantic fields), "
             "'current_turn_phase_counter' (monotonic per-turn phase counter), and "
             "'current_turn_phase_turn' (last turn the counter was scoped to). "
-            "Runtime stamps turn_sequence/phase_sequence; PTR never invents them."
+            "Runtime stamps turn_sequence/phase_sequence; PTR never invents them. "
+            "Post-action reasoning source metadata lives in "
+            "metadata['post_action_outcome_source'] and defaults to 'direct_tool'."
         ),
     )
     intent_hints: Dict[str, Any] = Field(default_factory=dict)

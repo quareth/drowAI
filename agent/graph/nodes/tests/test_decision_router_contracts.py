@@ -115,6 +115,312 @@ async def test_candidate_is_consumed_after_single_router_pass() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "candidate_action",
+    (
+        "call_tool",
+        "think_more",
+        "reflect",
+        "finalize",
+        "wait_for_subagents",
+    ),
+)
+async def test_candidate_actions_route_without_backend_execution(
+    candidate_action: str,
+) -> None:
+    state = _base_state()
+    state.facts.metadata["runtime_budgets"] = {
+        "remaining_iterations": 8,
+        "remaining_tool_calls": 4,
+    }
+    if candidate_action == "wait_for_subagents":
+        state.facts.metadata["active_agent_runs"] = [
+            {
+                "agent_run_id": "run-active-1",
+                "assignment_id": "assignment-active-1",
+                "agent_id": "pathfinder",
+                "agent_kind": "pathfinder",
+                "agent_display_name": "Pathfinder",
+                "objective": "Finish delegated enumeration.",
+                "status": "running",
+            }
+        ]
+    state.facts.metadata["candidate_decision"] = {
+        "next_action": candidate_action,
+        "action_reasoning": f"Characterize {candidate_action} routing.",
+        "decision_source": "ptr",
+        "candidate_id": f"ptr-7-3-{candidate_action}",
+        "producer_node": "post_tool_reasoning",
+        "turn_sequence": 7,
+        "phase_sequence": 3,
+    }
+
+    result = await decision_router(state.as_graph_state())
+    metadata = result["facts"]["metadata"]
+    outcome = metadata["router_outcome"]
+
+    assert outcome["action"] == candidate_action
+    assert outcome["candidate_action"] == candidate_action
+    assert outcome["candidate_source"] == "ptr"
+    assert outcome["resolution_source"] == "candidate"
+    assert outcome["reason"] == "candidate_decision_accepted"
+    assert metadata.get("candidate_decision") is None
+
+
+@pytest.mark.asyncio
+async def test_delegate_candidate_routes_with_shared_handoff_entry() -> None:
+    state = _base_state()
+    state.facts.metadata["runtime_budgets"] = {
+        "remaining_iterations": 8,
+        "remaining_tool_calls": 4,
+    }
+    state.facts.metadata["candidate_decision"] = {
+        "next_action": "delegate_subagent",
+        "action_reasoning": "Need bounded delegated enumeration.",
+        "agent_handoff": {
+            "agent_handoff": "required",
+            "subagent": "pathfinder",
+            "objective": "Enumerate services on the approved target.",
+        },
+        "decision_source": "ptr",
+        "candidate_id": "ptr-7-3-delegate_subagent",
+        "producer_node": "post_tool_reasoning",
+        "turn_sequence": 7,
+        "phase_sequence": 3,
+    }
+
+    result = await decision_router(state.as_graph_state())
+    metadata = result["facts"]["metadata"]
+    outcome = metadata["router_outcome"]
+
+    assert outcome["action"] == "delegate_subagent"
+    assert outcome["candidate_action"] == "delegate_subagent"
+    assert outcome["agent_handoff"] == {
+        "agent_handoff": "required",
+        "subagent": "pathfinder",
+        "objective": "Enumerate services on the approved target.",
+    }
+    assert metadata.get("candidate_decision") is None
+
+
+@pytest.mark.asyncio
+async def test_delegate_candidate_without_handoff_falls_back_safely() -> None:
+    state = _base_state()
+    state.facts.metadata["runtime_budgets"] = {
+        "remaining_iterations": 8,
+        "remaining_tool_calls": 4,
+    }
+    state.facts.metadata["candidate_decision"] = {
+        "next_action": "delegate_subagent",
+        "action_reasoning": "Need bounded delegated enumeration.",
+        "decision_source": "ptr",
+        "candidate_id": "ptr-7-3-delegate_subagent",
+        "producer_node": "post_tool_reasoning",
+        "turn_sequence": 7,
+        "phase_sequence": 3,
+    }
+
+    result = await decision_router(state.as_graph_state())
+    metadata = result["facts"]["metadata"]
+
+    assert metadata["router_outcome"]["action"] == "finalize"
+    assert metadata["router_outcome"]["reason"] == "candidate_invalid_agent_handoff"
+    assert metadata.get("candidate_decision") is None
+
+
+@pytest.mark.asyncio
+async def test_legacy_delegate_without_handoff_is_rejected_before_launch() -> None:
+    state = _base_state()
+    state.facts.metadata["runtime_budgets"] = {
+        "remaining_iterations": 8,
+        "remaining_tool_calls": 4,
+    }
+    state.facts.decision_history = ["delegate_subagent: stale legacy route"]
+
+    result = await decision_router(state.as_graph_state())
+    outcome = result["facts"]["metadata"]["router_outcome"]
+
+    assert outcome["action"] == "finalize"
+    assert outcome["candidate_action"] == "delegate_subagent"
+    assert outcome["reason"] == "coordination_delegate_invalid_handoff"
+    assert "agent_handoff" not in outcome
+
+
+@pytest.mark.asyncio
+async def test_wait_without_active_child_fails_closed_to_parent_reasoning() -> None:
+    state = _base_state()
+    state.facts.metadata["runtime_budgets"] = {
+        "remaining_iterations": 8,
+        "remaining_tool_calls": 4,
+    }
+    state.facts.metadata["candidate_decision"] = {
+        "next_action": "wait_for_subagents",
+        "action_reasoning": "Wait for delegated work.",
+        "decision_source": "ptr",
+        "candidate_id": "ptr-7-3-wait_for_subagents",
+        "producer_node": "post_tool_reasoning",
+        "turn_sequence": 7,
+        "phase_sequence": 3,
+    }
+
+    result = await decision_router(state.as_graph_state())
+    outcome = result["facts"]["metadata"]["router_outcome"]
+
+    assert outcome["action"] == "think_more"
+    assert outcome["candidate_action"] == "wait_for_subagents"
+    assert outcome["reason"] == "coordination_wait_without_active_run"
+    assert outcome["resolution_source"] == "guardrail"
+
+
+@pytest.mark.asyncio
+async def test_wait_with_only_irrelevant_active_children_fails_closed() -> None:
+    state = _base_state()
+    state.facts.metadata["runtime_budgets"] = {
+        "remaining_iterations": 8,
+        "remaining_tool_calls": 4,
+    }
+    state.facts.metadata["active_agent_runs"] = [
+        {
+            "agent_run_id": "run-irrelevant",
+            "assignment_id": "assignment-irrelevant",
+            "agent_id": "pathfinder",
+            "agent_kind": "pathfinder",
+            "agent_display_name": "Pathfinder",
+            "objective": "Old assignment no longer needed.",
+            "status": "running",
+        }
+    ]
+    state.facts.metadata["candidate_decision"] = {
+        "next_action": "wait_for_subagents",
+        "action_reasoning": "Wait for delegated work.",
+        "decision_source": "ptr",
+        "candidate_id": "ptr-7-3-wait_for_subagents",
+        "producer_node": "post_tool_reasoning",
+        "turn_sequence": 7,
+        "phase_sequence": 3,
+        "par_irrelevant_active_agent_run_ids": ["run-irrelevant"],
+    }
+
+    result = await decision_router(state.as_graph_state())
+    outcome = result["facts"]["metadata"]["router_outcome"]
+
+    assert outcome["action"] == "think_more"
+    assert outcome["reason"] == "coordination_wait_without_active_run"
+
+
+@pytest.mark.asyncio
+async def test_finalize_with_active_child_routes_to_explicit_wait() -> None:
+    state = _base_state()
+    state.facts.metadata["runtime_budgets"] = {
+        "remaining_iterations": 8,
+        "remaining_tool_calls": 4,
+    }
+    state.facts.metadata["active_agent_runs"] = [
+        {
+            "agent_run_id": "run-active-1",
+            "assignment_id": "assignment-active-1",
+            "agent_id": "pathfinder",
+            "agent_kind": "pathfinder",
+            "agent_display_name": "Pathfinder",
+            "objective": "Complete delegated enumeration.",
+            "status": "running",
+        }
+    ]
+    state.facts.metadata["candidate_decision"] = {
+        "next_action": "finalize",
+        "action_reasoning": "The first handoff looks sufficient.",
+        "decision_source": "ptr",
+        "candidate_id": "ptr-7-3-finalize",
+        "producer_node": "post_tool_reasoning",
+        "turn_sequence": 7,
+        "phase_sequence": 3,
+    }
+
+    result = await decision_router(state.as_graph_state())
+    outcome = result["facts"]["metadata"]["router_outcome"]
+
+    assert outcome["action"] == "wait_for_subagents"
+    assert outcome["candidate_action"] == "finalize"
+    assert outcome["reason"] == "coordination_finalize_blocked_active_runs"
+    assert outcome["resolution_source"] == "guardrail"
+
+
+@pytest.mark.asyncio
+async def test_finalize_allows_active_child_explicitly_marked_irrelevant() -> None:
+    state = _base_state()
+    state.facts.metadata["runtime_budgets"] = {
+        "remaining_iterations": 8,
+        "remaining_tool_calls": 4,
+    }
+    state.facts.metadata["active_agent_runs"] = [
+        {
+            "agent_run_id": "run-irrelevant",
+            "assignment_id": "assignment-irrelevant",
+            "agent_id": "pathfinder",
+            "agent_kind": "pathfinder",
+            "agent_display_name": "Pathfinder",
+            "objective": "Old assignment no longer needed.",
+            "status": "running",
+        }
+    ]
+    state.facts.metadata["candidate_decision"] = {
+        "next_action": "finalize",
+        "action_reasoning": "The remaining active assignment is irrelevant.",
+        "decision_source": "ptr",
+        "candidate_id": "ptr-7-3-finalize",
+        "producer_node": "post_tool_reasoning",
+        "turn_sequence": 7,
+        "phase_sequence": 3,
+        "par_irrelevant_active_agent_run_ids": ["run-irrelevant"],
+    }
+
+    result = await decision_router(state.as_graph_state())
+    outcome = result["facts"]["metadata"]["router_outcome"]
+
+    assert outcome["action"] == "finalize"
+    assert outcome["candidate_action"] == "finalize"
+    assert outcome["reason"] == "candidate_decision_accepted"
+    assert outcome["par_irrelevant_active_agent_run_ids"] == ["run-irrelevant"]
+
+
+@pytest.mark.asyncio
+async def test_finalize_with_malformed_irrelevant_active_child_ids_fails_closed() -> None:
+    state = _base_state()
+    state.facts.metadata["runtime_budgets"] = {
+        "remaining_iterations": 8,
+        "remaining_tool_calls": 4,
+    }
+    state.facts.metadata["active_agent_runs"] = [
+        {
+            "agent_run_id": "run-irrelevant",
+            "assignment_id": "assignment-irrelevant",
+            "agent_id": "pathfinder",
+            "agent_kind": "pathfinder",
+            "agent_display_name": "Pathfinder",
+            "objective": "Old assignment no longer needed.",
+            "status": "running",
+        }
+    ]
+    state.facts.metadata["candidate_decision"] = {
+        "next_action": "finalize",
+        "action_reasoning": "Malformed irrelevant ids must not bypass active runs.",
+        "decision_source": "ptr",
+        "candidate_id": "ptr-7-3-finalize",
+        "producer_node": "post_tool_reasoning",
+        "turn_sequence": 7,
+        "phase_sequence": 3,
+        "par_irrelevant_active_agent_run_ids": "run-irrelevant",
+    }
+
+    result = await decision_router(state.as_graph_state())
+    outcome = result["facts"]["metadata"]["router_outcome"]
+
+    assert outcome["action"] == "wait_for_subagents"
+    assert outcome["candidate_action"] == "finalize"
+    assert outcome["reason"] == "coordination_finalize_blocked_active_runs"
+
+
+@pytest.mark.asyncio
 async def test_binding_mismatch_candidate_falls_back_to_history_reason() -> None:
     state = _base_state()
     state.facts.metadata["candidate_decision"] = {

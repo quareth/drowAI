@@ -25,7 +25,20 @@ from ...state import TodoItem, TodoStatus
 logger = logging.getLogger(__name__)
 
 # Valid node names for routing
-VALID_ACTIONS = frozenset({"think_more", "call_tool", "reflect", "finalize", "synthesis"})
+VALID_ACTIONS = frozenset(
+    {
+        "think_more",
+        "call_tool",
+        "reflect",
+        "finalize",
+        "synthesis",
+        "delegate_subagent",
+        "wait_for_subagents",
+    }
+)
+ACTIVE_AGENT_RUNS_METADATA_KEY = "active_agent_runs"
+CONTEXT_BUNDLE_METADATA_KEY = "context_bundle"
+PAR_IRRELEVANT_ACTIVE_RUN_IDS_METADATA_KEY = "par_irrelevant_active_agent_run_ids"
 
 
 # =============================================================================
@@ -424,11 +437,116 @@ def consume_valid_candidate_decision(
     if next_action not in VALID_ACTIONS:
         return None, "candidate_invalid_next_action"
 
+    agent_handoff = raw.get("agent_handoff")
+    if next_action == "delegate_subagent":
+        if not is_valid_agent_handoff_entry(agent_handoff):
+            return None, "candidate_invalid_agent_handoff"
+    elif agent_handoff is not None:
+        return None, "candidate_unexpected_agent_handoff"
+
     normalized = dict(raw)
     normalized["next_action"] = next_action
     normalized["turn_sequence"] = candidate_turn
     normalized["phase_sequence"] = candidate_phase
+    if next_action == "delegate_subagent":
+        normalized["agent_handoff"] = normalize_agent_handoff_entry(agent_handoff)
     return normalized, None
+
+
+def is_valid_agent_handoff_entry(value: Any) -> bool:
+    """Return whether value is the shared required handoff entry shape."""
+    if not isinstance(value, Mapping):
+        return False
+    normalized = normalize_agent_handoff_entry(value)
+    return bool(normalized)
+
+
+def normalize_agent_handoff_entry(value: Any) -> dict[str, str]:
+    """Normalize a single classifier-compatible handoff entry."""
+    if not isinstance(value, Mapping):
+        return {}
+    marker = str(value.get("agent_handoff") or "").strip().lower()
+    subagent = str(value.get("subagent") or "").strip().lower()
+    objective = value.get("objective")
+    if marker != "required" or not subagent:
+        return {}
+    if not isinstance(objective, str) or not objective.strip():
+        return {}
+    return {
+        "agent_handoff": "required",
+        "subagent": subagent,
+        "objective": objective.strip(),
+    }
+
+
+def normalize_irrelevant_active_run_ids(value: Any) -> frozenset[str]:
+    """Return explicit PAR-recorded active run IDs that are no longer relevant."""
+    if not isinstance(value, list | tuple | set | frozenset):
+        return frozenset()
+    normalized = {
+        str(item).strip()
+        for item in value
+        if isinstance(item, str) and str(item).strip()
+    }
+    return frozenset(normalized)
+
+
+def relevant_active_agent_runs(
+    metadata: Mapping[str, Any],
+    *,
+    candidate_irrelevant_run_ids: Any = None,
+) -> tuple[Mapping[str, Any], ...]:
+    """Return active subagent runs not explicitly marked irrelevant by PAR."""
+    runs = _active_agent_runs_from_metadata(metadata)
+    if not runs:
+        return ()
+
+    irrelevant_ids = set(
+        normalize_irrelevant_active_run_ids(
+            metadata.get(PAR_IRRELEVANT_ACTIVE_RUN_IDS_METADATA_KEY)
+        )
+    )
+    irrelevant_ids.update(
+        normalize_irrelevant_active_run_ids(candidate_irrelevant_run_ids)
+    )
+    if not irrelevant_ids:
+        return runs
+
+    relevant: list[Mapping[str, Any]] = []
+    for run in runs:
+        run_id = str(run.get("agent_run_id") or "").strip()
+        if run_id and run_id in irrelevant_ids:
+            continue
+        relevant.append(run)
+    return tuple(relevant)
+
+
+def has_relevant_active_agent_runs(
+    metadata: Mapping[str, Any],
+    *,
+    candidate_irrelevant_run_ids: Any = None,
+) -> bool:
+    """Return whether any active child assignment still blocks coordination."""
+    return bool(
+        relevant_active_agent_runs(
+            metadata,
+            candidate_irrelevant_run_ids=candidate_irrelevant_run_ids,
+        )
+    )
+
+
+def _active_agent_runs_from_metadata(
+    metadata: Mapping[str, Any],
+) -> tuple[Mapping[str, Any], ...]:
+    """Read bounded active-run projections from metadata or its context bundle."""
+    runs = metadata.get(ACTIVE_AGENT_RUNS_METADATA_KEY)
+    if not isinstance(runs, list):
+        bundle = metadata.get(CONTEXT_BUNDLE_METADATA_KEY)
+        if isinstance(bundle, Mapping):
+            runs = bundle.get(ACTIVE_AGENT_RUNS_METADATA_KEY)
+    if not isinstance(runs, list):
+        return ()
+    return tuple(item for item in runs if isinstance(item, Mapping))
 
 
 def write_router_outcome(
@@ -439,7 +557,9 @@ def write_router_outcome(
     candidate_source: str,
     resolution_source: str,
     reason: str,
+    agent_handoff: Optional[Mapping[str, Any]] = None,
     profile: Optional[str] = None,
+    irrelevant_active_agent_run_ids: Any = None,
 ) -> dict[str, Any]:
     """Write normalized router_outcome metadata contract."""
     outcome = {
@@ -450,8 +570,30 @@ def write_router_outcome(
         "profile": profile or "",
         "reason": reason,
     }
+    if action == "delegate_subagent" and agent_handoff is not None:
+        outcome["agent_handoff"] = dict(agent_handoff)
+    irrelevant_ids = _normalize_irrelevant_active_run_ids(
+        irrelevant_active_agent_run_ids
+    )
+    if irrelevant_ids:
+        outcome["par_irrelevant_active_agent_run_ids"] = irrelevant_ids
     facts.set_router_outcome(outcome)
     return outcome
+
+
+def _normalize_irrelevant_active_run_ids(value: Any) -> list[str]:
+    """Return non-empty PAR-declared active run IDs without duplicates."""
+    if not isinstance(value, list | tuple | set | frozenset):
+        return []
+
+    normalized: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        run_id = item.strip()
+        if run_id and run_id not in normalized:
+            normalized.append(run_id)
+    return normalized
 
 
 def update_router_observability(
@@ -494,6 +636,7 @@ def update_router_observability(
 __all__ = [
     # Constants
     "VALID_ACTIONS",
+    "PAR_IRRELEVANT_ACTIVE_RUN_IDS_METADATA_KEY",
     # Decision-history parsing
     "extract_action_label",
     # Todo helpers
@@ -510,11 +653,14 @@ __all__ = [
     "consume_post_reflect_hint",
     # Router contract helpers
     "consume_valid_candidate_decision",
+    "has_relevant_active_agent_runs",
+    "is_valid_agent_handoff_entry",
+    "normalize_agent_handoff_entry",
+    "normalize_irrelevant_active_run_ids",
+    "relevant_active_agent_runs",
     "resolve_router_phase_sequence",
     "update_router_observability",
     "write_router_outcome",
     # Re-export from node_utils
     "determine_post_reflect_action",
 ]
-
-

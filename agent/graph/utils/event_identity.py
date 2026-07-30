@@ -12,6 +12,9 @@ from typing import Any, Optional, Tuple
 from .dr_iteration_state import _advance_dr_iteration, _ensure_dr_iteration
 
 
+POST_ACTION_STREAM_SEQUENCE_METADATA_KEY = "post_action_stream_sequence"
+
+
 def _coerce_int(value: Any) -> Optional[int]:
     if isinstance(value, bool):
         return None
@@ -220,6 +223,28 @@ def resolve_sub_turn_index(
             return retry_count
 
     return None
+
+
+def reserve_post_action_sub_turn_index(
+    metadata: dict[str, Any],
+) -> int:
+    """Reserve one monotonic observation identity within the active user turn.
+
+    PTR/PAR may execute more than once for one canonical turn, including across
+    separately invoked parent-continuation graphs. The ordinary retry/DR
+    identity is used as the initial floor, while this dedicated counter owns
+    every later post-action observation card.
+    """
+    baseline = resolve_sub_turn_index(metadata)
+    next_index = _coerce_int(metadata.get(POST_ACTION_STREAM_SEQUENCE_METADATA_KEY))
+    if next_index is None or next_index < 0:
+        reserved = baseline if baseline is not None else 0
+    elif baseline is None:
+        reserved = next_index
+    else:
+        reserved = max(next_index, baseline)
+    metadata[POST_ACTION_STREAM_SEQUENCE_METADATA_KEY] = reserved + 1
+    return reserved
 
 
 def resolve_direct_executor_step_index(state: Any) -> int:
