@@ -66,6 +66,8 @@ is likewise part of the cache contract and must not shift casually:
    materialized canonical prior-turn references)
 6. ``completed_agent_results`` (emitted only when the projection carries
    completed same-process subagent result summaries)
+7. ``active_agent_runs`` (emitted only when the projection carries
+   bounded same-process active subagent lifecycle summaries)
 
 The in-flight turn is part of the one conversation stream rendered
 inside ``recent_transcript`` so consumers never have to stitch two
@@ -93,6 +95,7 @@ SECTION_EVIDENCE_REFS = "evidence_refs"
 SECTION_WORKING_MEMORY = "working_memory"
 SECTION_REFERENCED_PRIOR_TURNS = "referenced_prior_turns"
 SECTION_COMPLETED_AGENT_RESULTS = "completed_agent_results"
+SECTION_ACTIVE_AGENT_RUNS = "active_agent_runs"
 
 _SECTION_ORDER: tuple[str, ...] = (
     SECTION_RECENT_TRANSCRIPT,
@@ -101,6 +104,7 @@ _SECTION_ORDER: tuple[str, ...] = (
     SECTION_WORKING_MEMORY,
     SECTION_REFERENCED_PRIOR_TURNS,
     SECTION_COMPLETED_AGENT_RESULTS,
+    SECTION_ACTIVE_AGENT_RUNS,
 )
 
 # Maximum characters retained for a memory-summary section. Matches the
@@ -428,6 +432,44 @@ def render_completed_agent_results_section(projection: Mapping[str, Any]) -> str
     return "Completed Agent Results:\n" + "\n\n".join(blocks)
 
 
+def render_active_agent_runs_section(projection: Mapping[str, Any]) -> str:
+    """Render safe active subagent lifecycle summaries for prompt use."""
+    runs = projection.get("active_agent_runs")
+    if not isinstance(runs, list) or not runs:
+        return ""
+
+    blocks: list[str] = []
+    for item in runs:
+        if not isinstance(item, Mapping):
+            continue
+        display_name = str(item.get("agent_display_name") or "Agent").strip()
+        agent_run_id = str(item.get("agent_run_id") or "").strip()
+        status = str(item.get("status") or "").strip()
+        lines = [
+            f"{display_name} active run"
+            + (f" ({agent_run_id})" if agent_run_id else "")
+            + (f": {status}" if status else "")
+        ]
+        for field_name, label in (
+            ("assignment_id", "assignment_id"),
+            ("objective", "objective"),
+            ("created_at", "created_at"),
+            ("started_at", "started_at"),
+        ):
+            value = str(item.get(field_name) or "").strip()
+            if value:
+                lines.append(f"{label}: {value}")
+        lifecycle_version = item.get("lifecycle_version")
+        if isinstance(lifecycle_version, int) and not isinstance(
+            lifecycle_version, bool
+        ):
+            lines.append(f"lifecycle_version: {lifecycle_version}")
+        blocks.append("\n".join(lines))
+    if not blocks:
+        return ""
+    return "Active Agent Runs:\n" + "\n\n".join(blocks)
+
+
 # -- Public serializer. ------------------------------------------------
 
 
@@ -469,6 +511,10 @@ def serialize_projection_to_prompt_sections(
     - ``completed_agent_results``: emitted only when the projection
       carries bounded same-process subagent results. The section renders
       summaries and references only, never raw activity or reasoning.
+    - ``active_agent_runs``: emitted only when the projection carries
+      bounded same-process active subagent lifecycle summaries. The
+      section renders assignment identity, objective, status, and timing
+      only, never task handles, child transcripts, or tool output.
 
     Parameters
     ----------
@@ -550,6 +596,17 @@ def serialize_projection_to_prompt_sections(
                 )
             continue
 
+        if section_name == SECTION_ACTIVE_AGENT_RUNS:
+            content = render_active_agent_runs_section(projection)
+            if content:
+                sections.append(
+                    {
+                        "name": SECTION_ACTIVE_AGENT_RUNS,
+                        "content": content,
+                    }
+                )
+            continue
+
     return sections
 
 
@@ -575,6 +632,7 @@ def serialize_projection_to_section_map(
 
 
 __all__ = [
+    "SECTION_ACTIVE_AGENT_RUNS",
     "SECTION_EVIDENCE_REFS",
     "SECTION_COMPLETED_AGENT_RESULTS",
     "SECTION_REFERENCED_PRIOR_TURNS",
@@ -586,6 +644,7 @@ __all__ = [
     "TURN_ATTR_ROLE",
     "TURN_TAG_NAME",
     "render_recent_transcript",
+    "render_active_agent_runs_section",
     "render_completed_agent_results_section",
     "render_referenced_prior_turns_section",
     "render_working_memory_section",

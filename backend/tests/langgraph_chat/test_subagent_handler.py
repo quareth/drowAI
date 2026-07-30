@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import os
+from types import SimpleNamespace
 from typing import Any
 
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg2://test:test@localhost/test")
@@ -29,6 +30,7 @@ from backend.services.agent_runs.completion import (
 )
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
 from backend.services.agent_runs.result_projection import (
+    ACTIVE_AGENT_RUNS_KEY,
     COMPLETED_AGENT_RESULTS_KEY,
     AgentRunResultProjector,
 )
@@ -180,8 +182,19 @@ class _FailingSecondLaunchAfterCompletionLauncher:
 
 
 class _FailingAfterUsageLauncher:
-    async def launch(self, **_kwargs: Any) -> asyncio.Task[AgentRunCompletion]:
+    def __init__(self, registry: ProcessLocalAgentRunRegistry) -> None:
+        self.registry = registry
+
+    async def launch(self, **kwargs: Any) -> asyncio.Task[AgentRunCompletion]:
+        assignment = kwargs["assignment"]
+
         async def _fail() -> AgentRunCompletion:
+            await self.registry.mark_failed(
+                tenant_id=assignment.tenant_id,
+                task_id=assignment.task_id,
+                agent_run_id=assignment.agent_run_id,
+                safe_error="Subagent worker failed",
+            )
             raise SubagentRunFailed(
                 "Subagent graph completed without a valid terminal result",
                 GraphExecutionResult(
@@ -209,8 +222,18 @@ class _FailingAfterUsageLauncher:
 
 
 class _CancellingLauncher:
-    async def launch(self, **_kwargs: Any) -> asyncio.Task[AgentRunCompletion]:
+    def __init__(self, registry: ProcessLocalAgentRunRegistry) -> None:
+        self.registry = registry
+
+    async def launch(self, **kwargs: Any) -> asyncio.Task[AgentRunCompletion]:
+        assignment = kwargs["assignment"]
+
         async def _cancel() -> AgentRunCompletion:
+            await self.registry.mark_cancelled(
+                tenant_id=assignment.tenant_id,
+                task_id=assignment.task_id,
+                agent_run_id=assignment.agent_run_id,
+            )
             raise SubagentRunCancelled(
                 execution_result=GraphExecutionResult(
                     final_state=_subagent_final_state(agent_run_id="agent-run-cancelled")
@@ -221,8 +244,25 @@ class _CancellingLauncher:
 
 
 class _PausingLauncher:
-    async def launch(self, **_kwargs: Any) -> asyncio.Task[AgentRunCompletion]:
+    def __init__(self, registry: ProcessLocalAgentRunRegistry) -> None:
+        self.registry = registry
+        self.paused = asyncio.Event()
+        self._assignment: Any = None
+        self._graph_thread_id: str | None = None
+
+    async def launch(self, **kwargs: Any) -> asyncio.Task[AgentRunCompletion]:
+        assignment = kwargs["assignment"]
+        self._assignment = assignment
+        self._graph_thread_id = kwargs["graph_thread_id"]
+
         async def _pause() -> AgentRunCompletion:
+            await self.registry.mark_waiting_for_approval(
+                tenant_id=assignment.tenant_id,
+                task_id=assignment.task_id,
+                agent_run_id=assignment.agent_run_id,
+                accounted_usage_record_count=1,
+            )
+            self.paused.set()
             raise SubagentRunPaused(
                 execution_result=GraphExecutionResult(
                     final_state=_subagent_final_state(agent_run_id="agent-run-paused")
@@ -230,6 +270,26 @@ class _PausingLauncher:
             )
 
         return asyncio.create_task(_pause())
+
+    async def complete_after_approval(self) -> None:
+        assignment = self._assignment
+        assert assignment is not None
+        assert self._graph_thread_id is not None
+        result = AgentResult(
+            agent_run_id=assignment.agent_run_id,
+            agent_id=assignment.agent_id,
+            agent_kind=assignment.agent_kind,
+            outcome="completed",
+            summary="Pathfinder completed after approval.",
+            key_findings=("80/tcp closed",),
+            tools_used=("information_gathering.network_discovery.nmap",),
+        )
+        await self.registry.mark_completed(
+            tenant_id=assignment.tenant_id,
+            task_id=assignment.task_id,
+            agent_run_id=assignment.agent_run_id,
+            result=result,
+        )
 
 
 class _CompletingExecutor:
@@ -276,6 +336,110 @@ class _CompletingExecutor:
         return GraphExecutionResult(
             final_state=_subagent_final_state(agent_run_id=agent_run_id)
         )
+
+
+class _BlockingFirstParentExecutor(_CompletingExecutor):
+    def __init__(self) -> None:
+        super().__init__()
+        self.first_parent_started = asyncio.Event()
+        self.release_first_parent = asyncio.Event()
+        self.parent_calls: list[dict[str, Any]] = []
+
+    async def stream_graph(
+        self,
+        compiled: Any,
+        graph_input: Any,
+        config: dict[str, Any],
+        task_id: int,
+        **kwargs: Any,
+    ) -> GraphExecutionResult:
+        graph_name = config["configurable"]["graph_name"]
+        if graph_name != GRAPH_NAME_SUBAGENT:
+            call = {
+                "compiled": compiled,
+                "graph_input": graph_input,
+                "config": config,
+                "task_id": task_id,
+                "kwargs": kwargs,
+            }
+            self.calls.append(call)
+            self.parent_calls.append(call)
+            if len(self.parent_calls) == 1:
+                self.first_parent_started.set()
+                await self.release_first_parent.wait()
+            final_state = copy.deepcopy(graph_input)
+            if len(self.parent_calls) == 1:
+                final_state["facts"]["metadata"]["runtime_budgets"][
+                    "remaining_tool_calls"
+                ] = 9
+            final_state["trace"]["final_text"] = "Main agent finalized Pathfinder result."
+            return GraphExecutionResult(final_state=final_state)
+        return await super().stream_graph(
+            compiled,
+            graph_input,
+            config,
+            task_id,
+            **kwargs,
+        )
+
+
+class _IrrelevantFirstParentExecutor(_CompletingExecutor):
+    def __init__(self) -> None:
+        super().__init__()
+        self.parent_calls: list[dict[str, Any]] = []
+
+    async def stream_graph(
+        self,
+        compiled: Any,
+        graph_input: Any,
+        config: dict[str, Any],
+        task_id: int,
+        **kwargs: Any,
+    ) -> GraphExecutionResult:
+        graph_name = config["configurable"]["graph_name"]
+        if graph_name == GRAPH_NAME_SUBAGENT:
+            return await super().stream_graph(
+                compiled,
+                graph_input,
+                config,
+                task_id,
+                **kwargs,
+            )
+
+        call = {
+            "compiled": compiled,
+            "graph_input": graph_input,
+            "config": config,
+            "task_id": task_id,
+            "kwargs": kwargs,
+        }
+        self.calls.append(call)
+        self.parent_calls.append(call)
+        metadata = graph_input["facts"]["metadata"]
+        active_runs = metadata.get(ACTIVE_AGENT_RUNS_KEY)
+        if not isinstance(active_runs, list):
+            bundle = metadata.get(METADATA_CONTEXT_BUNDLE_KEY)
+            active_runs = (
+                bundle.get(ACTIVE_AGENT_RUNS_KEY, [])
+                if isinstance(bundle, dict)
+                else []
+            )
+        irrelevant_run_ids = [
+            run["agent_run_id"]
+            for run in active_runs
+            if isinstance(run, dict) and isinstance(run.get("agent_run_id"), str)
+        ]
+        final_state = copy.deepcopy(graph_input)
+        final_state["facts"]["metadata"]["router_outcome"] = {
+            "action": "finalize",
+            "candidate_action": "finalize",
+            "candidate_source": "ptr",
+            "resolution_source": "candidate",
+            "reason": "candidate_decision_accepted",
+            "par_irrelevant_active_agent_run_ids": irrelevant_run_ids,
+        }
+        final_state["trace"]["final_text"] = "Main agent finalized without Cartographer."
+        return GraphExecutionResult(final_state=final_state)
 
 
 class _FakeCheckpointerService:
@@ -395,6 +559,19 @@ async def _wait_for_call_count(
     await asyncio.wait_for(_poll(), timeout=timeout)
 
 
+async def _wait_for_parent_call_count(
+    executor: Any,
+    expected: int,
+    *,
+    timeout: float = 0.5,
+) -> None:
+    async def _poll() -> None:
+        while len(executor.parent_calls) < expected:
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(_poll(), timeout=timeout)
+
+
 def _second_agent_definition() -> SubagentDefinition:
     return SubagentDefinition(
         schema_version=1,
@@ -469,7 +646,7 @@ async def test_subagent_handler_uses_registered_agent_identity_for_launch_failur
 
     handler = SubagentHandler(
         object(),
-        object(),
+        _CompletingExecutor(),
         object(),
         registry=registry,
         launcher=_FailingLauncher(),
@@ -484,15 +661,18 @@ async def test_subagent_handler_uses_registered_agent_identity_for_launch_failur
     assert entries[0].agent_id == "cartographer"
     assert entries[0].agent_run_id.startswith("agent-run-")
     assert entries[0].safe_error == "Cartographer launch failed"
-    assert result.final_text == "Cartographer could not complete the subagent run."
-    assert result.metadata["agent_id"] == "cartographer"
-    assert result.metadata["agent_display_name"] == "Cartographer"
-    assert [event["agent_run"]["agent_id"] for event in events] == [
+    assert result.final_text == "Main agent finalized Pathfinder result."
+    assert result.metadata["handoff_agent_id"] == "cartographer"
+    assert entries[0].result_consumed is True
+    lifecycle_events = [event for event in events if "agent_run" in event]
+    assert [event["agent_run"]["agent_id"] for event in lifecycle_events] == [
         "cartographer",
         "cartographer",
         "cartographer",
     ]
-    assert events[-1]["agent_run"]["safe_error"] == "Cartographer launch failed"
+    assert lifecycle_events[-1]["agent_run"]["safe_error"] == (
+        "Cartographer launch failed"
+    )
 
 
 @pytest.mark.asyncio
@@ -543,19 +723,43 @@ async def test_subagent_handler_waits_for_pathfinder_and_runs_parent_finalizer()
     assert len(entries) == 1
     assert entries[0].status == "completed"
     assert entries[0].result_consumed is True
-    assert [event[1]["agent_run"]["status"] for event in events] == [
+    lifecycle_events = [event for _task_id, event in events if "agent_run" in event]
+    parent_progress_events = [
+        event
+        for _task_id, event in events
+        if event.get("metadata", {}).get("progress_kind") == "parent_handoff"
+    ]
+    assert [event["agent_run"]["status"] for event in lifecycle_events] == [
         "queued",
         "running",
     ]
-    assert events[0][1]["agent_run"]["assignment"]["agent_run_id"] == (
+    assert lifecycle_events[0]["agent_run"]["assignment"]["agent_run_id"] == (
         assignment.agent_run_id
     )
-    assert "assignment" not in events[1][1]["agent_run"] or (
-        events[1][1]["agent_run"]["assignment"] is None
+    assert "assignment" not in lifecycle_events[1]["agent_run"] or (
+        lifecycle_events[1]["agent_run"]["assignment"] is None
     )
+    assert [event["type"] for event in parent_progress_events] == [
+        "reasoning_start",
+        "reasoning_delta",
+        "reasoning_section_end",
+    ]
+    assert parent_progress_events[1]["metadata"]["producer_type"] == "main_agent"
+    assert "agent_run_id" not in parent_progress_events[1]["metadata"]
     completed_results = runtime_config.metadata[COMPLETED_AGENT_RESULTS_KEY]
     assert completed_results[0]["agent_id"] == "pathfinder"
     assert completed_results[0]["agent_run_id"] == assignment.agent_run_id
+    parent_graph_input = executor.calls[-1]["graph_input"]
+    assert parent_graph_input["facts"]["metadata"]["runtime_budgets"] == {
+        "time_budget_ms": 300_000,
+        "remaining_iterations": 15,
+        "remaining_tool_calls": 10,
+    }
+    assert runtime_config.metadata["runtime_budgets"] == {
+        "time_budget_ms": 300_000,
+        "remaining_iterations": 15,
+        "remaining_tool_calls": 10,
+    }
     assert result.total_tokens == 44
     assert result.usage is not None
     assert len(result.usage) == 2
@@ -694,6 +898,181 @@ async def test_subagent_handler_launches_independent_handoffs_concurrently(
 
 
 @pytest.mark.asyncio
+async def test_subagent_handler_processes_first_ready_handoff_with_active_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    launcher = _ControlledLauncher(registry)
+    executor = _BlockingFirstParentExecutor()
+    second_definition = _second_agent_definition()
+    definition_registry = DefinitionSubagentRegistry(
+        [
+            get_definition_subagent_registry().require("pathfinder"),
+            second_definition,
+        ]
+    )
+    monkeypatch.setattr(
+        "agent.subagents.registry.get_subagent_registry",
+        lambda: definition_registry,
+    )
+
+    async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
+        return None
+
+    handler = SubagentHandler(
+        object(),
+        executor,
+        object(),
+        registry=registry,
+        launcher=launcher,
+        lifecycle_publisher=_publish,
+        subagent_registry=definition_registry,
+    )
+    runtime_config = _ordered_handoff_runtime_config(
+        {
+            "agent_id": "pathfinder",
+            "agent_kind": "recon",
+            "capabilities": ["port_scanning"],
+            "targets": ["10.0.0.10"],
+            "objective": "Scan ports on 10.0.0.10.",
+        },
+        {
+            "agent_id": "cartographer",
+            "agent_kind": "recon",
+            "capabilities": ["asset_inventory"],
+            "targets": ["10.0.0.10"],
+            "objective": "Inventory approved assets.",
+        },
+    )
+
+    result_task = asyncio.create_task(handler.handle(runtime_config))
+    await _wait_for_call_count(launcher, 2)
+
+    launcher.releases[0].set()
+    await asyncio.wait_for(executor.first_parent_started.wait(), timeout=0.5)
+
+    assert len(executor.parent_calls) == 1
+    completed_results = runtime_config.metadata[COMPLETED_AGENT_RESULTS_KEY]
+    active_runs = runtime_config.metadata[ACTIVE_AGENT_RUNS_KEY]
+    assert [result["agent_id"] for result in completed_results] == ["pathfinder"]
+    assert [run["agent_id"] for run in active_runs] == ["cartographer"]
+    assert active_runs[0]["status"] == "running"
+    assert not launcher.releases[1].is_set()
+
+    launcher.releases[1].set()
+    executor.release_first_parent.set()
+    result = await result_task
+
+    assert len(executor.parent_calls) == 2
+    first_graph_input = executor.parent_calls[0]["graph_input"]
+    assert first_graph_input["facts"]["metadata"]["runtime_budgets"] == {
+        "time_budget_ms": 300_000,
+        "remaining_iterations": 15,
+        "remaining_tool_calls": 10,
+    }
+    second_graph_input = executor.parent_calls[1]["graph_input"]
+    second_metadata = second_graph_input["facts"]["metadata"]
+    assert second_metadata["runtime_budgets"] == {
+        "time_budget_ms": 300_000,
+        "remaining_iterations": 15,
+        "remaining_tool_calls": 9,
+    }
+    assert runtime_config.metadata["runtime_budgets"] == {
+        "time_budget_ms": 300_000,
+        "remaining_iterations": 15,
+        "remaining_tool_calls": 9,
+    }
+    assert (
+        second_metadata[METADATA_CONTEXT_BUNDLE_KEY][ACTIVE_AGENT_RUNS_KEY]
+        == []
+    )
+    assert runtime_config.metadata[ACTIVE_AGENT_RUNS_KEY] == []
+    assert (
+        runtime_config.metadata[METADATA_CONTEXT_BUNDLE_KEY][ACTIVE_AGENT_RUNS_KEY]
+        == []
+    )
+    assert result.metadata["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_subagent_handler_does_not_reprocess_irrelevant_active_finalization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    launcher = _ControlledLauncher(registry)
+    executor = _IrrelevantFirstParentExecutor()
+    second_definition = _second_agent_definition()
+    definition_registry = DefinitionSubagentRegistry(
+        [
+            get_definition_subagent_registry().require("pathfinder"),
+            second_definition,
+        ]
+    )
+    monkeypatch.setattr(
+        "agent.subagents.registry.get_subagent_registry",
+        lambda: definition_registry,
+    )
+
+    async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
+        return None
+
+    handler = SubagentHandler(
+        object(),
+        executor,
+        object(),
+        registry=registry,
+        launcher=launcher,
+        lifecycle_publisher=_publish,
+        subagent_registry=definition_registry,
+    )
+    runtime_config = _ordered_handoff_runtime_config(
+        {
+            "agent_id": "pathfinder",
+            "agent_kind": "recon",
+            "capabilities": ["port_scanning"],
+            "targets": ["10.0.0.10"],
+            "objective": "Scan ports on 10.0.0.10.",
+        },
+        {
+            "agent_id": "cartographer",
+            "agent_kind": "recon",
+            "capabilities": ["asset_inventory"],
+            "targets": ["10.0.0.10"],
+            "objective": "Inventory approved assets.",
+        },
+    )
+
+    result_task = asyncio.create_task(handler.handle(runtime_config))
+    await _wait_for_call_count(launcher, 2)
+    launcher.releases[0].set()
+    await _wait_for_parent_call_count(executor, 1)
+    launcher.releases[1].set()
+    result = await result_task
+
+    assert result.final_text == "Main agent finalized without Cartographer."
+    assert len(executor.parent_calls) == 1
+    first_graph_input = executor.parent_calls[0]["graph_input"]
+    first_metadata = first_graph_input["facts"]["metadata"]
+    first_bundle = first_metadata[METADATA_CONTEXT_BUNDLE_KEY]
+    active_runs = first_bundle[ACTIVE_AGENT_RUNS_KEY]
+    assert [run["agent_id"] for run in active_runs] == ["cartographer"]
+    entries = sorted(
+        await registry.list_task_runs(tenant_id=7, task_id=42),
+        key=lambda entry: entry.agent_id,
+    )
+    assert [entry.agent_id for entry in entries] == ["cartographer", "pathfinder"]
+    assert [entry.status for entry in entries] == ["completed", "completed"]
+    assert [entry.result_consumed for entry in entries] == [True, True]
+    later_handoff = await AgentRunResultProjector(registry=registry).collect_for_context(
+        tenant_id=7,
+        task_id=42,
+        conversation_id="conv-42",
+    )
+    assert later_handoff.results == ()
+    assert later_handoff.agent_run_ids == ()
+
+
+@pytest.mark.asyncio
 async def test_subagent_handler_serializes_repeated_agent_handoffs_by_limit() -> None:
     registry = ProcessLocalAgentRunRegistry()
     launcher = _ControlledLauncher(registry)
@@ -825,21 +1204,31 @@ async def test_subagent_handler_emits_failed_lifecycle_when_launch_fails() -> No
         lifecycle_publisher=_publish,
     )
 
-    result = await handler.handle(_runtime_config())
+    runtime_config = _runtime_config()
+    result = await handler.handle(runtime_config)
 
     entries = await registry.list_task_runs(tenant_id=7, task_id=42)
     assert len(entries) == 1
     assert entries[0].status == "failed"
     assert entries[0].safe_error == "Pathfinder launch failed"
-    assert result.metadata["status"] == "failed"
-    assert result.usage is None
-    assert executor.calls == []
-    assert [event["agent_run"]["status"] for event in events] == [
+    assert entries[0].result_consumed is True
+    assert result.metadata["status"] == "completed"
+    assert result.metadata["handoff_agent_id"] == "pathfinder"
+    assert result.final_text == "Main agent finalized Pathfinder result."
+    assert result.usage is not None
+    assert len(result.usage) == 1
+    assert len(executor.calls) == 1
+    completed_results = runtime_config.metadata[COMPLETED_AGENT_RESULTS_KEY]
+    assert [handoff["outcome"] for handoff in completed_results] == ["failed"]
+    lifecycle_events = [event for event in events if "agent_run" in event]
+    assert [event["agent_run"]["status"] for event in lifecycle_events] == [
         "queued",
         "running",
         "failed",
     ]
-    assert events[-1]["agent_run"]["safe_error"] == "Pathfinder launch failed"
+    assert lifecycle_events[-1]["agent_run"]["safe_error"] == (
+        "Pathfinder launch failed"
+    )
 
 
 @pytest.mark.asyncio
@@ -848,6 +1237,7 @@ async def test_subagent_handler_settles_prior_batch_child_when_later_launch_fail
 ) -> None:
     registry = ProcessLocalAgentRunRegistry()
     launcher = _FailingSecondLaunchAfterCompletionLauncher(registry)
+    executor = _CompletingExecutor()
     second_definition = _second_agent_definition()
     definition_registry = DefinitionSubagentRegistry(
         [
@@ -865,7 +1255,7 @@ async def test_subagent_handler_settles_prior_batch_child_when_later_launch_fail
 
     handler = SubagentHandler(
         object(),
-        _CompletingExecutor(),
+        executor,
         object(),
         registry=registry,
         launcher=launcher,
@@ -891,21 +1281,32 @@ async def test_subagent_handler_settles_prior_batch_child_when_later_launch_fail
 
     result = await handler.handle(runtime_config)
 
-    assert result.metadata["status"] == "failed"
-    assert result.metadata["agent_id"] == "cartographer"
+    assert result.metadata["status"] == "completed"
+    assert result.metadata["handoff_agent_ids"] == ["pathfinder", "cartographer"]
+    assert result.final_text == "Main agent finalized Pathfinder result."
     assert result.usage is not None
-    assert len(result.usage) == 1
-    [usage] = result.usage
+    assert len(result.usage) == 2
+    usage = result.usage[0]
     assert usage.usage.total_tokens == 15
     assert usage.metadata.execution_branch == "subagent_child"
     assert usage.metadata.node_name == "subagent_runtime_model"
-    assert COMPLETED_AGENT_RESULTS_KEY not in runtime_config.metadata
+    assert len(executor.calls) == 1
+    completed_results = runtime_config.metadata[COMPLETED_AGENT_RESULTS_KEY]
+    assert [handoff["agent_id"] for handoff in completed_results] == [
+        "pathfinder",
+        "cartographer",
+    ]
+    assert [handoff["outcome"] for handoff in completed_results] == [
+        "completed",
+        "failed",
+    ]
     entries = sorted(
         await registry.list_task_runs(tenant_id=7, task_id=42),
         key=lambda entry: entry.agent_id,
     )
     assert [entry.agent_id for entry in entries] == ["cartographer", "pathfinder"]
     assert [entry.status for entry in entries] == ["failed", "completed"]
+    assert entries[0].result_consumed is True
     assert entries[1].result_consumed is True
     later_handoff = await AgentRunResultProjector(registry=registry).collect_for_context(
         tenant_id=7,
@@ -929,26 +1330,32 @@ async def test_subagent_handler_child_cancellation_returns_partial_child_usage()
         executor,
         object(),
         registry=registry,
-        launcher=_CancellingLauncher(),
+        launcher=_CancellingLauncher(registry),
         lifecycle_publisher=_publish,
     )
 
     result = await handler.handle(_runtime_config())
 
-    assert result.metadata["status"] == "cancelled"
+    assert result.metadata["status"] == "completed"
+    assert result.final_text == "Main agent finalized Pathfinder result."
     assert result.usage is not None
-    assert len(result.usage) == 1
-    [usage] = result.usage
+    assert len(result.usage) == 2
+    usage = result.usage[0]
     assert usage.usage.total_tokens == 15
     assert usage.metadata.execution_branch == "subagent_child"
     assert usage.metadata.node_name == "subagent_runtime_model"
-    assert executor.calls == []
+    assert len(executor.calls) == 1
+    entries = await registry.list_task_runs(tenant_id=7, task_id=42)
+    assert len(entries) == 1
+    assert entries[0].status == "cancelled"
+    assert entries[0].result_consumed is True
 
 
 @pytest.mark.asyncio
-async def test_subagent_handler_hitl_pause_returns_partial_child_usage() -> None:
+async def test_subagent_handler_hitl_pause_keeps_parent_open_until_child_resumes() -> None:
     registry = ProcessLocalAgentRunRegistry()
     executor = _CompletingExecutor()
+    launcher = _PausingLauncher(registry)
 
     async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
         return None
@@ -958,20 +1365,21 @@ async def test_subagent_handler_hitl_pause_returns_partial_child_usage() -> None
         executor,
         object(),
         registry=registry,
-        launcher=_PausingLauncher(),
+        launcher=launcher,
         lifecycle_publisher=_publish,
     )
 
-    result = await handler.handle(_runtime_config())
+    parent_task = asyncio.create_task(handler.handle(_runtime_config()))
+    await asyncio.wait_for(launcher.paused.wait(), timeout=1)
+    await asyncio.sleep(0)
+    assert parent_task.done() is False
 
-    assert result.metadata["status"] == "waiting_for_approval"
-    assert result.usage is not None
-    assert len(result.usage) == 1
-    [usage] = result.usage
-    assert usage.usage.total_tokens == 15
-    assert usage.metadata.execution_branch == "subagent_child"
-    assert usage.metadata.node_name == "subagent_runtime_model"
-    assert executor.calls == []
+    await launcher.complete_after_approval()
+    result = await asyncio.wait_for(parent_task, timeout=1)
+
+    assert result.metadata["status"] == "completed"
+    assert result.final_text == "Main agent finalized Pathfinder result."
+    assert len(executor.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -987,20 +1395,76 @@ async def test_subagent_handler_child_failure_returns_partial_child_usage() -> N
         executor,
         object(),
         registry=registry,
-        launcher=_FailingAfterUsageLauncher(),
+        launcher=_FailingAfterUsageLauncher(registry),
         lifecycle_publisher=_publish,
     )
 
     result = await handler.handle(_runtime_config())
 
-    assert result.metadata["status"] == "failed"
+    assert result.metadata["status"] == "completed"
+    assert result.final_text == "Main agent finalized Pathfinder result."
     assert result.usage is not None
-    assert len(result.usage) == 1
-    [usage] = result.usage
+    assert len(result.usage) == 2
+    usage = result.usage[0]
     assert usage.usage.total_tokens == 15
     assert usage.metadata.execution_branch == "subagent_child"
     assert usage.metadata.node_name == "subagent_runtime_model"
-    assert executor.calls == []
+    assert len(executor.calls) == 1
+    entries = await registry.list_task_runs(tenant_id=7, task_id=42)
+    assert len(entries) == 1
+    assert entries[0].status == "failed"
+    assert entries[0].result_consumed is True
+
+
+@pytest.mark.asyncio
+async def test_par_followup_delegation_replay_does_not_launch_duplicate() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    launcher = _ControlledLauncher(registry)
+
+    async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
+        return None
+
+    handler = SubagentHandler(
+        object(),
+        _CompletingExecutor(),
+        object(),
+        registry=registry,
+        launcher=launcher,
+        lifecycle_publisher=_publish,
+    )
+    runtime_config = _runtime_config()
+    turn = SimpleNamespace(turn_id="task-42-turn-5", turn_number=5)
+    agent_handoff = {
+        "agent_handoff": "required",
+        "subagent": "pathfinder",
+        "objective": "Check the unresolved HTTPS service evidence.",
+    }
+
+    first = await handler._dispatch_par_followup_delegation(
+        runtime_config,
+        turn=turn,
+        agent_handoff=agent_handoff,
+        decision_id="par-candidate-1",
+    )
+    second = await handler._dispatch_par_followup_delegation(
+        runtime_config,
+        turn=turn,
+        agent_handoff=agent_handoff,
+        decision_id="par-candidate-1",
+    )
+
+    assert len(launcher.calls) == 1
+    assert first.agent_run_ids == second.agent_run_ids
+    assert len(first.launched_agent_run_ids) == 1
+    assert second.launched_agent_run_ids == ()
+    assignment = launcher.calls[0]["assignment"]
+    assert assignment.agent_run_id == first.agent_run_ids[0]
+    assert assignment.objective == "Check the unresolved HTTPS service evidence."
+    assert assignment.relevant_context["delegation_source"] == "par"
+    assert assignment.relevant_context["delegation_decision_id"] == "par-candidate-1"
+    assert assignment.suggested_capabilities == ()
+
+    launcher.releases[0].set()
 
 
 def test_facade_registers_subagent_handler() -> None:
@@ -1052,12 +1516,19 @@ async def test_subagent_handler_default_launcher_runs_real_worker_to_completion(
     assert entries[0].result is not None
     assert entries[0].result.summary == "Pathfinder found HTTP."
     assert entries[0].result_consumed is True
-    assert [event["agent_run"]["status"] for event in events] == [
+    lifecycle_events = [event for event in events if "agent_run" in event]
+    parent_progress_events = [
+        event
+        for event in events
+        if event.get("metadata", {}).get("progress_kind") == "parent_handoff"
+    ]
+    assert [event["agent_run"]["status"] for event in lifecycle_events] == [
         "queued",
         "running",
         "completed",
     ]
-    assert events[-1]["agent_run"]["status"] == "completed"
+    assert lifecycle_events[-1]["agent_run"]["status"] == "completed"
+    assert any(event["type"] == "reasoning_delta" for event in parent_progress_events)
     assert result.usage is not None
     assert [record.metadata.execution_branch for record in result.usage] == [
         "subagent_child",

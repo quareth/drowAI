@@ -5,9 +5,18 @@ from __future__ import annotations
 from dataclasses import replace
 
 from backend.services.agent_runs.ownership_policy import (
+    SubagentRoutingDecision,
+    normalize_agent_handoff_entries,
     resolve_subagent_handoff,
 )
 from agent.subagents.registry import SubagentRegistry, get_subagent_registry
+from backend.services.langgraph_chat.contracts import (
+    AgentMode,
+    ChatInputs,
+    ExecutionMode,
+    LangGraphRuntimeConfig,
+)
+from backend.services.langgraph_chat.handlers.subagent_handler import _build_assignment
 
 
 def _metadata(
@@ -38,6 +47,97 @@ def _metadata(
     }
 
 
+def _runtime_config_for_assignment(
+    *,
+    subagent_routing: dict[str, object],
+    agent_mode: AgentMode = AgentMode.FULL_ACCESS,
+    plan_mode: bool = False,
+    reserved_message_id: int | None = None,
+) -> LangGraphRuntimeConfig:
+    chat_inputs = ChatInputs(
+        task_id=42,
+        user_id=3,
+        message="Fallback message that must not replace the handoff objective.",
+        conversation_id="conv-42",
+        history=[],
+        requested_mode=ExecutionMode.SIMPLE_TOOL,
+        provider="openai",
+        model="gpt-5.2-mini",
+        reasoning_effort="medium",
+        agent_mode=agent_mode,
+        plan_mode=plan_mode,
+    )
+    return LangGraphRuntimeConfig(
+        chat_inputs=chat_inputs,
+        execution_mode=ExecutionMode.SIMPLE_TOOL,
+        metadata={
+            "tenant_id": 7,
+            "graph_thread_id": "00000000000040008000000000000042",
+            "runtime_placement_mode": "runner",
+            "workspace_id": "task-42",
+            "actor_type": "agent",
+            "actor_id": "langgraph",
+            "runner_id": "runner-1",
+            "execution_site_id": "site-1",
+            "turn_sequence": 5,
+            "plan_review_required": plan_mode,
+            "reserved_message_id": reserved_message_id,
+            "intent_classifier_label": "direct_executor",
+            "intent_hints": {
+                "classifier_label": "direct_executor",
+                "targets": ["10.0.0.10"],
+            },
+            "subagent_routing": subagent_routing,
+            "feature_flags": {"simple_tool_enabled": True},
+        },
+    )
+
+
+def _routing_metadata(decision: SubagentRoutingDecision) -> dict[str, object]:
+    return {
+        "should_delegate": decision.should_delegate,
+        "reason": decision.reason,
+        "agent_id": decision.agent_id,
+        "agent_kind": decision.agent_kind,
+        "dispatch_branch": decision.dispatch_branch,
+        "capabilities": list(decision.capabilities),
+        "targets": list(decision.targets),
+        "objective": decision.objective,
+        "handoffs": [
+            {
+                "agent_id": handoff.agent_id,
+                "agent_kind": handoff.agent_kind,
+                "dispatch_branch": handoff.dispatch_branch,
+                "reason": decision.reason,
+                "capabilities": list(handoff.capabilities),
+                "targets": list(handoff.targets),
+                "objective": handoff.objective,
+            }
+            for handoff in decision.handoffs
+        ],
+    }
+
+
+def test_shared_normalizer_accepts_single_three_field_mapping() -> None:
+    entries = normalize_agent_handoff_entries(
+        {
+            "agent_handoff": " Required ",
+            "subagent": " PathFinder ",
+            "objective": "  Follow up on unresolved HTTP evidence.  ",
+            "ignored": "not part of the contract",
+        }
+    )
+
+    assert entries == (
+        {
+            "agent_handoff": "required",
+            "subagent": "pathfinder",
+            "objective": "Follow up on unresolved HTTP evidence.",
+        },
+    )
+    assert set(entries[0]) == {"agent_handoff", "subagent", "objective"}
+
+
 def test_policy_accepts_direct_executor_recon_capabilities_with_targets() -> None:
     decision = resolve_subagent_handoff(
         _metadata(raw_capabilities=["host discovery", "port scanning", "service enum"])
@@ -53,6 +153,91 @@ def test_policy_accepts_direct_executor_recon_capabilities_with_targets() -> Non
     )
     assert decision.targets == ("10.0.0.10",)
     assert decision.objective == "Map exposed services on the approved target."
+
+
+def test_assignment_construction_preserves_classifier_authored_objective() -> None:
+    authored_objective = (
+        "Enumerate only approved services and report unresolved hosts explicitly."
+    )
+    decision = resolve_subagent_handoff(
+        _metadata(
+            raw_capabilities=["network_scan"],
+            agent_handoffs=[
+                {
+                    "agent_handoff": "required",
+                    "subagent": "pathfinder",
+                    "objective": f"  {authored_objective}  ",
+                }
+            ],
+        )
+    )
+    assert decision.should_delegate is True
+
+    assignment = _build_assignment(
+        _runtime_config_for_assignment(
+            subagent_routing=_routing_metadata(decision)
+        ),
+        parent_turn_id="task-42-turn-5",
+    )
+
+    assert assignment.objective == authored_objective
+    assert (
+        assignment.objective
+        != "Fallback message that must not replace the handoff objective."
+    )
+    assert assignment.targets == ("10.0.0.10",)
+    assert assignment.suggested_capabilities == ("port_scanning",)
+    assert assignment.relevant_context["ownership_reason"] == "pathfinder_owned"
+
+
+def test_assignment_construction_preserves_parent_approval_policy() -> None:
+    decision = resolve_subagent_handoff(
+        _metadata(raw_capabilities=["network_scan"])
+    )
+    assert decision.should_delegate is True
+
+    assignment = _build_assignment(
+        _runtime_config_for_assignment(
+            subagent_routing=_routing_metadata(decision),
+            agent_mode=AgentMode.AGENT,
+            plan_mode=True,
+            reserved_message_id=815,
+        ),
+        parent_turn_id="task-42-turn-5",
+    )
+
+    assert assignment.relevant_context["agent_mode"] == "agent"
+    assert assignment.relevant_context["reserved_message_id"] == 815
+
+
+def test_followup_handoff_uses_shared_policy_and_assignment_builder() -> None:
+    authored_objective = "Check only the unresolved HTTPS service evidence."
+    decision = resolve_subagent_handoff(
+        _metadata(
+            raw_capabilities=["service_discovery"],
+            classifier_label="normal_chat",
+        ),
+        handoff_entries={
+            "agent_handoff": "required",
+            "subagent": "pathfinder",
+            "objective": authored_objective,
+        },
+        require_direct_executor=False,
+    )
+    assert decision.should_delegate is True
+
+    assignment = _build_assignment(
+        _runtime_config_for_assignment(
+            subagent_routing=_routing_metadata(decision)
+        ),
+        parent_turn_id="task-42-turn-5",
+    )
+
+    assert assignment.agent_id == "pathfinder"
+    assert assignment.objective == authored_objective
+    assert assignment.targets == ("10.0.0.10",)
+    assert assignment.suggested_capabilities == ("service_enumeration",)
+    assert assignment.relevant_context["ownership_reason"] == "pathfinder_owned"
 
 
 def test_generic_policy_resolves_name_and_dispatch_from_injected_registry() -> None:
@@ -251,6 +436,17 @@ def test_policy_rejects_unsupported_required_handoff() -> None:
 
     assert unsupported.should_delegate is False
     assert unsupported.reason == "unsupported_agent_handoff"
+
+
+def test_policy_rejects_disabled_required_handoff() -> None:
+    disabled = replace(get_subagent_registry().require("pathfinder"), enabled=False)
+    decision = resolve_subagent_handoff(
+        _metadata(raw_capabilities=["port_scan"]),
+        registry=SubagentRegistry((disabled,)),
+    )
+
+    assert decision.should_delegate is False
+    assert decision.reason == "unsupported_agent_handoff"
 
 
 def test_policy_rejects_non_direct_executor_and_active_local_run() -> None:

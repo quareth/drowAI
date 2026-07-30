@@ -66,6 +66,9 @@ and code aligned):
 - ``completed_agent_results`` (all roles, optional): Bounded safe
   subagent result summaries projected by the backend process-local
   registry for the current main turn.
+- ``active_agent_runs`` (planner / articulation, optional): Bounded safe
+  active subagent lifecycle summaries projected by the backend
+  process-local registry for the current main turn.
 
 Serialization
 -------------
@@ -182,6 +185,35 @@ def _completed_agent_results_for_prompt(
     if not isinstance(results, list) or not results:
         return None
     return [dict(item) for item in results if isinstance(item, dict)]
+
+
+def _active_agent_runs_for_prompt(
+    bundle: ConversationContextBundle,
+) -> list[dict[str, Any]] | None:
+    """Return bounded active subagent runs only when present on the bundle."""
+    runs = bundle.get("active_agent_runs")
+    if not isinstance(runs, list) or not runs:
+        return None
+    allowed_keys = {
+        "agent_run_id",
+        "assignment_id",
+        "agent_id",
+        "agent_kind",
+        "agent_display_name",
+        "objective",
+        "status",
+        "lifecycle_version",
+        "created_at",
+        "started_at",
+    }
+    projected: list[dict[str, Any]] = []
+    for item in runs:
+        if not isinstance(item, dict):
+            continue
+        projected.append(
+            {key: value for key, value in item.items() if key in allowed_keys}
+        )
+    return projected or None
 
 
 # -- Public projection helpers. -----------------------------------------
@@ -314,6 +346,9 @@ def project_for_planner(
     completed_agent_results = _completed_agent_results_for_prompt(bundle)
     if completed_agent_results:
         projection["completed_agent_results"] = completed_agent_results
+    active_agent_runs = _active_agent_runs_for_prompt(bundle)
+    if active_agent_runs:
+        projection["active_agent_runs"] = active_agent_runs
     if working_memory_summary:
         projection["working_memory_summary"] = working_memory_summary
     return projection
@@ -348,6 +383,9 @@ def project_for_articulation(
     completed_agent_results = _completed_agent_results_for_prompt(bundle)
     if completed_agent_results:
         projection["completed_agent_results"] = completed_agent_results
+    active_agent_runs = _active_agent_runs_for_prompt(bundle)
+    if active_agent_runs:
+        projection["active_agent_runs"] = active_agent_runs
     return projection
 
 

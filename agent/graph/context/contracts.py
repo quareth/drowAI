@@ -68,6 +68,12 @@ Section ownership
     the backend registry. These are not durable memory and carry no raw
     output or reasoning traces.
 
+- ``ActiveAgentRun``
+    Bounded, safe same-process subagent lifecycle summaries projected by
+    the backend registry. These carry only task-local assignment identity,
+    objective, status, and timing metadata; they never include task handles,
+    child transcripts, raw tool output, or reasoning traces.
+
 - ``ConversationContextBundle``
     The single hot-path envelope. Combines identity fields
     (``conversation_id``, ``turn_id``, ``turn_sequence``) with the
@@ -249,6 +255,21 @@ class CompletedAgentResult(TypedDict, total=False):
     final_checkpoint_id: str | None
 
 
+class ActiveAgentRun(TypedDict, total=False):
+    """Bounded same-process active subagent run summary for prompt context."""
+
+    agent_run_id: str
+    assignment_id: str
+    agent_id: str
+    agent_kind: str
+    agent_display_name: str
+    objective: str
+    status: str
+    lifecycle_version: int
+    created_at: str | None
+    started_at: str | None
+
+
 class ConversationContextBundle(TypedDict):
     """Canonical hot-path memory envelope assembled once per turn.
 
@@ -297,6 +318,11 @@ class ConversationContextBundle(TypedDict):
         Bounded completed subagent result summaries accepted from the
         live backend process-local registry for this turn. Best-effort
         only; absence does not imply no subagent work happened.
+    active_agent_runs:
+        Bounded active subagent lifecycle summaries accepted from the
+        live backend process-local registry for this turn. Best-effort,
+        same-process, task-local context used for parent wait/progress
+        decisions; absence does not imply no active work exists.
     retrieved_prior_context:
         **Reserved; intentionally empty in this migration.** Future
         long-term retrieval work will populate this list with
@@ -316,10 +342,12 @@ class ConversationContextBundle(TypedDict):
     prior_turn_references: PriorTurnReferences
     current_user_turn: dict[str, Any] | None
     completed_agent_results: list[CompletedAgentResult]
+    active_agent_runs: list[ActiveAgentRun]
     retrieved_prior_context: list[dict[str, Any]]
 
 
 __all__ = [
+    "ActiveAgentRun",
     "CLASSIFIER_TRANSCRIPT_WINDOW_KEY",
     "CompletedAgentResult",
     "ConversationContextBundle",

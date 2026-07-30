@@ -242,6 +242,7 @@ def build_conversation_context_bundle(
         prior_turn_references=_coerce_prior_turn_references(prior_turn_references),
         current_user_turn=_coerce_current_user_turn(current_message),
         completed_agent_results=[],
+        active_agent_runs=[],
         retrieved_prior_context=[],
     )
 
