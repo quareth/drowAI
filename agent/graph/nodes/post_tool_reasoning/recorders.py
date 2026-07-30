@@ -71,6 +71,12 @@ def record_decision(
         interactive,
         next_action=action,
         reasoning=reasoning,
+        agent_handoff=getattr(output, "agent_handoff", None),
+        irrelevant_active_run_ids=getattr(
+            output,
+            "par_irrelevant_active_agent_run_ids",
+            None,
+        ),
     )
     
     # CRITICAL DEBUG: Log decision_history update
@@ -111,6 +117,8 @@ def _write_router_candidate_decision(
     *,
     next_action: str,
     reasoning: str,
+    agent_handoff: Any = None,
+    irrelevant_active_run_ids: Any = None,
 ) -> None:
     """Write router candidate_decision contract for PTR → router handoff."""
     metadata = interactive.facts.ensure_metadata()
@@ -139,7 +147,34 @@ def _write_router_candidate_decision(
         "turn_sequence": turn_sequence,
         "phase_sequence": phase_sequence,
     }
+    if normalized_action == "delegate_subagent" and agent_handoff is not None:
+        if hasattr(agent_handoff, "model_dump"):
+            candidate_payload["agent_handoff"] = agent_handoff.model_dump()
+        elif isinstance(agent_handoff, Mapping):
+            candidate_payload["agent_handoff"] = dict(agent_handoff)
+    normalized_irrelevant_ids = _normalize_irrelevant_active_run_ids(
+        irrelevant_active_run_ids
+    )
+    if normalized_irrelevant_ids:
+        candidate_payload["par_irrelevant_active_agent_run_ids"] = (
+            normalized_irrelevant_ids
+        )
     interactive.facts.set_candidate_decision(candidate_payload)
+
+
+def _normalize_irrelevant_active_run_ids(value: Any) -> list[str]:
+    """Return non-empty PAR-declared active run IDs without duplicates."""
+    if not isinstance(value, list | tuple | set | frozenset):
+        return []
+
+    normalized: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        run_id = item.strip()
+        if run_id and run_id not in normalized:
+            normalized.append(run_id)
+    return normalized
 
 
 def _resolve_candidate_phase_sequence(metadata: Mapping[str, Any]) -> Optional[int]:
@@ -178,12 +213,15 @@ def _resolve_candidate_phase_sequence(metadata: Mapping[str, Any]) -> Optional[i
 def record_observation(
     interactive: "InteractiveState",
     output: "PostToolReasoningOutput",
+    *,
+    write_synthesized_output: bool = True,
 ) -> None:
     """Record the observation to state for context continuity.
 
     Updates:
     - trace.observations: Appends the full observation text
-    - metadata["synthesized_output"]["observation_text"]: For downstream nodes
+    - metadata["synthesized_output"]["observation_text"]: For downstream
+      direct-tool nodes when ``write_synthesized_output`` is true
     - metadata["working_memory"]["current_turn_phases"]: Appends one
       structured PTR phase record via
       :func:`agent.graph.utils.iteration_memory.append`. Runtime identity
@@ -206,11 +244,12 @@ def record_observation(
     # Update synthesized_output with observation_text (for observation_adapter)
     metadata = interactive.facts.ensure_metadata()
 
-    synthesized = metadata.get("synthesized_output")
-    if not isinstance(synthesized, dict):
-        synthesized = {}
-    synthesized["observation_text"] = observation
-    metadata["synthesized_output"] = synthesized
+    if write_synthesized_output:
+        synthesized = metadata.get("synthesized_output")
+        if not isinstance(synthesized, dict):
+            synthesized = {}
+        synthesized["observation_text"] = observation
+        metadata["synthesized_output"] = synthesized
 
     # Dual-write: append one structured PTR phase record to the shared
     # current-turn phase ledger so later PTR iterations can see this step
@@ -530,6 +569,3 @@ __all__ = [
     "record_observation",
     "format_tool_intent_for_hint",
 ]
-
-
-

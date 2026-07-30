@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Dict, List, Optional, Tupl
 
 if TYPE_CHECKING:
     from agent.providers.llm.core.base import LLMClient
+    from agent.providers.llm.contracts.tool_contracts import FunctionToolSpec
     from langgraph.types import StreamWriter
     from ...state import InteractiveState
 
@@ -25,8 +26,14 @@ from core.llm import (
     wait_for_with_timeout,
 )
 from ...node_utils import _usage_to_dict
-from ..models import PostToolReasoningError, PostToolReasoningOutput
+from agent.providers.llm.contracts.tool_contracts import ToolChoice
+from ..models import (
+    PostToolReasoningDecisionOutput,
+    PostToolReasoningError,
+    PostToolReasoningOutput,
+)
 from ..parser import parse_reasoning_response
+from ..route_tools import parse_post_tool_commit_call
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +51,127 @@ class StreamingAdapter:
     def __init__(self, usage_source: str, log_prefix: str) -> None:
         self._usage_source = usage_source
         self._log_prefix = log_prefix
+
+    async def stream_observation_with_route(
+        self,
+        writer: "StreamWriter",
+        llm_client: "LLMClient",
+        system_prompt: str,
+        user_prompt: str,
+        route_tools: list["FunctionToolSpec"],
+        conversation_id: str,
+        turn_id: str,
+        sequence: Optional[int],
+        sub_turn_index: Optional[int] = None,
+        reasoning_effort: Optional[str] = None,
+        task_id: Optional[Any] = None,
+        call_settings: Any = None,
+        *,
+        suppress_observation_start: bool = False,
+    ) -> tuple[
+        str,
+        PostToolReasoningDecisionOutput,
+        bool,
+        Optional[Dict[str, Any]],
+    ]:
+        """Stream visible observation text and parse one completed route tool."""
+        all_chunks: List[str] = []
+        streamed_observation = False
+        emitter = EventEmitterFactory.create_from_identity(
+            writer,
+            conversation_id,
+            turn_id,
+            turn_sequence=sequence,
+            sub_turn_index=sub_turn_index,
+        )
+        if not suppress_observation_start:
+            emitter.emit_observation_start(STREAMING_STEP_NAME)
+
+        try:
+            require_usage_aware_streaming(
+                llm_client,
+                call_settings,
+                operation="post_tool_route_stream",
+                task_id=task_id,
+            )
+            stream_response = await wait_for_with_timeout(
+                llm_client.stream_chat_with_tools_with_usage(
+                    system_prompt,
+                    user_prompt,
+                    route_tools,
+                    tool_choice=ToolChoice(mode="required"),
+                    temperature=0.3,
+                    max_tokens=MAX_REASONING_TOKENS,
+                    reasoning_effort=reasoning_effort,
+                    parallel_tool_calls=False,
+                ),
+                timeout_sec=LLM_TIMEOUT_POST_TOOL_ARTICULATOR_SEC,
+                component="POST_TOOL_OBSERVATION",
+                operation="route_stream_setup",
+                logger=logger,
+                task_id=task_id,
+                outcome="post_tool_route_timeout",
+            )
+            async for chunk in _iter_stream_chunks_with_setup_timeout(
+                stream_response.content_iterator,
+                setup_timeout_sec=LLM_TIMEOUT_POST_TOOL_ARTICULATOR_SEC,
+                setup_component="POST_TOOL_OBSERVATION",
+                setup_operation="route_stream_first_chunk",
+                setup_outcome="post_tool_route_timeout",
+                timeout_sec=LLM_STREAM_IDLE_TIMEOUT_POST_TOOL_OBSERVATION_SEC,
+                component="POST_TOOL_OBSERVATION",
+                operation="route_stream",
+                logger=logger,
+                task_id=task_id,
+                outcome="stream_idle_timeout",
+            ):
+                if not chunk:
+                    continue
+                all_chunks.append(chunk)
+                emitter.emit_observation_delta(chunk)
+                streamed_observation = True
+
+            observation = "".join(all_chunks).strip()
+            if not observation:
+                raise PostToolReasoningError(
+                    "LLM route turn returned no visible observation text"
+                )
+            decision = parse_post_tool_commit_call(
+                stream_response.get_final_tool_calls()
+            )
+            usage = require_final_stream_usage(
+                stream_response.get_final_usage(),
+                call_settings,
+                operation="post_tool_route_stream",
+                task_id=task_id,
+            )
+            captured_usage = _usage_to_dict(
+                usage,
+                self._usage_source,
+                request_mode="streaming",
+            )
+        except Exception as exc:
+            error_message = _format_stream_error(exc)
+            logger.error(
+                "[%s] Route streaming failed: %s",
+                self._log_prefix,
+                error_message,
+                exc_info=True,
+            )
+            emitter.emit_stream_error(
+                error=f"Post-action reasoning failed: {error_message}",
+                recoverable=False,
+            )
+            emitter.emit_observation_section_end(STREAMING_STEP_NAME)
+            if isinstance(exc, PostToolReasoningError):
+                raise
+            raise PostToolReasoningError(
+                f"LLM route streaming failed: {error_message}"
+            ) from exc
+
+        emitter.emit_observation_snapshot(observation, step=STREAMING_STEP_NAME)
+        emitter.emit_observation_section_end(STREAMING_STEP_NAME)
+        return observation, decision, streamed_observation, captured_usage
 
     async def stream_observation_text(
         self,

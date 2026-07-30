@@ -22,9 +22,15 @@ External code should import from this package:
 
 # Re-export models
 from .models import (
+    AgentHandoffEntry,
+    DIRECT_TOOL_OUTCOME_SOURCE,
+    POST_ACTION_OUTCOME_SOURCE_METADATA_KEY,
+    PostActionOutcomeSource,
     PostToolReasoningError,
     PostToolReasoningDecisionOutput,
     PostToolReasoningOutput,
+    SUBAGENT_HANDOFF_BATCH_OUTCOME_SOURCE,
+    VALID_POST_ACTION_OUTCOME_SOURCES,
     map_decision_output_to_post_tool_reasoning_output,
     TodoProgress,
     ToolIntent,
@@ -98,15 +104,21 @@ __all__ = [
     # Models
     "PostToolReasoningOutput",
     "PostToolReasoningDecisionOutput",
+    "AgentHandoffEntry",
+    "PostActionOutcomeSource",
     "TodoProgress",
     "ToolIntent",
     # Constants
+    "DIRECT_TOOL_OUTCOME_SOURCE",
     "MAX_HISTORY_CONTENT_CHARS",
     "MAX_HISTORY_ENTRIES",
     "MAX_OBSERVATION_TOKENS",
     "MAX_REASONING_TOKENS",
     "MAX_TODOS_IN_PROMPT",
+    "POST_ACTION_OUTCOME_SOURCE_METADATA_KEY",
     "STREAMING_STEP_NAME",
+    "SUBAGENT_HANDOFF_BATCH_OUTCOME_SOURCE",
+    "VALID_POST_ACTION_OUTCOME_SOURCES",
     "VALID_POST_TOOL_ACTIONS",
     "VALID_TODO_STATUSES",
     # Public functions

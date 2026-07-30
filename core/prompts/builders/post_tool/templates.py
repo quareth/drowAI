@@ -17,6 +17,9 @@ SYSTEM_PROMPT = _TEMPLATE_LOADER.load_latest_version("post_tool", "system.txt")
 ARTICULATION_SYSTEM_PROMPT = _TEMPLATE_LOADER.load_latest_version(
     "post_tool", "articulation_system.txt"
 )
+ROUTE_SYSTEM_PROMPT = _TEMPLATE_LOADER.load_latest_version(
+    "post_tool", "route_system.txt"
+)
 TASK_INSTRUCTION_PROMPT = _TEMPLATE_LOADER.load_latest_version(
     "post_tool", "task_instruction.txt"
 )
@@ -32,6 +35,7 @@ __all__ = [
     "ARTICULATION_SYSTEM_PROMPT",
     "CVE_LOOKUP_GUIDANCE_TEXT",
     "DIRECT_EXECUTOR_POLICY_TEXT",
+    "ROUTE_SYSTEM_PROMPT",
     "SYSTEM_PROMPT",
     "TASK_INSTRUCTION_PROMPT",
 ]

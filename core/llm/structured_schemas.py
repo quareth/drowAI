@@ -20,6 +20,52 @@ def _spec(name: str, schema: Dict[str, Any]) -> StructuredOutputSpec:
     return StructuredOutputSpec(name=name, schema=schema, strict=True)
 
 
+def _normalized_subagent_names(subagent_names: Sequence[str]) -> tuple[str, ...]:
+    """Return stable registry-scoped subagent names for schema enums."""
+    return tuple(
+        dict.fromkeys(
+            name.strip().lower()
+            for name in subagent_names
+            if isinstance(name, str) and name.strip()
+        )
+    )
+
+
+def _agent_handoff_entry_schema(
+    subagent_names: Sequence[str] | None = None,
+) -> Dict[str, Any]:
+    """Build the shared LLM-visible delegation-entry schema."""
+    subagent_schema: Dict[str, Any] = {
+        "type": "string",
+        "minLength": 1,
+    }
+    if subagent_names is not None:
+        normalized_names = _normalized_subagent_names(subagent_names)
+        if normalized_names:
+            subagent_schema["enum"] = list(normalized_names)
+
+    return {
+        "type": "object",
+        "properties": {
+            "agent_handoff": {
+                "type": "string",
+                "enum": ["required"],
+            },
+            "subagent": subagent_schema,
+            "objective": {
+                "type": "string",
+                "minLength": 1,
+            },
+        },
+        "required": [
+            "agent_handoff",
+            "subagent",
+            "objective",
+        ],
+        "additionalProperties": False,
+    }
+
+
 def _candidate_evidence_ref_schema(*, allow_source_artifact_ref: bool) -> Dict[str, Any]:
     """Build strict evidence reference schema for candidate observation rows."""
     properties: Dict[str, Any] = {
@@ -216,29 +262,7 @@ INTENT_CLASSIFIER_STRUCTURED_OUTPUT = _spec(
             "agent_handoffs": {
                 "type": "array",
                 "maxItems": 8,
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "agent_handoff": {
-                            "type": "string",
-                            "enum": ["required"],
-                        },
-                        "subagent": {
-                            "type": "string",
-                            "minLength": 1,
-                        },
-                        "objective": {
-                            "type": "string",
-                            "minLength": 1,
-                        },
-                    },
-                    "required": [
-                        "agent_handoff",
-                        "subagent",
-                        "objective",
-                    ],
-                    "additionalProperties": False,
-                },
+                "items": _agent_handoff_entry_schema(),
             },
             "requested_output_format": {
                 "type": ["string", "null"],
@@ -392,19 +416,11 @@ def build_intent_classifier_structured_output(
     subagent_names: Sequence[str],
 ) -> StructuredOutputSpec:
     """Build the classifier schema with registry-scoped subagent names."""
-    normalized_names = tuple(
-        dict.fromkeys(
-            name.strip().lower()
-            for name in subagent_names
-            if isinstance(name, str) and name.strip()
-        )
-    )
+    normalized_names = _normalized_subagent_names(subagent_names)
     schema = deepcopy(INTENT_CLASSIFIER_STRUCTURED_OUTPUT.schema)
     handoff_schema = schema["properties"]["agent_handoffs"]
-    subagent_schema = handoff_schema["items"]["properties"]["subagent"]
-    if normalized_names:
-        subagent_schema["enum"] = list(normalized_names)
-    else:
+    handoff_schema["items"] = _agent_handoff_entry_schema(normalized_names)
+    if not normalized_names:
         handoff_schema["maxItems"] = 0
     return _spec("intent_classifier", schema)
 
@@ -529,7 +545,14 @@ POST_TOOL_DECISION_STRUCTURED_OUTPUT = _spec(
         "properties": {
             "next_action": {
                 "type": "string",
-                "enum": ["call_tool", "think_more", "reflect", "finalize"],
+                "enum": [
+                    "call_tool",
+                    "think_more",
+                    "reflect",
+                    "finalize",
+                    "delegate_subagent",
+                    "wait_for_subagents",
+                ],
             },
             "action_reasoning": {
                 "type": "string",
@@ -609,6 +632,14 @@ POST_TOOL_DECISION_STRUCTURED_OUTPUT = _spec(
                     allow_source_artifact_ref=True
                 ),
             },
+            "agent_handoff": {
+                **_agent_handoff_entry_schema(),
+                "type": ["object", "null"],
+            },
+            "par_irrelevant_active_agent_run_ids": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
         },
         "required": [
             "next_action",
@@ -621,10 +652,26 @@ POST_TOOL_DECISION_STRUCTURED_OUTPUT = _spec(
             "failure_category",
             "retry_suggested",
             "candidate_observations",
+            "agent_handoff",
+            "par_irrelevant_active_agent_run_ids",
         ],
         "additionalProperties": False,
     },
 )
+
+
+def build_post_tool_decision_structured_output(
+    subagent_names: Sequence[str],
+) -> StructuredOutputSpec:
+    """Build the PAR decision schema with the shared delegation-entry shape."""
+    normalized_names = _normalized_subagent_names(subagent_names)
+    schema = deepcopy(POST_TOOL_DECISION_STRUCTURED_OUTPUT.schema)
+    handoff_schema = _agent_handoff_entry_schema(normalized_names)
+    schema["properties"]["agent_handoff"] = {
+        **deepcopy(handoff_schema),
+        "type": ["object", "null"],
+    }
+    return _spec("post_tool_decision", schema)
 
 
 REFLECT_STRUCTURED_OUTPUT = _spec(
@@ -1008,6 +1055,7 @@ __all__ = [
     "GENERIC_CANDIDATE_EXTRACTOR_STRUCTURED_OUTPUT",
     "INTENT_CLASSIFIER_STRUCTURED_OUTPUT",
     "build_intent_classifier_structured_output",
+    "build_post_tool_decision_structured_output",
     "MEMORY_EXTRACTION_STRUCTURED_OUTPUT",
     "MEMORY_GATE_STRUCTURED_OUTPUT",
     "PLANNER_CONTRACT_STRUCTURED_OUTPUT",

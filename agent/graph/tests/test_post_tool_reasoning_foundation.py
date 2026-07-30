@@ -111,6 +111,12 @@ class TestPostToolReasoningOutput:
                 "next_action": action,
                 "action_reasoning": "This is the reasoning.",
             }
+            if action == "delegate_subagent":
+                data["agent_handoff"] = {
+                    "agent_handoff": "required",
+                    "subagent": "pathfinder",
+                    "objective": "Enumerate services on the approved target.",
+                }
             output = PostToolReasoningOutput.model_validate(data)
             assert output.next_action == action
     
@@ -546,7 +552,14 @@ class TestConstants:
     
     def test_valid_actions_contains_expected_values(self):
         """VALID_POST_TOOL_ACTIONS should contain all expected actions."""
-        expected = {"call_tool", "think_more", "reflect", "finalize"}
+        expected = {
+            "call_tool",
+            "think_more",
+            "reflect",
+            "finalize",
+            "delegate_subagent",
+            "wait_for_subagents",
+        }
         assert VALID_POST_TOOL_ACTIONS == expected
     
     def test_max_history_entries_is_positive(self):

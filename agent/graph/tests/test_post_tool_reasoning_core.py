@@ -14,7 +14,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from agent.providers.llm.core.base import LLMResponse
+from agent.providers.llm.core.base import LLMResponse, ToolCall, ToolCallResult
 from agent.graph.nodes.post_tool_reasoning import (
     PostToolReasoningError,
     PostToolReasoningOutput,
@@ -114,12 +114,13 @@ def mock_llm_client():
     """Create a mock LLMClient that returns decision-only JSON."""
     client = AsyncMock()
     class Response:
-        """Minimal chat_with_usage payload shape."""
+        """Minimal one-turn visible-text plus route-call payload."""
         
-        def __init__(self, content: str):
+        def __init__(self, content: str, tool_calls: list[ToolCall] | None = None):
             self.content = content
             self.structured_output = None
             self.usage = None
+            self.tool_calls = tool_calls or []
 
     # Return decision-only JSON
     client.chat = AsyncMock(return_value=(
@@ -132,6 +133,27 @@ def mock_llm_client():
         return Response(body)
 
     client.chat_with_usage = AsyncMock(side_effect=chat_with_usage)
+
+    async def chat_with_tools_with_usage(
+        *args: Any,
+        **kwargs: Any,
+    ) -> Response:
+        raw_decision = await client.chat()
+        decision = json.loads(raw_decision)
+        return Response(
+            "I reviewed the current evidence and selected the next step.",
+            [
+                ToolCall(
+                    id="commit-1",
+                    name="ptr_commit",
+                    arguments=json.dumps(decision),
+                )
+            ],
+        )
+
+    client.chat_with_tools_with_usage = AsyncMock(
+        side_effect=chat_with_tools_with_usage
+    )
 
     return client
 
@@ -297,6 +319,12 @@ class TestParseReasoningResponse:
                     "description": "Collect additional evidence",
                     "target": "target-1",
                     "focus": "validation",
+                }
+            if action == "delegate_subagent":
+                decision_payload["agent_handoff"] = {
+                    "agent_handoff": "required",
+                    "subagent": "pathfinder",
+                    "objective": "Enumerate services on the approved target.",
                 }
             response = json.dumps(decision_payload)
             output = _parse_reasoning_response(response)
@@ -802,6 +830,88 @@ class TestPostToolReasoning:
         sample_interactive_state.facts.selected_tool = "information_gathering.network_discovery.nmap"
 
         class _StructuredDecisionClient:
+            async def chat_with_tools_with_usage(
+                self,
+                system_prompt: str,
+                user_prompt: str,
+                tools: list[Any],
+                **kwargs: Any,
+            ) -> ToolCallResult:
+                _ = (system_prompt, user_prompt, tools, kwargs)
+                arguments = {
+                    "next_action": "call_tool",
+                    "action_reasoning": "Need a targeted follow-up check.",
+                    "tool_intent": {
+                        "description": "Run a focused version validation step",
+                        "target": "10.0.0.8:5432",
+                        "focus": "postgresql version verification",
+                    },
+                    "user_goal_achieved": False,
+                    "todo_progress": [],
+                    "effective_next_goal": None,
+                    "failure_detected": False,
+                    "failure_category": None,
+                    "retry_suggested": False,
+                    "candidate_observations": [
+                        {
+                            "observation_type": "finding.vulnerability_detected",
+                            "subject_type": "finding.instance",
+                            "subject_key_hint": "cve-2024-0001:service.socket:10.0.0.8/tcp/5432",
+                            "assertion_level": "candidate",
+                            "confidence": 0.85,
+                            "attributes": [{"key": "version", "value": "11.5"}],
+                            "rationale": "Version appears in vulnerable range.",
+                            "evidence_refs": [
+                                {
+                                    "source_artifact_id": "artifact-1",
+                                    "excerpt": "PostgreSQL 11.5",
+                                }
+                            ],
+                            "vulnerability": {
+                                "id": "CVE-2024-0001",
+                                "title": "PostgreSQL version likely vulnerable",
+                                "severity": "high",
+                            },
+                            "vulnerability_confidence": 0.9,
+                        }
+                    ],
+                    "agent_handoff": None,
+                    "par_irrelevant_active_agent_run_ids": [],
+                }
+                return ToolCallResult(
+                    content=(
+                        "I observed version evidence suggesting a likely vulnerable "
+                        "PostgreSQL build. I will run a focused follow-up command "
+                        "to validate impact."
+                    ),
+                    tool_calls=[
+                        ToolCall(
+                            id="commit-1",
+                            name="ptr_commit",
+                            arguments=json.dumps(arguments),
+                        )
+                    ],
+                    raw=None,
+                    usage=UsageData(
+                        prompt_tokens=12,
+                        completion_tokens=6,
+                        total_tokens=18,
+                        model="claude-sonnet-4-6",
+                        provider="anthropic",
+                        api_surface="messages",
+                        provider_usage_components=ProviderUsageComponents(
+                            provider="anthropic",
+                            api_surface="messages",
+                            components={
+                                "input_tokens": 10,
+                                "cache_creation_input_tokens": 2,
+                                "cache_read_input_tokens": 0,
+                                "output_tokens": 6,
+                            },
+                        ),
+                    ),
+                )
+
             async def chat_with_usage(self, system_prompt: str, user_prompt: str, **kwargs: Any):
                 if kwargs.get("structured_output") is not None:
                     return LLMResponse(
@@ -906,8 +1016,8 @@ class TestPostToolReasoning:
         assert usage_summary["input_tokens"] == 12
         assert usage_summary["output_tokens"] == 6
         assert usage_summary["total_tokens"] == 18
-        assert usage_summary["estimated_cost_usd"] == 0.0
-        assert usage_summary["pricing_status"] == "unavailable"
+        assert usage_summary["estimated_cost_usd"] == 0.0001275
+        assert usage_summary["pricing_status"] == "available"
         assert usage_summary["provider"] == "anthropic"
         assert usage_summary["model"] == "claude-sonnet-4-6"
         assert usage_summary["api_surface"] == "messages"

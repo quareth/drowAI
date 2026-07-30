@@ -358,6 +358,171 @@ def test_post_tool_builder_renders_shared_last_tool_special_sections() -> None:
     assert prompt.index(lossiness_heading) < prompt.index(output_heading)
 
 
+def test_post_tool_latest_version_is_par_aware_v4() -> None:
+    from core.prompts.registry import PromptRegistry
+
+    registry = PromptRegistry()
+
+    assert registry.get_latest_version("post_tool") == "v4"
+
+
+def test_post_tool_builder_renders_bounded_handoff_context_without_transcript() -> None:
+    from agent.graph.state import FactsState, InteractiveState, TraceState
+    from core.prompts.builders.post_tool import PostToolReasoningPromptBuilder
+
+    facts = FactsState(
+        task_id=123,
+        message="Continue after delegated service enumeration.",
+        capability="deep_reasoning",
+        current_goal="Map exposed services and decide next action.",
+        plan=["Collect delegated evidence", "Decide next action"],
+        todo_list=[
+            {"description": "Collect delegated evidence", "status": "in_progress"},
+            {"description": "Decide next action", "status": "pending"},
+        ],
+        metadata={
+            "completed_agent_results": [
+                {
+                    "agent_run_id": "run-1",
+                    "agent_display_name": "Service Enumerator",
+                    "outcome": "completed",
+                    "summary": "Found HTTP on 10.0.0.1:80.",
+                    "key_findings": ["80/tcp open http"],
+                    "tools_used": ["nmap.scan"],
+                    "limitations": ["UDP was not in scope"],
+                    "recommended_next_steps": ["Fingerprint the HTTP service"],
+                    "child_transcript": "SECRET_CHILD_TRANSCRIPT",
+                    "raw_tool_output": "SECRET_RAW_TOOL_OUTPUT",
+                }
+            ],
+            "active_agent_runs": [
+                {
+                    "agent_run_id": "run-2",
+                    "assignment_id": "assignment-2",
+                    "agent_id": "web_recon",
+                    "agent_display_name": "Web Recon",
+                    "objective": "Fingerprint the discovered HTTP service.",
+                    "status": "running",
+                    "created_at": "2026-07-29T10:00:00Z",
+                    "started_at": "2026-07-29T10:01:00Z",
+                    "task_handle": "SECRET_TASK_HANDLE",
+                }
+            ],
+        },
+    )
+
+    prompt = PostToolReasoningPromptBuilder().build_user_prompt(
+        interactive=InteractiveState(facts=facts, trace=TraceState()),
+        synthesized={},
+        outcome_source="subagent_handoff_batch",
+    )
+
+    assert "## Outcome Source\nsubagent_handoff_batch" in prompt
+    assert "## Completed Bounded Subagent Results" in prompt
+    assert "Service Enumerator result (run-1): completed" in prompt
+    assert "summary: Found HTTP on 10.0.0.1:80." in prompt
+    assert "## Relevant Active Subagent Assignments" in prompt
+    assert "Web Recon active run (run-2): running" in prompt
+    assert "objective: Fingerprint the discovered HTTP service." in prompt
+    assert "## Parent Handoff Coordination Contract" in prompt
+    assert "`delegate_subagent`" in prompt
+    assert "`wait_for_subagents`" in prompt
+    assert 'agent_handoff: "required"' in prompt
+    assert "SECRET_CHILD_TRANSCRIPT" not in prompt
+    assert "SECRET_RAW_TOOL_OUTPUT" not in prompt
+    assert "SECRET_TASK_HANDLE" not in prompt
+    assert "## Tool Executed" not in prompt
+
+
+def test_post_tool_builder_reads_handoff_context_from_canonical_bundle() -> None:
+    """Parent PTR must see the bundle-only shape produced by facade assembly."""
+    from agent.graph.state import FactsState, InteractiveState, TraceState
+    from core.prompts.builders.post_tool import PostToolReasoningPromptBuilder
+
+    facts = FactsState(
+        task_id=123,
+        message="Report whether PostgreSQL is open.",
+        capability="deep_reasoning",
+        metadata={
+            "context_bundle": {
+                "completed_agent_results": [
+                    {
+                        "agent_run_id": "run-pathfinder",
+                        "agent_display_name": "Pathfinder",
+                        "outcome": "completed",
+                        "summary": "TCP/5432 is closed on 127.0.0.1.",
+                        "key_findings": ["5432/tcp closed"],
+                        "tools_used": ["nmap"],
+                        "limitations": [],
+                        "recommended_next_steps": [],
+                    }
+                ],
+                "active_agent_runs": [],
+            }
+        },
+    )
+
+    prompt = PostToolReasoningPromptBuilder().build_user_prompt(
+        interactive=InteractiveState(facts=facts, trace=TraceState()),
+        synthesized={},
+        outcome_source="subagent_handoff_batch",
+    )
+
+    assert "Pathfinder result (run-pathfinder): completed" in prompt
+    assert "summary: TCP/5432 is closed on 127.0.0.1." in prompt
+    assert "findings: 5432/tcp closed" in prompt
+
+
+def test_post_tool_articulation_prompts_parent_activity_for_handoff_continuation() -> None:
+    from agent.graph.state import FactsState, InteractiveState, TraceState
+    from core.prompts.builders.post_tool import PostToolReasoningPromptBuilder
+
+    facts = FactsState(
+        task_id=123,
+        message="Continue after delegated service enumeration.",
+        capability="deep_reasoning",
+        current_goal="Map exposed services and decide next action.",
+        metadata={
+            "completed_agent_results": [
+                {
+                    "agent_run_id": "run-1",
+                    "agent_display_name": "Service Enumerator",
+                    "outcome": "completed",
+                    "summary": "Found HTTP on 10.0.0.1:80.",
+                    "child_transcript": "SECRET_CHILD_TRANSCRIPT",
+                }
+            ],
+            "active_agent_runs": [
+                {
+                    "agent_run_id": "run-2",
+                    "assignment_id": "assignment-2",
+                    "agent_display_name": "Web Recon",
+                    "objective": "Fingerprint the discovered HTTP service.",
+                    "status": "running",
+                }
+            ],
+        },
+    )
+
+    prompt = PostToolReasoningPromptBuilder().build_articulation_user_prompt(
+        interactive=InteractiveState(facts=facts, trace=TraceState()),
+        synthesized={},
+        decision_output={
+            "next_action": "wait_for_subagents",
+            "action_reasoning": "A relevant assignment is still running.",
+            "user_goal_achieved": False,
+        },
+        outcome_source="subagent_handoff_batch",
+    )
+
+    assert "## Outcome Source\nsubagent_handoff_batch" in prompt
+    assert "Service Enumerator result (run-1): completed" in prompt
+    assert "Web Recon active run (run-2): running" in prompt
+    assert "concise parent activity update" in prompt
+    assert "without exposing hidden reasoning or writing a final answer" in prompt
+    assert "SECRET_CHILD_TRANSCRIPT" not in prompt
+
+
 def test_post_tool_builder_includes_active_decision_advisory_context() -> None:
     from agent.graph.state import FactsState, InteractiveState, TraceState
     from core.prompts.builders.post_tool import PostToolReasoningPromptBuilder

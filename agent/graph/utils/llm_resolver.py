@@ -336,7 +336,10 @@ def supports_usage_aware_streaming(
     call_settings: Any,
 ) -> bool:
     """Return True when the resolved model and client support final stream usage."""
-    if not hasattr(llm_client, "stream_chat_messages_with_usage"):
+    if not (
+        hasattr(llm_client, "stream_chat_messages_with_usage")
+        or hasattr(llm_client, "stream_chat_with_tools_with_usage")
+    ):
         return False
 
     provider = getattr(call_settings, "provider", None)

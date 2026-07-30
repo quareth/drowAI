@@ -12,6 +12,9 @@ turn_sequence: 9
 current_phase_sequence: 1
 latest_recorded_phase_sequence: 0
 
+## Outcome Source
+direct_tool
+
 ## Prior Current-Turn Phase Memory
 <phase turn=9 phase=0 source=tool>
 ## Tool Output Summary
@@ -56,4 +59,6 @@ Use the runtime context above and follow the system contract.
 Runtime has already provided the current turn and phase context. Do NOT invent or emit turn or phase numbers; the runtime stamps them.
 If Intent Contract Check says NOT SATISFIED and the current-turn evidence does not already satisfy the user's goal, choose `call_tool` with corrected `tool_intent`, set `failure_detected=true`, `failure_category="invalid_params"`, and `retry_suggested=true`.
 If current-turn evidence already satisfies the user's goal, choose `finalize` even when the latest step was an evidence-processing helper.
+If Outcome Source is `subagent_handoff_batch`, reason globally from the bounded handoff context and active assignments; do not treat the task as child-result summarization.
+For subagent handoff batches, use `wait_for_subagents` when relevant active assignments should finish before new work or finalization, and use `delegate_subagent` only with the shared `agent_handoff` entry.
 Consult Prior Current-Turn Phase Memory when deciding whether a hypothesis is still open before acting.
