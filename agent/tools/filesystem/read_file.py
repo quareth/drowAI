@@ -108,6 +108,11 @@ def _extract_line_evidence(content: str, *, limit: int = 5) -> List[str]:
 
 
 class FsReadTool(BaseTool):
+    description = (
+        "Read a workspace file without modifying it; supports bounded full, "
+        "head, tail, range, grep, byte, and line-numbered modes."
+    )
+
     """
     Read file content from workspace.
     
