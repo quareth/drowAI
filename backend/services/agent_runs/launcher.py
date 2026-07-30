@@ -201,12 +201,16 @@ class AgentRunLauncher:
         try:
             completion = completed.result()
         except asyncio.CancelledError:
-            entry = await self._registry.mark_cancelled(
+            transition = await self._registry.record_cancelled(
                 tenant_id=assignment.tenant_id,
                 task_id=assignment.task_id,
                 agent_run_id=assignment.agent_run_id,
             )
-            await self._publish_terminal_lifecycle(entry, parent_run_id=parent_run_id)
+            if transition.changed:
+                await self._publish_terminal_lifecycle(
+                    transition.entry,
+                    parent_run_id=parent_run_id,
+                )
             return
         except SubagentRunPaused as exc:
             usage_records = child_usage_records_from_state(
@@ -214,13 +218,17 @@ class AgentRunLauncher:
                 assignment=assignment,
                 graph_thread_id=graph_thread_id,
             )
-            entry = await self._registry.mark_waiting_for_approval(
+            transition = await self._registry.record_waiting_for_approval(
                 tenant_id=assignment.tenant_id,
                 task_id=assignment.task_id,
                 agent_run_id=assignment.agent_run_id,
                 accounted_usage_record_count=len(usage_records),
             )
-            await self._publish_terminal_lifecycle(entry, parent_run_id=parent_run_id)
+            if transition.changed:
+                await self._publish_terminal_lifecycle(
+                    transition.entry,
+                    parent_run_id=parent_run_id,
+                )
             return
         except Exception:
             logger.warning(
@@ -230,22 +238,30 @@ class AgentRunLauncher:
                 assignment.agent_run_id,
                 exc_info=True,
             )
-            entry = await self._registry.mark_failed(
+            transition = await self._registry.record_failed(
                 tenant_id=assignment.tenant_id,
                 task_id=assignment.task_id,
                 agent_run_id=assignment.agent_run_id,
                 safe_error="Subagent worker failed",
             )
-            await self._publish_terminal_lifecycle(entry, parent_run_id=parent_run_id)
+            if transition.changed:
+                await self._publish_terminal_lifecycle(
+                    transition.entry,
+                    parent_run_id=parent_run_id,
+                )
             return
 
-        entry = await self._registry.mark_completed(
+        transition = await self._registry.record_completed(
             tenant_id=assignment.tenant_id,
             task_id=assignment.task_id,
             agent_run_id=assignment.agent_run_id,
             result=completion.result,
         )
-        await self._publish_terminal_lifecycle(entry, parent_run_id=parent_run_id)
+        if transition.changed:
+            await self._publish_terminal_lifecycle(
+                transition.entry,
+                parent_run_id=parent_run_id,
+            )
 
     async def _publish_terminal_lifecycle(
         self,

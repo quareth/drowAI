@@ -16,15 +16,17 @@ from typing import Any, Mapping
 
 from agent.graph.context.builder import METADATA_CONTEXT_BUNDLE_KEY
 
-from .contracts import AgentResultProjection
-from .registry import ProcessLocalAgentRunRegistry
+from .contracts import AgentResultProjection, agent_display_name
+from .registry import ACTIVE_AGENT_RUN_STATUSES, ProcessLocalAgentRunRegistry
 
 
 logger = logging.getLogger(__name__)
 
 COMPLETED_AGENT_RESULTS_KEY = "completed_agent_results"
+ACTIVE_AGENT_RUNS_KEY = "active_agent_runs"
 
 DEFAULT_MAX_RESULTS = 3
+DEFAULT_MAX_ACTIVE_RUNS = 5
 DEFAULT_MAX_LIST_ITEMS = 8
 DEFAULT_MAX_TEXT_CHARS = 800
 DEFAULT_MAX_EVIDENCE_REFS = 8
@@ -53,6 +55,7 @@ class AgentRunResultProjector:
         *,
         registry: ProcessLocalAgentRunRegistry,
         max_results: int = DEFAULT_MAX_RESULTS,
+        max_active_runs: int = DEFAULT_MAX_ACTIVE_RUNS,
         max_list_items: int = DEFAULT_MAX_LIST_ITEMS,
         max_text_chars: int = DEFAULT_MAX_TEXT_CHARS,
         max_evidence_refs: int = DEFAULT_MAX_EVIDENCE_REFS,
@@ -60,6 +63,7 @@ class AgentRunResultProjector:
     ) -> None:
         self._registry = registry
         self._max_results = max(0, max_results)
+        self._max_active_runs = max(0, max_active_runs)
         self._max_list_items = max(0, max_list_items)
         self._max_text_chars = max(0, max_text_chars)
         self._max_evidence_refs = max(0, max_evidence_refs)
@@ -108,6 +112,39 @@ class AgentRunResultProjector:
             agent_run_ids=tuple(agent_run_ids),
         )
 
+    async def collect_active_for_context(
+        self,
+        *,
+        tenant_id: int,
+        task_id: int,
+        conversation_id: str,
+    ) -> tuple[dict[str, Any], ...]:
+        """Return bounded active subagent runs for one task conversation."""
+        if self._max_active_runs <= 0 or not conversation_id:
+            return ()
+
+        entries = await self._registry.list_task_runs(
+            tenant_id=tenant_id,
+            task_id=task_id,
+        )
+        candidates = sorted(
+            (
+                entry
+                for entry in entries
+                if entry.conversation_id == conversation_id
+                and entry.status in ACTIVE_AGENT_RUN_STATUSES
+            ),
+            key=lambda entry: (
+                _datetime_sort_key(entry.started_at),
+                _datetime_sort_key(entry.created_at),
+                entry.agent_run_id,
+            ),
+        )
+        return tuple(
+            self._bounded_active_projection(entry)
+            for entry in candidates[: self._max_active_runs]
+        )
+
     async def mark_consumed(
         self,
         *,
@@ -126,6 +163,10 @@ class AgentRunResultProjector:
     def project_result(self, result: Any) -> dict[str, Any]:
         """Return the same bounded projection used by next-turn collection."""
         return self._bounded_projection(result)
+
+    def project_active_run(self, entry: Any) -> dict[str, Any]:
+        """Return the same bounded active-run projection used by context collection."""
+        return self._bounded_active_projection(entry)
 
     def _bounded_projection(self, result: Any) -> dict[str, Any]:
         projection = AgentResultProjection.from_result(result).model_dump(mode="json")
@@ -171,6 +212,27 @@ class AgentRunResultProjector:
             ),
         }
 
+    def _bounded_active_projection(self, entry: Any) -> dict[str, Any]:
+        assignment = entry.assignment
+        return {
+            "agent_run_id": _bounded_text(
+                entry.agent_run_id, max_chars=self._max_evidence_value_chars
+            ),
+            "assignment_id": _bounded_text(
+                assignment.assignment_id, max_chars=self._max_evidence_value_chars
+            ),
+            "agent_id": entry.agent_id,
+            "agent_kind": entry.agent_kind,
+            "agent_display_name": agent_display_name(entry.agent_id),
+            "objective": _bounded_text(
+                assignment.objective, max_chars=self._max_text_chars
+            ),
+            "status": entry.status,
+            "lifecycle_version": entry.lifecycle_version,
+            "created_at": _optional_datetime_text(entry.created_at),
+            "started_at": _optional_datetime_text(entry.started_at),
+        }
+
 
 def attach_completed_agent_results_to_context(
     metadata: dict[str, Any],
@@ -185,6 +247,19 @@ def attach_completed_agent_results_to_context(
     bundle = metadata.get(METADATA_CONTEXT_BUNDLE_KEY)
     if isinstance(bundle, dict):
         bundle[COMPLETED_AGENT_RESULTS_KEY] = [dict(item) for item in results]
+
+
+def attach_active_agent_runs_to_context(
+    metadata: dict[str, Any],
+    active_runs: tuple[dict[str, Any], ...],
+) -> None:
+    """Attach bounded active-run projections to metadata and context bundle."""
+    runs = [dict(item) for item in active_runs]
+    metadata[ACTIVE_AGENT_RUNS_KEY] = runs
+
+    bundle = metadata.get(METADATA_CONTEXT_BUNDLE_KEY)
+    if isinstance(bundle, dict):
+        bundle[ACTIVE_AGENT_RUNS_KEY] = [dict(item) for item in runs]
 
 
 def _bounded_string_list(
@@ -232,6 +307,12 @@ def _optional_bounded_text(value: Any, *, max_chars: int) -> str | None:
     return text or None
 
 
+def _optional_datetime_text(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.isoformat()
+
+
 def _bounded_text(value: Any, *, max_chars: int) -> str:
     text = str(value).strip()
     for pattern in _SECRET_VALUE_PATTERNS:
@@ -252,8 +333,10 @@ def _datetime_sort_key(value: datetime | None) -> str:
 
 
 __all__ = [
+    "ACTIVE_AGENT_RUNS_KEY",
     "COMPLETED_AGENT_RESULTS_KEY",
     "AgentRunResultProjector",
     "CompletedAgentResultHandoff",
+    "attach_active_agent_runs_to_context",
     "attach_completed_agent_results_to_context",
 ]

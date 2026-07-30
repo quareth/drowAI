@@ -228,6 +228,58 @@ async def test_worker_failure_is_sanitized_and_contained() -> None:
 
 
 @pytest.mark.asyncio
+async def test_done_callback_cannot_overwrite_richer_terminal_result() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    assignment = _assignment()
+    await registry.register(assignment, graph_thread_id="child-thread-1")
+    await registry.mark_running(tenant_id=7, task_id=42, agent_run_id="run-1")
+    release_worker = asyncio.Event()
+    events: list[tuple[int, dict[str, Any]]] = []
+
+    async def _publish(task_id: int, event: dict[str, Any]) -> None:
+        events.append((task_id, event))
+
+    async def _worker(**_kwargs: Any) -> AgentRunCompletion:
+        await release_worker.wait()
+        raise RuntimeError("later worker failure")
+
+    launcher = AgentRunLauncher(
+        registry=registry,
+        worker=_worker,
+        lifecycle_publisher=_publish,
+    )
+    task = await launcher.launch(
+        assignment=assignment,
+        runtime_config=object(),
+        graph_thread_id="child-thread-1",
+        parent_run_id="parent-run-1",
+    )
+    richer_result = _result("run-1").model_copy(
+        update={"summary": "Specific terminal handoff from child graph."}
+    )
+    completed = await registry.mark_completed(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="run-1",
+        result=richer_result,
+    )
+
+    release_worker.set()
+    with pytest.raises(RuntimeError):
+        await task
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    terminal = await registry.get(tenant_id=7, task_id=42, agent_run_id="run-1")
+    assert terminal == completed
+    assert terminal is not None
+    assert terminal.lifecycle_version == completed.lifecycle_version
+    assert terminal.result == richer_result
+    assert terminal.safe_error is None
+    assert events == []
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("worker_error", "expected_status", "expected_safe_error"),
     [

@@ -8,6 +8,11 @@ from agent.graph.context.builder import (
     METADATA_CONTEXT_BUNDLE_KEY,
     build_conversation_context_bundle,
 )
+from agent.graph.context.projections import project_for_planner
+from agent.graph.context.serialization import (
+    SECTION_ACTIVE_AGENT_RUNS,
+    serialize_projection_to_section_map,
+)
 from backend.services.agent_runs.contracts import (
     AgentAssignment,
     AgentResult,
@@ -15,8 +20,10 @@ from backend.services.agent_runs.contracts import (
 )
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
 from backend.services.agent_runs.result_projection import (
+    ACTIVE_AGENT_RUNS_KEY,
     COMPLETED_AGENT_RESULTS_KEY,
     AgentRunResultProjector,
+    attach_active_agent_runs_to_context,
     attach_completed_agent_results_to_context,
 )
 
@@ -45,6 +52,7 @@ def _assignment(
     task_id: int = 42,
     agent_run_id: str = "run-1",
     conversation_id: str = "conversation-1",
+    objective: str = "Map open services on the approved target.",
 ) -> AgentAssignment:
     return AgentAssignment(
         assignment_id=f"assign-{agent_run_id}",
@@ -56,7 +64,7 @@ def _assignment(
         conversation_id=conversation_id,
         parent_turn_id="turn-1",
         parent_graph_thread_id="parent-thread-1",
-        objective="Map open services on the approved target.",
+        objective=objective,
         targets=["10.0.0.10"],
         suggested_capabilities=["host_discovery", "port_scan"],
         scope_summary="Approved internal test host only.",
@@ -147,6 +155,73 @@ async def test_collect_projects_completed_unconsumed_results_for_conversation() 
 
 
 @pytest.mark.asyncio
+async def test_collect_projects_task_local_active_runs_with_bounded_fields() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    await registry.register(
+        _assignment(
+            agent_run_id="run-active",
+            objective=(
+                "Investigate api_key=secret-value-that-must-not-leak and "
+                "continue with a very long bounded assignment brief."
+            ),
+        ),
+        graph_thread_id="child-active",
+    )
+    await registry.mark_running(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="run-active",
+    )
+    await registry.register(
+        _assignment(agent_run_id="run-other-task", task_id=43),
+        graph_thread_id="child-other-task",
+    )
+    await registry.register(
+        _assignment(agent_run_id="run-other-conversation", conversation_id="other"),
+        graph_thread_id="child-other-conversation",
+    )
+    await registry.register(
+        _assignment(agent_run_id="run-completed"),
+        graph_thread_id="child-completed",
+    )
+    await registry.mark_completed(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="run-completed",
+        result=_result("run-completed"),
+    )
+
+    projector = AgentRunResultProjector(
+        registry=registry,
+        max_active_runs=3,
+        max_text_chars=64,
+    )
+
+    active_runs = await projector.collect_active_for_context(
+        tenant_id=7,
+        task_id=42,
+        conversation_id="conversation-1",
+    )
+
+    assert len(active_runs) == 1
+    active = active_runs[0]
+    assert active["agent_run_id"] == "run-active"
+    assert active["assignment_id"] == "assign-run-active"
+    assert active["agent_id"] == "pathfinder"
+    assert active["agent_display_name"] == "Pathfinder"
+    assert active["status"] == "running"
+    assert active["lifecycle_version"] == 2
+    assert active["created_at"]
+    assert active["started_at"]
+    assert "<REDACTED>" in active["objective"]
+    assert len(active["objective"]) <= 64
+    assert "task_handle" not in active
+    assert "assignment" not in active
+    assert "relevant_context" not in active
+    assert "result" not in active
+
+
+@pytest.mark.asyncio
 async def test_mark_consumed_is_idempotent_after_acceptance() -> None:
     registry = ProcessLocalAgentRunRegistry()
     await registry.register(_assignment(), graph_thread_id="child-1")
@@ -213,3 +288,107 @@ def test_attach_completed_agent_results_updates_metadata_and_context_bundle() ->
         metadata[METADATA_CONTEXT_BUNDLE_KEY][COMPLETED_AGENT_RESULTS_KEY][0]["summary"]
         == "HTTP exposed"
     )
+
+
+def test_attach_active_agent_runs_updates_metadata_and_context_bundle() -> None:
+    bundle = build_conversation_context_bundle(
+        conversation_id="conversation-1",
+        turn_id="turn-2",
+        turn_sequence=2,
+        messages=[],
+        current_message="check active runs",
+    )
+    metadata = {METADATA_CONTEXT_BUNDLE_KEY: bundle}
+    active_runs = (
+        {
+            "agent_run_id": "run-1",
+            "assignment_id": "assign-run-1",
+            "agent_id": "pathfinder",
+            "agent_kind": "recon",
+            "agent_display_name": "Pathfinder",
+            "objective": "Map open services.",
+            "status": "running",
+            "lifecycle_version": 2,
+            "created_at": "2026-07-29T10:00:00+00:00",
+            "started_at": "2026-07-29T10:00:01+00:00",
+        },
+    )
+
+    attach_active_agent_runs_to_context(metadata, active_runs)
+
+    assert metadata[ACTIVE_AGENT_RUNS_KEY][0]["objective"] == "Map open services."
+    assert (
+        metadata[METADATA_CONTEXT_BUNDLE_KEY][ACTIVE_AGENT_RUNS_KEY][0]["objective"]
+        == "Map open services."
+    )
+
+
+def test_attach_active_agent_runs_clears_stale_metadata_and_context_bundle() -> None:
+    bundle = build_conversation_context_bundle(
+        conversation_id="conversation-1",
+        turn_id="turn-2",
+        turn_sequence=2,
+        messages=[],
+        current_message="check active runs",
+    )
+    bundle[ACTIVE_AGENT_RUNS_KEY] = [{"agent_run_id": "stale-run"}]
+    metadata = {
+        ACTIVE_AGENT_RUNS_KEY: [{"agent_run_id": "stale-run"}],
+        METADATA_CONTEXT_BUNDLE_KEY: bundle,
+    }
+
+    attach_active_agent_runs_to_context(metadata, ())
+
+    assert metadata[ACTIVE_AGENT_RUNS_KEY] == []
+    assert metadata[METADATA_CONTEXT_BUNDLE_KEY][ACTIVE_AGENT_RUNS_KEY] == []
+
+
+def test_active_agent_runs_project_and_render_without_private_fields() -> None:
+    bundle = build_conversation_context_bundle(
+        conversation_id="conversation-1",
+        turn_id="turn-2",
+        turn_sequence=2,
+        messages=[],
+        current_message="check active runs",
+    )
+    bundle[ACTIVE_AGENT_RUNS_KEY] = [
+        {
+            "agent_run_id": "run-1",
+            "assignment_id": "assign-run-1",
+            "agent_id": "pathfinder",
+            "agent_kind": "recon",
+            "agent_display_name": "Pathfinder",
+            "objective": "Map open services.",
+            "status": "running",
+            "lifecycle_version": 2,
+            "created_at": "2026-07-29T10:00:00+00:00",
+            "started_at": "2026-07-29T10:00:01+00:00",
+            "task_handle": "PRIVATE_TASK_HANDLE",
+            "child_messages": ["PRIVATE_CHILD_TRANSCRIPT"],
+            "tool_transcript": "PRIVATE_TOOL_OUTPUT",
+        }
+    ]
+
+    projection = project_for_planner(bundle)
+    section_map = serialize_projection_to_section_map(projection)
+
+    assert projection[ACTIVE_AGENT_RUNS_KEY] == [
+        {
+            "agent_run_id": "run-1",
+            "assignment_id": "assign-run-1",
+            "agent_id": "pathfinder",
+            "agent_kind": "recon",
+            "agent_display_name": "Pathfinder",
+            "objective": "Map open services.",
+            "status": "running",
+            "lifecycle_version": 2,
+            "created_at": "2026-07-29T10:00:00+00:00",
+            "started_at": "2026-07-29T10:00:01+00:00",
+        }
+    ]
+    rendered = section_map[SECTION_ACTIVE_AGENT_RUNS]
+    assert "Active Agent Runs:" in rendered
+    assert "objective: Map open services." in rendered
+    assert "PRIVATE_TASK_HANDLE" not in rendered
+    assert "PRIVATE_CHILD_TRANSCRIPT" not in rendered
+    assert "PRIVATE_TOOL_OUTPUT" not in rendered

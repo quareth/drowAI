@@ -74,7 +74,11 @@ def _assignment() -> AgentAssignment:
         targets=["10.0.0.10"],
         suggested_capabilities=["host_discovery"],
         scope_summary="Approved internal test host only.",
-        relevant_context={"ticket": "ENG-123", "turn_sequence": 4},
+        relevant_context={
+            "ticket": "ENG-123",
+            "turn_sequence": 4,
+            "agent_mode": "full_access",
+        },
         runtime_identity=_runtime_identity(),
     )
 

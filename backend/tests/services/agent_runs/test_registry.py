@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -99,13 +100,16 @@ async def test_register_creates_queued_process_local_entry() -> None:
     assert entry.task_handle is None
     assert entry.cancel_requested is False
     assert entry.result_consumed is False
+    assert entry.result_claim_id is None
     assert entry.accounted_usage_record_count == 0
 
 
 @pytest.mark.asyncio
 async def test_registry_accepts_distinct_active_subagent_run_ids_for_task() -> None:
     registry = ProcessLocalAgentRunRegistry()
-    await registry.register(_assignment(agent_run_id="run-1"), graph_thread_id="child-1")
+    await registry.register(
+        _assignment(agent_run_id="run-1"), graph_thread_id="child-1"
+    )
 
     second = await registry.register(
         _assignment(agent_run_id="run-2"), graph_thread_id="child-2"
@@ -181,17 +185,18 @@ async def test_duplicate_terminal_callbacks_do_not_regress_state() -> None:
         result=_result("run-1"),
     )
 
-    duplicate_failed = await registry.mark_failed(
-        tenant_id=7,
-        task_id=42,
-        agent_run_id="run-1",
-        safe_error="later worker error",
-    )
-    duplicate_cancelled = await registry.mark_cancelled(
-        tenant_id=7,
-        task_id=42,
-        agent_run_id="run-1",
-    )
+    with patch("backend.services.agent_runs.registry.safe_inc") as mock_inc:
+        duplicate_failed = await registry.mark_failed(
+            tenant_id=7,
+            task_id=42,
+            agent_run_id="run-1",
+            safe_error="later worker error",
+        )
+        duplicate_cancelled = await registry.mark_cancelled(
+            tenant_id=7,
+            task_id=42,
+            agent_run_id="run-1",
+        )
 
     assert running.lifecycle_version == 2
     assert completed.status == "completed"
@@ -200,6 +205,46 @@ async def test_duplicate_terminal_callbacks_do_not_regress_state() -> None:
     assert duplicate_cancelled == completed
     assert duplicate_failed.safe_error is None
     assert duplicate_failed.result == _result("run-1")
+    recorded_counters = [call.args[0] for call in mock_inc.call_args_list]
+    assert recorded_counters.count("agent_run_terminal_duplicate_suppressed") == 2
+    assert "agent_run_terminal_duplicate_suppressed_failed" in recorded_counters
+    assert "agent_run_terminal_duplicate_suppressed_cancelled" in recorded_counters
+
+
+@pytest.mark.asyncio
+async def test_failed_and_cancelled_terminal_results_are_claimable() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    await registry.register(
+        _assignment(agent_run_id="run-1"), graph_thread_id="child-thread-1"
+    )
+    await registry.register(
+        _assignment(agent_run_id="run-2"), graph_thread_id="child-thread-2"
+    )
+    await registry.mark_running(tenant_id=7, task_id=42, agent_run_id="run-1")
+    await registry.mark_running(tenant_id=7, task_id=42, agent_run_id="run-2")
+
+    failed = await registry.mark_failed(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="run-1",
+        safe_error="Subagent worker failed",
+    )
+    cancelled = await registry.mark_cancelled(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="run-2",
+    )
+
+    claim = await registry.claim_ready_handoffs(tenant_id=7, task_id=42)
+
+    assert failed.result is not None
+    assert failed.result.outcome == "failed"
+    assert failed.result.summary == "Subagent run failed: Subagent worker failed"
+    assert cancelled.result is not None
+    assert cancelled.result.outcome == "cancelled"
+    assert claim is not None
+    assert claim.agent_run_ids == ("run-1", "run-2")
+    assert [result.outcome for result in claim.results] == ["failed", "cancelled"]
 
 
 @pytest.mark.asyncio
@@ -267,6 +312,250 @@ async def test_result_consumption_is_one_shot_and_finished_cleanup_is_bounded() 
     clock = datetime(2026, 7, 26, 12, 0, 31, tzinfo=UTC)
     assert await registry.cleanup_finished() == 1
     assert await registry.get(tenant_id=7, task_id=42, agent_run_id="run-1") is None
+
+
+@pytest.mark.asyncio
+async def test_concurrent_claims_do_not_receive_the_same_result() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    for agent_run_id in ("run-1", "run-2"):
+        await registry.register(
+            _assignment(agent_run_id=agent_run_id),
+            graph_thread_id=f"child-{agent_run_id}",
+        )
+        await registry.mark_completed(
+            tenant_id=7,
+            task_id=42,
+            agent_run_id=agent_run_id,
+            result=_result(agent_run_id),
+        )
+
+    first_attempt = registry.claim_ready_handoffs(tenant_id=7, task_id=42)
+    second_attempt = registry.claim_ready_handoffs(tenant_id=7, task_id=42)
+
+    with patch("backend.services.agent_runs.registry.safe_inc") as mock_inc, patch(
+        "backend.services.agent_runs.registry.safe_gauge"
+    ) as mock_gauge:
+        claims = [
+            claim
+            for claim in await asyncio.gather(first_attempt, second_attempt)
+            if claim is not None
+        ]
+
+    claimed_run_ids = [
+        agent_run_id for claim in claims for agent_run_id in claim.agent_run_ids
+    ]
+    assert sorted(claimed_run_ids) == ["run-1", "run-2"]
+    assert len(claimed_run_ids) == len(set(claimed_run_ids))
+    recorded_counters = [call.args[0] for call in mock_inc.call_args_list]
+    assert "agent_run_handoff_claim_created" in recorded_counters
+    assert "agent_run_handoff_duplicate_claim_suppressed" in recorded_counters
+    recorded_gauges = {
+        call.args[0]: call.args[1] for call in mock_gauge.call_args_list
+    }
+    assert recorded_gauges["agent_run_handoff_claim_batch_size"] == 2
+    assert recorded_gauges["agent_run_handoff_duplicate_claim_suppressed_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_acknowledged_handoffs_cannot_be_claimed_again() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    await registry.register(_assignment(), graph_thread_id="child-thread-1")
+    await registry.mark_completed(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="run-1",
+        result=_result("run-1"),
+    )
+
+    claim = await registry.claim_ready_handoffs(tenant_id=7, task_id=42)
+    assert claim is not None
+    await registry.acknowledge_handoffs(claim.claim_id)
+
+    assert await registry.claim_ready_handoffs(tenant_id=7, task_id=42) is None
+    entry = await registry.get(tenant_id=7, task_id=42, agent_run_id="run-1")
+    assert entry is not None
+    assert entry.result_consumed is True
+    assert entry.result_claim_id is None
+
+
+@pytest.mark.asyncio
+async def test_released_handoffs_become_claimable_again() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    await registry.register(_assignment(), graph_thread_id="child-thread-1")
+    await registry.mark_completed(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="run-1",
+        result=_result("run-1"),
+    )
+
+    claim = await registry.claim_ready_handoffs(tenant_id=7, task_id=42)
+    assert claim is not None
+    assert await registry.claim_ready_handoffs(tenant_id=7, task_id=42) is None
+
+    await registry.release_handoffs(claim.claim_id)
+
+    retried = await registry.claim_ready_handoffs(tenant_id=7, task_id=42)
+    assert retried is not None
+    assert retried.agent_run_ids == ("run-1",)
+
+
+@pytest.mark.asyncio
+async def test_claim_result_and_active_snapshot_are_task_scoped() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    await registry.register(
+        _assignment(agent_run_id="run-1"), graph_thread_id="child-1"
+    )
+    await registry.register(
+        _assignment(agent_run_id="run-2", task_id=43),
+        graph_thread_id="child-2",
+    )
+    await registry.register(
+        _assignment(agent_run_id="run-3"), graph_thread_id="child-3"
+    )
+    await registry.register(
+        _assignment(agent_run_id="run-4", task_id=43),
+        graph_thread_id="child-4",
+    )
+    await registry.mark_completed(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="run-1",
+        result=_result("run-1"),
+    )
+    await registry.mark_completed(
+        tenant_id=7,
+        task_id=43,
+        agent_run_id="run-2",
+        result=_result("run-2"),
+    )
+    await registry.mark_running(tenant_id=7, task_id=42, agent_run_id="run-3")
+    await registry.mark_running(tenant_id=7, task_id=43, agent_run_id="run-4")
+
+    claim = await registry.claim_ready_handoffs(tenant_id=7, task_id=42)
+
+    assert claim is not None
+    assert claim.agent_run_ids == ("run-1",)
+    assert [entry.agent_run_id for entry in claim.active_runs] == ["run-3"]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_processing_can_release_claimed_handoffs() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    await registry.register(_assignment(), graph_thread_id="child-thread-1")
+    await registry.mark_completed(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="run-1",
+        result=_result("run-1"),
+    )
+    claim_started = asyncio.Event()
+
+    async def _process_claim() -> None:
+        claim = await registry.claim_ready_handoffs(tenant_id=7, task_id=42)
+        assert claim is not None
+        claim_started.set()
+        try:
+            await asyncio.sleep(60)
+        finally:
+            await registry.release_handoffs(claim.claim_id)
+
+    task = asyncio.create_task(_process_claim())
+    await claim_started.wait()
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    retried = await registry.claim_ready_handoffs(tenant_id=7, task_id=42)
+    assert retried is not None
+    assert retried.agent_run_ids == ("run-1",)
+
+
+@pytest.mark.asyncio
+async def test_state_change_notification_has_no_lost_wakeup() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    before_register = await registry.state_version()
+    await registry.register(_assignment(), graph_thread_id="child-thread-1")
+
+    observed_after_register = await asyncio.wait_for(
+        registry.wait_for_state_change(after_version=before_register),
+        timeout=1,
+    )
+    assert observed_after_register > before_register
+
+    before_completion = await registry.state_version()
+    waiter = asyncio.create_task(
+        registry.wait_for_state_change(after_version=before_completion)
+    )
+    await asyncio.sleep(0)
+    await registry.mark_completed(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="run-1",
+        result=_result("run-1"),
+    )
+
+    observed_after_completion = await asyncio.wait_for(waiter, timeout=1)
+    assert observed_after_completion > before_completion
+
+
+@pytest.mark.asyncio
+async def test_scoped_handoff_wait_ignores_unrelated_task_notifications() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    await registry.register(
+        _assignment(agent_run_id="run-active"),
+        graph_thread_id="child-active",
+    )
+    await registry.mark_running(tenant_id=7, task_id=42, agent_run_id="run-active")
+
+    before_wait = await registry.state_version()
+    waiter = asyncio.create_task(
+        registry.wait_for_ready_handoffs_or_inactive(
+            tenant_id=7,
+            task_id=42,
+            conversation_id="conversation-1",
+            after_version=before_wait,
+        )
+    )
+    await asyncio.sleep(0)
+
+    await registry.register(
+        _assignment(agent_run_id="run-other", task_id=43),
+        graph_thread_id="child-other",
+    )
+    await registry.mark_completed(
+        tenant_id=7,
+        task_id=43,
+        agent_run_id="run-other",
+        result=_result("run-other"),
+    )
+    await asyncio.sleep(0)
+
+    assert waiter.done() is False
+
+    await registry.mark_completed(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="run-active",
+        result=_result("run-active"),
+    )
+
+    assert await asyncio.wait_for(waiter, timeout=1) == "ready"
+
+
+@pytest.mark.asyncio
+async def test_scoped_handoff_wait_exits_when_no_active_runs_remain() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+
+    assert (
+        await registry.wait_for_ready_handoffs_or_inactive(
+            tenant_id=7,
+            task_id=42,
+            conversation_id="conversation-1",
+            after_version=await registry.state_version(),
+        )
+        == "inactive"
+    )
 
 
 def test_registry_module_has_no_database_or_orm_dependency() -> None:
