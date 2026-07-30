@@ -29,6 +29,9 @@ from backend.services.langgraph_chat.intent.briefs import (
     METADATA_KEY_REQUEST_CONTRACT,
     METADATA_KEY_TURN_INTERPRETATION,
 )
+from backend.services.langgraph_chat.intent.classifier import (
+    _normalize_agent_handoffs,
+)
 
 
 def _chat_inputs(
@@ -109,6 +112,45 @@ def test_build_metadata_forwards_intent_seed_and_classifier_keys() -> None:
     for key, value in seeded.items():
         assert key in metadata, f"missing key after build_metadata handoff: {key}"
         assert metadata[key] == value
+
+
+def test_normalized_initial_agent_handoff_shape_is_classifier_compatible() -> None:
+    handoffs = _normalize_agent_handoffs(
+        {
+            "agent_handoffs": [
+                {
+                    "agent_handoff": " Required ",
+                    "subagent": " PathFinder ",
+                    "objective": "  Map exposed services on the approved target.  ",
+                    "ignored": "metadata stays out of the contract",
+                },
+                {
+                    "agent_handoff": "optional",
+                    "subagent": "pathfinder",
+                    "objective": "Optional handoffs are not routed.",
+                },
+                {
+                    "agent_handoff": "required",
+                    "subagent": "pathfinder",
+                    "objective": "  Map exposed services on the approved target.  ",
+                },
+                {
+                    "agent_handoff": "required",
+                    "subagent": "",
+                    "objective": "Missing agent is ignored.",
+                },
+            ],
+        }
+    )
+
+    assert handoffs == [
+        {
+            "agent_handoff": "required",
+            "subagent": "pathfinder",
+            "objective": "Map exposed services on the approved target.",
+        }
+    ]
+    assert set(handoffs[0]) == {"agent_handoff", "subagent", "objective"}
 
 
 @pytest.mark.asyncio

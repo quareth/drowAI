@@ -85,17 +85,69 @@ class SubagentRoutingDecision:
     handoffs: tuple[SubagentPlanHandoff, ...] = ()
 
 
+def normalize_agent_handoff_entries(
+    raw_handoffs: Any,
+    *,
+    max_handoffs: int | None = None,
+    reject_invalid: bool = False,
+) -> tuple[dict[str, str], ...]:
+    """Normalize required three-field subagent handoff mappings."""
+    if isinstance(raw_handoffs, Mapping):
+        candidates: Sequence[Any] = (raw_handoffs,)
+    elif isinstance(raw_handoffs, Sequence) and not isinstance(raw_handoffs, str):
+        candidates = raw_handoffs
+    else:
+        return ()
+
+    normalized: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for raw_handoff in candidates:
+        if not isinstance(raw_handoff, Mapping):
+            if reject_invalid:
+                raise ValueError("invalid_handoff_plan")
+            continue
+        handoff = _normalize_token(raw_handoff.get("agent_handoff"))
+        if handoff != "required":
+            continue
+        subagent = _normalize_token(raw_handoff.get("subagent"))
+        objective = raw_handoff.get("objective")
+        if not subagent or not isinstance(objective, str) or not objective.strip():
+            if reject_invalid:
+                raise ValueError("invalid_handoff_plan")
+            continue
+        normalized_objective = objective.strip()
+        identity = (subagent, normalized_objective)
+        if identity in seen:
+            continue
+        seen.add(identity)
+        normalized.append(
+            {
+                "agent_handoff": "required",
+                "subagent": subagent,
+                "objective": normalized_objective,
+            }
+        )
+        if max_handoffs is not None and len(normalized) >= max_handoffs:
+            break
+    return tuple(normalized)
+
+
 def resolve_subagent_handoff(
     metadata: Mapping[str, Any],
     *,
     registry: SubagentRegistry | None = None,
     active_runs_by_agent_id: Mapping[str, int] | None = None,
+    handoff_entries: Any = None,
+    require_direct_executor: bool = True,
 ) -> SubagentRoutingDecision:
-    """Resolve explicit classifier handoffs through the live registry."""
-    if _classifier_label(metadata) != "direct_executor":
+    """Resolve explicit handoffs through the live registry."""
+    if require_direct_executor and _classifier_label(metadata) != "direct_executor":
         return SubagentRoutingDecision(False, "classifier_not_direct_executor")
 
-    requested_handoffs, invalid_reason = _required_agent_handoffs(metadata)
+    requested_handoffs, invalid_reason = _required_agent_handoffs(
+        metadata,
+        handoff_entries=handoff_entries,
+    )
     if invalid_reason is not None:
         return SubagentRoutingDecision(False, invalid_reason)
     if not requested_handoffs:
@@ -166,32 +218,31 @@ def resolve_subagent_handoff(
 
 def _required_agent_handoffs(
     metadata: Mapping[str, Any],
+    *,
+    handoff_entries: Any = None,
 ) -> tuple[tuple[tuple[str, str], ...], str | None]:
-    """Return ordered, normalized required handoffs from classifier metadata."""
-    raw_handoffs = metadata.get("intent_agent_handoffs")
-    if not isinstance(raw_handoffs, Sequence) or isinstance(raw_handoffs, str):
+    """Return ordered, normalized required handoffs from shared input."""
+    raw_handoffs = handoff_entries
+    if raw_handoffs is None:
+        raw_handoffs = metadata.get("intent_agent_handoffs")
+    if raw_handoffs is None:
         raw_response = metadata.get("intent_classifier_raw_response")
         raw_handoffs = (
             raw_response.get("agent_handoffs")
             if isinstance(raw_response, Mapping)
             else None
         )
-    if not isinstance(raw_handoffs, Sequence) or isinstance(raw_handoffs, str):
-        return (), None
-
-    handoffs: list[tuple[str, str]] = []
-    for raw_handoff in raw_handoffs:
-        if not isinstance(raw_handoff, Mapping):
-            return (), "invalid_handoff_plan"
-        handoff = _normalize_token(raw_handoff.get("agent_handoff"))
-        if handoff != "required":
-            continue
-        subagent = _normalize_token(raw_handoff.get("subagent"))
-        objective = raw_handoff.get("objective")
-        if not subagent or not isinstance(objective, str) or not objective.strip():
-            return (), "invalid_handoff_plan"
-        handoffs.append((subagent, objective.strip()))
-    return tuple(handoffs), None
+    try:
+        normalized = normalize_agent_handoff_entries(
+            raw_handoffs,
+            reject_invalid=True,
+        )
+    except ValueError:
+        return (), "invalid_handoff_plan"
+    return (
+        tuple((entry["subagent"], entry["objective"]) for entry in normalized),
+        None,
+    )
 
 
 def _classifier_label(metadata: Mapping[str, Any]) -> str:
@@ -310,5 +361,6 @@ __all__ = [
     "SUBAGENT_DISPATCH_BRANCH",
     "SubagentPlanHandoff",
     "SubagentRoutingDecision",
+    "normalize_agent_handoff_entries",
     "resolve_subagent_handoff",
 ]

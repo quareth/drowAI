@@ -64,6 +64,10 @@ class SubagentRuntimePromptBuilder:
         shared_guidance = self._tool_planning_builder.build_native_tool_call_shared_guidance(
             max_committed_tools_per_batch=max_committed_tools_per_batch,
         )
+        native_tool_guidance = _subagent_native_tool_guidance(
+            shared_guidance,
+            max_committed_tools_per_batch=max_committed_tools_per_batch,
+        )
         rendered = template.format(
             role_prompt=_normalize_prompt_text(role_prompt),
             definition_id=_normalize_prompt_text(definition_id),
@@ -71,7 +75,7 @@ class SubagentRuntimePromptBuilder:
             definition_instructions=_normalize_prompt_text(definition_instructions),
             ownership_boundary=_normalize_prompt_text(ownership_boundary),
             boundary_rules=_to_prompt_bullets(boundary_rules),
-            native_tool_guidance=shared_guidance,
+            native_tool_guidance=native_tool_guidance,
         )
         return _ensure_trailing_newline(rendered)
 
@@ -115,6 +119,32 @@ class SubagentRuntimePromptBuilder:
             assignment_json=_to_prompt_json(assignment),
         )
         return _ensure_trailing_newline(rendered)
+
+
+def _subagent_native_tool_guidance(
+    shared_guidance: str,
+    *,
+    max_committed_tools_per_batch: int,
+) -> str:
+    """Adapt shared call-building rules to allow a terminal text handoff."""
+
+    mandatory_prefix = (
+        "You are the native tool-call builder. Emit native tool calls only.\n\n"
+        f"Call between 1 and {max_committed_tools_per_batch} candidate tool "
+        "function(s) for this iteration."
+    )
+    conditional_prefix = (
+        "When more evidence is required, call between 1 and "
+        f"{max_committed_tools_per_batch} candidate tool function(s) for this "
+        "iteration. When the assignment is complete, emit no tool call and "
+        "return the concise parent handoff instead."
+    )
+    if mandatory_prefix not in shared_guidance:
+        raise ValueError(
+            "Canonical native tool guidance is missing the expected call-only prefix"
+        )
+    return shared_guidance.replace(mandatory_prefix, conditional_prefix, 1)
+
 
 def _build_tool_runbooks_section(
     runbook_service: RunbookService,

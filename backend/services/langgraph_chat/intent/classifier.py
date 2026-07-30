@@ -44,6 +44,9 @@ from agent.providers.llm.core.identity import (
 )
 from agent.providers.llm.profiles.registry import resolve_context_window_tokens
 from agent.subagents.registry import SubagentRegistry, get_subagent_registry
+from backend.services.agent_runs.ownership_policy import (
+    normalize_agent_handoff_entries,
+)
 from core.prompts.builders.intent_classifier import (
     build_classifier_system_prompt,
     build_classifier_user_prompt,
@@ -247,34 +250,12 @@ def _build_request_contract(parsed: Dict[str, Any], message: str) -> Dict[str, s
 
 def _normalize_agent_handoffs(parsed: Dict[str, Any]) -> List[Dict[str, str]]:
     """Normalize ordered required subagent requests from classifier output."""
-    raw_handoffs = parsed.get("agent_handoffs")
-    if not isinstance(raw_handoffs, list):
-        return []
-
-    normalized: List[Dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-    for raw_handoff in raw_handoffs:
-        if not isinstance(raw_handoff, dict):
-            continue
-        handoff = str(raw_handoff.get("agent_handoff") or "").strip().lower()
-        subagent = str(raw_handoff.get("subagent") or "").strip().lower()
-        objective = str(raw_handoff.get("objective") or "").strip()
-        if handoff != "required" or not subagent or not objective:
-            continue
-        identity = (subagent, objective)
-        if identity in seen:
-            continue
-        seen.add(identity)
-        normalized.append(
-            {
-                "agent_handoff": "required",
-                "subagent": subagent,
-                "objective": objective,
-            }
+    return list(
+        normalize_agent_handoff_entries(
+            parsed.get("agent_handoffs"),
+            max_handoffs=_MAX_AGENT_HANDOFFS,
         )
-        if len(normalized) >= _MAX_AGENT_HANDOFFS:
-            break
-    return normalized
+    )
 
 
 def _normalize_intent_target_resolution(parsed: Dict[str, Any]) -> Dict[str, Any]:

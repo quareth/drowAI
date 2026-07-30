@@ -16,7 +16,7 @@ def test_subagent_runtime_system_prompt_uses_versioned_canonical_guidance() -> N
         display_name="Pathfinder",
         role_prompt=(
             "You are Pathfinder, a bounded recon subagent.\n"
-            "Emit native tool calls only."
+            "Use tools when needed; otherwise return the parent handoff."
         ),
         definition_instructions=(
             "You are Pathfinder, a bounded reconnaissance subagent.\n"
@@ -36,9 +36,12 @@ def test_subagent_runtime_system_prompt_uses_versioned_canonical_guidance() -> N
     assert_golden("subagent_runtime__system.txt", prompt)
     assert "Definition Instructions:" in prompt
     assert "Ownership and Runtime Boundary:" in prompt
-    assert "Use tools as needed to complete the bounded assignment" in prompt
+    assert "Use tools only when more evidence is needed" in prompt
     assert "return a concise parent handoff" in prompt
-    assert "You are the native tool-call builder. Emit native tool calls only." in prompt
+    assert "Emit native tool calls only." not in prompt
+    assert "Remaining tool budget is permission, not a requirement" in prompt
+    assert "Never repeat an equivalent successful tool call" in prompt
+    assert "When more evidence is required, call between 1 and 3" in prompt
     assert "Selector Decision" not in prompt
 
 
