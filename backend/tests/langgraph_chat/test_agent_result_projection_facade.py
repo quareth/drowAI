@@ -86,6 +86,16 @@ def _result() -> AgentResult:
     )
 
 
+def _forbidden_child_payload() -> dict[str, Any]:
+    return {
+        "working_memory": {"available_findings": ["private child memory"]},
+        "current_turn_phases": [{"source": "tool", "body": "private phase"}],
+        "subagent_observation_transcript": [{"summary": "legacy transcript"}],
+        "checkpoint_state": {"messages": ["private checkpoint payload"]},
+        "raw_tool_output": "RAW_STDOUT should not reach the parent",
+    }
+
+
 class _ContextBuilder:
     def build_runtime_config(
         self,
@@ -158,10 +168,22 @@ async def test_facade_marks_projected_result_consumed_after_handler_accepts() ->
 
     await facade.handle_turn(chat_inputs)
 
-    assert capture["metadata"]["completed_agent_results"][0]["summary"] == (
-        "Pathfinder found HTTP."
-    )
-    assert capture["bundle"]["completed_agent_results"][0]["agent_run_id"] == "run-1"
+    metadata_result = capture["metadata"]["completed_agent_results"][0]
+    bundle_result = capture["bundle"]["completed_agent_results"][0]
+    assert metadata_result == bundle_result
+    assert metadata_result["summary"] == "Pathfinder found HTTP."
+    assert metadata_result["evidence_refs"] == [
+        {
+            "kind": "artifact",
+            "evidence_id": "nmap-xml",
+            "summary": "Nmap XML artifact",
+        }
+    ]
+    assert metadata_result["final_checkpoint_id"] == "checkpoint-1"
+    assert bundle_result["agent_run_id"] == "run-1"
+    for forbidden_key in _forbidden_child_payload():
+        assert forbidden_key not in metadata_result
+        assert forbidden_key not in bundle_result
     assert await registry.consume_result(
         tenant_id=7,
         task_id=42,

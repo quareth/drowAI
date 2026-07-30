@@ -82,7 +82,6 @@ import type {
   AgentResultProjection,
   AgentRunLifecycleProjection,
 } from "@/features/agent-runs/contracts/agent-run";
-import type { ToolApprovalInterruptDetail } from "@/types/hitl";
 
 const TASK_ID = 61103;
 const apiFetchMock = vi.mocked(apiFetch);
@@ -292,37 +291,6 @@ function lifecycleReplayPacket(sequence: number): Record<string, unknown> {
       sequence,
     },
     agent_run: lifecycle(),
-  };
-}
-
-function pathfinderApprovalInterrupt(): ToolApprovalInterruptDetail {
-  return {
-    taskId: TASK_ID,
-    threadId: "thread-pathfinder",
-    interruptId: "approval-pathfinder-1",
-    checkpointId: "checkpoint-pathfinder-1",
-    interruptType: "tool_approval",
-    graphName: "subagent",
-    payload: {
-      type: "tool_approval",
-      interrupt_id: "approval-pathfinder-1",
-      tool_id: "network.nmap",
-      tool_name: "network.nmap",
-      parameters: { target: "10.0.0.10", ports: "22,443" },
-      description: "Run a scoped service discovery scan.",
-      risk_level: "medium",
-      tool_batch_id: "batch-pathfinder-1",
-      items: [
-        {
-          tool_call_id: "tool-call-pathfinder-1",
-          tool_id: "network.nmap",
-          tool_name: "network.nmap",
-          parameters: { target: "10.0.0.10", ports: "22,443" },
-          description: "Run a scoped service discovery scan.",
-          risk_level: "medium",
-        },
-      ],
-    },
   };
 }
 
@@ -1220,8 +1188,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
     });
   });
 
-  it("shows Pathfinder approval controls only in the selected contained panel", async () => {
-    const onApprove = vi.fn();
+  it("shows waiting status without approval controls in the selected contained panel", async () => {
     applyAgentRunLifecycleUpdate(
       TASK_ID,
       lifecycle({
@@ -1237,12 +1204,6 @@ describe("MessageList Pathfinder agent-run cards", () => {
         taskId={TASK_ID}
         isLoading={false}
         isConnected
-        agentRunApprovalControls={{
-          interrupt: pathfinderApprovalInterrupt(),
-          onApprove,
-          onEdit: vi.fn(),
-          onSkip: vi.fn(),
-        }}
       />,
     );
 
@@ -1256,12 +1217,11 @@ describe("MessageList Pathfinder agent-run cards", () => {
     fireEvent.click(screen.getByRole("button", { name: /open pathfinder thread/i }));
 
     expect(screen.getByRole("complementary", { name: /subagents/i })).toBeTruthy();
-    expect(screen.getByText("Approval")).toBeTruthy();
-    expect(screen.getByText("nmap")).toBeTruthy();
-    expect(screen.getByText("medium")).toBeTruthy();
-
-    fireEvent.click(screen.getByRole("button", { name: /^run$/i }));
-    expect(onApprove).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByText("Pathfinder is waiting for a tool approval."),
+    ).toBeTruthy();
+    expect(screen.queryByText("Approval")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^run$/i })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: /close subagents/i }));
     await waitFor(() => {

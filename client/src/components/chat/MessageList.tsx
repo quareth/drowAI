@@ -17,10 +17,7 @@ import type { ReactNode } from "react";
 import { ArrowDown, Loader2 } from "lucide-react";
 
 import { AgentRunCard } from "@/features/agent-runs/components/AgentRunCard";
-import {
-  AgentRunDrawer,
-  type AgentRunApprovalControls,
-} from "@/features/agent-runs/components/AgentRunDrawer";
+import { AgentRunDrawer } from "@/features/agent-runs/components/AgentRunDrawer";
 import {
   useAgentRunPresentation,
   useAgentRunLocalStatusHydration,
@@ -71,7 +68,6 @@ export interface MessageListProps {
   autoScrollThreshold?: number;
   emptyState?: ReactNode;
   className?: string;
-  agentRunApprovalControls?: AgentRunApprovalControls;
 }
 
 const DEFAULT_AUTO_SCROLL_THRESHOLD = 96;
@@ -219,7 +215,6 @@ export function MessageList({
   autoScrollThreshold = DEFAULT_AUTO_SCROLL_THRESHOLD,
   emptyState,
   className,
-  agentRunApprovalControls,
 }: MessageListProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const topSentinelRef = useRef<HTMLButtonElement | null>(null);
@@ -587,7 +582,6 @@ export function MessageList({
                 <AgentRunDrawer
                   taskId={taskId}
                   activityMessages={agentRunActivityMessages}
-                  approvalControls={agentRunApprovalControls}
                   onStopRun={handleStopAgentRun}
                 />
               </ResizablePanel>

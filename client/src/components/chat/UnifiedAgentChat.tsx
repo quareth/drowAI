@@ -875,18 +875,6 @@ export function UnifiedAgentChat({
     return null;
   }, [pendingInterrupt]);
 
-  const agentRunApprovalControls = useMemo(() => {
-    if (!toolApprovalInterrupt) return undefined;
-    return {
-      interrupt: toolApprovalInterrupt,
-      onApprove: () => handleApproval("approve"),
-      onEdit: (params: Record<string, unknown>) => handleApproval("edit", params),
-      onSkip: () => handleApproval("skip"),
-      onBatchSubmit: handleBatchApproval,
-      isSubmitting: resumeMutation.isPending,
-    };
-  }, [handleApproval, handleBatchApproval, resumeMutation.isPending, toolApprovalInterrupt]);
-
   const clarifyRequestInterrupt = useMemo<ClarifyRequestInterruptDetail | null>(() => {
     if (!activeTaskId || !pendingInterrupt) return null;
     if (pendingInterrupt.taskId !== activeTaskId) return null;
@@ -1018,7 +1006,6 @@ export function UnifiedAgentChat({
         onMessageRetry={handleMessageRetry}
         resolveRetryState={resolveRetryStateForMessage}
         emptyState={emptyState}
-        agentRunApprovalControls={agentRunApprovalControls}
       />
 
       {toolApprovalInterrupt && (

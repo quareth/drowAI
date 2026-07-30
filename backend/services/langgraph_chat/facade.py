@@ -20,6 +20,7 @@ from backend.services.agent_runs.local_runtime import (
 from backend.services.agent_runs.result_projection import (
     AgentRunResultProjector,
     CompletedAgentResultHandoff,
+    attach_active_agent_runs_to_context,
     attach_completed_agent_results_to_context,
 )
 from backend.services.agent_runs.registry import (
@@ -200,6 +201,7 @@ class LangGraphChatFacade:
             ),
             build_result=facade_helpers.build_result,
             agent_run_registry=self._agent_run_registry,
+            agent_run_lifecycle_publisher=agent_run_lifecycle_publisher,
         )
 
     async def handle_turn(
@@ -456,7 +458,7 @@ class LangGraphChatFacade:
         self,
         runtime_config: LangGraphRuntimeConfig,
     ) -> CompletedAgentResultHandoff:
-        """Best-effort projection of completed subagent results into main context."""
+        """Best-effort projection of subagent context into main context."""
         try:
             tenant_id = int(runtime_config.metadata.get("tenant_id"))
         except (TypeError, ValueError):
@@ -474,6 +476,12 @@ class LangGraphChatFacade:
                 runtime_config.metadata,
                 handoff,
             )
+            active_runs = await self._agent_run_result_projector.collect_active_for_context(
+                tenant_id=tenant_id,
+                task_id=runtime_config.chat_inputs.task_id,
+                conversation_id=conversation_id,
+            )
+            attach_active_agent_runs_to_context(runtime_config.metadata, active_runs)
             return handoff
         except Exception:
             logger.debug(

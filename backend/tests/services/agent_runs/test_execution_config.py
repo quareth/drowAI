@@ -81,7 +81,10 @@ def _assignment(
         targets=["10.0.0.10"],
         suggested_capabilities=["port_scan"],
         scope_summary="Targets: 10.0.0.10",
-        relevant_context={"classifier_label": "direct_executor"},
+        relevant_context={
+            "classifier_label": "direct_executor",
+            "agent_mode": "full_access",
+        },
         runtime_identity=runtime_identity or _runtime_identity(),
     )
 

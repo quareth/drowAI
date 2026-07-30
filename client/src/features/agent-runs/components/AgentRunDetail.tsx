@@ -3,43 +3,25 @@
  *
  * Responsibilities:
  * - render one subagent run as a compact child conversation
- * - expose Stop and pending approval controls without changing chat behavior
+ * - expose Stop and pending-approval status without owning HITL controls
  * - reuse existing reasoning, tool, observation, and final-message renderers
  */
 import { useState } from "react";
-import { AlertTriangle, CircleStop, ShieldQuestion } from "lucide-react";
+import { AlertTriangle, CircleStop } from "lucide-react";
 
-import ToolApprovalCard, { type BatchApprovalDecisions } from "@/components/chat/ToolApprovalCard";
 import type { ChatMessage } from "@/components/chat/types";
 import { Button } from "@/components/ui/button";
-import type { ToolApprovalInterruptDetail } from "@/types/hitl";
 
 import { isAgentRunTerminalStatus } from "../contracts/agent-run";
 import type { AgentRunRecord } from "../state/agent-stream-store";
 import { AgentActivityTimeline } from "./AgentActivityTimeline";
 
-export interface AgentRunApprovalControls {
-  interrupt: ToolApprovalInterruptDetail | null;
-  onApprove: () => void;
-  onEdit: (params: Record<string, unknown>) => void;
-  onSkip: () => void;
-  onBatchSubmit?: (decisions: BatchApprovalDecisions) => void;
-  isSubmitting?: boolean;
-}
-
-type VisibleAgentRunApprovalControls = AgentRunApprovalControls & {
-  interrupt: ToolApprovalInterruptDetail;
-};
-
 interface AgentRunDetailProps {
   taskId: number;
   run: AgentRunRecord;
   activityMessages: ChatMessage[];
-  approvalControls?: AgentRunApprovalControls;
   onStop: (run: AgentRunRecord) => Promise<void> | void;
 }
-
-const SUBAGENT_GRAPH_NAME = "subagent";
 
 function formatDuration(run: AgentRunRecord): string {
   const end = run.completedAt ?? run.updatedAt;
@@ -55,31 +37,15 @@ function formatDuration(run: AgentRunRecord): string {
   return `${hours}h ${minutes % 60}m`;
 }
 
-function shouldShowApproval(
-  run: AgentRunRecord,
-  controls: AgentRunApprovalControls | undefined,
-): controls is VisibleAgentRunApprovalControls {
-  return (
-    run.status === "waiting_for_approval" &&
-    controls?.interrupt != null &&
-    controls.interrupt.taskId === run.taskId &&
-    controls.interrupt.graphName === SUBAGENT_GRAPH_NAME
-  );
-}
-
 export function AgentRunDetail({
   taskId,
   run,
   activityMessages,
-  approvalControls,
   onStop,
 }: AgentRunDetailProps) {
   const [isStopping, setIsStopping] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
   const canStop = !isAgentRunTerminalStatus(run.status) && !isStopping;
-  const visibleApprovalControls = shouldShowApproval(run, approvalControls)
-    ? approvalControls
-    : null;
 
   const handleStop = async () => {
     if (!canStop) return;
@@ -117,24 +83,7 @@ export function AgentRunDetail({
             </section>
           )}
 
-          {visibleApprovalControls && (
-            <section className="space-y-2">
-              <h3 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-amber-200">
-                <ShieldQuestion className="h-3.5 w-3.5" aria-hidden="true" />
-                Approval
-              </h3>
-              <ToolApprovalCard
-                payload={visibleApprovalControls.interrupt.payload}
-                onApprove={visibleApprovalControls.onApprove}
-                onEdit={visibleApprovalControls.onEdit}
-                onSkip={visibleApprovalControls.onSkip}
-                onBatchSubmit={visibleApprovalControls.onBatchSubmit}
-                isSubmitting={visibleApprovalControls.isSubmitting}
-              />
-            </section>
-          )}
-
-          {run.status === "waiting_for_approval" && !visibleApprovalControls && (
+          {run.status === "waiting_for_approval" && (
             <section className="rounded-lg border border-amber-500/35 bg-amber-500/10 px-3 py-3 text-sm text-amber-100">
               {run.agentDisplayName} is waiting for a tool approval.
             </section>
@@ -152,18 +101,18 @@ export function AgentRunDetail({
           </section>
 
           {canStop && (
-          <section>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={handleStop}
-              className="px-2 text-slate-500 hover:bg-slate-900 hover:text-slate-300"
-            >
-              <CircleStop className="h-4 w-4" aria-hidden="true" />
-              {isStopping ? "Stopping" : "Stop"}
-            </Button>
-          </section>
+            <section>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={handleStop}
+                className="px-2 text-slate-500 hover:bg-slate-900 hover:text-slate-300"
+              >
+                <CircleStop className="h-4 w-4" aria-hidden="true" />
+                {isStopping ? "Stopping" : "Stop"}
+              </Button>
+            </section>
           )}
 
           {stopError && (

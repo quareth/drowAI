@@ -29,6 +29,7 @@ SUBAGENT_RECOVERY_ERROR = (
     "Subagent approval cannot be resumed because the live process-local registry "
     "entry is missing. Start a new subagent run."
 )
+SUBAGENT_PARENT_CONTINUATION_PENDING = "subagent_parent_continuation_pending"
 _SUBAGENT_GRAPH_NAMES = frozenset({GRAPH_NAME_SUBAGENT})
 
 
@@ -112,12 +113,12 @@ async def mark_subagent_running(
     *,
     registry: ProcessLocalAgentRunRegistry,
     context: SubagentContinuationContext | None,
-) -> None:
+) -> LocalAgentRun | None:
     """Move a verified live subagent run out of waiting state for resume work."""
 
     if context is None:
-        return
-    await registry.mark_running(
+        return None
+    return await registry.mark_running(
         tenant_id=context.entry.tenant_id,
         task_id=context.entry.task_id,
         agent_run_id=context.entry.agent_run_id,
@@ -205,6 +206,7 @@ def is_subagent_graph_name(graph_name: str | None) -> bool:
 
 
 __all__ = [
+    "SUBAGENT_PARENT_CONTINUATION_PENDING",
     "SUBAGENT_RECOVERY_ERROR",
     "SubagentContinuationContext",
     "SubagentContinuationError",

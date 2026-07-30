@@ -23,16 +23,13 @@ import {
   returnAgentRunDrawerToList,
   type AgentRunRecord,
 } from "../state/agent-stream-store";
-import { AgentRunDetail, type AgentRunApprovalControls } from "./AgentRunDetail";
+import { AgentRunDetail } from "./AgentRunDetail";
 import { AgentIdentityIcon } from "./AgentIdentityIcon";
 import { AgentRunList } from "./AgentRunList";
-
-export type { AgentRunApprovalControls } from "./AgentRunDetail";
 
 interface AgentRunDrawerProps {
   taskId: number | null | undefined;
   activityMessages: ChatMessage[];
-  approvalControls?: AgentRunApprovalControls;
   onStopRun: (run: AgentRunRecord) => Promise<void> | void;
 }
 
@@ -43,7 +40,6 @@ function isValidTaskId(taskId: number | null | undefined): taskId is number {
 export function AgentRunDrawer({
   taskId,
   activityMessages,
-  approvalControls,
   onStopRun,
 }: AgentRunDrawerProps) {
   const presentation = useAgentRunPresentation(taskId);
@@ -134,7 +130,6 @@ export function AgentRunDrawer({
           taskId={resolvedTaskId}
           run={selectedRun}
           activityMessages={selectedActivityMessages}
-          approvalControls={approvalControls}
           onStop={onStopRun}
         />
       ) : (

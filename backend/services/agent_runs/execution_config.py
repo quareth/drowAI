@@ -65,18 +65,12 @@ async def build_child_execution_config(
             task_id=assignment.task_id,
         ),
         "graph_name": GRAPH_NAME_SUBAGENT,
-        "graph_thread_id": child_graph_thread_id,
-        "producer_type": "subagent",
-        "agent_run_id": assignment.agent_run_id,
-        "agent_id": assignment.agent_id,
-        "agent_kind": assignment.agent_kind,
-        "agent_display_name": agent_display_name(assignment.agent_id),
-        "agent_icon_key": agent_icon_key(assignment.agent_id),
-        "parent_turn_id": assignment.parent_turn_id,
-        "parent_run_id": parent_run_id,
-        "parent_graph_thread_id": assignment.parent_graph_thread_id,
-        "internal_only": False,
-        "lifecycle_version": entry.lifecycle_version,
+        **build_child_event_attribution(
+            assignment=assignment,
+            child_graph_thread_id=child_graph_thread_id,
+            parent_run_id=parent_run_id,
+            lifecycle_version=entry.lifecycle_version,
+        ),
         "runtime_projection": runtime_projection,
     }
 
@@ -88,6 +82,30 @@ async def build_child_execution_config(
         configurable["llm_runtime_selection"] = selection_payload
 
     return {"configurable": configurable}
+
+
+def build_child_event_attribution(
+    *,
+    assignment: AgentAssignment,
+    child_graph_thread_id: str,
+    parent_run_id: str | None,
+    lifecycle_version: int,
+) -> dict[str, Any]:
+    """Return stable stream ownership metadata for a child execution attempt."""
+    return {
+        "graph_thread_id": child_graph_thread_id,
+        "producer_type": "subagent",
+        "agent_run_id": assignment.agent_run_id,
+        "agent_id": assignment.agent_id,
+        "agent_kind": assignment.agent_kind,
+        "agent_display_name": agent_display_name(assignment.agent_id),
+        "agent_icon_key": agent_icon_key(assignment.agent_id),
+        "parent_turn_id": assignment.parent_turn_id,
+        "parent_run_id": parent_run_id,
+        "parent_graph_thread_id": assignment.parent_graph_thread_id,
+        "internal_only": False,
+        "lifecycle_version": lifecycle_version,
+    }
 
 
 def _authorize_parent_runtime(
@@ -198,5 +216,6 @@ def _optional_string(value: Any) -> str | None:
 
 __all__ = [
     "ChildExecutionConfigError",
+    "build_child_event_attribution",
     "build_child_execution_config",
 ]

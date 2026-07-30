@@ -91,4 +91,53 @@ describe("MessageList activity collapse", () => {
     expect(screen.getByTestId("message-group-reasoning")).toBeTruthy();
     expect(screen.getByTestId("message-group-tool")).toBeTruthy();
   });
+
+  it("renders parent handoff progress as existing reasoning activity", () => {
+    render(
+      <MessageList
+        messages={[
+          makeMessage("progress-start", "reasoning_start", "", {
+            ind: 0,
+            reasoning_section_id: "turn-1:parent-handoff:abc123",
+            progress_kind: "parent_handoff",
+            producer_type: "main_agent",
+          }),
+          makeMessage(
+            "progress-delta",
+            "reasoning_delta",
+            "2 assignments returned a handoff. 1 relevant assignment still active. The parent is evaluating the batch before the next step.",
+            {
+              ind: 0,
+              reasoning_section_id: "turn-1:parent-handoff:abc123",
+              progress_kind: "parent_handoff",
+              producer_type: "main_agent",
+              parent_progress: {
+                completed_assignment_count: 2,
+                active_assignment_count: 1,
+              },
+            },
+          ),
+          makeMessage("progress-end", "reasoning_section_end", "", {
+            ind: 0,
+            reasoning_section_id: "turn-1:parent-handoff:abc123",
+            progress_kind: "parent_handoff",
+            producer_type: "main_agent",
+          }),
+          makeMessage("final", "message_delta", "Final answer", {
+            ind: 2,
+            final_snapshot: true,
+          }),
+        ]}
+        taskId={42}
+        isLoading={false}
+        isConnected
+      />,
+    );
+
+    expect(screen.getByTestId("turn-activity-card-turn-sequence:1")).toBeTruthy();
+    expect(screen.getByText("Final answer")).toBeTruthy();
+    expect(screen.getByTestId("message-group-reasoning").textContent).toContain(
+      "2 assignments returned a handoff",
+    );
+  });
 });

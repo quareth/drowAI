@@ -29,6 +29,9 @@ from backend.services.langgraph_chat.checkpoint.interrupt_ticket_service import 
     mark_interrupt_ticket_failed_best_effort,
     mark_interrupt_ticket_resumed_best_effort,
 )
+from backend.services.agent_runs.continuation import (
+    SUBAGENT_PARENT_CONTINUATION_PENDING,
+)
 from backend.services.langgraph_chat.model_role_registry import (
     DEFAULT_USER_SELECTED_REASONING_EFFORT,
     ROLE_CONVERSATION_MAIN,
@@ -709,6 +712,7 @@ class TurnExecutionOrchestrator:
                 )
             )
         lifecycle_status = "failed"
+        parent_continuation_pending = False
         workflow_failed_fn = (
             mark_turn_workflow_failed or mark_turn_workflow_failed_best_effort
         )
@@ -859,6 +863,26 @@ class TurnExecutionOrchestrator:
                             turn_id=lifecycle_turn_id,
                         )
                     lifecycle_status = "waiting_for_human"
+                    return
+
+                if result_metadata.get(SUBAGENT_PARENT_CONTINUATION_PENDING) is True:
+                    service._record_result_usage(
+                        task_id=task_id,
+                        user_id=user_id,
+                        result=result,
+                        conversation_id=conversation_id,
+                        model=runtime_context.model,
+                        runtime_selection=runtime_context.selection_payload,
+                    )
+                    interrupt_completed_fn = (
+                        mark_interrupt_ticket_completed
+                        or mark_interrupt_ticket_completed_best_effort
+                    )
+                    interrupt_completed_fn(
+                        task_id=task_id,
+                        interrupt_id=interrupt_id,
+                    )
+                    parent_continuation_pending = True
                     return
 
                 final_content = service._result_service.extract_final_content(
@@ -1100,11 +1124,11 @@ class TurnExecutionOrchestrator:
                         turn_id=lifecycle_turn_id,
                     )
         finally:
-            if lifecycle_turn_id:
+            if lifecycle_turn_id and not parent_continuation_pending:
                 lifecycle.end_run(
                     task_id=task_id, turn_id=lifecycle_turn_id, status=lifecycle_status
                 )
-            if hub is not None:
+            if hub is not None and not parent_continuation_pending:
                 service._turn_stream_publisher.set_streaming_inactive(
                     task_id=task_id, hub=hub
                 )

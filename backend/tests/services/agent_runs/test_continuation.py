@@ -434,6 +434,8 @@ async def test_resume_from_interrupt_marks_subagent_completed_on_success(
             checkpoint_id="cp-ticket",
         ),
     )
+    persist_calls: list[dict[str, Any]] = []
+    lifecycle_events: list[dict[str, Any]] = []
     service = _build_subagent_resume_service(
         registry=registry,
         final_state=_interactive_state(
@@ -481,6 +483,8 @@ async def test_resume_from_interrupt_marks_subagent_completed_on_success(
             ],
         ),
         interrupted=False,
+        persist_calls=persist_calls,
+        lifecycle_events=lifecycle_events,
     )
     monkeypatch.setattr(
         service,
@@ -497,7 +501,17 @@ async def test_resume_from_interrupt_marks_subagent_completed_on_success(
         response={"approved": True},
     )
 
-    assert result.final_text == "Pathfinder found HTTP on port 80."
+    assert result.final_text is None
+    assert result.metadata["subagent_parent_continuation_pending"] is True
+    assert persist_calls[-1]["final_message"] is None
+    assert persist_calls[-1]["event_attribution"]["producer_type"] == "subagent"
+    assert (
+        persist_calls[-1]["event_attribution"]["agent_run_id"]
+        == "pathfinder-run-1"
+    )
+    assert [event["agent_run"]["status"] for event in lifecycle_events] == [
+        "running"
+    ]
     entry = await registry.get(
         tenant_id=7,
         task_id=42,
@@ -718,6 +732,8 @@ def _build_subagent_resume_service(
     registry: ProcessLocalAgentRunRegistry,
     final_state: dict[str, Any],
     interrupted: bool,
+    persist_calls: list[dict[str, Any]] | None = None,
+    lifecycle_events: list[dict[str, Any]] | None = None,
 ) -> CheckpointContinuationService:
     class _CheckpointerService:
         def get_checkpointer(self, task_id: int) -> "_FakeCheckpointerContext":
@@ -736,11 +752,19 @@ def _build_subagent_resume_service(
             assert task_id == 42
             assert config["configurable"]["thread_id"] == "graph-" + ("a" * 32)
             assert config["configurable"]["checkpoint_id"] == "cp-ticket"
+            assert config["configurable"]["producer_type"] == "subagent"
+            assert config["configurable"]["agent_run_id"] == "pathfinder-run-1"
+            assert config["configurable"]["agent_id"] == "pathfinder"
+            assert config["configurable"]["parent_turn_id"] == "turn-42"
             return SimpleNamespace(
                 final_state=final_state,
                 interrupted=interrupted,
                 metadata={},
             )
+
+    async def _publish_lifecycle(_task_id: int, event: dict[str, Any]) -> None:
+        if lifecycle_events is not None:
+            lifecycle_events.append(event)
 
     return CheckpointContinuationService(
         checkpointer_service=_CheckpointerService(),
@@ -759,7 +783,9 @@ def _build_subagent_resume_service(
         hydrate_container_from_checkpoint_state=lambda *_args, **_kwargs: None,
         extract_resume_conversation_id=lambda _state: "",
         resolve_resume_turn_number=lambda **_kwargs: 0,
-        persist_chat_message_from_container=lambda **_kwargs: None,
+        persist_chat_message_from_container=lambda **kwargs: (
+            persist_calls.append(kwargs) if persist_calls is not None else None
+        ),
         build_result=lambda **kwargs: LangGraphChatResult(
             final_text=kwargs["final_text"],
             conversation_id=kwargs["conversation_id"],
@@ -768,4 +794,5 @@ def _build_subagent_resume_service(
             usage=kwargs["usage"],
         ),
         agent_run_registry=registry,
+        agent_run_lifecycle_publisher=_publish_lifecycle,
     )
