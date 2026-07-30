@@ -323,6 +323,36 @@ sequenceDiagram
     Graph->>DB: finalize assistant message + usage/tool rows
 ```
 
+Canonical semantic fact handoff:
+
+```mermaid
+flowchart LR
+    Native["Native tool result"]
+    Producer["Tool-owned parser + semantic emitters"]
+    Envelope["Flat semantic envelope"]
+    AgentCompile["Agent call to shared compiler"]
+    Compact["Optional pentest compact fact projection"]
+    KnowledgeCompile["Knowledge call to shared compiler + bridge"]
+    Ledger["Append-only Knowledge observations"]
+    ReadModels["Knowledge read models"]
+
+    Native --> Producer
+    Producer --> Envelope
+    Envelope --> AgentCompile
+    AgentCompile --> Compact
+    Envelope --> KnowledgeCompile
+    KnowledgeCompile --> Ledger
+    Ledger --> ReadModels
+```
+
+The compiler contract, evidence rules, admission policy, masking, diagnostics,
+ordering, and dedupe are backend-free under
+`runtime_shared/semantic/pentest_facts`. Agent compact projection and backend
+Knowledge ingestion are independent consumers: they rebuild and compile their
+own envelopes and never exchange compiled sets or consumer DTOs. Tool-specific
+parsing stays with the producer; backend Knowledge adds tenant/user/engagement
+lineage and archive-scoped evidence only after canonical compilation.
+
 Runner-backed runtime operation:
 
 ```mermaid

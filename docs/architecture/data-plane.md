@@ -293,8 +293,12 @@ Common write paths:
   validates the accepted identity, object key, declared size/hash, object
   presence, and stored size. The local head metadata has no content hash, so
   readiness does not independently hash the stored bytes.
-- Knowledge/reporting services promote selected runtime outputs into
-  engagement-owned durable records.
+- Deterministic Knowledge ingestion promotes admitted canonical semantic facts
+  into append-only engagement-owned observations before projecting durable read
+  models. Tool-specific parsing stays at the producer, shared admission stays
+  backend-free under `runtime_shared/semantic/pentest_facts`, and compact tool
+  output is not a deterministic Knowledge authority. Optional candidate
+  extraction remains a separate policy-controlled observation source.
 
 ## Workspace Boundary
 

@@ -364,8 +364,21 @@ Runtime responsibilities under the subgraph:
 - validate and execute tool batches
 - apply approval and idempotency behavior
 - dispatch local, direct, or runner-backed commands
-- project compact result metadata back into graph state
+- run producer-owned native parsing and semantic observation/evidence emitters
+  through shared result enrichment
+- project universal primary compact output plus optional canonical pentest-fact
+  secondary output into batch/cache records
+- preserve the flat semantic envelope with execution results for independent
+  downstream Knowledge ingestion
 - record artifact/provenance metadata
+
+`compress_tool_output()` remains the graph compression entrypoint. Its pentest
+secondary lane compiles the semantic envelope through
+`runtime_shared.semantic.pentest_facts` and projects fact families through
+`agent.graph.compression.pentest_facts`; it does not parse raw output or call
+Knowledge. Graph state, frontend streaming, and Knowledge triggers continue to
+use the universal primary compact value, while the post-tool prompt may render
+secondary batch evidence as supplemental context.
 
 ## Streaming And Checkpointing
 
