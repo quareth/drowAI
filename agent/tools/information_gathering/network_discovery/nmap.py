@@ -201,7 +201,7 @@ def parse_nmap_xml(xml_text: str) -> Dict[str, Any]:
 
     # Parse all hosts (not just first one)
     for host in root.findall("host"):
-        host_info: Dict[str, Any] = {"ports": []}
+        host_info: Dict[str, Any] = {"ports": [], "scanned_ports": []}
 
         # Get host address
         addr_el = host.find("address")
@@ -217,16 +217,23 @@ def parse_nmap_xml(xml_text: str) -> Dict[str, Any]:
         # Get ports for this host
         for port_el in host.findall("ports/port"):
             state_el = port_el.find("state")
-            if state_el is not None and state_el.attrib.get("state") == "open":
-                service_el = port_el.find("service")
-                port_info = {
-                    "port": int(port_el.attrib.get("portid", 0)),
-                    "protocol": port_el.attrib.get("protocol"),
-                    "service": service_el.attrib.get("name") if service_el is not None else None,
-                    "product": service_el.attrib.get("product") if service_el is not None else None,
-                    "version": service_el.attrib.get("version") if service_el is not None else None,
-                }
-                # Enrich port with service profile (scripts, http_title, etc.)
+            if state_el is None:
+                continue
+            service_el = port_el.find("service")
+            port_info = {
+                "port": int(port_el.attrib.get("portid", 0)),
+                "protocol": port_el.attrib.get("protocol"),
+                "status": state_el.attrib.get("state"),
+                "state_reason": state_el.attrib.get("reason"),
+                "service": service_el.attrib.get("name") if service_el is not None else None,
+                "product": service_el.attrib.get("product") if service_el is not None else None,
+                "version": service_el.attrib.get("version") if service_el is not None else None,
+            }
+            # Preserve every explicit port state so a negative scan result is
+            # still decision-grade evidence for the parent handoff.
+            host_info["scanned_ports"].append(dict(port_info))
+            if port_info["status"] == "open":
+                # Enrich open services with profiles/scripts as before.
                 enrich_port(port_el, port_info)
                 host_info["ports"].append(port_info)
                 # Also add to flat open_ports list for backward compatibility
