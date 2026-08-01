@@ -10,6 +10,7 @@ from agent.config import AgentConfig
 from ...infrastructure.state_models import GraphRuntimeContext
 from ...state import InteractiveState
 from ...utils.event_identity import resolve_turn_sequence
+from ..working_memory import apply_post_tool_active_decision
 
 # Import from submodules
 from .guardrails import (
@@ -138,6 +139,11 @@ def _route_with_outcome(
 ) -> dict:
     """Write router contracts, record decision, and return graph update."""
     facts = interactive.facts
+    _supersede_overridden_active_decision(
+        interactive,
+        action=action,
+        reason=reason,
+    )
     outcome = write_router_outcome(
         facts,
         action=action,
@@ -152,6 +158,33 @@ def _route_with_outcome(
     record_decision(interactive, action, reason, append_history=append_history)
     update_router_observability(facts, outcome)
     return interactive.as_graph_update()
+
+
+def _supersede_overridden_active_decision(
+    interactive: InteractiveState,
+    *,
+    action: str,
+    reason: str,
+) -> None:
+    """Supersede an active proposal when authoritative routing replaces it."""
+    working_memory = interactive.facts.safe_metadata.get("working_memory")
+    if not isinstance(working_memory, Mapping):
+        return
+    active_decision = working_memory.get("active_decision")
+    if not isinstance(active_decision, Mapping):
+        return
+    if str(active_decision.get("status") or "").strip().lower() != "active":
+        return
+
+    proposed_action = str(active_decision.get("next_action") or "").strip().lower()
+    routed_action = str(action or "").strip().lower()
+    if not proposed_action or proposed_action == routed_action:
+        return
+
+    superseded = dict(active_decision)
+    superseded["status"] = "superseded"
+    superseded["status_reason"] = f"router_override:{reason}"[:256]
+    apply_post_tool_active_decision(interactive, superseded)
 
 
 # =============================================================================

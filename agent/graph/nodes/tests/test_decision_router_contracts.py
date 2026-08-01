@@ -587,14 +587,57 @@ async def test_budget_conflict_uses_most_restrictive_model_with_reason_tag() -> 
         "turn_sequence": 7,
         "phase_sequence": 3,
     }
+    state.facts.metadata["working_memory"] = {
+        "active_decision": {
+            "status": "active",
+            "next_action": "call_tool",
+            "action_reasoning": "Need to run one more tool",
+        }
+    }
 
     result = await decision_router(state.as_graph_state())
-    outcome = result["facts"]["metadata"]["router_outcome"]
+    metadata = result["facts"]["metadata"]
+    outcome = metadata["router_outcome"]
 
     assert outcome["action"] == "finalize"
     assert outcome["candidate_action"] == "call_tool"
     assert outcome["reason"] == "budget_exhausted_conflict_tool_calls"
     assert outcome["resolution_source"] == "guardrail"
+    assert metadata["working_memory"]["active_decision"]["status"] == "superseded"
+    assert metadata["working_memory"]["active_decision"]["status_reason"] == (
+        "router_override:budget_exhausted_conflict_tool_calls"
+    )
+
+
+@pytest.mark.asyncio
+async def test_router_keeps_active_decision_when_route_accepts_its_action() -> None:
+    state = _base_state()
+    state.facts.metadata["runtime_budgets"] = {
+        "remaining_iterations": 8,
+        "remaining_tool_calls": 4,
+    }
+    state.facts.metadata["candidate_decision"] = {
+        "next_action": "call_tool",
+        "action_reasoning": "Need one more scan",
+        "decision_source": "ptr",
+        "candidate_id": "ptr-7-3",
+        "producer_node": "post_tool_reasoning",
+        "turn_sequence": 7,
+        "phase_sequence": 3,
+    }
+    state.facts.metadata["working_memory"] = {
+        "active_decision": {
+            "status": "active",
+            "next_action": "call_tool",
+            "action_reasoning": "Need one more scan",
+        }
+    }
+
+    result = await decision_router(state.as_graph_state())
+
+    assert result["facts"]["metadata"]["working_memory"]["active_decision"][
+        "status"
+    ] == "active"
 
 
 @pytest.mark.asyncio
