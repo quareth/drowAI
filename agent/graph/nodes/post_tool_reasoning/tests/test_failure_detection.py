@@ -1,18 +1,131 @@
 """Failure and retry behavior tests for post_tool_reasoning node."""
 
+import json
+from collections.abc import Awaitable, Callable
 from typing import Any, Dict, List
 
 import pytest
 
 from agent.graph.nodes.post_tool_reasoning import node
 from agent.graph.nodes.post_tool_reasoning.models import (
+    PostToolReasoningDecisionOutput,
     PostToolReasoningOutput,
     TodoProgress,
     ToolIntent,
 )
+from agent.providers.llm.core.base import ToolCall, ToolCallResult
 from agent.graph.nodes.post_tool_reasoning.node import _update_active_decision_memory
 from agent.graph.state import FactsState, InteractiveState, TodoItem, TodoStatus, TraceState
 from agent.graph.utils.todo_stall_guard import TODO_STALL_METADATA_KEY
+
+
+DecisionCall = Callable[..., Awaitable[PostToolReasoningOutput]]
+
+
+def _decision_projection(
+    output: PostToolReasoningOutput | PostToolReasoningDecisionOutput,
+) -> PostToolReasoningDecisionOutput:
+    if isinstance(output, PostToolReasoningDecisionOutput):
+        return output
+    return PostToolReasoningDecisionOutput.model_validate(
+        output.model_dump(exclude={"observation"})
+    )
+
+
+class _RouteDecisionClient:
+    """Fake provider client returning one visible-text plus route-tool response."""
+
+    def __init__(self, decision_call: DecisionCall) -> None:
+        self._decision_call = decision_call
+
+    async def decision(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+    ) -> tuple[str, PostToolReasoningDecisionOutput]:
+        output = await self._decision_call(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+        observation = str(getattr(output, "observation", "") or "")
+        return observation, _decision_projection(output)
+
+    async def chat_with_tools_with_usage(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *_args: Any,
+        **_kwargs: Any,
+    ) -> Any:
+        observation, decision = await self.decision(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+        )
+        return ToolCallResult(
+            content=observation,
+            tool_calls=[
+                ToolCall(
+                    id="ptr-commit-1",
+                    name="ptr_commit",
+                    arguments=json.dumps(
+                        decision.model_dump(mode="json", exclude_none=True)
+                    ),
+                )
+            ],
+            raw={},
+            usage=None,
+            outcome=None,
+        )
+
+
+class _RouteStreamingAdapter:
+    """Adapt focused stream probes to the provider-native route seam."""
+
+    def __init__(self, adapter: Any) -> None:
+        self._adapter = adapter
+
+    def get_stream_identifiers(self, *args: Any, **kwargs: Any) -> tuple[str, str]:
+        return self._adapter.get_stream_identifiers(*args, **kwargs)
+
+    async def stream_observation_with_route(
+        self,
+        **kwargs: Any,
+    ) -> tuple[str, PostToolReasoningDecisionOutput, bool, Any, None]:
+        client = kwargs["llm_client"]
+        observation, decision = await client.decision(
+            system_prompt=kwargs["system_prompt"],
+            user_prompt=kwargs["user_prompt"],
+        )
+        streamed_observation, streamed, usage = (
+            await self._adapter.stream_observation_text(**kwargs)
+        )
+        return streamed_observation or observation, decision, streamed, usage, None
+
+
+def _install_route_client(
+    monkeypatch: pytest.MonkeyPatch,
+    decision_call: DecisionCall,
+) -> None:
+    monkeypatch.setattr(
+        node,
+        "resolve_llm_client",
+        lambda *_args, **_kwargs: _RouteDecisionClient(decision_call),
+    )
+
+
+def _install_route_stream(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    adapter: Any,
+    decision_call: DecisionCall,
+) -> None:
+    _install_route_client(monkeypatch, decision_call)
+    monkeypatch.setattr(
+        node.StreamingAdapterFactory,
+        "create",
+        lambda *_args, **_kwargs: _RouteStreamingAdapter(adapter),
+    )
 
 
 def _make_state(
@@ -165,12 +278,11 @@ async def test_retry_event_emission(monkeypatch: pytest.MonkeyPatch) -> None:
             retry_suggested=True,
         )
 
-    def fake_resolve_llm_client(*_: Any, **__: Any) -> Any:
-        return object()
-
-    monkeypatch.setattr(node.StreamingAdapterFactory, "create", lambda *_args, **_kwargs: DummyAdapter())
-    monkeypatch.setattr(node, "resolve_llm_client", fake_resolve_llm_client)
-    monkeypatch.setattr(node, "analyze_tool_result", fake_decision_call)
+    _install_route_stream(
+        monkeypatch,
+        adapter=DummyAdapter(),
+        decision_call=fake_decision_call,
+    )
 
     metadata = {
         "synthesized_output": {"summary": "failure summary", "success": False},
@@ -224,12 +336,11 @@ async def test_simple_streaming_uses_retry_count_for_sub_turn_index(
             retry_suggested=False,
         )
 
-    def fake_resolve_llm_client(*_: Any, **__: Any) -> Any:
-        return object()
-
-    monkeypatch.setattr(node.StreamingAdapterFactory, "create", lambda *_args, **_kwargs: DummyAdapter())
-    monkeypatch.setattr(node, "resolve_llm_client", fake_resolve_llm_client)
-    monkeypatch.setattr(node, "analyze_tool_result", fake_decision_call)
+    _install_route_stream(
+        monkeypatch,
+        adapter=DummyAdapter(),
+        decision_call=fake_decision_call,
+    )
 
     state = _make_state(
         {
@@ -281,12 +392,11 @@ async def test_simple_streaming_prefers_explicit_sub_turn_index_over_retry_count
             retry_suggested=False,
         )
 
-    def fake_resolve_llm_client(*_: Any, **__: Any) -> Any:
-        return object()
-
-    monkeypatch.setattr(node.StreamingAdapterFactory, "create", lambda *_args, **_kwargs: DummyAdapter())
-    monkeypatch.setattr(node, "resolve_llm_client", fake_resolve_llm_client)
-    monkeypatch.setattr(node, "analyze_tool_result", fake_decision_call)
+    _install_route_stream(
+        monkeypatch,
+        adapter=DummyAdapter(),
+        decision_call=fake_decision_call,
+    )
 
     state = _make_state(
         {
@@ -339,12 +449,11 @@ async def test_streaming_sub_turn_prefers_dr_counter_over_retry_count(
             retry_suggested=False,
         )
 
-    def fake_resolve_llm_client(*_: Any, **__: Any) -> Any:
-        return object()
-
-    monkeypatch.setattr(node.StreamingAdapterFactory, "create", lambda *_args, **_kwargs: DummyAdapter())
-    monkeypatch.setattr(node, "resolve_llm_client", fake_resolve_llm_client)
-    monkeypatch.setattr(node, "analyze_tool_result", fake_decision_call)
+    _install_route_stream(
+        monkeypatch,
+        adapter=DummyAdapter(),
+        decision_call=fake_decision_call,
+    )
 
     state = _make_state(
         {
@@ -395,12 +504,11 @@ async def test_streaming_observation_flag_written_to_active_metadata_reference(
             retry_suggested=False,
         )
 
-    def fake_resolve_llm_client(*_: Any, **__: Any) -> Any:
-        return object()
-
-    monkeypatch.setattr(node.StreamingAdapterFactory, "create", lambda *_args, **_kwargs: DummyAdapter())
-    monkeypatch.setattr(node, "resolve_llm_client", fake_resolve_llm_client)
-    monkeypatch.setattr(node, "analyze_tool_result", fake_decision_call)
+    _install_route_stream(
+        monkeypatch,
+        adapter=DummyAdapter(),
+        decision_call=fake_decision_call,
+    )
 
     state = _make_state(
         {
@@ -431,14 +539,7 @@ async def test_failure_metadata_storage(monkeypatch: pytest.MonkeyPatch) -> None
             retry_suggested=False,
         )
 
-    def fake_resolve_llm_client(*_: Any, **__: Any) -> Any:
-        class _Dummy:
-            pass
-
-        return _Dummy()
-
-    monkeypatch.setattr(node, "analyze_tool_result", fake_non_streaming_call)
-    monkeypatch.setattr(node, "resolve_llm_client", fake_resolve_llm_client)
+    _install_route_client(monkeypatch, fake_non_streaming_call)
 
     metadata = {
         "synthesized_output": {"summary": "failure summary", "success": False},
@@ -469,20 +570,13 @@ async def test_retry_budget_consumed_non_streaming(monkeypatch: pytest.MonkeyPat
             retry_suggested=True,
         )
 
-    def fake_resolve_llm_client(*_: Any, **__: Any) -> Any:
-        class _Dummy:
-            pass
-
-        return _Dummy()
-
     metadata = {
         "synthesized_output": {"summary": "failure summary", "success": False},
         "last_tool_result": {"stderr": "connection refused", "success": False},
     }
     state = _make_state(metadata)
 
-    monkeypatch.setattr(node, "analyze_tool_result", fake_non_streaming_call)
-    monkeypatch.setattr(node, "resolve_llm_client", fake_resolve_llm_client)
+    _install_route_client(monkeypatch, fake_non_streaming_call)
 
     await node.post_tool_reasoning(state, context=None, config=None, writer=None)
 
@@ -508,12 +602,6 @@ async def test_retry_suggestion_rejected_when_budget_exhausted(
             retry_suggested=True,
         )
 
-    def fake_resolve_llm_client(*_: Any, **__: Any) -> Any:
-        class _Dummy:
-            pass
-
-        return _Dummy()
-
     metadata = {
         "retry_tracking": {"count": node.MAX_RETRIES},
         "synthesized_output": {"summary": "failure summary", "success": False},
@@ -521,8 +609,7 @@ async def test_retry_suggestion_rejected_when_budget_exhausted(
     }
     state = _make_state(metadata)
 
-    monkeypatch.setattr(node, "analyze_tool_result", fake_non_streaming_call)
-    monkeypatch.setattr(node, "resolve_llm_client", fake_resolve_llm_client)
+    _install_route_client(monkeypatch, fake_non_streaming_call)
 
     await node.post_tool_reasoning(state, context=None, config=None, writer=None)
 
@@ -562,9 +649,6 @@ async def test_simple_tool_success_allows_bounded_followup_call_tool(
             retry_suggested=False,
         )
 
-    def fake_resolve_llm_client(*_: Any, **__: Any) -> Any:
-        return object()
-
     state = _make_state(
         {
             "synthesized_output": {"summary": "postgres detected", "success": True},
@@ -573,8 +657,7 @@ async def test_simple_tool_success_allows_bounded_followup_call_tool(
         capability="simple_tool_execution",
     )
 
-    monkeypatch.setattr(node, "analyze_tool_result", fake_non_streaming_call)
-    monkeypatch.setattr(node, "resolve_llm_client", fake_resolve_llm_client)
+    _install_route_client(monkeypatch, fake_non_streaming_call)
 
     await node.post_tool_reasoning(state, context=None, config=None, writer=None)
 
@@ -613,9 +696,6 @@ async def test_active_todo_stall_guard_candidate_decision_reflects(
             retry_suggested=False,
         )
 
-    def fake_resolve_llm_client(*_: Any, **__: Any) -> Any:
-        return object()
-
     state = _make_state(
         {
             "turn_sequence": 7,
@@ -633,8 +713,7 @@ async def test_active_todo_stall_guard_candidate_decision_reflects(
         TodoItem(description="Resolve target hostname", status=TodoStatus.IN_PROGRESS)
     ]
 
-    monkeypatch.setattr(node, "analyze_tool_result", fake_non_streaming_call)
-    monkeypatch.setattr(node, "resolve_llm_client", fake_resolve_llm_client)
+    _install_route_client(monkeypatch, fake_non_streaming_call)
 
     await node.post_tool_reasoning(state, context=None, config=None, writer=None)
 
@@ -669,9 +748,6 @@ async def test_active_todo_stall_guard_candidate_decision_synthesizes_after_refl
             retry_suggested=False,
         )
 
-    def fake_resolve_llm_client(*_: Any, **__: Any) -> Any:
-        return object()
-
     state = _make_state(
         {
             "turn_sequence": 8,
@@ -691,8 +767,7 @@ async def test_active_todo_stall_guard_candidate_decision_synthesizes_after_refl
         TodoItem(description="Resolve target hostname", status=TodoStatus.IN_PROGRESS)
     ]
 
-    monkeypatch.setattr(node, "analyze_tool_result", fake_non_streaming_call)
-    monkeypatch.setattr(node, "resolve_llm_client", fake_resolve_llm_client)
+    _install_route_client(monkeypatch, fake_non_streaming_call)
 
     await node.post_tool_reasoning(state, context=None, config=None, writer=None)
 
@@ -725,9 +800,6 @@ async def test_simple_tool_failure_retry_call_tool_is_preserved(
             retry_suggested=True,
         )
 
-    def fake_resolve_llm_client(*_: Any, **__: Any) -> Any:
-        return object()
-
     state = _make_state(
         {
             "synthesized_output": {"summary": "timeout", "success": False},
@@ -736,8 +808,7 @@ async def test_simple_tool_failure_retry_call_tool_is_preserved(
         capability="simple_tool_execution",
     )
 
-    monkeypatch.setattr(node, "analyze_tool_result", fake_non_streaming_call)
-    monkeypatch.setattr(node, "resolve_llm_client", fake_resolve_llm_client)
+    _install_route_client(monkeypatch, fake_non_streaming_call)
 
     await node.post_tool_reasoning(state, context=None, config=None, writer=None)
 
@@ -775,9 +846,6 @@ async def test_simple_tool_intent_contract_records_mismatch_but_does_not_overrid
             retry_suggested=False,
         )
 
-    def fake_resolve_llm_client(*_: Any, **__: Any) -> Any:
-        return object()
-
     selected_tool = "information_gathering.network_discovery.nmap"
     state = _make_state(
         {
@@ -790,8 +858,7 @@ async def test_simple_tool_intent_contract_records_mismatch_but_does_not_overrid
         tool_parameters={selected_tool: {"target": "127.0.0.1", "ports": "5432"}},
     )
 
-    monkeypatch.setattr(node, "analyze_tool_result", fake_non_streaming_call)
-    monkeypatch.setattr(node, "resolve_llm_client", fake_resolve_llm_client)
+    _install_route_client(monkeypatch, fake_non_streaming_call)
 
     await node.post_tool_reasoning(state, context=None, config=None, writer=None)
 
@@ -825,12 +892,6 @@ async def test_simple_tool_intent_contract_allows_helper_step_when_prior_turn_st
             retry_suggested=False,
         )
 
-    async def fake_observation(*_: Any, **__: Any) -> str:
-        return "I confirmed the redirect destination from the saved response."
-
-    def fake_resolve_llm_client(*_: Any, **__: Any) -> Any:
-        return object()
-
     state = _make_state(
         {
             "turn_sequence": 11,
@@ -856,9 +917,7 @@ async def test_simple_tool_intent_contract_allows_helper_step_when_prior_turn_st
         intent_hints={"targets": ["10.129.31.138"]},
     )
 
-    monkeypatch.setattr(node, "analyze_tool_result", fake_decision_call)
-    monkeypatch.setattr(node, "_generate_observation_text", fake_observation)
-    monkeypatch.setattr(node, "resolve_llm_client", fake_resolve_llm_client)
+    _install_route_client(monkeypatch, fake_decision_call)
 
     await node.post_tool_reasoning(state, context=None, config=None, writer=None)
 
@@ -906,9 +965,6 @@ async def test_dr_binary_contract_partial_progress_does_not_force_finalize(
             retry_suggested=False,
         )
 
-    def fake_resolve_llm_client(*_: Any, **__: Any) -> Any:
-        return object()
-
     state = _make_state(
         {
             "synthesized_output": {
@@ -933,8 +989,7 @@ async def test_dr_binary_contract_partial_progress_does_not_force_finalize(
         "Determine whether 5432 is open on selected host",
     ]
 
-    monkeypatch.setattr(node, "analyze_tool_result", fake_non_streaming_call)
-    monkeypatch.setattr(node, "resolve_llm_client", fake_resolve_llm_client)
+    _install_route_client(monkeypatch, fake_non_streaming_call)
 
     await node.post_tool_reasoning(state, context=None, config=None, writer=None)
 
@@ -982,9 +1037,6 @@ async def test_dr_binary_contract_all_todos_terminal_still_finalizes(
             retry_suggested=False,
         )
 
-    def fake_resolve_llm_client(*_: Any, **__: Any) -> Any:
-        return object()
-
     state = _make_state(
         {
             "synthesized_output": {
@@ -1009,8 +1061,7 @@ async def test_dr_binary_contract_all_todos_terminal_still_finalizes(
         "Determine whether 5432 is open on selected host",
     ]
 
-    monkeypatch.setattr(node, "analyze_tool_result", fake_non_streaming_call)
-    monkeypatch.setattr(node, "resolve_llm_client", fake_resolve_llm_client)
+    _install_route_client(monkeypatch, fake_non_streaming_call)
 
     await node.post_tool_reasoning(state, context=None, config=None, writer=None)
 

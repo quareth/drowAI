@@ -171,8 +171,8 @@ class TestAnalyzeToolResult:
         assert output.next_action == "finalize"
         assert output.user_goal_achieved is True
 
-    async def test_analyze_tool_result_enforces_call_tool_has_tool_intent(self):
-        """A call_tool decision without tool_intent should be normalized to a safe action."""
+    async def test_analyze_tool_result_rejects_call_tool_without_tool_intent(self):
+        """A call_tool decision without tool_intent violates the strict contract."""
         mock_client = MockLLMClient("ignored")
 
         async def chat_with_structured_output(*_args, **_kwargs):
@@ -186,14 +186,12 @@ class TestAnalyzeToolResult:
 
         mock_client.chat_with_usage = chat_with_structured_output
 
-        output = await analyze_tool_result(
-            mock_client,
-            "system prompt",
-            "user prompt",
-        )
-
-        assert output.next_action == "reflect"
-        assert output.tool_intent is None
+        with pytest.raises(PostToolReasoningError, match="tool_intent is required"):
+            await analyze_tool_result(
+                mock_client,
+                "system prompt",
+                "user prompt",
+            )
 
     async def test_analyze_tool_result_rejects_invalid_structured_payload(self):
         """Invalid structured payload should fail fast in decision-only path."""

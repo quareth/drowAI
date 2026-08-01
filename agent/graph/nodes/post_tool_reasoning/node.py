@@ -84,14 +84,12 @@ from .recorders import (
 # Import core logic (capability-agnostic)
 from .core import (
     _ensure_min_length_observation,
-    _generate_observation_text,
     _make_fallback_observation,
     build_failure_context_from_state,
     detect_failure,
     get_retry_count,
     can_retry,
     increment_retry_count,
-    analyze_tool_result,
 )
 from .route_tools import (
     PTRCommitError,
@@ -119,10 +117,6 @@ except ImportError:  # pragma: no cover - typing fallback
     StreamWriter = Any  # type: ignore[misc, assignment]
 
 logger = logging.getLogger(__name__)
-
-# Compatibility seam for focused policy tests that replace the historical
-# decision function. The wired runtime never enters this branch.
-_DEFAULT_ANALYZE_TOOL_RESULT = analyze_tool_result
 
 _COMPLETED_AGENT_RESULTS_METADATA_KEY = "completed_agent_results"
 _ACTIVE_AGENT_RUNS_METADATA_KEY = "active_agent_runs"
@@ -912,57 +906,7 @@ async def post_tool_reasoning(
         decision_tools = [
             build_post_tool_commit_tool(get_subagent_registry().ids())
         ]
-        if analyze_tool_result is not _DEFAULT_ANALYZE_TOOL_RESULT:
-            legacy_output = await analyze_tool_result(
-                llm_client=decision_llm_client,
-                system_prompt=system_prompt,
-                user_prompt=decision_user_prompt,
-                interactive=interactive,
-                reasoning_effort=decision_reasoning_effort,
-            )
-            if isinstance(legacy_output, PostToolReasoningOutput):
-                observation = legacy_output.observation
-                decision_output = PostToolReasoningDecisionOutput.model_validate(
-                    legacy_output.model_dump(exclude={"observation"})
-                )
-            else:
-                decision_output = PostToolReasoningDecisionOutput.model_validate(
-                    legacy_output
-                )
-                observation = ""
-            if writer is not None:
-                observation, streamed, streaming_usage = (
-                    await adapter.stream_observation_text(
-                        writer=writer,
-                        llm_client=decision_llm_client,
-                        call_settings=decision_call_settings,
-                        system_prompt=system_prompt,
-                        user_prompt=decision_user_prompt,
-                        conversation_id=stream_conversation_id,
-                        turn_id=stream_turn_id,
-                        sequence=stream_turn_sequence,
-                        sub_turn_index=stream_sub_turn_index,
-                        reasoning_effort=decision_reasoning_effort,
-                        task_id=interactive.facts.task_id,
-                        suppress_observation_start=True,
-                    )
-                )
-                metadata["observation_streamed"] = streamed
-                if streaming_usage is not None:
-                    if interactive.trace.usage_records is None:
-                        interactive.trace.usage_records = []
-                    interactive.trace.usage_records.append(streaming_usage)
-            elif not observation:
-                observation = await _generate_observation_text(
-                    decision_llm_client,
-                    system_prompt,
-                    decision_user_prompt,
-                    interactive=interactive,
-                    reasoning_effort=decision_reasoning_effort,
-                )
-            if writer is None:
-                metadata["observation_streamed"] = False
-        elif writer is not None:
+        if writer is not None:
             (
                 observation,
                 decision_output,
