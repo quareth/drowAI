@@ -261,7 +261,6 @@ INTENT_CLASSIFIER_STRUCTURED_OUTPUT = _spec(
             },
             "agent_handoffs": {
                 "type": "array",
-                "maxItems": 8,
                 "items": _agent_handoff_entry_schema(),
             },
             "requested_output_format": {
@@ -414,14 +413,17 @@ INTENT_CLASSIFIER_STRUCTURED_OUTPUT = _spec(
 
 def build_intent_classifier_structured_output(
     subagent_names: Sequence[str],
+    *,
+    max_handoffs: int,
 ) -> StructuredOutputSpec:
     """Build the classifier schema with registry-scoped subagent names."""
+    if max_handoffs < 1:
+        raise ValueError("max_handoffs must be positive")
     normalized_names = _normalized_subagent_names(subagent_names)
     schema = deepcopy(INTENT_CLASSIFIER_STRUCTURED_OUTPUT.schema)
     handoff_schema = schema["properties"]["agent_handoffs"]
     handoff_schema["items"] = _agent_handoff_entry_schema(normalized_names)
-    if not normalized_names:
-        handoff_schema["maxItems"] = 0
+    handoff_schema["maxItems"] = max_handoffs if normalized_names else 0
     return _spec("intent_classifier", schema)
 
 

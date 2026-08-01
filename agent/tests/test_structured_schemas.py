@@ -12,6 +12,7 @@ from agent.providers.llm.contracts.structured_output import validate_openai_stri
 from agent.graph.nodes.post_tool_reasoning.models import (
     PostToolReasoningDecisionOutput,
 )
+from backend.services.agent_runs.ownership_policy import MAX_AGENT_HANDOFFS
 from core.llm.structured_schemas import (
     DECISION_ROUTER_STRUCTURED_OUTPUT,
     ENGAGEMENT_REPORT_SECTION_STRUCTURED_OUTPUT,
@@ -263,7 +264,10 @@ def test_intent_classifier_turn_interpretation_requires_goal_and_task_seed() -> 
 
 
 def test_intent_classifier_subagent_enum_is_registry_scoped() -> None:
-    spec = build_intent_classifier_structured_output(("pathfinder", "analyst"))
+    spec = build_intent_classifier_structured_output(
+        ("pathfinder", "analyst"),
+        max_handoffs=MAX_AGENT_HANDOFFS,
+    )
     subagent_schema = spec.schema["properties"]["agent_handoffs"]["items"][
         "properties"
     ]["subagent"]
@@ -273,12 +277,14 @@ def test_intent_classifier_subagent_enum_is_registry_scoped() -> None:
         "minLength": 1,
         "enum": ["pathfinder", "analyst"],
     }
+    assert spec.schema["properties"]["agent_handoffs"]["maxItems"] == 3
     validate_openai_strict_schema(spec)
 
 
 def test_classifier_and_par_share_delegation_entry_shape() -> None:
     classifier_spec = build_intent_classifier_structured_output(
-        ("PathFinder", "analyst", "pathfinder")
+        ("PathFinder", "analyst", "pathfinder"),
+        max_handoffs=MAX_AGENT_HANDOFFS,
     )
     par_spec = build_post_tool_decision_structured_output(
         ("PathFinder", "analyst", "pathfinder")
@@ -308,7 +314,8 @@ def test_classifier_and_par_share_delegation_entry_shape() -> None:
 
 def test_delegation_entry_schema_rejects_empty_objective_and_invalid_subagent() -> None:
     classifier_schema = build_intent_classifier_structured_output(
-        ("pathfinder", "analyst")
+        ("pathfinder", "analyst"),
+        max_handoffs=MAX_AGENT_HANDOFFS,
     ).schema
     par_schema = build_post_tool_decision_structured_output(
         ("pathfinder", "analyst")
@@ -411,7 +418,10 @@ def test_post_tool_decision_schema_exposes_irrelevant_active_run_ids() -> None:
 
 
 def test_intent_classifier_disallows_handoffs_when_registry_is_empty() -> None:
-    spec = build_intent_classifier_structured_output(())
+    spec = build_intent_classifier_structured_output(
+        (),
+        max_handoffs=MAX_AGENT_HANDOFFS,
+    )
 
     assert spec.schema["properties"]["agent_handoffs"]["maxItems"] == 0
     validate_openai_strict_schema(spec)

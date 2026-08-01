@@ -13,9 +13,11 @@ from agent.graph.context.builder import (
     build_conversation_context_bundle,
 )
 from agent.providers.llm.core.exceptions import LLMConfigurationError
+from backend.services.agent_runs.ownership_policy import MAX_AGENT_HANDOFFS
 from backend.services.langgraph_chat.intent.classifier import (
     ANTHROPIC_INTENT_CLASSIFIER_MAX_TOKENS,
     IntentClassifier,
+    _normalize_agent_handoffs,
 )
 from backend.services.langgraph_chat.contracts import ChatInputs, ExecutionMode, LangGraphRuntimeConfig
 
@@ -109,6 +111,26 @@ def _runtime_config(
         metadata=metadata,
         execution_mode=ExecutionMode.NORMAL_CHAT,
     )
+
+
+def test_intent_classifier_normalizes_at_the_ownership_handoff_limit() -> None:
+    handoffs = [
+        {
+            "agent_handoff": "required",
+            "subagent": f"agent_{index}",
+            "objective": f"Objective {index}",
+        }
+        for index in range(MAX_AGENT_HANDOFFS + 1)
+    ]
+
+    normalized = _normalize_agent_handoffs({"agent_handoffs": handoffs})
+
+    assert len(normalized) == MAX_AGENT_HANDOFFS == 3
+    assert [entry["subagent"] for entry in normalized] == [
+        "agent_0",
+        "agent_1",
+        "agent_2",
+    ]
 
 
 @pytest.mark.asyncio

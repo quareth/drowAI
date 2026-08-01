@@ -45,6 +45,7 @@ from agent.providers.llm.core.identity import (
 from agent.providers.llm.profiles.registry import resolve_context_window_tokens
 from agent.subagents.registry import SubagentRegistry, get_subagent_registry
 from backend.services.agent_runs.ownership_policy import (
+    MAX_AGENT_HANDOFFS,
     normalize_agent_handoff_entries,
 )
 from core.prompts.builders.intent_classifier import (
@@ -118,8 +119,6 @@ _PRIOR_TURN_REFERENCE_KINDS = frozenset(
 _PRIOR_TURN_REFERENCE_SPEAKERS = frozenset(
     {"user", "assistant", "system", "tool", "unknown"}
 )
-_MAX_AGENT_HANDOFFS = 8
-
 _ROUTING_LABEL_ALIASES: Dict[str, str] = {
     "simple_chat": "simple_chat",
     "chat": "simple_chat",
@@ -253,7 +252,7 @@ def _normalize_agent_handoffs(parsed: Dict[str, Any]) -> List[Dict[str, str]]:
     return list(
         normalize_agent_handoff_entries(
             parsed.get("agent_handoffs"),
-            max_handoffs=_MAX_AGENT_HANDOFFS,
+            max_handoffs=MAX_AGENT_HANDOFFS,
         )
     )
 
@@ -723,7 +722,8 @@ def build_intent_classifier_request(
         temperature=temperature,
         max_tokens=max_tokens,
         structured_output=build_intent_classifier_structured_output(
-            registry.ids()
+            registry.ids(),
+            max_handoffs=MAX_AGENT_HANDOFFS,
         ),
     )
 
