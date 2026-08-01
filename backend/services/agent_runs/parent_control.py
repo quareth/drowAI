@@ -58,11 +58,14 @@ def parse_parent_control_outcome(
     if action == "wait_for_subagents":
         return ParentControlOutcome(action=action, decision_id=decision_id)
 
-    normalized = normalize_agent_handoff_entries(
-        source.get("agent_handoff"),
-        max_handoffs=1,
-        reject_invalid=True,
-    )
+    try:
+        normalized = normalize_agent_handoff_entries(
+            source.get("agent_handoff"),
+            max_handoffs=1,
+            reject_invalid=True,
+        )
+    except ValueError:
+        normalized = ()
     if not normalized:
         safe_inc("post_action_reasoning_followup_delegation_rejected")
         raise RuntimeError("PAR delegate_subagent outcome missing agent_handoff")

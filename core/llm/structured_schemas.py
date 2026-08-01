@@ -10,6 +10,7 @@ from copy import deepcopy
 from typing import Any, Dict, Sequence
 
 from agent.providers.llm.core.base import StructuredOutputSpec
+from agent.subagents.handoff import agent_handoff_entry_json_schema
 from backend.services.reporting.report_section_schema import (
     engagement_report_section_json_schema,
 )
@@ -18,52 +19,6 @@ from backend.services.reporting.report_section_schema import (
 def _spec(name: str, schema: Dict[str, Any]) -> StructuredOutputSpec:
     """Build immutable structured-output spec objects."""
     return StructuredOutputSpec(name=name, schema=schema, strict=True)
-
-
-def _normalized_subagent_names(subagent_names: Sequence[str]) -> tuple[str, ...]:
-    """Return stable registry-scoped subagent names for schema enums."""
-    return tuple(
-        dict.fromkeys(
-            name.strip().lower()
-            for name in subagent_names
-            if isinstance(name, str) and name.strip()
-        )
-    )
-
-
-def _agent_handoff_entry_schema(
-    subagent_names: Sequence[str] | None = None,
-) -> Dict[str, Any]:
-    """Build the shared LLM-visible delegation-entry schema."""
-    subagent_schema: Dict[str, Any] = {
-        "type": "string",
-        "minLength": 1,
-    }
-    if subagent_names is not None:
-        normalized_names = _normalized_subagent_names(subagent_names)
-        if normalized_names:
-            subagent_schema["enum"] = list(normalized_names)
-
-    return {
-        "type": "object",
-        "properties": {
-            "agent_handoff": {
-                "type": "string",
-                "enum": ["required"],
-            },
-            "subagent": subagent_schema,
-            "objective": {
-                "type": "string",
-                "minLength": 1,
-            },
-        },
-        "required": [
-            "agent_handoff",
-            "subagent",
-            "objective",
-        ],
-        "additionalProperties": False,
-    }
 
 
 def _candidate_evidence_ref_schema(*, allow_source_artifact_ref: bool) -> Dict[str, Any]:
@@ -261,7 +216,7 @@ INTENT_CLASSIFIER_STRUCTURED_OUTPUT = _spec(
             },
             "agent_handoffs": {
                 "type": "array",
-                "items": _agent_handoff_entry_schema(),
+                "items": agent_handoff_entry_json_schema(),
             },
             "requested_output_format": {
                 "type": ["string", "null"],
@@ -419,11 +374,13 @@ def build_intent_classifier_structured_output(
     """Build the classifier schema with registry-scoped subagent names."""
     if max_handoffs < 1:
         raise ValueError("max_handoffs must be positive")
-    normalized_names = _normalized_subagent_names(subagent_names)
     schema = deepcopy(INTENT_CLASSIFIER_STRUCTURED_OUTPUT.schema)
     handoff_schema = schema["properties"]["agent_handoffs"]
-    handoff_schema["items"] = _agent_handoff_entry_schema(normalized_names)
-    handoff_schema["maxItems"] = max_handoffs if normalized_names else 0
+    handoff_schema["items"] = agent_handoff_entry_json_schema(subagent_names)
+    registered_names = handoff_schema["items"]["properties"]["subagent"].get(
+        "enum", []
+    )
+    handoff_schema["maxItems"] = max_handoffs if registered_names else 0
     return _spec("intent_classifier", schema)
 
 
@@ -635,7 +592,7 @@ POST_TOOL_DECISION_STRUCTURED_OUTPUT = _spec(
                 ),
             },
             "agent_handoff": {
-                **_agent_handoff_entry_schema(),
+                **agent_handoff_entry_json_schema(),
                 "type": ["object", "null"],
             },
             "par_irrelevant_active_agent_run_ids": {
@@ -666,9 +623,8 @@ def build_post_tool_decision_structured_output(
     subagent_names: Sequence[str],
 ) -> StructuredOutputSpec:
     """Build the PAR decision schema with the shared delegation-entry shape."""
-    normalized_names = _normalized_subagent_names(subagent_names)
     schema = deepcopy(POST_TOOL_DECISION_STRUCTURED_OUTPUT.schema)
-    handoff_schema = _agent_handoff_entry_schema(normalized_names)
+    handoff_schema = agent_handoff_entry_json_schema(subagent_names)
     schema["properties"]["agent_handoff"] = {
         **deepcopy(handoff_schema),
         "type": ["object", "null"],

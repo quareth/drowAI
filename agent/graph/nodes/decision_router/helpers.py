@@ -12,6 +12,10 @@ import json
 import logging
 from typing import TYPE_CHECKING, Any, Mapping, MutableMapping, Optional
 
+from agent.subagents.handoff import (
+    normalize_agent_handoff_entry as _normalize_agent_handoff_entry,
+)
+
 # Import shared utilities from node_utils
 from ..node_utils import determine_post_reflect_action
 from ..post_tool_reasoning.models import normalize_irrelevant_active_run_ids
@@ -464,20 +468,7 @@ def is_valid_agent_handoff_entry(value: Any) -> bool:
 
 def normalize_agent_handoff_entry(value: Any) -> dict[str, str]:
     """Normalize a single classifier-compatible handoff entry."""
-    if not isinstance(value, Mapping):
-        return {}
-    marker = str(value.get("agent_handoff") or "").strip().lower()
-    subagent = str(value.get("subagent") or "").strip().lower()
-    objective = value.get("objective")
-    if marker != "required" or not subagent:
-        return {}
-    if not isinstance(objective, str) or not objective.strip():
-        return {}
-    return {
-        "agent_handoff": "required",
-        "subagent": subagent,
-        "objective": objective.strip(),
-    }
+    return _normalize_agent_handoff_entry(value)
 
 
 def relevant_active_agent_runs(

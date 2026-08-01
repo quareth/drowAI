@@ -15,6 +15,7 @@ from agent.subagents.definition import (
     SubagentDefinition,
     resolve_definition_capability,
 )
+from agent.subagents.handoff import normalize_agent_handoff_entries
 from agent.subagents.registry import SubagentRegistry, get_subagent_registry
 
 from .contracts import AgentCapability
@@ -62,53 +63,6 @@ class SubagentRoutingDecision:
     targets: tuple[str, ...] = ()
     objective: str | None = None
     handoffs: tuple[SubagentPlanHandoff, ...] = ()
-
-
-def normalize_agent_handoff_entries(
-    raw_handoffs: Any,
-    *,
-    max_handoffs: int | None = None,
-    reject_invalid: bool = False,
-) -> tuple[dict[str, str], ...]:
-    """Normalize required three-field subagent handoff mappings."""
-    if isinstance(raw_handoffs, Mapping):
-        candidates: Sequence[Any] = (raw_handoffs,)
-    elif isinstance(raw_handoffs, Sequence) and not isinstance(raw_handoffs, str):
-        candidates = raw_handoffs
-    else:
-        return ()
-
-    normalized: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-    for raw_handoff in candidates:
-        if not isinstance(raw_handoff, Mapping):
-            if reject_invalid:
-                raise ValueError("invalid_handoff_plan")
-            continue
-        handoff = _normalize_token(raw_handoff.get("agent_handoff"))
-        if handoff != "required":
-            continue
-        subagent = _normalize_token(raw_handoff.get("subagent"))
-        objective = raw_handoff.get("objective")
-        if not subagent or not isinstance(objective, str) or not objective.strip():
-            if reject_invalid:
-                raise ValueError("invalid_handoff_plan")
-            continue
-        normalized_objective = objective.strip()
-        identity = (subagent, normalized_objective)
-        if identity in seen:
-            continue
-        seen.add(identity)
-        normalized.append(
-            {
-                "agent_handoff": "required",
-                "subagent": subagent,
-                "objective": normalized_objective,
-            }
-        )
-        if max_handoffs is not None and len(normalized) >= max_handoffs:
-            break
-    return tuple(normalized)
 
 
 def resolve_subagent_handoff(

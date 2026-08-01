@@ -18,6 +18,8 @@ from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from agent.subagents.handoff import AgentHandoffEntry
+
 PostActionNextAction = Literal[
     "call_tool",
     "think_more",
@@ -173,35 +175,6 @@ class ToolIntent(BaseModel):
     )
 
     model_config = ConfigDict(extra="forbid")
-
-
-class AgentHandoffEntry(BaseModel):
-    """Classifier-compatible bounded delegation entry authored by PAR."""
-
-    agent_handoff: Literal["required"] = Field(
-        ...,
-        description="Marker indicating that a subagent assignment is required.",
-    )
-    subagent: str = Field(
-        ...,
-        min_length=1,
-        description="Registered subagent identifier selected by PAR.",
-    )
-    objective: str = Field(
-        ...,
-        min_length=1,
-        description="Bounded natural-language assignment brief for the subagent.",
-    )
-
-    model_config = ConfigDict(extra="forbid")
-
-    @field_validator("subagent", "objective")
-    @classmethod
-    def _require_non_blank_text(cls, value: str) -> str:
-        """Reject blank delegation text while preserving the authored value."""
-        if not value.strip():
-            raise ValueError("must not be blank")
-        return value
 
 
 class TodoProgress(BaseModel):
