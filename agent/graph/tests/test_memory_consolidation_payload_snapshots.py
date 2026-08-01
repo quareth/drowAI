@@ -30,6 +30,7 @@ from backend.services.langgraph_chat.contracts import (
     LangGraphRuntimeConfig,
 )
 from backend.services.langgraph_chat.intent.classifier import IntentClassifier
+from backend.services.usage_tracking.models import UsageData
 from core.prompts.tests._golden import assert_golden
 
 
@@ -48,6 +49,31 @@ class _StreamingLLMStub:
         self.messages_payloads.append(list(messages))
         for chunk in self.chunks:
             yield chunk
+
+    async def chat_messages_with_usage(
+        self,
+        messages: List[Dict[str, str]],
+        **_: Any,
+    ) -> Any:
+        self.messages_payloads.append(list(messages))
+        payload = {
+            "action": "".join(self.chunks),
+            "findings": "- Snapshot evidence was captured.",
+            "impact": "The snapshot path completed.",
+            "recommended_next_action": "Continue with the next snapshot step.",
+        }
+        return SimpleNamespace(
+            content=json.dumps(payload),
+            structured_output=payload,
+            usage=UsageData(
+                prompt_tokens=10,
+                completion_tokens=5,
+                total_tokens=15,
+                model="gpt-5.2",
+                provider="openai",
+                api_surface="responses",
+            ),
+        )
 
 
 class _UsageLLMStub:

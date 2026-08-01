@@ -55,6 +55,29 @@ def _make_mock_llm_client(chunks: List[str]):
             )
 
     class _Client:
+        async def chat_messages_with_usage(self, *args: Any, **kwargs: Any):
+            return type(
+                "_Response",
+                (),
+                {
+                    "content": '{"internal":"ignored"}',
+                    "structured_output": {
+                        "action": "".join(chunks),
+                        "findings": "- Test evidence was captured.",
+                        "impact": "The test path completed.",
+                        "recommended_next_action": "Continue with the next test step.",
+                    },
+                    "usage": UsageData(
+                        prompt_tokens=10,
+                        completion_tokens=len(chunks),
+                        total_tokens=10 + len(chunks),
+                        model="gpt-5.2",
+                        provider="openai",
+                        api_surface="responses",
+                    ),
+                },
+            )()
+
         def stream_chat_messages(self, *args: Any, **kwargs: Any):
             return _stream()
 
