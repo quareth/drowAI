@@ -10,6 +10,10 @@ import { useSyncExternalStore } from "react";
 
 import { setChatState } from "@/state/chat-session-store";
 import {
+  isSubagentRunMetadata,
+  readAgentRunMetadata,
+} from "@/features/agent-runs/contracts/agent-run";
+import {
   STEP_COMPARATOR,
   mergeStepContent,
   normalizeStep,
@@ -390,7 +394,10 @@ interface OpenAgentRunSection {
 
 function isMatchingAgentRunStep(item: Step, agentRunId: string): boolean {
   const metadata = (item.metadata ?? {}) as Record<string, unknown>;
-  return metadata.producer_type === "subagent" && metadata.agent_run_id === agentRunId;
+  return (
+    isSubagentRunMetadata(metadata) &&
+    readAgentRunMetadata(metadata)?.agent_run_id === agentRunId
+  );
 }
 
 function resolveAgentRunSectionKey(item: Step, phase: AgentRunPhase): string {
@@ -561,9 +568,11 @@ function projectParentRunCompletion(taskId: number, terminal: Step): void {
     return;
   }
   const metadata = (terminal.metadata ?? {}) as Record<string, unknown>;
+  const agentRunMetadata = readAgentRunMetadata(metadata);
   if (
-    metadata.producer_type === "subagent" ||
-    (typeof metadata.agent_run_id === "string" && metadata.agent_run_id.trim())
+    isSubagentRunMetadata(metadata) ||
+    (typeof agentRunMetadata?.agent_run_id === "string" &&
+      agentRunMetadata.agent_run_id.trim())
   ) {
     return;
   }

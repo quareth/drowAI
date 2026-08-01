@@ -131,6 +131,73 @@ export interface AgentRunActivityIdentity {
   lifecycleVersion: number | null;
 }
 
+export function readAgentRunMetadata(
+  payloadOrMetadata: unknown,
+): Record<string, unknown> | null {
+  const event = unwrapStreamEvent(payloadOrMetadata);
+  if (event) {
+    return readRecord(event.metadata);
+  }
+  const record = readRecord(payloadOrMetadata);
+  if (!record) {
+    return null;
+  }
+  return readRecord(record.metadata) ?? record;
+}
+
+export function hasAgentRunIdentity(metadata: unknown): boolean {
+  const record = readAgentRunMetadata(metadata);
+  return Boolean(
+    record &&
+      readString(record.agent_run_id) &&
+      readString(record.agent_id),
+  );
+}
+
+export function isSubagentRunMetadata(metadata: unknown): boolean {
+  const record = readAgentRunMetadata(metadata);
+  return Boolean(
+    record &&
+      readString(record.producer_type) === AGENT_RUN_PRODUCER_TYPE &&
+      readString(record.agent_run_id),
+  );
+}
+
+export function isAgentRunLifecyclePayload(payload: unknown): boolean {
+  const event = unwrapStreamEvent(payload);
+  const metadata = readAgentRunMetadata(payload);
+  if (!event || !metadata || !readString(metadata.agent_run_id)) {
+    return false;
+  }
+  return (
+    event.content === AGENT_RUN_LIFECYCLE_CONTENT ||
+    metadata.subtype === AGENT_RUN_LIFECYCLE_SUBTYPE
+  );
+}
+
+export function isAgentRunParentControlPayload(payload: unknown): boolean {
+  const metadata = readAgentRunMetadata(payload);
+  return Boolean(
+    metadata &&
+      !isAgentRunLifecyclePayload(payload) &&
+      hasAgentRunIdentity(metadata) &&
+      readString(metadata.agent_kind) &&
+      readString(metadata.agent_display_name) &&
+      readString(metadata.status) &&
+      !isSubagentRunMetadata(metadata),
+  );
+}
+
+export function isAgentRunActivityPayload(payload: unknown): boolean {
+  const metadata = readAgentRunMetadata(payload);
+  return Boolean(
+    metadata &&
+      !isAgentRunLifecyclePayload(payload) &&
+      hasAgentRunIdentity(metadata) &&
+      isSubagentRunMetadata(metadata),
+  );
+}
+
 export function readAgentRunLifecycleProjection(
   payload: unknown,
 ): AgentRunLifecycleProjection | null {

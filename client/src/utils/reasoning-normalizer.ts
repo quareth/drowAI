@@ -1,6 +1,7 @@
 import type { StreamEvent, StreamEventMetadata } from "../types/reasoning-events";
 import type { StreamPacket } from "@/types/packets";
 import { isStreamPacket } from "@/types/packets";
+import { isSubagentRunMetadata } from "@/features/agent-runs/contracts/agent-run";
 
 export type StepMetadata = StreamEventMetadata | undefined;
 
@@ -155,7 +156,7 @@ export function deriveStepKey(step: Step): string {
 
 function deriveAttributionKeyPrefix(meta: Record<string, unknown>): string {
   if (
-    meta.producer_type !== "subagent" ||
+    !isSubagentRunMetadata(meta) ||
     typeof meta.agent_run_id !== "string"
   ) {
     return "";

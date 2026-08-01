@@ -4,8 +4,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  isAgentRunActivityPayload,
+  isSubagentRunMetadata,
   readAgentAssignment,
   readAgentResultProjection,
+  readAgentRunActivityIdentity,
   readAgentRunLifecycleProjection,
   readLocalAgentRuns,
   type AgentAssignment,
@@ -209,5 +212,29 @@ describe("agent-run projection readers", () => {
     expect(readAgentRunLifecycleProjection(replayPacket)).toEqual(
       readAgentRunLifecycleProjection(event),
     );
+  });
+
+  it("recognizes child activity for any valid agent kind", () => {
+    const event = {
+      type: "reasoning_delta",
+      content: "Correlating evidence",
+      metadata: {
+        producer_type: "subagent",
+        agent_run_id: "run-analysis-1",
+        agent_id: "evidence_analyst",
+        agent_kind: "analysis",
+        agent_display_name: "Evidence Analyst",
+        parent_turn_id: "turn-1",
+      },
+    };
+
+    expect(isSubagentRunMetadata(event.metadata)).toBe(true);
+    expect(isAgentRunActivityPayload(event)).toBe(true);
+    expect(readAgentRunActivityIdentity(TASK_ID, event)).toMatchObject({
+      agentRunId: "run-analysis-1",
+      agentId: "evidence_analyst",
+      agentKind: "analysis",
+      agentDisplayName: "Evidence Analyst",
+    });
   });
 });

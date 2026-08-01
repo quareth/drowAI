@@ -38,6 +38,7 @@ import type { RuntimeAgentReasoningEnvelope } from "@/services/runtime_stream/ty
 import type { RuntimeStreamConnectionStatus } from "@/services/runtime_stream/RuntimeStreamClient";
 import type { RuntimeTaskSubscriptionState } from "@/services/runtime_stream/types";
 import { onActiveTenantChanged } from "@/lib/tenant-context";
+import { isSubagentRunMetadata } from "@/features/agent-runs/contracts/agent-run";
 
 interface UseMultiTaskStreamManagerOptions {
   taskIds: number[];
@@ -712,15 +713,6 @@ function shouldSuppressChildMainCompatibilityEvent(
     eventKind === "retry_state" ||
     eventKind === "checkpoint_rewind_state" ||
     eventKind === "run_state"
-  );
-}
-
-function isSubagentRunMetadata(metadata: Record<string, unknown>): boolean {
-  return (
-    metadata.producer_type === "subagent" &&
-    typeof metadata.agent_run_id === "string" &&
-    metadata.agent_run_id.trim().length > 0 &&
-    metadata.agent_kind === "recon"
   );
 }
 

@@ -7,6 +7,7 @@
 
 import { useMemo } from "react";
 import type { ChatMessage } from "@/components/chat/types";
+import { isAgentRunLifecyclePayload } from "@/features/agent-runs/contracts/agent-run";
 
 export interface MessageGroup {
   key: string;
@@ -78,10 +79,7 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
       message.metadata.agent_run_id.trim().length > 0
         ? message.metadata.agent_run_id.trim()
         : undefined;
-    const isAgentRunLifecycle =
-      agentRunId !== undefined &&
-      (message.content === "agent_run_lifecycle" ||
-        message.metadata?.subtype === "agent_run_lifecycle");
+    const isAgentRunLifecycle = isAgentRunLifecyclePayload(message);
     const toolCallId =
       typeof (message.metadata as any)?.tool_call_id === "string"
         ? (message.metadata as any).tool_call_id

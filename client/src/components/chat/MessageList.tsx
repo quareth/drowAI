@@ -19,6 +19,14 @@ import { ArrowDown, Loader2 } from "lucide-react";
 import { AgentRunCard } from "@/features/agent-runs/components/AgentRunCard";
 import { AgentRunDrawer } from "@/features/agent-runs/components/AgentRunDrawer";
 import {
+  AGENT_RUN_LIFECYCLE_CONTENT,
+  AGENT_RUN_LIFECYCLE_SUBTYPE,
+  AGENT_RUN_PRODUCER_TYPE,
+  isAgentRunActivityPayload,
+  isAgentRunLifecyclePayload,
+  isAgentRunParentControlPayload,
+} from "@/features/agent-runs/contracts/agent-run";
+import {
   useAgentRunPresentation,
   useAgentRunLocalStatusHydration,
   useAgentRuns,
@@ -71,48 +79,11 @@ export interface MessageListProps {
 }
 
 const DEFAULT_AUTO_SCROLL_THRESHOLD = 96;
-const AGENT_RUN_LIFECYCLE_CONTENT = "agent_run_lifecycle";
-const AGENT_RUN_LIFECYCLE_SUBTYPE = "agent_run_lifecycle";
 
 function readString(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const normalized = value.trim();
   return normalized.length > 0 ? normalized : null;
-}
-
-function isAgentRunLifecycleMessage(message: ChatMessage): boolean {
-  const metadata = message.metadata ?? {};
-  return (
-    readString(metadata.agent_run_id) !== null &&
-    readString(metadata.agent_id) !== null &&
-    (message.content === AGENT_RUN_LIFECYCLE_CONTENT ||
-      metadata.subtype === AGENT_RUN_LIFECYCLE_SUBTYPE)
-  );
-}
-
-function isAgentRunParentControlMessage(message: ChatMessage): boolean {
-  const metadata = message.metadata ?? {};
-  return (
-    readString(metadata.agent_run_id) !== null &&
-    readString(metadata.agent_id) !== null &&
-    readString(metadata.agent_kind) !== null &&
-    readString(metadata.agent_display_name) !== null &&
-    readString(metadata.status) !== null &&
-    metadata.producer_type !== "subagent"
-  );
-}
-
-function isAgentRunActivityMessage(message: ChatMessage): boolean {
-  const metadata = message.metadata ?? {};
-  const isLifecycle =
-    message.content === AGENT_RUN_LIFECYCLE_CONTENT ||
-    metadata.subtype === AGENT_RUN_LIFECYCLE_SUBTYPE;
-  return (
-    !isLifecycle &&
-    readString(metadata.agent_run_id) !== null &&
-    readString(metadata.agent_id) !== null &&
-    metadata.producer_type === "subagent"
-  );
 }
 
 function agentRunIdsForGroup(group: MessageGroup): Set<string> {
@@ -145,7 +116,7 @@ function addMissingAgentRunMarkers(
   const messagesByTurnId = new Map<string, ChatMessage>();
   for (const message of messages) {
     const agentRunId = readString(message.metadata?.agent_run_id);
-    if (agentRunId && isAgentRunLifecycleMessage(message)) {
+    if (agentRunId && isAgentRunLifecyclePayload(message)) {
       existingRunIds.add(agentRunId);
     }
     for (const value of [message.metadata?.id, message.metadata?.turn_id]) {
@@ -182,7 +153,7 @@ function addMissingAgentRunMarkers(
         ind: 1,
         step_type: "tool_start",
         subtype: AGENT_RUN_LIFECYCLE_SUBTYPE,
-        producer_type: "subagent",
+        producer_type: AGENT_RUN_PRODUCER_TYPE,
         agent_run_id: run.agentRunId,
         agent_id: run.agentId,
         agent_kind: run.agentKind,
@@ -197,7 +168,7 @@ function addMissingAgentRunMarkers(
     });
   }
   const visibleMessages = messages.filter(
-    (message) => !isAgentRunParentControlMessage(message),
+    (message) => !isAgentRunParentControlPayload(message),
   );
   return markers.length > 0 ? [...visibleMessages, ...markers] : visibleMessages;
 }
@@ -370,12 +341,12 @@ export function MessageList({
   // Group messages by `ind` field for proper rendering.
   const parentTranscriptMessages = useMemo(() => {
     const parentMessages = messages.filter(
-      (message) => !isAgentRunActivityMessage(message),
+      (message) => !isAgentRunActivityPayload(message),
     );
     return addMissingAgentRunMarkers(parentMessages, agentRuns);
   }, [agentRuns, messages]);
   const agentRunActivityMessages = useMemo(
-    () => messages.filter(isAgentRunActivityMessage),
+    () => messages.filter(isAgentRunActivityPayload),
     [messages],
   );
   const messageGroups = useMessageGrouping(parentTranscriptMessages);

@@ -7,6 +7,10 @@
  */
 
 import type { MessageGroup } from "@/hooks/useMessageGrouping";
+import {
+  isAgentRunLifecyclePayload,
+  isAgentRunParentControlPayload,
+} from "@/features/agent-runs/contracts/agent-run";
 import type { ChatMessage } from "./types";
 
 export interface TurnActivitySummary {
@@ -94,30 +98,11 @@ function hasSuccessfulFinalMessage(group: MessageGroup): boolean {
 }
 
 export function isAgentRunEventGroup(group: MessageGroup): boolean {
-  return group.messages.some((message) => {
-    const metadata = message.metadata ?? {};
-    const hasRunId =
-      typeof metadata.agent_run_id === "string" &&
-      metadata.agent_run_id.trim().length > 0;
-    if (!hasRunId) {
-      return false;
-    }
-    const isLifecycle =
-      message.content === "agent_run_lifecycle" ||
-      metadata.subtype === "agent_run_lifecycle";
-    if (isLifecycle) {
-      return true;
-    }
-    return (
-      metadata.producer_type !== "subagent" &&
-      typeof metadata.agent_id === "string" &&
-      metadata.agent_id.trim().length > 0 &&
-      typeof metadata.agent_kind === "string" &&
-      metadata.agent_kind.trim().length > 0 &&
-      typeof metadata.agent_display_name === "string" &&
-      metadata.agent_display_name.trim().length > 0
-    );
-  });
+  return group.messages.some(
+    message =>
+      isAgentRunLifecyclePayload(message) ||
+      isAgentRunParentControlPayload(message),
+  );
 }
 
 function isCollapsibleIntermediate(group: MessageGroup): boolean {
