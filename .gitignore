@@ -84,8 +84,11 @@ pip-delete-this-directory.txt
 /error.log
 /*.db
 
-# Local developer design workspace
-/docs/devdocs/
+# Local developer design workspace; publish completed quality-refactor records.
+/docs/devdocs/*
+!/docs/devdocs/refactor/
+/docs/devdocs/refactor/*
+!/docs/devdocs/refactor/quality-refactor-*.md
 
 # Unit test / coverage reports
 htmlcov/
