@@ -117,7 +117,7 @@ def _completion(
 
 
 @pytest.mark.asyncio
-async def test_launch_attaches_task_and_completion_callback_stores_result() -> None:
+async def test_awaiting_launch_task_guarantees_completed_registry_state() -> None:
     registry = ProcessLocalAgentRunRegistry()
     assignment = _assignment()
     await registry.register(assignment, graph_thread_id="child-thread-1")
@@ -151,10 +151,10 @@ async def test_launch_attaches_task_and_completion_callback_stores_result() -> N
     completion = await task
     assert completion.result == _result("run-1")
     assert completion.usage_records[0]["agent_run_id"] == "run-1"
-    completed = await _wait_for_status(
-        registry, tenant_id=7, task_id=42, agent_run_id="run-1", status="completed"
-    )
+    completed = await registry.get(tenant_id=7, task_id=42, agent_run_id="run-1")
 
+    assert completed is not None
+    assert completed.status == "completed"
     assert completed.result == _result("run-1")
     assert completed.task_handle is None
 
@@ -187,10 +187,10 @@ async def test_terminal_completion_publishes_attributed_lifecycle_event() -> Non
     )
 
     assert (await task).result == _result("run-1")
-    await _wait_for_status(
-        registry, tenant_id=7, task_id=42, agent_run_id="run-1", status="completed"
-    )
+    completed = await registry.get(tenant_id=7, task_id=42, agent_run_id="run-1")
 
+    assert completed is not None
+    assert completed.status == "completed"
     assert len(events) == 1
     task_id, event = events[0]
     metadata = event["metadata"]
@@ -207,13 +207,49 @@ async def test_terminal_completion_publishes_attributed_lifecycle_event() -> Non
 
 
 @pytest.mark.asyncio
+async def test_lifecycle_publication_failure_preserves_settled_worker_result() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    assignment = _assignment()
+    await registry.register(assignment, graph_thread_id="child-thread-1")
+
+    async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
+        raise RuntimeError("stream unavailable")
+
+    async def _worker(**_kwargs: Any) -> AgentRunCompletion:
+        return _completion(assignment)
+
+    launcher = AgentRunLauncher(
+        registry=registry,
+        subagent_registry=get_subagent_registry(),
+        worker=_worker,
+        lifecycle_publisher=_publish,
+    )
+
+    task = await launcher.launch(
+        assignment=assignment,
+        runtime_config=object(),
+        graph_thread_id="child-thread-1",
+    )
+
+    completion = await task
+    terminal = await registry.get(tenant_id=7, task_id=42, agent_run_id="run-1")
+
+    assert completion.result == _result("run-1")
+    assert terminal is not None
+    assert terminal.status == "completed"
+    assert terminal.task_handle is None
+
+
+@pytest.mark.asyncio
 async def test_worker_failure_is_sanitized_and_contained() -> None:
     registry = ProcessLocalAgentRunRegistry()
     assignment = _assignment()
     await registry.register(assignment, graph_thread_id="child-thread-1")
 
+    worker_error = RuntimeError("secret token=abc123")
+
     async def _worker(**_kwargs: Any) -> AgentRunCompletion:
-        raise RuntimeError("secret token=abc123")
+        raise worker_error
 
     launcher = AgentRunLauncher(
         registry=registry,
@@ -227,19 +263,20 @@ async def test_worker_failure_is_sanitized_and_contained() -> None:
         graph_thread_id="child-thread-1",
     )
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(RuntimeError) as raised:
         await task
-    failed = await _wait_for_status(
-        registry, tenant_id=7, task_id=42, agent_run_id="run-1", status="failed"
-    )
+    failed = await registry.get(tenant_id=7, task_id=42, agent_run_id="run-1")
 
+    assert failed is not None
+    assert failed.status == "failed"
+    assert raised.value is worker_error
     assert failed.safe_error == "Subagent worker failed"
     assert "abc123" not in failed.safe_error
     assert failed.task_handle is None
 
 
 @pytest.mark.asyncio
-async def test_done_callback_cannot_overwrite_richer_terminal_result() -> None:
+async def test_lifecycle_task_cannot_overwrite_richer_terminal_result() -> None:
     registry = ProcessLocalAgentRunRegistry()
     assignment = _assignment()
     await registry.register(assignment, graph_thread_id="child-thread-1")
@@ -279,8 +316,6 @@ async def test_done_callback_cannot_overwrite_richer_terminal_result() -> None:
     release_worker.set()
     with pytest.raises(RuntimeError):
         await task
-    await asyncio.sleep(0)
-    await asyncio.sleep(0)
 
     terminal = await registry.get(tenant_id=7, task_id=42, agent_run_id="run-1")
     assert terminal == completed
@@ -332,16 +367,13 @@ async def test_specialized_worker_errors_use_fallback_terminalization(
         parent_run_id="parent-run-1",
     )
 
-    with pytest.raises(type(worker_error)):
+    with pytest.raises(type(worker_error)) as raised:
         await task
-    terminal = await _wait_for_status(
-        registry,
-        tenant_id=7,
-        task_id=42,
-        agent_run_id="run-1",
-        status=expected_status,
-    )
+    terminal = await registry.get(tenant_id=7, task_id=42, agent_run_id="run-1")
 
+    assert terminal is not None
+    assert terminal.status == expected_status
+    assert raised.value is worker_error
     assert terminal.safe_error == expected_safe_error
     assert terminal.task_handle is None
     assert len(events) == 1
@@ -392,11 +424,11 @@ async def test_cancellation_signal_is_scoped_to_exact_local_run() -> None:
 
     with contextlib.suppress(asyncio.CancelledError):
         await first_task
-    cancelled = await _wait_for_status(
-        registry, tenant_id=7, task_id=42, agent_run_id="run-1", status="cancelled"
-    )
+    cancelled = await registry.get(tenant_id=7, task_id=42, agent_run_id="run-1")
     other = await registry.get(tenant_id=8, task_id=42, agent_run_id="run-2")
 
+    assert cancelled is not None
+    assert cancelled.status == "cancelled"
     assert cancelled.task_handle is None
     assert other is not None
     assert other.cancel_requested is False
@@ -405,9 +437,11 @@ async def test_cancellation_signal_is_scoped_to_exact_local_run() -> None:
     await launcher.request_cancellation(tenant_id=8, task_id=42, agent_run_id="run-2")
     with contextlib.suppress(asyncio.CancelledError):
         await second_task
-    await _wait_for_status(
-        registry, tenant_id=8, task_id=42, agent_run_id="run-2", status="cancelled"
+    second_cancelled = await registry.get(
+        tenant_id=8, task_id=42, agent_run_id="run-2"
     )
+    assert second_cancelled is not None
+    assert second_cancelled.status == "cancelled"
 
 
 @pytest.mark.asyncio
@@ -450,14 +484,12 @@ async def test_paused_approval_cancellation_becomes_terminal_and_publishes() -> 
         runtime_config=object(),
         graph_thread_id="child-thread-1",
     )
-    waiting = await _wait_for_status(
-        registry,
-        tenant_id=7,
-        task_id=42,
-        agent_run_id="run-1",
-        status="waiting_for_approval",
-    )
+    with pytest.raises(SubagentRunPaused):
+        await task
+    waiting = await registry.get(tenant_id=7, task_id=42, agent_run_id="run-1")
 
+    assert waiting is not None
+    assert waiting.status == "waiting_for_approval"
     assert task.done() is True
     assert waiting.task_handle is task
     assert waiting.accounted_usage_record_count == 1
@@ -512,6 +544,96 @@ async def test_create_task_failure_does_not_attach_local_handle() -> None:
     assert entry.task_handle is None
 
 
+@pytest.mark.asyncio
+async def test_attach_failure_cancels_and_settles_created_task() -> None:
+    class _FailingAttachRegistry(ProcessLocalAgentRunRegistry):
+        async def attach_task_handle(self, **_kwargs: Any) -> LocalAgentRun:
+            raise RuntimeError("attach failed")
+
+    registry = _FailingAttachRegistry()
+    assignment = _assignment()
+    await registry.register(assignment, graph_thread_id="child-thread-1")
+    created_tasks: list[asyncio.Task[AgentRunCompletion]] = []
+    worker_started = False
+
+    async def _worker(**_kwargs: Any) -> AgentRunCompletion:
+        nonlocal worker_started
+        worker_started = True
+        return _completion(assignment)
+
+    def _task_factory(
+        coro: Any,
+    ) -> asyncio.Task[AgentRunCompletion]:
+        task = asyncio.create_task(coro)
+        created_tasks.append(task)
+        return task
+
+    launcher = AgentRunLauncher(
+        registry=registry,
+        subagent_registry=get_subagent_registry(),
+        worker=_worker,
+        task_factory=_task_factory,
+    )
+
+    with pytest.raises(RuntimeError, match="attach failed"):
+        await launcher.launch(
+            assignment=assignment,
+            runtime_config=object(),
+            graph_thread_id="child-thread-1",
+        )
+
+    assert len(created_tasks) == 1
+    assert created_tasks[0].cancelled() is True
+    assert worker_started is False
+
+
+@pytest.mark.asyncio
+async def test_cancellation_before_worker_start_settles_before_task_await_returns() -> None:
+    class _CancelOnAttachRegistry(ProcessLocalAgentRunRegistry):
+        async def attach_task_handle(
+            self,
+            *,
+            task_handle: asyncio.Task[Any],
+            **kwargs: Any,
+        ) -> LocalAgentRun:
+            entry = await super().attach_task_handle(
+                task_handle=task_handle,
+                **kwargs,
+            )
+            task_handle.cancel()
+            return entry
+
+    registry = _CancelOnAttachRegistry()
+    assignment = _assignment()
+    await registry.register(assignment, graph_thread_id="child-thread-1")
+    worker_started = False
+
+    async def _worker(**_kwargs: Any) -> AgentRunCompletion:
+        nonlocal worker_started
+        worker_started = True
+        return _completion(assignment)
+
+    launcher = AgentRunLauncher(
+        registry=registry,
+        subagent_registry=get_subagent_registry(),
+        worker=_worker,
+    )
+    task = await launcher.launch(
+        assignment=assignment,
+        runtime_config=object(),
+        graph_thread_id="child-thread-1",
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    terminal = await registry.get(tenant_id=7, task_id=42, agent_run_id="run-1")
+
+    assert worker_started is False
+    assert terminal is not None
+    assert terminal.status == "cancelled"
+    assert terminal.task_handle is None
+
+
 def test_launcher_module_has_no_durable_or_route_boundary_dependencies() -> None:
     source_path = Path(__file__).resolve().parents[3] / "services/agent_runs/launcher.py"
     tree = ast.parse(source_path.read_text(encoding="utf-8"))
@@ -529,23 +651,3 @@ def test_launcher_module_has_no_durable_or_route_boundary_dependencies() -> None
         and prohibited_parts.isdisjoint(module.lower().split("."))
         for module in imported_modules
     )
-
-
-async def _wait_for_status(
-    registry: ProcessLocalAgentRunRegistry,
-    *,
-    tenant_id: int,
-    task_id: int,
-    agent_run_id: str,
-    status: str,
-) -> LocalAgentRun:
-    for _ in range(20):
-        entry = await registry.get(
-            tenant_id=tenant_id,
-            task_id=task_id,
-            agent_run_id=agent_run_id,
-        )
-        if entry is not None and entry.status == status:
-            return entry
-        await asyncio.sleep(0)
-    raise AssertionError(f"Timed out waiting for {status}")

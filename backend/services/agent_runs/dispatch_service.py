@@ -42,7 +42,6 @@ from .parent_handoff_coordinator import (
 )
 from .registry import (
     ACTIVE_AGENT_RUN_STATUSES,
-    TERMINAL_AGENT_RUN_STATUSES,
     LocalAgentRun,
     ProcessLocalAgentRunRegistry,
 )
@@ -482,7 +481,11 @@ class SubagentDispatchService:
         if not isinstance(exc, (SubagentRunCancelled, SubagentRunFailed)):
             return None
 
-        terminal = await self._observe_terminal_entry(item.assignment)
+        terminal = await self._registry.get(
+            tenant_id=item.assignment.tenant_id,
+            task_id=item.assignment.task_id,
+            agent_run_id=item.assignment.agent_run_id,
+        )
         if (
             terminal is None
             or terminal.result is None
@@ -558,12 +561,10 @@ class SubagentDispatchService:
                 for item, child_task in launched
             )
         )
-        await asyncio.sleep(0)
         completions: list[AgentRunCompletion] = []
         for (item, _child_task), result in zip(launched, settled, strict=True):
             assignment = item.assignment
             if isinstance(result, AgentRunCompletion):
-                await self._observe_terminal_entry(assignment)
                 completions.append(result)
                 continue
 
@@ -571,7 +572,11 @@ class SubagentDispatchService:
                 result,
                 (SubagentRunCancelled, SubagentRunPaused, SubagentRunFailed),
             ):
-                terminal = await self._observe_terminal_entry(assignment)
+                terminal = await self._registry.get(
+                    tenant_id=assignment.tenant_id,
+                    task_id=assignment.task_id,
+                    agent_run_id=assignment.agent_run_id,
+                )
                 if terminal is not None and terminal.result is not None:
                     usage_records = child_usage_records_from_state(
                         getattr(result.execution_result, "final_state", None),
@@ -586,7 +591,11 @@ class SubagentDispatchService:
                         )
                     )
                 continue
-            terminal = await self._observe_terminal_entry(assignment)
+            terminal = await self._registry.get(
+                tenant_id=assignment.tenant_id,
+                task_id=assignment.task_id,
+                agent_run_id=assignment.agent_run_id,
+            )
             if terminal is not None and terminal.result is not None:
                 completions.append(
                     AgentRunCompletion(
@@ -596,26 +605,6 @@ class SubagentDispatchService:
                     )
                 )
         return tuple(completions)
-
-    async def _observe_terminal_entry(
-        self,
-        assignment: AgentAssignment,
-    ) -> LocalAgentRun | None:
-        """Observe the launcher's terminal registry transition without mutating it."""
-        for _ in range(100):
-            entry = await self._registry.get(
-                tenant_id=assignment.tenant_id,
-                task_id=assignment.task_id,
-                agent_run_id=assignment.agent_run_id,
-            )
-            if entry is not None and entry.status in TERMINAL_AGENT_RUN_STATUSES:
-                return entry
-            await asyncio.sleep(0)
-        logger.debug(
-            "subagent run %s did not terminally settle before dispatch observation",
-            assignment.agent_run_id,
-        )
-        return None
 
     async def _active_counts_for_plan(
         self,

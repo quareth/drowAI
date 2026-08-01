@@ -9,6 +9,7 @@ inside the process-local lifecycle boundary.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Coroutine, Protocol
@@ -68,7 +69,7 @@ class SubagentRunFailed(RuntimeError):
 
 
 class AgentRunLauncher:
-    """Creates and observes one local asyncio task per subagent assignment."""
+    """Create one task that executes and settles each local subagent run."""
 
     def __init__(
         self,
@@ -94,10 +95,17 @@ class AgentRunLauncher:
         parent_run_id: str | None = None,
     ) -> asyncio.Task[AgentRunCompletion]:
         """Create the local subagent task and attach its handle to the registry."""
-        task_coro = self._run_worker(
+        lifecycle_started = asyncio.Event()
+        attachment_finished = asyncio.Event()
+        worker_start = asyncio.Event()
+        task_coro = self._run_lifecycle(
             assignment=assignment,
             runtime_config=runtime_config,
             graph_thread_id=graph_thread_id,
+            parent_run_id=parent_run_id,
+            lifecycle_started=lifecycle_started,
+            attachment_finished=attachment_finished,
+            worker_start=worker_start,
         )
         try:
             task = self._task_factory(task_coro)
@@ -105,6 +113,7 @@ class AgentRunLauncher:
             task_coro.close()
             raise
 
+        await lifecycle_started.wait()
         try:
             await self._registry.attach_task_handle(
                 tenant_id=assignment.tenant_id,
@@ -113,16 +122,13 @@ class AgentRunLauncher:
                 task_handle=task,
             )
         except Exception:
+            attachment_finished.set()
             task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
             raise
-        task.add_done_callback(
-            lambda completed: self._schedule_completion(
-                assignment,
-                completed,
-                graph_thread_id=graph_thread_id,
-                parent_run_id=parent_run_id,
-            )
-        )
+        worker_start.set()
+        attachment_finished.set()
         return task
 
     async def request_cancellation(
@@ -160,56 +166,42 @@ class AgentRunLauncher:
         )
         return bool(entry and entry.cancel_requested)
 
-    async def _run_worker(
+    async def _run_lifecycle(
         self,
         *,
         assignment: AgentAssignment,
         runtime_config: Any,
         graph_thread_id: str,
+        parent_run_id: str | None,
+        lifecycle_started: asyncio.Event,
+        attachment_finished: asyncio.Event,
+        worker_start: asyncio.Event,
     ) -> AgentRunCompletion:
-        return await self._worker(
-            assignment=assignment,
-            runtime_config=runtime_config,
-            graph_thread_id=graph_thread_id,
-            is_cancel_requested=lambda: self.is_cancel_requested(assignment),
-        )
-
-    def _schedule_completion(
-        self,
-        assignment: AgentAssignment,
-        completed: asyncio.Task[AgentRunCompletion],
-        *,
-        graph_thread_id: str,
-        parent_run_id: str | None,
-    ) -> None:
-        cleanup = asyncio.create_task(
-            self._complete_task(
-                assignment,
-                completed,
-                graph_thread_id=graph_thread_id,
-                parent_run_id=parent_run_id,
-            )
-        )
-        cleanup.add_done_callback(
-            lambda task: self._log_cleanup_failure(assignment, task)
-        )
-
-    async def _complete_task(
-        self,
-        assignment: AgentAssignment,
-        completed: asyncio.Task[AgentRunCompletion],
-        *,
-        graph_thread_id: str,
-        parent_run_id: str | None,
-    ) -> None:
+        """Run the worker, settle its lifecycle, then preserve its outcome."""
+        lifecycle_started.set()
         try:
-            completion = completed.result()
+            await worker_start.wait()
+            completion = await self._worker(
+                assignment=assignment,
+                runtime_config=runtime_config,
+                graph_thread_id=graph_thread_id,
+                is_cancel_requested=lambda: self.is_cancel_requested(assignment),
+            )
         except asyncio.CancelledError:
+            await attachment_finished.wait()
+            if not worker_start.is_set():
+                raise
             transition = await self._registry.record_cancelled(
                 tenant_id=assignment.tenant_id,
                 task_id=assignment.task_id,
                 agent_run_id=assignment.agent_run_id,
             )
+            if transition.changed:
+                await self._publish_terminal_lifecycle(
+                    transition.entry,
+                    parent_run_id=parent_run_id,
+                )
+            raise
         except SubagentRunPaused as exc:
             usage_records = child_usage_records_from_state(
                 getattr(exc.execution_result, "final_state", None),
@@ -222,6 +214,12 @@ class AgentRunLauncher:
                 agent_run_id=assignment.agent_run_id,
                 accounted_usage_record_count=len(usage_records),
             )
+            if transition.changed:
+                await self._publish_terminal_lifecycle(
+                    transition.entry,
+                    parent_run_id=parent_run_id,
+                )
+            raise
         except Exception:
             logger.warning(
                 "Subagent worker failed for tenant_id=%s task_id=%s agent_run_id=%s",
@@ -236,18 +234,25 @@ class AgentRunLauncher:
                 agent_run_id=assignment.agent_run_id,
                 safe_error="Subagent worker failed",
             )
-        else:
-            transition = await self._registry.record_completed(
-                tenant_id=assignment.tenant_id,
-                task_id=assignment.task_id,
-                agent_run_id=assignment.agent_run_id,
-                result=completion.result,
-            )
+            if transition.changed:
+                await self._publish_terminal_lifecycle(
+                    transition.entry,
+                    parent_run_id=parent_run_id,
+                )
+            raise
+
+        transition = await self._registry.record_completed(
+            tenant_id=assignment.tenant_id,
+            task_id=assignment.task_id,
+            agent_run_id=assignment.agent_run_id,
+            result=completion.result,
+        )
         if transition.changed:
             await self._publish_terminal_lifecycle(
                 transition.entry,
                 parent_run_id=parent_run_id,
             )
+        return completion
 
     async def _publish_terminal_lifecycle(
         self,
@@ -272,22 +277,6 @@ class AgentRunLauncher:
                 entry.agent_run_id,
                 exc_info=True,
             )
-
-    def _log_cleanup_failure(
-        self,
-        assignment: AgentAssignment,
-        cleanup: asyncio.Task[None],
-    ) -> None:
-        try:
-            cleanup.result()
-        except Exception:
-            logger.exception(
-                "Subagent completion cleanup failed for tenant_id=%s task_id=%s agent_run_id=%s",
-                assignment.tenant_id,
-                assignment.task_id,
-                assignment.agent_run_id,
-            )
-
 
 async def _unavailable_worker(
     *,
