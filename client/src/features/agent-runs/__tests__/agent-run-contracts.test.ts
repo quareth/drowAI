@@ -194,10 +194,32 @@ describe("agent-run projection readers", () => {
 
     expect(
       readLocalAgentRuns(
-        { task_id: TASK_ID, agent_runs: [valid, malformed] },
+        {
+          process_local: true,
+          task_id: TASK_ID,
+          agent_runs: [valid, malformed],
+        },
         TASK_ID,
       ),
     ).toEqual([valid]);
+  });
+
+  it("requires the backend process-local envelope marker", () => {
+    expect(
+      readLocalAgentRuns({ task_id: TASK_ID, agent_runs: [] }, TASK_ID),
+    ).toBeNull();
+    expect(
+      readLocalAgentRuns(
+        { process_local: false, task_id: TASK_ID, agent_runs: [] },
+        TASK_ID,
+      ),
+    ).toBeNull();
+    expect(
+      readLocalAgentRuns(
+        { process_local: true, task_id: TASK_ID, agent_runs: [] },
+        TASK_ID,
+      ),
+    ).toEqual([]);
   });
 
   it("uses the same lifecycle reader for live events and replay packets", () => {

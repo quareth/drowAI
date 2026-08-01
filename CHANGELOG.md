@@ -39,6 +39,8 @@ The format is based on
 
 ### Fixed
 
+- Process-local subagent replay now accepts the backend-owned response marker,
+  allowing orphaned nonterminal runs to reconcile to interrupted state.
 - Final answers now render only validated structured sections, preventing
   pending tool-call JSON from leaking into assistant messages when router
   guardrails override an action and force finalization.

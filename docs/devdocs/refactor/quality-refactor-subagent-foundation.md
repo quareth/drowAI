@@ -135,7 +135,7 @@ current presentation owners. Do not perform the broader MessageList extraction.
 | 4 | Parent-control extraction and coordinator split | Complete | 35 focused tests passed |
 | 5 | Continuation responsibility split | Complete | 52 focused tests passed |
 | 6 | Graph construction unification | Complete | 31 focused tests passed |
-| 7 | Frontend protocol authority | Complete | 123 affected tests passed; one known baseline failure retained |
+| 7 | Frontend protocol authority | Complete | Historical gate retained; follow-up envelope correction passed |
 | 8 | Cleanup and integration gate | Complete | 203 backend tests, type-check, build, and diff checks passed |
 
 ## Completion criteria
@@ -165,9 +165,9 @@ deleted with the cached graph route.
 - Focused frontend baseline: 97 passed with one existing failure:
   `MessageList.agent-runs.test.tsx` expected a replayed nonterminal local run to
   become interrupted. The backend envelope includes `process_local`, while the
-  existing strict frontend list schema does not accept that field. Correcting
-  that mismatch would change current reconciliation behavior, so it remains
-  outside this behavior-neutral refactor.
+  existing strict frontend list schema did not accept that field. The follow-up
+  contract correction now accepts only `process_local: true`, and the replay
+  reconciliation test passes with the backend-defined interrupted state.
 
 ### Phase gates
 
@@ -180,7 +180,9 @@ deleted with the cached graph route.
   subagent E2E: 31 passed.
 - Frontend agent-run contracts, store/replay, MessageList, activity grouping,
   message grouping, compatibility filtering, chat-stream terminalization, and
-  stream ingestion: 123 passed, with only the same baseline failure above.
+  stream ingestion retained the historical phase gate. The focused follow-up
+  contract, replay, and MessageList gate passed 27 tests after the envelope
+  correction.
 - TypeScript: `npm run check` passed.
 - Production frontend: `npm run build` passed (existing large-chunk warning).
 

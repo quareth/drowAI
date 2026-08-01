@@ -253,6 +253,7 @@ describe("agent-run replay hydration", () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
+            process_local: true,
             task_id: TASK_ID,
             agent_runs: [],
           }),
@@ -343,6 +344,7 @@ describe("agent-run replay hydration", () => {
       .mockResolvedValueOnce(
         new Response(
           JSON.stringify({
+            process_local: true,
             task_id: TASK_ID,
             agent_runs: [],
           }),

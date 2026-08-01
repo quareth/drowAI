@@ -156,6 +156,7 @@ export const localAgentRunStatusProjectionSchema = z
 
 export const localAgentRunListEnvelopeSchema = z
   .object({
+    process_local: z.literal(true),
     task_id: positiveInteger,
     agent_runs: z.array(z.unknown()),
   })

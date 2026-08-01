@@ -71,6 +71,7 @@ export type AgentCapability = string;
 export type AgentRunDrawerView = "list" | "detail";
 
 export interface LocalAgentRunListResponse {
+  process_local: true;
   task_id: number;
   agent_runs: LocalAgentRunStatusProjection[];
 }
@@ -96,6 +97,7 @@ export function readLocalAgentRuns(
 }
 
 export interface LocalAgentRunCancelResponse {
+  process_local: true;
   cancelled: boolean;
   agent_run: LocalAgentRunStatusProjection;
 }
