@@ -380,10 +380,11 @@ Important boundaries:
   simple-tool.
 - `observation_adapter` converts post-tool findings into compact observations
   before returning to `decision_router`.
-- PTR obtains the visible Observation and exactly one internal `ptr_commit`
-  tool from the same provider-neutral streamed model turn. Provider adapters
-  stream only assistant text, buffer tool arguments until completion, and then
-  normalize the completed route call for the existing `decision_router`.
+- PTR obtains optional visible narration and exactly one internal `ptr_commit`
+  from the same provider-neutral model turn. Provider adapters stream only
+  assistant text, buffer tool arguments until completion, and expose terminal
+  truncation state. A missing or truncated commit triggers one commit-only
+  recovery call over existing evidence; completed external work is not rerun.
 - Terminal path is `finalize -> fallback_finalize -> END`.
 
 ## Subagent Child Graph

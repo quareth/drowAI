@@ -68,19 +68,23 @@ is distinct from post-tool Observations and from subagent selection intent.
 
 ### PTR Observations
 
-Post-tool reasoning makes one provider-neutral
+Post-tool reasoning normally makes one provider-neutral
 `stream_chat_with_tools_with_usage` call with one internal `ptr_commit`
 function:
 
-1. Ordinary assistant-text chunks stream directly into the Observation card.
-2. Provider adapters buffer native function-argument chunks privately.
-3. After the response completes, the backend parses and validates the complete
-   `ptr_commit` call.
-4. The validated `next_action` drives graph routing.
+1. Optional assistant-text chunks stream directly into the Observation card.
+2. Provider adapters buffer native function arguments privately and report
+   whether the response completed or reached an output limit.
+3. After completion, the backend sanitizes optional candidate observations and
+   validates the complete `ptr_commit` against the runtime decision model.
+4. If only the commit is missing or truncated, one non-streaming recovery call
+   exposes only `ptr_commit` and reuses the completed evidence. It cannot rerun
+   the external tool or delegated action.
+5. The validated `next_action` drives graph routing.
 
-Observation text is therefore genuine model-text streaming. It is not
-extracted from the function JSON, and control flow never depends on parsing the
-visible text.
+Observation text is genuine model-text streaming and is never parsed for
+control flow. Narration is optional; when omitted, the already-complete,
+LLM-authored `action_reasoning` becomes the observation after commit validation.
 
 ### Subagent tool intent
 
@@ -139,9 +143,10 @@ and OpenAI-compatible adapters normalize:
 - refusals and stream failures into provider-neutral exceptions.
 
 Usage-aware streams must return final usage data. Setup and idle timeouts bound
-stalled providers. Mixed PTR streaming depends on a provider/model supporting
-assistant text and a native function call in the same response; function
-arguments are never forwarded as visible deltas.
+stalled providers. Mixed PTR streaming requires provider/model support for
+assistant text and a native function call in one response. Function arguments
+are never forwarded as visible deltas, and provider-specific finish states are
+normalized into completed, incomplete, or unknown outcomes.
 
 ## Fanout, Persistence, and Replay
 

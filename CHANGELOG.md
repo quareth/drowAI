@@ -39,6 +39,14 @@ The format is based on
 
 ### Fixed
 
+- Final answers now render only validated structured sections, preventing
+  pending tool-call JSON from leaking into assistant messages when router
+  guardrails override an action and force finalization.
+- Post-action reasoning now applies its complete progress, repetition, retry,
+  and stopping policies while committing routes through `ptr_commit`, restoring
+  reflection or finalization after repeated no-progress actions.
+- Blocked direct-executor turns now retain grounded task seeds so recovery
+  attempts remain visible to progress tracking and the three-phase stall guard.
 - Subagent tool calls now inherit the parent Agent or Full Access approval
   policy, reuse the existing main conversation approval card, and show only a
   waiting indicator in the subagent drawer.
@@ -48,14 +56,15 @@ The format is based on
 - Persisted tool results from both parent and subagent execution now trigger
   durable knowledge ingestion at shared tool completion, independent of whether
   parent post-action reasoning receives the child execution state.
-- Post-action Observations now stream as ordinary assistant text from the same
-  model turn that commits the next graph route, preventing completed subagent
-  work from being described as an action that is still about to run.
+- Post-action Observations now use the same provider-neutral model turn that
+  commits the next graph route. Optional narration, larger output budgets,
+  truncation detection, and commit-only recovery prevent completed external
+  work from being repeated when an internal route commit is incomplete.
 - Each parent post-action phase now receives a distinct Observation stream
   identity, so later phases no longer overwrite or reorder an earlier card.
 - Parent post-action reasoning now uses one provider-portable internal commit
-  schema for all routes, avoiding six duplicated function definitions while
-  preserving strict runtime validation across model providers.
+  schema for all routes, aligned with runtime validation while malformed
+  optional knowledge candidates are safely discarded.
 - Parent reasoning now receives completed handoff evidence from the canonical
   context bundle, preventing redundant delegation after a subagent has already
   completed the requested work.
