@@ -10,8 +10,6 @@ responsibilities.
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
@@ -26,15 +24,17 @@ from agent.graph.utils.event_identity import (
     POST_ACTION_STREAM_SEQUENCE_METADATA_KEY,
 )
 from agent.subagents.registry import SubagentRegistry, get_subagent_registry
-from backend.services.agent_runs.assignment_builder import (
-    build_agent_assignment,
-    parent_run_id_from_metadata,
-    string_list,
-)
+from backend.services.agent_runs.assignment_builder import parent_run_id_from_metadata
 from backend.services.agent_runs.contracts import (
     AgentAssignment,
     AgentResult,
-    agent_display_name,
+)
+from backend.services.agent_runs.dispatch_plan import (
+    PlannedAgentInvocation,
+    build_dispatch_plan,
+    routing_metadata_from_decision,
+    runtime_config_with_subagent_routing,
+    stable_par_assignment_identity,
 )
 from backend.services.agent_runs.completion import (
     AgentRunCompletion,
@@ -52,8 +52,6 @@ from backend.services.agent_runs.launcher import (
     SubagentRunPaused,
 )
 from backend.services.agent_runs.ownership_policy import (
-    MAX_AGENT_HANDOFFS,
-    SubagentRoutingDecision,
     normalize_agent_handoff_entries,
     resolve_subagent_handoff,
 )
@@ -81,9 +79,6 @@ from backend.services.langgraph_chat.contracts import (
 from backend.services.langgraph_chat.execution.completion_callback import (
     StreamEmitter,
     run_turn_with_completion_callback,
-)
-from backend.services.langgraph_chat.checkpoint.thread_identity import (
-    generate_graph_thread_id,
 )
 from backend.services.langgraph_chat.facade_helpers import (
     build_result,
@@ -114,16 +109,6 @@ LifecyclePublisher = Callable[[int, dict[str, Any]], Awaitable[None]]
 ReadyHandoffProcessor = Callable[
     [tuple[AgentRunCompletion, ...], bool], Awaitable[ParentHandoffOutcome | None]
 ]
-
-
-@dataclass(frozen=True, slots=True)
-class _PlannedInvocation:
-    """One immutable subagent invocation prepared before launch."""
-
-    index: int
-    assignment: AgentAssignment
-    display_name: str
-    graph_thread_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -188,7 +173,7 @@ class SubagentHandler(BaseLangGraphHandler):
         chat_inputs = runtime_config.chat_inputs
         turn = ensure_turn_identity(runtime_config, logger_=logger)
 
-        plan = _build_dispatch_plan(
+        plan = build_dispatch_plan(
             runtime_config,
             parent_turn_id=str(turn.turn_id),
             subagent_registry=self._subagent_registry,
@@ -276,7 +261,7 @@ class SubagentHandler(BaseLangGraphHandler):
         if not normalized:
             raise RuntimeError("PAR follow-up delegation rejected: invalid_handoff_plan")
 
-        _, stable_agent_run_id = _stable_par_assignment_identity(
+        _, stable_agent_run_id = stable_par_assignment_identity(
             delegation_decision_id=decision_id,
             agent_id=normalized[0]["subagent"],
             objective=normalized[0]["objective"],
@@ -305,15 +290,15 @@ class SubagentHandler(BaseLangGraphHandler):
                 f"PAR follow-up delegation rejected: {decision.reason}"
             )
 
-        followup_config = _runtime_config_with_subagent_routing(
+        followup_config = runtime_config_with_subagent_routing(
             runtime_config,
-            _routing_metadata_from_decision(
+            routing_metadata_from_decision(
                 decision,
                 delegation_source="par",
                 delegation_decision_id=decision_id,
             ),
         )
-        plan = _build_dispatch_plan(
+        plan = build_dispatch_plan(
             followup_config,
             parent_turn_id=str(turn.turn_id),
             subagent_registry=self._subagent_registry,
@@ -345,7 +330,7 @@ class SubagentHandler(BaseLangGraphHandler):
 
     async def _run_dispatch_plan(
         self,
-        plan: tuple["_PlannedInvocation", ...],
+        plan: tuple[PlannedAgentInvocation, ...],
         runtime_config: LangGraphRuntimeConfig,
         *,
         turn: Any,
@@ -358,8 +343,8 @@ class SubagentHandler(BaseLangGraphHandler):
         parent_handoff_outcome: ParentHandoffOutcome | None = None
 
         while pending:
-            batch: list[_PlannedInvocation] = []
-            deferred: list[_PlannedInvocation] = []
+            batch: list[PlannedAgentInvocation] = []
+            deferred: list[PlannedAgentInvocation] = []
             for item in pending:
                 spec = self._subagent_registry.require(item.assignment.agent_id)
                 count = active_counts.get(item.assignment.agent_id, 0)
@@ -516,7 +501,7 @@ class SubagentHandler(BaseLangGraphHandler):
         self,
         exc: BaseException,
         *,
-        item: "_PlannedInvocation",
+        item: PlannedAgentInvocation,
     ) -> AgentRunCompletion | None:
         """Return a launcher-recorded failed/cancelled completion for parent PAR."""
         if isinstance(exc, SubagentRunPaused):
@@ -597,17 +582,17 @@ class SubagentHandler(BaseLangGraphHandler):
 
     async def _launch_batch(
         self,
-        batch: list["_PlannedInvocation"],
+        batch: list[PlannedAgentInvocation],
         runtime_config: LangGraphRuntimeConfig,
         *,
         turn: Any,
     ) -> (
-        tuple[tuple["_PlannedInvocation", Awaitable[Any]], ...]
+        tuple[tuple[PlannedAgentInvocation, Awaitable[Any]], ...]
         | LangGraphChatResult
         | _LaunchBatchFailure
     ):
         """Register, mark running, and launch one already-validated batch."""
-        launched: list[tuple[_PlannedInvocation, Awaitable[Any]]] = []
+        launched: list[tuple[PlannedAgentInvocation, Awaitable[Any]]] = []
         for item in batch:
             assignment = item.assignment
             queued: LocalAgentRun | None = None
@@ -717,7 +702,7 @@ class SubagentHandler(BaseLangGraphHandler):
 
     async def _settle_launched_batch_on_failure(
         self,
-        launched: list[tuple["_PlannedInvocation", Awaitable[Any]]],
+        launched: list[tuple[PlannedAgentInvocation, Awaitable[Any]]],
     ) -> tuple[AgentRunCompletion, ...]:
         """Terminally settle earlier launches without consuming parent handoffs."""
         if not launched:
@@ -1107,7 +1092,7 @@ def _normalized_non_empty_strings(value: Any) -> tuple[str, ...]:
 def _ack_for_child_exception(
     exc: BaseException,
     *,
-    item: _PlannedInvocation,
+    item: PlannedAgentInvocation,
     runtime_config: LangGraphRuntimeConfig,
     turn: Any,
 ) -> LangGraphChatResult:
@@ -1158,175 +1143,6 @@ async def _publish_lifecycle_to_hub(task_id: int, event: dict[str, Any]) -> None
     from backend.services.streaming.in_memory_hub import get_in_memory_stream_hub
 
     await get_in_memory_stream_hub().publish(task_id, event)
-
-
-def _build_assignment(
-    runtime_config: LangGraphRuntimeConfig,
-    *,
-    parent_turn_id: str,
-    subagent_registry: SubagentRegistry | None = None,
-) -> AgentAssignment:
-    return _build_dispatch_plan(
-        runtime_config,
-        parent_turn_id=parent_turn_id,
-        subagent_registry=subagent_registry,
-    )[0].assignment
-
-
-def _build_dispatch_plan(
-    runtime_config: LangGraphRuntimeConfig,
-    *,
-    parent_turn_id: str,
-    subagent_registry: SubagentRegistry | None = None,
-) -> tuple[_PlannedInvocation, ...]:
-    metadata = runtime_config.metadata
-    ownership = metadata.get("subagent_routing")
-    if not isinstance(ownership, Mapping) or not ownership.get("should_delegate"):
-        raise RuntimeError("Subagent branch requires a positive ownership decision")
-
-    raw_handoffs = ownership.get("handoffs")
-    if isinstance(raw_handoffs, list | tuple) and raw_handoffs:
-        requested_handoffs = tuple(raw_handoffs)
-    else:
-        requested_handoffs = (ownership,)
-
-    if len(requested_handoffs) > MAX_AGENT_HANDOFFS:
-        raise RuntimeError("Subagent dispatch plan has too many handoffs")
-
-    registry = subagent_registry or get_subagent_registry()
-    validated: list[tuple[Mapping[str, Any], Any]] = []
-    for raw_handoff in requested_handoffs:
-        if not isinstance(raw_handoff, Mapping):
-            raise RuntimeError("Subagent dispatch plan contains an invalid handoff")
-        if "reason" not in raw_handoff and "reason" in ownership:
-            raw_handoff = {**raw_handoff, "reason": ownership.get("reason")}
-        agent_id = _required_string(raw_handoff.get("agent_id"), "agent_id")
-        try:
-            spec = registry.require(agent_id)
-        except KeyError as exc:
-            raise RuntimeError(
-                f"subagent is not registered or enabled: {agent_id}"
-            ) from exc
-        if raw_handoff.get("agent_kind") != spec.kind:
-            raise RuntimeError("Subagent branch agent kind does not match registry")
-        if spec.requires_resolved_target and not string_list(
-            raw_handoff.get("targets")
-        ):
-            raise RuntimeError("Subagent dispatch plan requires resolved targets")
-        validated.append((raw_handoff, spec))
-
-    return tuple(
-        _PlannedInvocation(
-            index=index,
-            assignment=build_agent_assignment(
-                runtime_config,
-                parent_turn_id=parent_turn_id,
-                ownership=raw_handoff,
-                spec=spec,
-            ),
-            display_name=spec.display_name,
-            graph_thread_id=_new_child_graph_thread_id(),
-        )
-        for index, (raw_handoff, spec) in enumerate(validated)
-    )
-
-
-def _runtime_config_with_subagent_routing(
-    runtime_config: LangGraphRuntimeConfig,
-    routing: dict[str, Any],
-) -> LangGraphRuntimeConfig:
-    """Return a shallow runtime config copy with PAR routing metadata injected."""
-    metadata = dict(runtime_config.metadata)
-    metadata["subagent_routing"] = routing
-    return LangGraphRuntimeConfig(
-        chat_inputs=runtime_config.chat_inputs,
-        tooling=runtime_config.tooling,
-        persistence=runtime_config.persistence,
-        execution_mode=runtime_config.execution_mode,
-        metadata=metadata,
-        llm_runtime_selection=runtime_config.llm_runtime_selection,
-        runtime_services=runtime_config.runtime_services,
-    )
-
-
-def _routing_metadata_from_decision(
-    decision: SubagentRoutingDecision,
-    *,
-    delegation_source: str | None = None,
-    delegation_decision_id: str | None = None,
-) -> dict[str, Any]:
-    """Project an ownership decision into the handler's dispatch-plan metadata."""
-    stable_handoffs = [
-        _handoff_metadata(
-            handoff,
-            reason=decision.reason,
-            delegation_source=delegation_source,
-            delegation_decision_id=delegation_decision_id,
-        )
-        for handoff in decision.handoffs
-    ]
-    first = stable_handoffs[0] if stable_handoffs else {}
-    return {
-        "should_delegate": decision.should_delegate,
-        "reason": decision.reason,
-        "agent_id": decision.agent_id,
-        "agent_kind": decision.agent_kind,
-        "dispatch_branch": decision.dispatch_branch,
-        "capabilities": list(decision.capabilities),
-        "targets": list(decision.targets),
-        "objective": decision.objective,
-        "delegation_source": delegation_source,
-        "delegation_decision_id": delegation_decision_id,
-        "assignment_id": first.get("assignment_id"),
-        "agent_run_id": first.get("agent_run_id"),
-        "handoffs": stable_handoffs,
-    }
-
-
-def _handoff_metadata(
-    handoff: Any,
-    *,
-    reason: str,
-    delegation_source: str | None,
-    delegation_decision_id: str | None,
-) -> dict[str, Any]:
-    payload = {
-        "agent_id": handoff.agent_id,
-        "agent_kind": handoff.agent_kind,
-        "dispatch_branch": handoff.dispatch_branch,
-        "reason": reason,
-        "capabilities": list(handoff.capabilities),
-        "targets": list(handoff.targets),
-        "objective": handoff.objective,
-        "delegation_source": delegation_source,
-        "delegation_decision_id": delegation_decision_id,
-    }
-    if delegation_source == "par" and delegation_decision_id:
-        assignment_id, agent_run_id = _stable_par_assignment_identity(
-            delegation_decision_id=delegation_decision_id,
-            agent_id=handoff.agent_id,
-            objective=handoff.objective,
-        )
-        payload["assignment_id"] = assignment_id
-        payload["agent_run_id"] = agent_run_id
-    return payload
-
-
-def _stable_par_assignment_identity(
-    *,
-    delegation_decision_id: str,
-    agent_id: str,
-    objective: str,
-) -> tuple[str, str]:
-    identity = {
-        "delegation_decision_id": delegation_decision_id,
-        "agent_id": agent_id,
-        "objective": objective,
-    }
-    digest = hashlib.sha256(
-        json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    ).hexdigest()[:32]
-    return f"assignment-par-{digest}", f"agent-run-par-{digest}"
 
 
 def _ack_result(
@@ -1403,24 +1219,6 @@ def _usage_from_child_execution_result(
 def _safe_launch_error(exc: Exception, *, agent_display_name: str) -> str:
     _ = exc
     return f"{agent_display_name} launch failed"
-
-
-def _new_child_graph_thread_id() -> str:
-    return generate_graph_thread_id()
-
-
-def _required_string(value: Any, field_name: str) -> str:
-    normalized = _optional_string(value)
-    if not normalized:
-        raise RuntimeError(f"Subagent assignment requires {field_name}")
-    return normalized
-
-
-def _optional_string(value: Any) -> str | None:
-    if value is None:
-        return None
-    normalized = str(value).strip()
-    return normalized or None
 
 
 __all__ = [

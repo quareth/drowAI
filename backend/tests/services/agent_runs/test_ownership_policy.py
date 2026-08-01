@@ -9,6 +9,7 @@ from backend.services.agent_runs.ownership_policy import (
     normalize_agent_handoff_entries,
     resolve_subagent_handoff,
 )
+from backend.services.agent_runs.dispatch_plan import build_assignment
 from agent.subagents.registry import SubagentRegistry, get_subagent_registry
 from backend.services.langgraph_chat.contracts import (
     AgentMode,
@@ -16,7 +17,6 @@ from backend.services.langgraph_chat.contracts import (
     ExecutionMode,
     LangGraphRuntimeConfig,
 )
-from backend.services.langgraph_chat.handlers.subagent_handler import _build_assignment
 
 
 def _metadata(
@@ -173,7 +173,7 @@ def test_assignment_construction_preserves_classifier_authored_objective() -> No
     )
     assert decision.should_delegate is True
 
-    assignment = _build_assignment(
+    assignment = build_assignment(
         _runtime_config_for_assignment(
             subagent_routing=_routing_metadata(decision)
         ),
@@ -196,7 +196,7 @@ def test_assignment_construction_preserves_parent_approval_policy() -> None:
     )
     assert decision.should_delegate is True
 
-    assignment = _build_assignment(
+    assignment = build_assignment(
         _runtime_config_for_assignment(
             subagent_routing=_routing_metadata(decision),
             agent_mode=AgentMode.AGENT,
@@ -226,7 +226,7 @@ def test_followup_handoff_uses_shared_policy_and_assignment_builder() -> None:
     )
     assert decision.should_delegate is True
 
-    assignment = _build_assignment(
+    assignment = build_assignment(
         _runtime_config_for_assignment(
             subagent_routing=_routing_metadata(decision)
         ),

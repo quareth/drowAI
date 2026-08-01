@@ -24,6 +24,7 @@ from agent.subagents.registry import (
 )
 from agent.subagents.runtime.model import SUBAGENT_RESULT_METADATA_KEY
 from backend.services.agent_runs.contracts import AgentResult
+from backend.services.agent_runs.dispatch_plan import build_assignment
 from backend.services.agent_runs.completion import (
     AgentRunCompletion,
     build_agent_run_completion,
@@ -1566,8 +1567,4 @@ async def test_facade_active_registry_check_prevents_recon_branch() -> None:
 
 
 def _build_assignment_for_active_run(runtime_config: LangGraphRuntimeConfig) -> Any:
-    from backend.services.langgraph_chat.handlers.subagent_handler import (
-        _build_assignment,
-    )
-
-    return _build_assignment(runtime_config, parent_turn_id="task-42-turn-5")
+    return build_assignment(runtime_config, parent_turn_id="task-42-turn-5")
