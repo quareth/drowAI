@@ -71,6 +71,11 @@ def test_loads_builtin_pathfinder_definition_from_package_data() -> None:
         "information_gathering.network_discovery.fping",
         "information_gathering.network_discovery.nmap",
     )
+    assert dict(pathfinder.capability_aliases)["port_discovery"] == "port_scanning"
+    assert (
+        dict(pathfinder.capability_aliases)["service_detection"]
+        == "service_enumeration"
+    )
     assert "bounded reconnaissance subagent" in pathfinder.instructions
 
 
@@ -142,6 +147,22 @@ def test_rejects_invalid_category_ids(tmp_path: Path) -> None:
     )
 
     with pytest.raises(SubagentDefinitionError, match="supported_task_categories"):
+        load_subagent_definitions(tmp_path)
+
+
+def test_rejects_capability_alias_outside_supported_categories(
+    tmp_path: Path,
+) -> None:
+    _write_definition(
+        tmp_path,
+        "bad-alias.toml",
+        f'{VALID_DEFINITION}\n[capability_aliases]\nhttp_probe = "web_mapping"\n',
+    )
+
+    with pytest.raises(
+        SubagentDefinitionError,
+        match="must reference a supported_task_categories value",
+    ):
         load_subagent_definitions(tmp_path)
 
 

@@ -11,6 +11,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from agent.subagents.definition import (
+    SubagentDefinition,
+    resolve_definition_capability,
+)
 from agent.subagents.registry import SubagentRegistry, get_subagent_registry
 
 from .contracts import AgentCapability
@@ -21,31 +25,6 @@ MAX_TARGET_LENGTH = 512
 MAX_AGENT_HANDOFFS = 3
 SUBAGENT_DISPATCH_BRANCH = "subagent"
 
-_CAPABILITY_ALIASES: dict[str, AgentCapability] = {
-    "discover_hosts": "host_discovery",
-    "discovery": "host_discovery",
-    "gather_info": "host_discovery",
-    "host_discovery": "host_discovery",
-    "host_discover": "host_discovery",
-    "host_enumeration": "host_discovery",
-    "host_recon": "host_discovery",
-    "information_gathering": "host_discovery",
-    "network_discovery": "host_discovery",
-    "network_scan": "port_scanning",
-    "network_scanning": "port_scanning",
-    "recon": "host_discovery",
-    "reconnaissance": "host_discovery",
-    "enumerate_services": "service_enumeration",
-    "service_detection": "service_enumeration",
-    "service_discovery": "service_enumeration",
-    "service_enum": "service_enumeration",
-    "service_enumeration": "service_enumeration",
-    "port_discovery": "port_scanning",
-    "port_enumeration": "port_scanning",
-    "port_scan": "port_scanning",
-    "port_scanning": "port_scanning",
-    "scan_ports": "port_scanning",
-}
 _NON_CAPABILITY_ROUTE_HINTS = frozenset(
     {
         "direct_executor",
@@ -189,7 +168,7 @@ def resolve_subagent_handoff(
 
         capabilities, _unknown = _requested_capabilities(
             metadata,
-            supported_capabilities=spec.supported_task_categories,
+            definition=spec,
         )
         plan.append(
             SubagentPlanHandoff(
@@ -257,7 +236,7 @@ def _classifier_label(metadata: Mapping[str, Any]) -> str:
 def _requested_capabilities(
     metadata: Mapping[str, Any],
     *,
-    supported_capabilities: tuple[str, ...],
+    definition: SubagentDefinition,
 ) -> tuple[tuple[AgentCapability, ...], tuple[str, ...]]:
     raw_response = metadata.get("intent_classifier_raw_response")
     if isinstance(raw_response, Mapping):
@@ -265,7 +244,7 @@ def _requested_capabilities(
         if raw_capabilities:
             return _normalize_capability_values(
                 raw_capabilities,
-                supported_capabilities=supported_capabilities,
+                definition=definition,
             )
 
     values: list[Any] = []
@@ -288,19 +267,18 @@ def _requested_capabilities(
 
     return _normalize_capability_values(
         values,
-        supported_capabilities=supported_capabilities,
+        definition=definition,
     )
 
 
 def _normalize_capability_values(
     values: Sequence[Any],
     *,
-    supported_capabilities: tuple[str, ...],
+    definition: SubagentDefinition,
 ) -> tuple[tuple[AgentCapability, ...], tuple[str, ...]]:
     capabilities: list[AgentCapability] = []
     unknown: list[str] = []
     seen: set[str] = set()
-    supported = frozenset(supported_capabilities)
     for value in values:
         token = _normalize_token(value)
         if not token or token in seen:
@@ -308,11 +286,8 @@ def _normalize_capability_values(
         seen.add(token)
         if token in _NON_CAPABILITY_ROUTE_HINTS:
             continue
-        capability = _CAPABILITY_ALIASES.get(token)
+        capability = resolve_definition_capability(definition, token)
         if capability is None:
-            unknown.append(token)
-            continue
-        if capability not in supported:
             unknown.append(token)
             continue
         if capability not in capabilities:

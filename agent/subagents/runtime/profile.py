@@ -18,7 +18,10 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from agent.subagents.definition import SubagentDefinition
+from agent.subagents.definition import (
+    SubagentDefinition,
+    resolve_definition_capability,
+)
 from agent.tools.catalog_policy import get_tool_catalog_role
 from agent.tools.catalog_visibility import visible_available_tools
 from agent.tools.categories import ToolCategory
@@ -26,65 +29,13 @@ from agent.tools.enhanced_metadata import EnhancedToolMetadata, ToolCatalogRole
 from agent.tools.enhanced_metadata_registry import get_enhanced_tool_metadata
 
 
-_CAPABILITY_ALIASES: dict[str, str] = {
-    "host_discovery": "host_discovery",
-    "port_discovery": "port_scanning",
-    "port_scan": "port_scanning",
-    "port_scanning": "port_scanning",
-    "service_detection": "service_enumeration",
-    "service_discovery": "service_enumeration",
-    "service_enum": "service_enumeration",
-    "service_enumeration": "service_enumeration",
-}
-_FORBIDDEN_CATEGORIES: frozenset[ToolCategory] = frozenset(
+_PLATFORM_FORBIDDEN_CATEGORIES: frozenset[ToolCategory] = frozenset(
     {
-        ToolCategory.APPLICATION_PROXY,
-        ToolCategory.CMS_IDENTIFICATION,
-        ToolCategory.DATABASE_ASSESSMENT,
-        ToolCategory.EXPLOITATION_TOOLS,
-        ToolCategory.FORENSICS,
-        ToolCategory.FUZZING,
-        ToolCategory.KNOWLEDGE,
-        ToolCategory.MAINTAINING_ACCESS,
-        ToolCategory.OPENVAS_SCANNING,
-        ToolCategory.PASSWORD_ATTACKS,
-        ToolCategory.REPORTING_TOOLS,
-        ToolCategory.REVERSE_ENGINEERING,
-        ToolCategory.SERVICE_ACCESS,
         ToolCategory.SHELL,
-        ToolCategory.SNIFFING_SPOOFING,
-        ToolCategory.STRESS_TESTING,
-        ToolCategory.VOIP_ANALYSIS,
-        ToolCategory.WEB_CRAWLING,
-        ToolCategory.WEB_ENUMERATION,
-        ToolCategory.WEB_FUZZING,
-        ToolCategory.WEB_VULNERABILITY_SCANNING,
-        ToolCategory.WORKSPACE_FILESYSTEM,
     }
 )
-_FORBIDDEN_TOOL_PREFIXES: tuple[str, ...] = (
-    "artifact.",
-    "exploitation_tools.",
-    "filesystem.",
-    "knowledge.",
-    "password_attacks.",
-    "reporting_tools.",
-    "service_access.",
+_PLATFORM_FORBIDDEN_TOOL_PREFIXES: tuple[str, ...] = (
     "shell.",
-)
-_FORBIDDEN_CAPABILITY_TOKENS: tuple[str, ...] = (
-    "agent",
-    "credential",
-    "delete",
-    "download",
-    "exploit",
-    "file",
-    "login",
-    "metasploit",
-    "password",
-    "report",
-    "shell",
-    "write",
 )
 
 
@@ -190,8 +141,8 @@ def subagent_capabilities_from_metadata(
     if (
         not normalized_tool_id
         or normalized_tool_id not in definition.tool_ids
-        or _is_forbidden_tool_id(normalized_tool_id)
-        or metadata.category in _FORBIDDEN_CATEGORIES
+        or _is_platform_forbidden_tool_id(normalized_tool_id)
+        or metadata.category in _PLATFORM_FORBIDDEN_CATEGORIES
         or get_tool_catalog_role(normalized_tool_id) is not ToolCatalogRole.PENTEST
     ):
         return ()
@@ -202,11 +153,6 @@ def subagent_capabilities_from_metadata(
     )
     if not capabilities:
         return ()
-    if any(
-        _contains_forbidden_capability_token(capability.name)
-        for capability in metadata.capabilities
-    ):
-        return ()
     return capabilities
 
 
@@ -215,37 +161,21 @@ def _normalize_capabilities(
     *,
     definition: SubagentDefinition,
 ) -> tuple[str, ...]:
-    owned_capabilities = {
-        capability
-        for category in definition.supported_task_categories
-        if (capability := _CAPABILITY_ALIASES.get(_normalize_token(category)))
-    }
     normalized: list[str] = []
     for raw_name in capability_names:
-        capability = _CAPABILITY_ALIASES.get(_normalize_token(raw_name))
+        capability = resolve_definition_capability(definition, raw_name)
         if capability is None or capability in normalized:
-            continue
-        if capability not in owned_capabilities:
             continue
         normalized.append(capability)
     return tuple(normalized)
 
 
-def _is_forbidden_tool_id(tool_id: str) -> bool:
-    return tool_id.startswith(_FORBIDDEN_TOOL_PREFIXES)
-
-
-def _contains_forbidden_capability_token(capability_name: Any) -> bool:
-    normalized = _normalize_token(capability_name)
-    return any(token in normalized for token in _FORBIDDEN_CAPABILITY_TOKENS)
+def _is_platform_forbidden_tool_id(tool_id: str) -> bool:
+    return tool_id.startswith(_PLATFORM_FORBIDDEN_TOOL_PREFIXES)
 
 
 def _normalize_tool_id(tool_id: Any) -> str:
     return str(tool_id or "").strip()
-
-
-def _normalize_token(value: Any) -> str:
-    return str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
 
 
 __all__ = [

@@ -209,6 +209,30 @@ async def test_background_service_start_is_concurrently_idempotent(
     await background_services_module.stop_background_services()
 
 
+@pytest.mark.asyncio
+async def test_retention_cycle_cleans_durable_logs_and_finished_subagent_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _DbSessionStub()
+    registry = SimpleNamespace(cleanup_finished=AsyncMock(return_value=2))
+    monkeypatch.setattr(background_services_module, "SessionLocal", lambda: db)
+    monkeypatch.setattr(
+        background_services_module,
+        "cleanup_agent_logs",
+        lambda _db: 3,
+    )
+    monkeypatch.setattr(
+        background_services_module,
+        "get_process_local_agent_run_registry",
+        lambda: registry,
+    )
+
+    await background_services_module._run_retention_cycle()
+
+    assert db.close_calls == 1
+    registry.cleanup_finished.assert_awaited_once_with()
+
+
 def _prepare_pre_runner_control_schema(database_url: str) -> None:
     engine = create_engine(database_url, future=True)
     with engine.begin() as connection:

@@ -10,12 +10,26 @@ projected to task stream events.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any, Literal, TypeAlias, cast
+from typing import Annotated, Any, Literal, TypeAlias, cast
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 
-AgentKind: TypeAlias = Literal["recon"]
+AgentKind: TypeAlias = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True,
+        min_length=1,
+        pattern=r"^[a-z][a-z0-9_]*$",
+    ),
+]
 AgentId: TypeAlias = str
 AgentCapability: TypeAlias = str
 AgentRunStatus: TypeAlias = Literal[

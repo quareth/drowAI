@@ -2,16 +2,49 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from agent.config import AgentConfig
-from agent.subagents.definition import SubagentDefinition, load_subagent_definitions
-from agent.subagents.runtime.profile import resolve_subagent_tool_profile
+from agent.subagents.definition import (
+    SubagentDefinition,
+    load_subagent_definitions,
+    resolve_definition_capability,
+)
+from agent.subagents.runtime.profile import (
+    resolve_subagent_tool_profile,
+    subagent_capabilities_from_metadata,
+)
 from agent.subagents.registry import get_subagent_registry
+from agent.tools.categories import ToolCategory
+from agent.tools.enhanced_metadata import EnhancedToolMetadata, ToolCapability
 
 
 _SUPPORTED_CATEGORY_TO_PROFILE_CAPABILITY = {
     "host_discovery": "host_discovery",
     "port_scanning": "port_scanning",
     "service_enumeration": "service_enumeration",
+}
+_PATHFINDER_CAPABILITY_ALIASES = {
+    "discover_hosts": "host_discovery",
+    "discovery": "host_discovery",
+    "gather_info": "host_discovery",
+    "host_discover": "host_discovery",
+    "host_enumeration": "host_discovery",
+    "host_recon": "host_discovery",
+    "information_gathering": "host_discovery",
+    "network_discovery": "host_discovery",
+    "recon": "host_discovery",
+    "reconnaissance": "host_discovery",
+    "network_scan": "port_scanning",
+    "network_scanning": "port_scanning",
+    "port_discovery": "port_scanning",
+    "port_enumeration": "port_scanning",
+    "port_scan": "port_scanning",
+    "scan_ports": "port_scanning",
+    "enumerate_services": "service_enumeration",
+    "service_detection": "service_enumeration",
+    "service_discovery": "service_enumeration",
+    "service_enum": "service_enumeration",
 }
 
 
@@ -51,6 +84,44 @@ def test_pathfinder_definition_owns_current_tool_profile() -> None:
         _SUPPORTED_CATEGORY_TO_PROFILE_CAPABILITY[category]
         for category in definition.supported_task_categories
     } == {"host_discovery", "port_scanning", "service_enumeration"}
+
+
+def test_pathfinder_definition_preserves_the_existing_capability_vocabulary() -> None:
+    definition = _pathfinder_definition()
+
+    assert dict(definition.capability_aliases) == _PATHFINDER_CAPABILITY_ALIASES
+    for category in definition.supported_task_categories:
+        assert resolve_definition_capability(definition, category) == category
+    for alias, category in _PATHFINDER_CAPABILITY_ALIASES.items():
+        assert resolve_definition_capability(definition, alias) == category
+
+
+def test_platform_shell_restriction_remains_definition_independent() -> None:
+    definition = replace(
+        _pathfinder_definition(),
+        id="command_runner",
+        kind="automation",
+        supported_task_categories=("command_execution",),
+        tool_ids=("shell.execute",),
+        capability_aliases=(),
+    )
+    metadata = EnhancedToolMetadata(
+        tool_id="shell.execute",
+        display_name="Execute shell command",
+        category=ToolCategory.SHELL,
+        capabilities=[
+            ToolCapability(
+                name="command_execution",
+                description="Execute an arbitrary shell command.",
+            )
+        ],
+    )
+
+    assert subagent_capabilities_from_metadata(
+        definition,
+        "shell.execute",
+        metadata,
+    ) == ()
 
 
 def test_pathfinder_definition_matches_current_runtime_limits() -> None:

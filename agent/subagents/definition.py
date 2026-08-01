@@ -48,6 +48,7 @@ _REQUIRED_KEYS = frozenset(
 )
 _OPTIONAL_KEYS = frozenset(
     {
+        "capability_aliases",
         "enabled",
         "runtime_role_prompt",
         "runtime_boundary_rules",
@@ -82,6 +83,7 @@ class SubagentDefinition:
     instructions: str
     runtime_role_prompt: str | None
     runtime_boundary_rules: tuple[str, ...]
+    capability_aliases: tuple[tuple[str, str], ...] = ()
 
     @classmethod
     def from_mapping(
@@ -99,6 +101,13 @@ class SubagentDefinition:
             )
 
         definition_id = _require_canonical_id(data, "id", source=source)
+        supported_task_categories = _require_text_tuple(
+            data,
+            "supported_task_categories",
+            source=source,
+            require_non_empty=True,
+            canonical_items=True,
+        )
         return cls(
             schema_version=schema_version,
             id=definition_id,
@@ -110,13 +119,7 @@ class SubagentDefinition:
                 "ownership_boundary",
                 source=source,
             ),
-            supported_task_categories=_require_text_tuple(
-                data,
-                "supported_task_categories",
-                source=source,
-                require_non_empty=True,
-                canonical_items=True,
-            ),
+            supported_task_categories=supported_task_categories,
             excluded_task_categories=_require_text_tuple(
                 data,
                 "excluded_task_categories",
@@ -165,6 +168,11 @@ class SubagentDefinition:
                 "runtime_boundary_rules",
                 source=source,
                 require_non_empty=True,
+            ),
+            capability_aliases=_require_capability_aliases(
+                data,
+                source=source,
+                supported_task_categories=supported_task_categories,
             ),
         )
 
@@ -363,6 +371,55 @@ def _require_optional_text_tuple(
     )
 
 
+def _require_capability_aliases(
+    data: Mapping[str, Any],
+    *,
+    source: str,
+    supported_task_categories: tuple[str, ...],
+) -> tuple[tuple[str, str], ...]:
+    """Return validated metadata-capability aliases owned by one definition."""
+    raw_aliases = data.get("capability_aliases", {})
+    if not isinstance(raw_aliases, Mapping):
+        raise SubagentDefinitionError(
+            f"{source}: capability_aliases must be a table"
+        )
+
+    supported = frozenset(supported_task_categories)
+    aliases: list[tuple[str, str]] = []
+    for raw_alias, raw_category in raw_aliases.items():
+        alias = str(raw_alias).strip()
+        if not _CANONICAL_ID_PATTERN.fullmatch(alias):
+            raise SubagentDefinitionError(
+                f"{source}: capability_aliases key {raw_alias!r} must be a "
+                "canonical lowercase identifier"
+            )
+        if not isinstance(raw_category, str):
+            raise SubagentDefinitionError(
+                f"{source}: capability_aliases.{alias} must be a string"
+            )
+        category = raw_category.strip()
+        if category not in supported:
+            raise SubagentDefinitionError(
+                f"{source}: capability_aliases.{alias} must reference a "
+                "supported_task_categories value"
+            )
+        aliases.append((alias, category))
+    return tuple(aliases)
+
+
+def resolve_definition_capability(
+    definition: SubagentDefinition,
+    value: Any,
+) -> str | None:
+    """Resolve a capability token through one definition's owned vocabulary."""
+    token = str(value or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if not token:
+        return None
+    if token in definition.supported_task_categories:
+        return token
+    return dict(definition.capability_aliases).get(token)
+
+
 __all__ = [
     "DEFINITION_DIRECTORY",
     "DEFINITION_PACKAGE",
@@ -371,4 +428,5 @@ __all__ = [
     "SubagentDefinitionError",
     "load_subagent_definition_file",
     "load_subagent_definitions",
+    "resolve_definition_capability",
 ]

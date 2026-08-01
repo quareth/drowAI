@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 from dataclasses import FrozenInstanceError, replace
+from pathlib import Path
 
 import pytest
 
 from agent.subagents.definition import SubagentDefinition, load_subagent_definitions
+from agent.subagents.contracts import (
+    AgentAssignment,
+    AgentResult,
+    AgentRuntimeIdentity,
+)
 from agent.subagents.registry import (
     SubagentRegistry,
     get_subagent_registry,
     load_subagent_registry,
 )
+from agent.subagents.runtime.profile import resolve_subagent_tool_profile
 
 
 def _pathfinder_definition() -> SubagentDefinition:
@@ -102,3 +109,78 @@ def test_registry_rejects_duplicate_definition_ids() -> None:
 
     with pytest.raises(ValueError, match="duplicate subagent definition id"):
         SubagentRegistry((definition, definition))
+
+
+def test_non_recon_definition_flows_through_registry_profile_and_contracts(
+    tmp_path: Path,
+) -> None:
+    definition_path = tmp_path / "web_mapper.toml"
+    definition_path.write_text(
+        """
+schema_version = 1
+id = "web_mapper"
+display_name = "Web Mapper"
+kind = "web_assessment"
+description = "Map approved HTTP surfaces."
+ownership_boundary = "Own HTTP probing only."
+supported_task_categories = ["web_mapping"]
+excluded_task_categories = ["exploitation"]
+tool_ids = ["information_gathering.web_enumeration.http_request"]
+enabled = true
+max_active_runs_per_task = 1
+max_iterations = 2
+max_tool_calls_per_iteration = 2
+requires_resolved_target = true
+icon = "web_mapper"
+instructions = "Probe only the assigned approved HTTP targets."
+
+[capability_aliases]
+http_probe = "web_mapping"
+""".strip(),
+        encoding="utf-8",
+    )
+
+    registry = load_subagent_registry(tmp_path)
+    definition = registry.require("web_mapper")
+    profile = resolve_subagent_tool_profile(definition, definition.tool_ids)
+    runtime_identity = AgentRuntimeIdentity(
+        tenant_id=7,
+        task_id=42,
+        workspace_id="task-42",
+        runtime_placement_mode="runner",
+        actor_type="user",
+        actor_id="3",
+        feature_flags={},
+    )
+    assignment = AgentAssignment(
+        assignment_id="assign-web-1",
+        agent_run_id="run-web-1",
+        agent_id=definition.id,
+        agent_kind=definition.kind,
+        task_id=42,
+        tenant_id=7,
+        conversation_id="conversation-1",
+        parent_turn_id="turn-1",
+        parent_graph_thread_id="parent-thread-1",
+        objective="Map the approved HTTP endpoint.",
+        targets=("https://example.test",),
+        suggested_capabilities=profile.capabilities_for_tool(
+            "information_gathering.web_enumeration.http_request"
+        ),
+        runtime_identity=runtime_identity,
+    )
+    result = AgentResult(
+        agent_run_id=assignment.agent_run_id,
+        agent_id=assignment.agent_id,
+        agent_kind=assignment.agent_kind,
+        outcome="completed",
+        summary="The approved HTTP endpoint responded.",
+    )
+
+    assert definition.kind == "web_assessment"
+    assert profile.tool_ids == (
+        "information_gathering.web_enumeration.http_request",
+    )
+    assert assignment.suggested_capabilities == ("web_mapping",)
+    assert AgentAssignment.model_validate(assignment.model_dump()) == assignment
+    assert AgentResult.model_validate(result.model_dump()) == result
