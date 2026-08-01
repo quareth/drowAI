@@ -22,24 +22,15 @@ from backend.services.agent_runs.registry import (
     AgentRunNotFoundError,
     ProcessLocalAgentRunRegistry,
 )
+from backend.tests.agent_run_test_support import (
+    build_agent_assignment,
+    build_agent_result,
+    build_runtime_identity,
+)
 
 
 def _runtime_identity(*, tenant_id: int = 7, task_id: int = 42) -> AgentRuntimeIdentity:
-    return AgentRuntimeIdentity(
-        tenant_id=tenant_id,
-        task_id=task_id,
-        workspace_id=f"task-{task_id}",
-        workspace_path="/workspace",
-        runtime_placement_mode="runner",
-        actor_type="user",
-        actor_id="3",
-        runner_id="runner-1",
-        execution_site_id="site-1",
-        provider="openai",
-        model="gpt-5.2-mini",
-        reasoning_effort="medium",
-        feature_flags={},
-    )
+    return build_runtime_identity(tenant_id=tenant_id, task_id=task_id)
 
 
 def _assignment(
@@ -48,38 +39,18 @@ def _assignment(
     task_id: int = 42,
     agent_run_id: str = "run-1",
 ) -> AgentAssignment:
-    return AgentAssignment(
+    return build_agent_assignment(
         assignment_id=f"assign-{agent_run_id}",
         agent_run_id=agent_run_id,
-        agent_id="pathfinder",
-        agent_kind="recon",
-        task_id=task_id,
-        tenant_id=tenant_id,
-        conversation_id="conversation-1",
-        parent_turn_id="turn-1",
-        parent_graph_thread_id="parent-thread-1",
-        objective="Map open services on the approved target.",
-        targets=["10.0.0.10"],
-        suggested_capabilities=["host_discovery", "port_scan"],
-        scope_summary="Approved internal test host only.",
-        relevant_context={"ticket": "ENG-123"},
         runtime_identity=_runtime_identity(tenant_id=tenant_id, task_id=task_id),
     )
 
 
 def _result(agent_run_id: str = "run-1") -> AgentResult:
-    return AgentResult(
-        agent_run_id=agent_run_id,
-        agent_id="pathfinder",
-        agent_kind="recon",
-        outcome="completed",
+    return build_agent_result(
+        _assignment(agent_run_id=agent_run_id),
         summary="Pathfinder found exposed HTTP.",
-        key_findings=["HTTP exposed on 80"],
-        evidence_refs=[{"kind": "artifact", "path": "/workspace/artifacts/nmap.xml"}],
-        tools_used=["nmap"],
-        limitations=[],
         recommended_next_steps=["Review HTTP headers"],
-        final_checkpoint_id="checkpoint-1",
     )
 
 

@@ -15,69 +15,81 @@ import {
   type AgentResultProjection,
   type AgentRunLifecycleProjection,
 } from "../contracts/agent-run";
+import {
+  buildAgentAssignment,
+  buildAgentResultProjection,
+  buildAgentRuntimeIdentity,
+} from "../test-data";
 
 const TASK_ID = 73101;
+
+describe("agent-run test data", () => {
+  it("derives linked identities and returns fresh nested values", () => {
+    const identity = buildAgentRuntimeIdentity({ task_id: TASK_ID, tenant_id: 19 });
+    const firstAssignment = buildAgentAssignment({ runtimeIdentity: identity });
+    const secondAssignment = buildAgentAssignment({ runtimeIdentity: identity });
+    const firstResult = buildAgentResultProjection({ assignment: firstAssignment });
+    const secondResult = buildAgentResultProjection({ assignment: secondAssignment });
+
+    expect(firstAssignment).toMatchObject({ task_id: TASK_ID, tenant_id: 19 });
+    expect(firstAssignment.runtime_identity).not.toBe(identity);
+    expect(firstAssignment.relevant_context).not.toBe(
+      secondAssignment.relevant_context,
+    );
+    expect(firstResult).toMatchObject({
+      agent_run_id: firstAssignment.agent_run_id,
+      agent_id: firstAssignment.agent_id,
+      agent_kind: firstAssignment.agent_kind,
+    });
+    expect(firstResult.evidence_refs).not.toBe(secondResult.evidence_refs);
+  });
+});
 
 function assignment(
   overrides: Partial<AgentAssignment> = {},
 ): AgentAssignment {
-  return {
-    assignment_id: "assignment-1",
-    agent_run_id: "run-1",
-    agent_id: "pathfinder",
-    agent_kind: "recon",
-    task_id: TASK_ID,
-    tenant_id: 9,
-    conversation_id: "conversation-1",
-    parent_turn_id: "turn-1",
-    parent_graph_thread_id: "parent-thread-1",
-    objective: "Map exposed services.",
-    targets: ["10.0.0.8"],
-    suggested_capabilities: ["port_scan"],
-    scope_summary: "Approved target only.",
-    relevant_context: { ticket: "ENG-123", priorities: [1, true, null] },
-    runtime_identity: {
-      tenant_id: 9,
-      task_id: TASK_ID,
+  const { runtime_identity, task_id, tenant_id, ...assignmentOverrides } = overrides;
+  return buildAgentAssignment({
+    runtimeIdentity: buildAgentRuntimeIdentity({
+      tenant_id: tenant_id ?? 9,
+      task_id: task_id ?? TASK_ID,
       user_id: 4,
       workspace_id: "task-73101",
-      workspace_path: "/workspace",
-      runtime_placement_mode: "runner",
-      actor_type: "user",
       actor_id: "4",
-      runner_id: "runner-1",
-      execution_site_id: "site-1",
-      provider: "openai",
-      model: "gpt-5.2-mini",
-      reasoning_effort: "medium",
       feature_flags: { subagents: true },
       credential_ref: {
         provider: "openai",
         credential_id: "credential-1",
       },
-    },
-    ...overrides,
-  };
+      ...runtime_identity,
+    }),
+    assignment_id: "assignment-1",
+    objective: "Map exposed services.",
+    targets: ["10.0.0.8"],
+    suggested_capabilities: ["port_scan"],
+    scope_summary: "Approved target only.",
+    relevant_context: { ticket: "ENG-123", priorities: [1, true, null] },
+    ...assignmentOverrides,
+  });
 }
 
 function result(
   overrides: Partial<AgentResultProjection> = {},
 ): AgentResultProjection {
-  return {
-    agent_run_id: "run-1",
-    agent_id: "pathfinder",
-    agent_kind: "recon",
+  const { agent_run_id, agent_id, agent_kind, ...resultOverrides } = overrides;
+  return buildAgentResultProjection({
+    assignment: assignment({
+      agent_run_id: agent_run_id ?? "run-1",
+      agent_id: agent_id ?? "pathfinder",
+      agent_kind: agent_kind ?? "recon",
+    }),
     agent_display_name: "Pathfinder",
-    outcome: "completed",
     summary: "Mapped the approved target.",
     key_findings: ["80/tcp open"],
     evidence_refs: [{ tool_call_id: "tool-1", artifact_id: "artifact-1" }],
-    tools_used: ["nmap"],
-    limitations: [],
     recommended_next_steps: ["Review HTTP headers."],
-    final_checkpoint_id: "checkpoint-1",
-    ...overrides,
-  };
+    ...resultOverrides,
+  });
 }
 
 function lifecycle(

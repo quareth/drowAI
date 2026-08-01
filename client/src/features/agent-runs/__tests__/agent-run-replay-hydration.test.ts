@@ -23,6 +23,10 @@ import {
 } from "../state/agent-run-presentation-store";
 import { clearTaskState, getTaskStreamSnapshot } from "@/state/chat-stream-store";
 import type { AgentAssignment, AgentRunLifecycleProjection } from "../contracts/agent-run";
+import {
+  buildAgentAssignment,
+  buildAgentRuntimeIdentity,
+} from "../test-data";
 import type { StreamEvent } from "@/types/packets";
 
 const mocked = vi.hoisted(() => ({
@@ -43,13 +47,20 @@ afterEach(() => {
 });
 
 function assignment(): AgentAssignment {
-  return {
+  return buildAgentAssignment({
+    runtimeIdentity: buildAgentRuntimeIdentity({
+      task_id: TASK_ID,
+      workspace_id: "workspace-1",
+      runtime_placement_mode: "local",
+      actor_id: "user-1",
+      runner_id: null,
+      execution_site_id: null,
+      provider: null,
+      model: null,
+      reasoning_effort: null,
+    }),
     assignment_id: "assign-pathfinder-1",
     agent_run_id: "pathfinder-run-1",
-    agent_id: "pathfinder",
-    agent_kind: "recon",
-    task_id: TASK_ID,
-    tenant_id: 7,
     conversation_id: "conv-pathfinder",
     parent_turn_id: "turn-parent",
     parent_graph_thread_id: "thread-parent",
@@ -57,16 +68,7 @@ function assignment(): AgentAssignment {
     targets: ["10.0.0.5"],
     suggested_capabilities: ["port_scan"],
     relevant_context: {},
-    runtime_identity: {
-      tenant_id: 7,
-      task_id: TASK_ID,
-      workspace_id: "workspace-1",
-      runtime_placement_mode: "local",
-      actor_type: "user",
-      actor_id: "user-1",
-      feature_flags: {},
-    },
-  };
+  });
 }
 
 function lifecycle(

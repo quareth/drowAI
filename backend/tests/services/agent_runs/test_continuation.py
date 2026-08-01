@@ -34,36 +34,32 @@ from backend.services.langgraph_chat.contracts import LangGraphChatResult
 from backend.services.langgraph_chat.checkpoint.interrupt_state_service import (
     InterruptStateService,
 )
+from backend.tests.agent_run_test_support import (
+    build_agent_assignment,
+    build_runtime_identity,
+)
 
 
 def _runtime_identity() -> AgentRuntimeIdentity:
-    return AgentRuntimeIdentity(
-        tenant_id=7,
-        task_id=42,
+    return build_runtime_identity(
         user_id=3,
-        workspace_id="task-42",
         workspace_path="/workspace/task-42",
-        runtime_placement_mode="runner",
         actor_type="agent",
         actor_id="langgraph",
-        runner_id="runner-1",
-        execution_site_id="site-1",
+        provider=None,
+        model=None,
+        reasoning_effort=None,
     )
 
 
 def _assignment() -> AgentAssignment:
-    return AgentAssignment(
+    return build_agent_assignment(
         assignment_id="assignment-1",
         agent_run_id="pathfinder-run-1",
-        agent_id="pathfinder",
-        agent_kind="recon",
-        task_id=42,
-        tenant_id=7,
         conversation_id="conv-42",
         parent_turn_id="turn-42",
         parent_graph_thread_id="b" * 32,
         objective="Scan 10.0.0.10",
-        targets=["10.0.0.10"],
         suggested_capabilities=["port_scan"],
         relevant_context={},
         runtime_identity=_runtime_identity(),

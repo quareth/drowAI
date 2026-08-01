@@ -29,24 +29,15 @@ from backend.services.agent_runs.result_projection import (
     attach_active_agent_runs_to_context,
     attach_completed_agent_results_to_context,
 )
+from backend.tests.agent_run_test_support import (
+    build_agent_assignment,
+    build_agent_result,
+    build_runtime_identity,
+)
 
 
 def _runtime_identity(*, tenant_id: int = 7, task_id: int = 42) -> AgentRuntimeIdentity:
-    return AgentRuntimeIdentity(
-        tenant_id=tenant_id,
-        task_id=task_id,
-        workspace_id=f"task-{task_id}",
-        workspace_path="/workspace",
-        runtime_placement_mode="runner",
-        actor_type="user",
-        actor_id="3",
-        runner_id="runner-1",
-        execution_site_id="site-1",
-        provider="openai",
-        model="gpt-5.2-mini",
-        reasoning_effort="medium",
-        feature_flags={},
-    )
+    return build_runtime_identity(tenant_id=tenant_id, task_id=task_id)
 
 
 def _assignment(
@@ -57,21 +48,11 @@ def _assignment(
     conversation_id: str = "conversation-1",
     objective: str = "Map open services on the approved target.",
 ) -> AgentAssignment:
-    return AgentAssignment(
+    return build_agent_assignment(
         assignment_id=f"assign-{agent_run_id}",
         agent_run_id=agent_run_id,
-        agent_id="pathfinder",
-        agent_kind="recon",
-        task_id=task_id,
-        tenant_id=tenant_id,
         conversation_id=conversation_id,
-        parent_turn_id="turn-1",
-        parent_graph_thread_id="parent-thread-1",
         objective=objective,
-        targets=["10.0.0.10"],
-        suggested_capabilities=["host_discovery", "port_scan"],
-        scope_summary="Approved internal test host only.",
-        relevant_context={"ticket": "ENG-123"},
         runtime_identity=_runtime_identity(tenant_id=tenant_id, task_id=task_id),
     )
 
@@ -81,11 +62,8 @@ def _result(
     *,
     summary: str = "Pathfinder found HTTP.",
 ) -> AgentResult:
-    return AgentResult(
-        agent_run_id=agent_run_id,
-        agent_id="pathfinder",
-        agent_kind="recon",
-        outcome="completed",
+    return build_agent_result(
+        _assignment(agent_run_id=agent_run_id),
         summary=summary,
         key_findings=[
             "HTTP on 80",
@@ -102,7 +80,6 @@ def _result(
         tools_used=["nmap", "curl"],
         limitations=["No UDP scan"],
         recommended_next_steps=["Review HTTP headers"],
-        final_checkpoint_id="checkpoint-1",
     )
 
 

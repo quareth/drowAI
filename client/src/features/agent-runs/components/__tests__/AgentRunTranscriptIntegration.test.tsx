@@ -86,6 +86,11 @@ import type {
   AgentResultProjection,
   AgentRunLifecycleProjection,
 } from "@/features/agent-runs/contracts/agent-run";
+import {
+  buildAgentAssignment,
+  buildAgentResultProjection,
+  buildAgentRuntimeIdentity,
+} from "@/features/agent-runs/test-data";
 
 const TASK_ID = 61103;
 const apiFetchMock = vi.mocked(apiFetch);
@@ -109,13 +114,17 @@ afterEach(() => {
 });
 
 function assignment(overrides: Partial<AgentAssignment> = {}): AgentAssignment {
-  return {
+  const { runtime_identity, task_id, tenant_id, ...assignmentOverrides } = overrides;
+  return buildAgentAssignment({
+    runtimeIdentity: buildAgentRuntimeIdentity({
+      task_id: task_id ?? TASK_ID,
+      tenant_id: tenant_id ?? 7,
+      workspace_id: "workspace-1",
+      actor_id: "user-1",
+      ...runtime_identity,
+    }),
     assignment_id: "assignment-run-1",
     agent_run_id: "pathfinder-run-1",
-    agent_id: "pathfinder",
-    agent_kind: "recon",
-    task_id: TASK_ID,
-    tenant_id: 7,
     conversation_id: "conv-1",
     parent_turn_id: "turn-parent",
     parent_graph_thread_id: "thread-parent",
@@ -124,17 +133,8 @@ function assignment(overrides: Partial<AgentAssignment> = {}): AgentAssignment {
     suggested_capabilities: ["port_scan"],
     scope_summary: "Targets: 10.0.0.10",
     relevant_context: {},
-    runtime_identity: {
-      tenant_id: 7,
-      task_id: TASK_ID,
-      workspace_id: "workspace-1",
-      runtime_placement_mode: "runner",
-      actor_type: "user",
-      actor_id: "user-1",
-      feature_flags: {},
-    },
-    ...overrides,
-  };
+    ...assignmentOverrides,
+  });
 }
 
 function lifecycle(
@@ -161,12 +161,14 @@ function lifecycle(
 function completedResult(
   overrides: Partial<AgentResultProjection> = {},
 ): AgentResultProjection {
-  return {
-    agent_run_id: "pathfinder-run-1",
-    agent_id: "pathfinder",
-    agent_kind: "recon",
+  const { agent_run_id, agent_id, agent_kind, ...resultOverrides } = overrides;
+  return buildAgentResultProjection({
+    assignment: assignment({
+      agent_run_id: agent_run_id ?? "pathfinder-run-1",
+      agent_id: agent_id ?? "pathfinder",
+      agent_kind: agent_kind ?? "recon",
+    }),
     agent_display_name: "Pathfinder",
-    outcome: "completed",
     summary: "Pathfinder found HTTPS on 443.",
     key_findings: ["HTTPS exposed on 443"],
     evidence_refs: [{ path: "/workspace/task-42/nmap.xml" }],
@@ -174,8 +176,8 @@ function completedResult(
     limitations: ["Single approved target only."],
     recommended_next_steps: ["Review the HTTPS service banner."],
     final_checkpoint_id: "cp-pathfinder-final",
-    ...overrides,
-  };
+    ...resultOverrides,
+  });
 }
 
 function lifecycleMessage(): ChatMessage {

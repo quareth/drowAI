@@ -22,6 +22,10 @@ import type {
   LocalAgentRunStatusProjection,
 } from "../contracts/agent-run";
 import type { StreamEvent } from "@/types/packets";
+import {
+  buildAgentAssignment,
+  buildAgentRuntimeIdentity,
+} from "../test-data";
 
 const TASK_ID = 51101;
 const OTHER_TASK_ID = 51102;
@@ -31,32 +35,24 @@ afterEach(() => {
 });
 
 function assignment(overrides: Partial<AgentAssignment> = {}): AgentAssignment {
-  return {
+  const { runtime_identity, task_id, tenant_id, ...assignmentOverrides } = overrides;
+  return buildAgentAssignment({
+    runtimeIdentity: buildAgentRuntimeIdentity({
+      task_id: task_id ?? TASK_ID,
+      tenant_id: tenant_id ?? 77,
+      workspace_id: "workspace-1",
+      actor_id: "user-1",
+      ...runtime_identity,
+    }),
     assignment_id: "assign-1",
-    agent_run_id: "run-1",
-    agent_id: "pathfinder",
-    agent_kind: "recon",
-    task_id: TASK_ID,
-    tenant_id: 77,
     conversation_id: "conv-1",
-    parent_turn_id: "turn-1",
     parent_graph_thread_id: "thread-parent",
     objective: "Map exposed services",
-    targets: ["10.0.0.10"],
     suggested_capabilities: ["port_scan"],
     scope_summary: "service discovery",
     relevant_context: {},
-    runtime_identity: {
-      tenant_id: 77,
-      task_id: TASK_ID,
-      workspace_id: "workspace-1",
-      runtime_placement_mode: "runner",
-      actor_type: "user",
-      actor_id: "user-1",
-      feature_flags: {},
-    },
-    ...overrides,
-  };
+    ...assignmentOverrides,
+  });
 }
 
 function lifecycle(

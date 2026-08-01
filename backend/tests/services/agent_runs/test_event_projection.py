@@ -11,35 +11,28 @@ from backend.services.agent_runs.event_projection import (
     build_agent_run_lifecycle_event,
 )
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
+from backend.tests.agent_run_test_support import (
+    build_agent_assignment,
+    build_runtime_identity,
+)
 
 
 def _runtime_identity() -> AgentRuntimeIdentity:
-    return AgentRuntimeIdentity(
-        tenant_id=7,
-        task_id=42,
-        workspace_id="task-42",
-        workspace_path="/workspace",
-        runtime_placement_mode="runner",
-        actor_type="user",
-        actor_id="3",
+    return build_runtime_identity(
+        runner_id=None,
+        execution_site_id=None,
+        provider=None,
+        model=None,
+        reasoning_effort=None,
     )
 
 
 def _assignment() -> AgentAssignment:
-    return AgentAssignment(
+    return build_agent_assignment(
         assignment_id="assignment-1",
         agent_run_id="pathfinder-run-1",
-        agent_id="pathfinder",
-        agent_kind="recon",
-        task_id=42,
-        tenant_id=7,
-        conversation_id="conversation-1",
-        parent_turn_id="turn-1",
-        parent_graph_thread_id="parent-thread-1",
         objective="Map open services.",
-        targets=["10.0.0.10"],
         suggested_capabilities=["port_scan"],
-        relevant_context={"ticket": "ENG-123"},
         runtime_identity=_runtime_identity(),
     )
 

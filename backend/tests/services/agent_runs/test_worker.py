@@ -29,6 +29,11 @@ from backend.services.agent_runs.worker import (
     resolve_definition_for_assignment,
 )
 from backend.services.langgraph_chat.execution.graph_executor import GraphExecutionResult
+from backend.tests.agent_run_test_support import (
+    build_agent_assignment,
+    build_agent_result,
+    build_runtime_identity,
+)
 
 
 def _pathfinder_definition() -> SubagentDefinition:
@@ -41,39 +46,15 @@ def _pathfinder_definition() -> SubagentDefinition:
 
 
 def _runtime_identity() -> AgentRuntimeIdentity:
-    return AgentRuntimeIdentity(
-        tenant_id=7,
-        task_id=42,
+    return build_runtime_identity(
         user_id=3,
-        workspace_id="task-42",
-        workspace_path="/workspace",
-        runtime_placement_mode="runner",
-        actor_type="user",
-        actor_id="3",
-        runner_id="runner-1",
-        execution_site_id="site-1",
-        provider="openai",
-        model="gpt-5.2-mini",
-        reasoning_effort="medium",
-        feature_flags={},
     )
 
 
 def _assignment() -> AgentAssignment:
-    return AgentAssignment(
-        assignment_id="assign-1",
-        agent_run_id="run-1",
-        agent_id="pathfinder",
-        agent_kind="recon",
-        task_id=42,
-        tenant_id=7,
-        conversation_id="conversation-1",
-        parent_turn_id="turn-1",
-        parent_graph_thread_id="parent-thread-1",
+    return build_agent_assignment(
         objective="Map live hosts on the approved target.",
-        targets=["10.0.0.10"],
         suggested_capabilities=["host_discovery"],
-        scope_summary="Approved internal test host only.",
         relevant_context={
             "ticket": "ENG-123",
             "turn_sequence": 4,
@@ -84,14 +65,14 @@ def _assignment() -> AgentAssignment:
 
 
 def _result() -> AgentResult:
-    return AgentResult(
-        agent_run_id="run-1",
-        agent_id="pathfinder",
-        agent_kind="recon",
-        outcome="completed",
+    return build_agent_result(
+        _assignment(),
         summary="Pathfinder found one live host.",
         key_findings=["10.0.0.10 responded to probes."],
         tools_used=["fping"],
+        evidence_refs=[],
+        recommended_next_steps=[],
+        final_checkpoint_id=None,
     )
 
 

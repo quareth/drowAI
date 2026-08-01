@@ -14,23 +14,14 @@ from backend.routers.tasks import agent_runs as agent_run_routes
 from backend.services.agent_runs.contracts import AgentAssignment, AgentRuntimeIdentity
 from backend.services.agent_runs.control import AgentRunControlService
 from backend.services.agent_runs.registry import LocalAgentRun, ProcessLocalAgentRunRegistry
+from backend.tests.agent_run_test_support import (
+    build_agent_assignment,
+    build_runtime_identity,
+)
 
 
 def _runtime_identity(*, tenant_id: int = 7, task_id: int = 42) -> AgentRuntimeIdentity:
-    return AgentRuntimeIdentity(
-        tenant_id=tenant_id,
-        task_id=task_id,
-        workspace_id=f"task-{task_id}",
-        workspace_path="/workspace",
-        runtime_placement_mode="runner",
-        actor_type="user",
-        actor_id="3",
-        runner_id="runner-1",
-        execution_site_id="site-1",
-        provider="openai",
-        model="gpt-5.2-mini",
-        reasoning_effort="medium",
-    )
+    return build_runtime_identity(tenant_id=tenant_id, task_id=task_id)
 
 
 def _assignment(
@@ -39,21 +30,12 @@ def _assignment(
     task_id: int = 42,
     agent_run_id: str = "pathfinder-run-1",
 ) -> AgentAssignment:
-    return AgentAssignment(
+    return build_agent_assignment(
         assignment_id=f"assignment-{agent_run_id}",
         agent_run_id=agent_run_id,
-        agent_id="pathfinder",
-        agent_kind="recon",
-        task_id=task_id,
-        tenant_id=tenant_id,
         conversation_id=f"conversation-{task_id}",
-        parent_turn_id="turn-1",
-        parent_graph_thread_id="parent-thread-1",
-        objective="Map open services on the approved target.",
-        targets=["10.0.0.10"],
         suggested_capabilities=["port_scan"],
         scope_summary="Approved internal target only.",
-        relevant_context={"ticket": "ENG-123"},
         runtime_identity=_runtime_identity(tenant_id=tenant_id, task_id=task_id),
     )
 

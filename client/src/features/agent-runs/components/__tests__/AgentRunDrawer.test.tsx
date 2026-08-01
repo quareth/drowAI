@@ -16,6 +16,11 @@ import {
   resetAgentRunPresentationStoreForTests,
 } from "../../state/agent-run-presentation-store";
 import { AgentRunDrawer } from "../AgentRunDrawer";
+import {
+  buildAgentAssignment,
+  buildAgentResultProjection,
+  buildAgentRuntimeIdentity,
+} from "../../test-data";
 
 const TASK_ID = 71201;
 
@@ -26,13 +31,19 @@ afterEach(() => {
 });
 
 function assignment(overrides: Partial<AgentAssignment> = {}): AgentAssignment {
-  return {
+  const { runtime_identity, task_id, tenant_id, ...assignmentOverrides } = overrides;
+  return buildAgentAssignment({
+    runtimeIdentity: buildAgentRuntimeIdentity({
+      task_id: task_id ?? TASK_ID,
+      tenant_id: tenant_id ?? 7,
+      workspace_id: "workspace-1",
+      actor_id: "user-1",
+      ...runtime_identity,
+    }),
     assignment_id: "assignment-reviewer-run-1",
     agent_run_id: "reviewer-run-1",
     agent_id: "reviewer",
     agent_kind: "review",
-    task_id: TASK_ID,
-    tenant_id: 7,
     conversation_id: "conversation-1",
     parent_turn_id: "turn-parent",
     parent_graph_thread_id: "thread-parent",
@@ -41,17 +52,8 @@ function assignment(overrides: Partial<AgentAssignment> = {}): AgentAssignment {
     suggested_capabilities: ["artifact_review"],
     scope_summary: "Generated artifact audit",
     relevant_context: {},
-    runtime_identity: {
-      tenant_id: 7,
-      task_id: TASK_ID,
-      workspace_id: "workspace-1",
-      runtime_placement_mode: "runner",
-      actor_type: "user",
-      actor_id: "user-1",
-      feature_flags: {},
-    },
-    ...overrides,
-  };
+    ...assignmentOverrides,
+  });
 }
 
 function reviewerLifecycle(): AgentRunLifecycleProjection {
@@ -68,20 +70,16 @@ function reviewerLifecycle(): AgentRunLifecycleProjection {
     parent_turn_id: "turn-parent",
     parent_run_id: "parent-run-1",
     assignment: assignment(),
-    result: {
-      agent_run_id: "reviewer-run-1",
-      agent_id: "reviewer",
-      agent_kind: "review",
+    result: buildAgentResultProjection({
+      assignment: assignment(),
       agent_display_name: "Reviewer",
-      outcome: "completed",
       summary: "Artifacts passed review.",
       key_findings: ["No missing outputs."],
       evidence_refs: [],
       tools_used: [],
       limitations: [],
       recommended_next_steps: [],
-      final_checkpoint_id: "checkpoint-1",
-    },
+    }),
     safe_error: null,
   };
 }

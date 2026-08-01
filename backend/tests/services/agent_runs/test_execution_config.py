@@ -17,7 +17,6 @@ from agent.subagents.runtime.graph import initialize_subagent_state
 from agent.subagents.runtime.state import build_subagent_initial_state
 from backend.services.agent_runs.contracts import (
     AgentAssignment,
-    AgentCredentialReference,
     AgentRuntimeIdentity,
 )
 from backend.services.agent_runs.execution_config import (
@@ -34,6 +33,10 @@ from backend.services.langgraph_chat.contracts import (
     ExecutionMode,
     LangGraphRuntimeConfig,
 )
+from backend.tests.agent_run_test_support import (
+    build_agent_assignment,
+    build_runtime_identity,
+)
 
 
 def _runtime_identity(
@@ -42,25 +45,15 @@ def _runtime_identity(
     runner_id: str | None = "runner-1",
     execution_site_id: str | None = "site-1",
 ) -> AgentRuntimeIdentity:
-    return AgentRuntimeIdentity(
-        tenant_id=7,
-        task_id=42,
+    return build_runtime_identity(
         user_id=3,
-        workspace_id="task-42",
         workspace_path="/workspace/task-42",
         runtime_placement_mode=runtime_placement_mode,
         actor_type="agent",
         actor_id="langgraph",
         runner_id=runner_id,
         execution_site_id=execution_site_id,
-        provider="openai",
-        model="gpt-5.2-mini",
-        reasoning_effort="medium",
-        feature_flags={},
-        credential_ref=AgentCredentialReference(
-            provider="openai",
-            credential_id="cred-1",
-        ),
+        credential_ref={"provider": "openai", "credential_id": "cred-1"},
     )
 
 
@@ -68,18 +61,13 @@ def _assignment(
     *,
     runtime_identity: AgentRuntimeIdentity | None = None,
 ) -> AgentAssignment:
-    return AgentAssignment(
+    return build_agent_assignment(
         assignment_id="assignment-1",
         agent_run_id="pathfinder-run-1",
-        agent_id="pathfinder",
-        agent_kind="recon",
-        task_id=42,
-        tenant_id=7,
         conversation_id="conv-42",
         parent_turn_id="turn-42",
         parent_graph_thread_id="a" * 32,
         objective="Scan 10.0.0.10",
-        targets=["10.0.0.10"],
         suggested_capabilities=["port_scan"],
         scope_summary="Targets: 10.0.0.10",
         relevant_context={

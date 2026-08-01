@@ -26,24 +26,15 @@ from backend.services.agent_runs.result_projection import (
     COMPLETED_AGENT_RESULTS_KEY,
 )
 from backend.services.langgraph_chat.contracts import LangGraphChatResult
+from backend.tests.agent_run_test_support import (
+    build_agent_assignment,
+    build_agent_result,
+    build_runtime_identity,
+)
 
 
 def _runtime_identity(*, tenant_id: int = 7, task_id: int = 42) -> AgentRuntimeIdentity:
-    return AgentRuntimeIdentity(
-        tenant_id=tenant_id,
-        task_id=task_id,
-        workspace_id=f"task-{task_id}",
-        workspace_path="/workspace",
-        runtime_placement_mode="runner",
-        actor_type="user",
-        actor_id="3",
-        runner_id="runner-1",
-        execution_site_id="site-1",
-        provider="openai",
-        model="gpt-5.2-mini",
-        reasoning_effort="medium",
-        feature_flags={},
-    )
+    return build_runtime_identity(tenant_id=tenant_id, task_id=task_id)
 
 
 def _assignment(
@@ -53,21 +44,12 @@ def _assignment(
     parent_turn_id: str = "turn-1",
     objective: str = "Map open services on the approved target.",
 ) -> AgentAssignment:
-    return AgentAssignment(
+    return build_agent_assignment(
         assignment_id=f"assign-{agent_run_id}",
         agent_run_id=agent_run_id,
-        agent_id="pathfinder",
-        agent_kind="recon",
-        task_id=42,
-        tenant_id=7,
         conversation_id=conversation_id,
         parent_turn_id=parent_turn_id,
-        parent_graph_thread_id="parent-thread-1",
         objective=objective,
-        targets=["10.0.0.10"],
-        suggested_capabilities=["host_discovery", "port_scan"],
-        scope_summary="Approved internal test host only.",
-        relevant_context={"ticket": "ENG-123"},
         runtime_identity=_runtime_identity(),
     )
 
@@ -77,16 +59,10 @@ def _result(
     *,
     outcome: str = "completed",
 ) -> AgentResult:
-    return AgentResult(
-        agent_run_id=agent_run_id,
-        agent_id="pathfinder",
-        agent_kind="recon",
+    return build_agent_result(
+        _assignment(agent_run_id=agent_run_id),
         outcome=outcome,  # type: ignore[arg-type]
         summary=f"{agent_run_id} found exposed HTTP.",
-        key_findings=["HTTP exposed on 80"],
-        evidence_refs=[{"kind": "artifact", "path": "/workspace/artifacts/nmap.xml"}],
-        tools_used=["nmap"],
-        limitations=[],
         recommended_next_steps=["Review HTTP headers"],
         final_checkpoint_id=f"checkpoint-{agent_run_id}",
     )

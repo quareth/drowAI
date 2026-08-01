@@ -24,52 +24,28 @@ from backend.services.langgraph_chat.contracts import (
     LangGraphRuntimeConfig,
 )
 from backend.services.langgraph_chat.facade import LangGraphChatFacade
+from backend.tests.agent_run_test_support import (
+    build_agent_assignment,
+    build_agent_result,
+    build_runtime_identity,
+)
 
 
 def _runtime_identity(*, tenant_id: int = 7, task_id: int = 42) -> AgentRuntimeIdentity:
-    return AgentRuntimeIdentity(
-        tenant_id=tenant_id,
-        task_id=task_id,
-        workspace_id=f"task-{task_id}",
-        workspace_path="/workspace",
-        runtime_placement_mode="runner",
-        actor_type="user",
-        actor_id="3",
-        runner_id="runner-1",
-        execution_site_id="site-1",
-        provider="openai",
-        model="gpt-5.2-mini",
-        reasoning_effort="medium",
-        feature_flags={},
-    )
+    return build_runtime_identity(tenant_id=tenant_id, task_id=task_id)
 
 
 def _assignment() -> AgentAssignment:
-    return AgentAssignment(
+    return build_agent_assignment(
         assignment_id="assign-run-1",
         agent_run_id="run-1",
-        agent_id="pathfinder",
-        agent_kind="recon",
-        task_id=42,
-        tenant_id=7,
-        conversation_id="conversation-1",
-        parent_turn_id="turn-1",
-        parent_graph_thread_id="parent-thread-1",
-        objective="Map open services on the approved target.",
-        targets=["10.0.0.10"],
-        suggested_capabilities=["host_discovery", "port_scan"],
-        scope_summary="Approved internal test host only.",
-        relevant_context={"ticket": "ENG-123"},
         runtime_identity=_runtime_identity(),
     )
 
 
 def _result() -> AgentResult:
-    return AgentResult(
-        agent_run_id="run-1",
-        agent_id="pathfinder",
-        agent_kind="recon",
-        outcome="completed",
+    return build_agent_result(
+        _assignment(),
         summary="Pathfinder found HTTP.",
         key_findings=["HTTP on 80"],
         evidence_refs=[
@@ -82,7 +58,6 @@ def _result() -> AgentResult:
         tools_used=["nmap"],
         limitations=[],
         recommended_next_steps=["Review HTTP headers"],
-        final_checkpoint_id="checkpoint-1",
     )
 
 

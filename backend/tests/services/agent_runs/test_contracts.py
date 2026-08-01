@@ -17,46 +17,42 @@ from backend.services.agent_runs.contracts import (
     AgentRunLifecycleProjection,
     AgentRuntimeIdentity,
 )
+from backend.tests.agent_run_test_support import (
+    build_agent_assignment,
+    build_agent_result,
+    build_runtime_identity,
+)
 
 
-def _runtime_identity() -> AgentRuntimeIdentity:
-    return AgentRuntimeIdentity(
-        tenant_id=7,
-        task_id=42,
+def _contract_identity() -> AgentRuntimeIdentity:
+    return build_runtime_identity(
         user_id=3,
-        workspace_id="task-42",
-        workspace_path="/workspace",
-        runtime_placement_mode="runner",
-        actor_type="user",
-        actor_id="3",
-        runner_id="runner-1",
-        execution_site_id="site-1",
-        provider="openai",
-        model="gpt-5.2-mini",
-        reasoning_effort="medium",
-        feature_flags={},
         credential_ref={"provider": "openai", "credential_id": "cred-1"},
     )
 
 
-def _assignment() -> AgentAssignment:
-    return AgentAssignment(
-        assignment_id="assign-1",
-        agent_run_id="run-1",
-        agent_id="pathfinder",
-        agent_kind="recon",
-        task_id=42,
-        tenant_id=7,
-        conversation_id="conversation-1",
-        parent_turn_id="turn-1",
-        parent_graph_thread_id="parent-thread-1",
-        objective="Map open services on the approved target.",
-        targets=["10.0.0.10"],
+def _contract_assignment() -> AgentAssignment:
+    return build_agent_assignment(
         suggested_capabilities=["host_discovery", "port_scan", "service_enum"],
-        scope_summary="Approved internal test host only.",
         relevant_context={"ticket": "ENG-123", "ports": [80, 443]},
-        runtime_identity=_runtime_identity(),
+        runtime_identity=_contract_identity(),
     )
+
+
+def test_agent_run_test_builders_derive_identity_and_return_fresh_values() -> None:
+    identity = build_runtime_identity(task_id=84, tenant_id=11)
+    first_assignment = build_agent_assignment(runtime_identity=identity)
+    second_assignment = build_agent_assignment(runtime_identity=identity)
+    first_result = build_agent_result(first_assignment)
+    second_result = build_agent_result(second_assignment)
+
+    assert (first_assignment.task_id, first_assignment.tenant_id) == (84, 11)
+    assert first_assignment.runtime_identity is not identity
+    assert first_assignment.relevant_context is not second_assignment.relevant_context
+    assert first_result.agent_run_id == first_assignment.agent_run_id
+    assert first_result.agent_id == first_assignment.agent_id
+    assert first_result.agent_kind == first_assignment.agent_kind
+    assert first_result.evidence_refs is not second_result.evidence_refs
 
 
 def test_backend_contracts_reexport_agent_contracts() -> None:
@@ -76,7 +72,7 @@ def test_backend_contracts_reexport_agent_contracts() -> None:
 
 
 def test_assignment_validates_deterministically_and_keeps_display_name_separate() -> None:
-    assignment = _assignment()
+    assignment = _contract_assignment()
 
     assert assignment.agent_kind == "recon"
     assert "agent_display_name" not in assignment.model_dump()
@@ -104,7 +100,7 @@ def test_runtime_identity_rejects_non_serializable_values() -> None:
 
 
 def test_runtime_identity_allows_only_identifier_credential_refs() -> None:
-    identity = _runtime_identity()
+    identity = _contract_identity()
 
     assert identity.credential_ref is not None
     assert identity.credential_ref.provider == "openai"
@@ -135,7 +131,7 @@ def test_runtime_identity_allows_only_identifier_credential_refs() -> None:
 
 
 def test_assignment_rejects_raw_tool_output_and_chain_of_thought_context() -> None:
-    base = _assignment().model_dump()
+    base = _contract_assignment().model_dump()
 
     for forbidden_key in ("raw_tool_output", "chain_of_thought"):
         with pytest.raises(ValidationError, match="not safe to project"):
@@ -148,7 +144,7 @@ def test_assignment_rejects_raw_tool_output_and_chain_of_thought_context() -> No
 
 
 def test_contracts_reject_post_validation_mutation_of_safe_payloads() -> None:
-    assignment = _assignment()
+    assignment = _contract_assignment()
     result = AgentResult(
         agent_run_id="run-1",
         agent_id="pathfinder",
@@ -235,7 +231,7 @@ def test_result_and_lifecycle_projections_exclude_raw_activity() -> None:
         conversation_id="conversation-1",
         parent_turn_id="turn-1",
         parent_run_id="parent-run-1",
-        assignment=_assignment(),
+        assignment=_contract_assignment(),
         result=result_projection,
     )
 
