@@ -16,6 +16,7 @@ import {
   isAgentRunTerminalStatus,
   readAgentRunActivityIdentity,
   readAgentRunLifecycleProjection,
+  readAgentRunStreamPayload,
   readStreamSequence,
   resolveAgentDisplayName,
   resolveAgentIconKey,
@@ -237,19 +238,27 @@ export function applyAgentRunLifecyclePayload(
 
 export function applyAgentRunActivityPayload(
   taskId: number,
-  payload: StreamPacket | StreamEvent,
+  payload: unknown,
   sequenceHint?: number,
 ): boolean {
-  const identity = readAgentRunActivityIdentity(taskId, payload);
+  const streamPayload = readAgentRunStreamPayload(payload);
+  if (!streamPayload) {
+    return false;
+  }
+  const identity = readAgentRunActivityIdentity(taskId, streamPayload);
   if (!identity || identity.internalOnly) {
     return false;
   }
-  const projection = readAgentRunLifecycleProjection(payload);
+  const projection = readAgentRunLifecycleProjection(streamPayload);
   if (projection) {
-    applyAgentRunLifecycleUpdate(taskId, projection, readStreamSequence(payload, sequenceHint));
+    applyAgentRunLifecycleUpdate(
+      taskId,
+      projection,
+      readStreamSequence(streamPayload, sequenceHint),
+    );
     return projection.task_id === taskId;
   }
-  const sequence = readStreamSequence(payload, sequenceHint);
+  const sequence = readStreamSequence(streamPayload, sequenceHint);
   mutateTaskState(taskId, draft => {
     const existing = draft.runs.get(identity.agentRunId);
     const nextRun = existing ?? emptyRunFromActivity(identity);
@@ -257,7 +266,7 @@ export function applyAgentRunActivityPayload(
       taskId,
       agentRunId: identity.agentRunId,
       sequence,
-      payload,
+      payload: streamPayload,
       receivedAt: Date.now(),
     });
     if (activity === nextRun.activity) {

@@ -8,6 +8,28 @@
  */
 import { isStreamPacket, type StreamEvent, type StreamPacket } from "@/types/packets";
 
+import {
+  agentAssignmentSchema,
+  agentResultProjectionSchema,
+  agentRunLifecycleProjectionSchema,
+  localAgentRunListEnvelopeSchema,
+  localAgentRunStatusProjectionSchema,
+  type AgentAssignment,
+  type AgentResultProjection,
+  type AgentRunLifecycleProjection,
+  type LocalAgentRunStatusProjection,
+} from "./agent-run-schema";
+
+export type {
+  AgentAssignment,
+  AgentCredentialReference,
+  AgentEvidenceRef,
+  AgentResultProjection,
+  AgentRuntimeIdentity,
+  AgentRunLifecycleProjection,
+  LocalAgentRunStatusProjection,
+} from "./agent-run-schema";
+
 export const AGENT_RUN_LIFECYCLE_CONTENT = "agent_run_lifecycle";
 export const AGENT_RUN_LIFECYCLE_SUBTYPE = "agent_run_lifecycle";
 export const AGENT_RUN_PRODUCER_TYPE = "subagent";
@@ -48,91 +70,6 @@ export type AgentCapability = string;
 
 export type AgentRunDrawerView = "list" | "detail";
 
-export interface AgentCredentialReference {
-  provider: string;
-  credential_id: string;
-}
-
-export interface AgentRuntimeIdentity {
-  tenant_id: number;
-  task_id: number;
-  user_id?: number | null;
-  workspace_id: string;
-  workspace_path?: string | null;
-  runtime_placement_mode: string;
-  actor_type: string;
-  actor_id: string;
-  runner_id?: string | null;
-  execution_site_id?: string | null;
-  provider?: string | null;
-  model?: string | null;
-  reasoning_effort?: string | null;
-  feature_flags: Record<string, boolean>;
-  credential_ref?: AgentCredentialReference | null;
-}
-
-export interface AgentAssignment {
-  assignment_id: string;
-  agent_run_id: string;
-  agent_id: AgentId;
-  agent_kind: AgentKind;
-  task_id: number;
-  tenant_id: number;
-  conversation_id: string;
-  parent_turn_id: string;
-  parent_graph_thread_id: string;
-  objective: string;
-  targets: string[];
-  suggested_capabilities: AgentCapability[];
-  scope_summary?: string | null;
-  relevant_context: Record<string, unknown>;
-  runtime_identity: AgentRuntimeIdentity;
-}
-
-export interface AgentEvidenceRef {
-  [key: string]: string;
-}
-
-export interface AgentResultProjection {
-  agent_run_id: string;
-  agent_id: AgentId;
-  agent_kind: AgentKind;
-  agent_display_name: AgentDisplayName;
-  outcome: AgentRunOutcome;
-  summary: string;
-  key_findings: string[];
-  evidence_refs: AgentEvidenceRef[];
-  tools_used: string[];
-  limitations: string[];
-  recommended_next_steps: string[];
-  final_checkpoint_id?: string | null;
-}
-
-export interface AgentRunLifecycleProjection {
-  agent_run_id: string;
-  agent_id: AgentId;
-  agent_kind: AgentKind;
-  agent_display_name: AgentDisplayName;
-  agent_icon_key?: AgentIconKey | null;
-  status: AgentRunLifecycleStatus;
-  lifecycle_version: number;
-  task_id: number;
-  conversation_id: string;
-  parent_turn_id: string;
-  parent_run_id?: string | null;
-  assignment?: AgentAssignment | null;
-  result?: AgentResultProjection | null;
-  safe_error?: string | null;
-}
-
-export interface LocalAgentRunStatusProjection extends AgentRunLifecycleProjection {
-  assignment: AgentAssignment;
-  cancel_requested: boolean;
-  created_at: string;
-  started_at?: string | null;
-  completed_at?: string | null;
-}
-
 export interface LocalAgentRunListResponse {
   task_id: number;
   agent_runs: LocalAgentRunStatusProjection[];
@@ -145,11 +82,17 @@ export function readLocalAgentRuns(
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return null;
   }
-  const response = payload as Partial<LocalAgentRunListResponse>;
-  if (response.task_id !== taskId || !Array.isArray(response.agent_runs)) {
+  const response = localAgentRunListEnvelopeSchema.safeParse(payload);
+  if (!response.success || response.data.task_id !== taskId) {
     return null;
   }
-  return response.agent_runs.filter(isLocalAgentRunStatusProjection);
+  return response.data.agent_runs.flatMap(value => {
+    const parsed = localAgentRunStatusProjectionSchema.safeParse(value);
+    if (!parsed.success || parsed.data.task_id !== taskId) {
+      return [];
+    }
+    return [parsed.data];
+  });
 }
 
 export interface LocalAgentRunCancelResponse {
@@ -269,6 +212,13 @@ export function readStreamSequence(payload: unknown, fallback?: number): number 
   return null;
 }
 
+export function readAgentRunStreamPayload(payload: unknown): AgentRunStreamPayload | null {
+  if (isStreamPacket(payload)) {
+    return isStreamEvent(payload.obj) ? payload : null;
+  }
+  return isStreamEvent(payload) ? payload : null;
+}
+
 function unwrapStreamEvent(payload: unknown): StreamEvent | null {
   if (isStreamPacket(payload)) {
     return isStreamEvent(payload.obj) ? payload.obj : null;
@@ -296,16 +246,11 @@ function normalizeAgentRunLifecycleProjection(
 ): AgentRunLifecycleProjection | null {
   const agentRunId = readString(value.agent_run_id);
   const agentId = readString(value.agent_id);
-  const status = readLifecycleStatus(value.status);
-  const lifecycleVersion = readPositiveInt(value.lifecycle_version);
-  const taskId = readPositiveInt(value.task_id);
   const conversationId = readString(value.conversation_id);
   const parentTurnId = readString(value.parent_turn_id);
-  if (!agentRunId || !agentId || !status || lifecycleVersion === null || taskId === null || !conversationId || !parentTurnId) {
-    return null;
-  }
   const agentKind = readString(value.agent_kind);
-  if (!agentKind) {
+  const taskId = readPositiveInt(value.task_id);
+  if (!agentRunId || !agentId || !agentKind || taskId === null || !conversationId || !parentTurnId) {
     return null;
   }
   const agentDisplayName = resolveAgentDisplayName(
@@ -316,41 +261,42 @@ function normalizeAgentRunLifecycleProjection(
     agentId,
     readAgentIconKey(value) ?? readAgentIconKey(metadata),
   );
-  return {
-    agent_run_id: agentRunId,
-    agent_id: agentId,
-    agent_kind: agentKind,
+  const identity = {
+    agentRunId,
+    agentId,
+    agentKind,
+    taskId,
+    conversationId,
+    parentTurnId,
+  };
+  const parsedAssignment = readAgentAssignment(value.assignment);
+  const assignment =
+    parsedAssignment && assignmentMatchesLifecycle(parsedAssignment, identity)
+      ? parsedAssignment
+      : null;
+  const parsedResult = readAgentResultProjection(value.result);
+  const result =
+    parsedResult && resultMatchesLifecycle(parsedResult, identity)
+      ? parsedResult
+      : null;
+  const normalized = agentRunLifecycleProjectionSchema.safeParse({
+    ...value,
     agent_display_name: agentDisplayName,
     agent_icon_key: agentIconKey,
-    status,
-    lifecycle_version: lifecycleVersion,
-    task_id: taskId,
-    conversation_id: conversationId,
-    parent_turn_id: parentTurnId,
-    parent_run_id: readString(value.parent_run_id),
-    assignment: readAssignment(value.assignment),
-    result: readResultProjection(value.result),
-    safe_error: readString(value.safe_error),
-  };
+    assignment,
+    result,
+  });
+  return normalized.success ? normalized.data : null;
 }
 
-function readAssignment(value: unknown): AgentAssignment | null {
-  const record = readRecord(value);
-  if (!record) {
-    return null;
-  }
-  return record as unknown as AgentAssignment;
+export function readAgentAssignment(value: unknown): AgentAssignment | null {
+  const parsed = agentAssignmentSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
-function readResultProjection(value: unknown): AgentResultProjection | null {
-  const record = readRecord(value);
-  if (!record) {
-    return null;
-  }
-  if (!readString(record.agent_id) || !readString(record.agent_kind) || !readString(record.summary)) {
-    return null;
-  }
-  return record as unknown as AgentResultProjection;
+export function readAgentResultProjection(value: unknown): AgentResultProjection | null {
+  const parsed = agentResultProjectionSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
 }
 
 export function resolveAgentDisplayName(
@@ -421,42 +367,36 @@ function readNonNegativeInt(value: unknown): number | null {
   return normalized >= 0 ? normalized : null;
 }
 
-function readLifecycleStatus(value: unknown): AgentRunLifecycleStatus | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  switch (value) {
-    case "queued":
-    case "running":
-    case "waiting_for_approval":
-    case "completed":
-    case "failed":
-    case "cancelled":
-      return value;
-    default:
-      return null;
-  }
+interface LifecycleIdentity {
+  agentRunId: string;
+  agentId: string;
+  agentKind: string;
+  taskId: number;
+  conversationId: string;
+  parentTurnId: string;
 }
 
-function isLocalAgentRunStatusProjection(
-  value: unknown,
-): value is LocalAgentRunStatusProjection {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const run = value as Partial<LocalAgentRunStatusProjection>;
+function assignmentMatchesLifecycle(
+  assignment: AgentAssignment,
+  identity: LifecycleIdentity,
+): boolean {
   return (
-    readString(run.agent_run_id) !== null &&
-    readString(run.agent_id) !== null &&
-    readString(run.agent_kind) !== null &&
-    readString(run.agent_display_name) !== null &&
-    readLifecycleStatus(run.status) !== null &&
-    typeof run.lifecycle_version === "number" &&
-    Number.isFinite(run.lifecycle_version) &&
-    run.lifecycle_version > 0 &&
-    typeof run.task_id === "number" &&
-    Number.isFinite(run.task_id) &&
-    typeof run.conversation_id === "string" &&
-    typeof run.parent_turn_id === "string"
+    assignment.agent_run_id === identity.agentRunId &&
+    assignment.agent_id === identity.agentId &&
+    assignment.agent_kind === identity.agentKind &&
+    assignment.task_id === identity.taskId &&
+    assignment.conversation_id === identity.conversationId &&
+    assignment.parent_turn_id === identity.parentTurnId
+  );
+}
+
+function resultMatchesLifecycle(
+  result: AgentResultProjection,
+  identity: LifecycleIdentity,
+): boolean {
+  return (
+    result.agent_run_id === identity.agentRunId &&
+    result.agent_id === identity.agentId &&
+    result.agent_kind === identity.agentKind
   );
 }

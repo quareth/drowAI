@@ -8,9 +8,9 @@
  */
 import { apiFetch } from "@/lib/api-config";
 import { advanceStreamSequence, applyStreamMessage } from "@/state/chat-stream-store";
-import type { StreamEvent, StreamPacket } from "@/types/packets";
 
 import {
+  readAgentRunStreamPayload,
   readLocalAgentRuns,
   readStreamSequence,
   type LocalAgentRunStatusProjection,
@@ -72,7 +72,10 @@ export function hydrateAgentRunStoreFromReplayItems(
   let replayedPackets = 0;
   let lastSequence: number | null = readNonNegativeInt(nextAfter);
   for (const item of items) {
-    const replayItem = item as StreamPacket | StreamEvent;
+    const replayItem = readAgentRunStreamPayload(item);
+    if (!replayItem) {
+      continue;
+    }
     const sequence = readStreamSequence(replayItem);
     if (sequence !== null) {
       advanceStreamSequence(taskId, sequence);
