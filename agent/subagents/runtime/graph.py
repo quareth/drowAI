@@ -15,29 +15,19 @@ outside the shared graph nodes, or choose between generic and legacy paths.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from collections.abc import Mapping
-from dataclasses import asdict
 from functools import partial
 from typing import Any
 
 from langgraph.graph import END, StateGraph
 
-from agent.graph.graph_names import GRAPH_NAME_SUBAGENT
 from agent.graph.builders.common_edges import (
     with_interactive_state,
     wrap_with_context,
     wrap_with_context_async,
 )
-from agent.graph.infrastructure.graph_registry import (
-    GraphRegistry,
-    get_default_graph_registry,
-    get_or_register_compiled_graph,
-)
 from agent.graph.infrastructure.state_models import GraphRuntimeContext
 from agent.graph.nodes.tool_synthesizer import synthesize_tool_output
-from agent.graph.persistence import get_default_checkpointer
 from agent.graph.state import InteractiveState
 from agent.graph.subgraphs.tool_execution import (
     approval_gate_node,
@@ -115,13 +105,8 @@ def _route_after_model(interactive: InteractiveState) -> str:
     raise ValueError("Subagent model turn did not write a valid route")
 
 
-def build_subagent_graph(
-    definition: SubagentDefinition,
-    *,
-    checkpointer: Any | None = None,
-    build_only: bool = False,
-) -> Any:
-    """Build a definition-configured subagent graph."""
+def build_subagent_state_graph(definition: SubagentDefinition) -> StateGraph:
+    """Build the single uncompiled topology for one subagent definition."""
 
     graph = StateGraph(dict)
 
@@ -172,40 +157,17 @@ def build_subagent_graph(
     graph.add_edge("observation", "model")
     graph.add_edge("handoff", END)
 
-    if build_only:
-        return graph
-    return graph.compile(checkpointer=checkpointer or get_default_checkpointer())
+    return graph
 
 
-def get_compiled_subagent_graph(
+def build_subagent_graph(
     definition: SubagentDefinition,
     *,
-    registry: GraphRegistry | None = None,
-) -> object:
-    """Return the compiled generic subagent graph from the shared registry."""
+    checkpointer: Any,
+) -> Any:
+    """Compile the canonical topology with an explicit task checkpointer."""
 
-    return get_or_register_compiled_graph(
-        registry=registry or get_default_graph_registry(),
-        name=graph_cache_key_for_definition(definition),
-        build_uncompiled=lambda: build_subagent_graph(definition, build_only=True),
-        checkpointer_factory=get_default_checkpointer,
-    )
-
-
-def graph_cache_key_for_definition(definition: SubagentDefinition) -> str:
-    """Return a stable cache key for one complete immutable definition."""
-
-    payload = json.dumps(
-        asdict(definition),
-        ensure_ascii=True,
-        separators=(",", ":"),
-        sort_keys=True,
-    )
-    fingerprint = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-    return (
-        f"{GRAPH_NAME_SUBAGENT}:{definition.id}:"
-        f"v{definition.schema_version}:{fingerprint}"
-    )
+    return build_subagent_state_graph(definition).compile(checkpointer=checkpointer)
 
 
 def _validate_config_thread(
@@ -235,9 +197,7 @@ def _equivalent_thread_ids(thread_id: Any) -> set[str]:
 
 
 __all__ = [
-    "GRAPH_NAME_SUBAGENT",
     "build_subagent_graph",
-    "get_compiled_subagent_graph",
-    "graph_cache_key_for_definition",
+    "build_subagent_state_graph",
     "initialize_subagent_state",
 ]
