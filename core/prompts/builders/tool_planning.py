@@ -25,6 +25,26 @@ _RUNBOOK_SERVICE = RunbookService()
 _ARTIFACT_SEARCH_TOOL_ID = "artifact.search"
 _ARTIFACT_READ_TOOL_ID = "artifact.read"
 _CVE_LOOKUP_TOOL_ID = "knowledge.cve_lookup"
+_MAIN_NATIVE_TOOL_CALL_REQUIREMENT = (
+    "You are the native tool-call builder. Emit native tool calls only.\n\n"
+    "Call between 1 and {max_committed_tools_per_batch} candidate tool "
+    "function(s) for this iteration."
+)
+_SUBAGENT_NATIVE_TOOL_CALL_REQUIREMENT = (
+    "When more evidence is required, call between 1 and "
+    "{max_committed_tools_per_batch} candidate tool function(s) for this "
+    "iteration. When the assignment is complete, emit no tool call and "
+    "return the concise parent handoff instead."
+)
+_MAIN_SELECTOR_STRATEGY_GUIDANCE = (
+    "Execution strategy (read from Selector Decision in the current turn input):\n"
+    '- The upstream selector sets requested execution strategy to "parallel" or '
+    '"sequential". This is scheduling guidance for the calls you commit, not '
+    "permission to call every candidate tool.\n"
+    "- Candidate Tools are a shortlist of allowed tool ids. They are alternatives "
+    "and context, not a mandatory multi-tool todo list. Do not emit one call per "
+    "candidate merely because several candidates were listed.\n\n"
+)
 
 
 def _render_latest(template_name: str, **context: Any) -> str:
@@ -33,16 +53,14 @@ def _render_latest(template_name: str, **context: Any) -> str:
     return template.format_map(safe_context)
 
 
-def _extract_tagged_prompt_section(prompt: str, tag: str) -> str:
-    """Return one inclusive XML-like section from a canonical prompt."""
+def _normalize_committed_tool_cap(raw_cap: Any) -> int:
+    """Return the positive batch cap used by native tool-call prompts."""
 
-    start_marker = f"<{tag}>"
-    end_marker = f"</{tag}>"
-    start = prompt.find(start_marker)
-    end = prompt.find(end_marker)
-    if start < 0 or end < start:
-        raise ValueError(f"Canonical tool builder prompt is missing <{tag}>")
-    return prompt[start : end + len(end_marker)]
+    try:
+        cap = int(raw_cap)
+    except (TypeError, ValueError):
+        return 1
+    return max(cap, 1)
 
 
 def _format_history(history: Sequence[Dict[str, Any]], max_turns: int = 5) -> str:
@@ -421,15 +439,18 @@ class ToolPlanningPromptBuilder:
         max_committed_tools_per_batch: int = 1,
     ) -> str:
         """Build the native tool-call builder system prompt."""
-        try:
-            cap_value = int(max_committed_tools_per_batch)
-        except (TypeError, ValueError):
-            cap_value = 1
-        if cap_value < 1:
-            cap_value = 1
+        cap_value = _normalize_committed_tool_cap(max_committed_tools_per_batch)
+        call_requirement = _MAIN_NATIVE_TOOL_CALL_REQUIREMENT.format(
+            max_committed_tools_per_batch=cap_value,
+        )
+        native_tool_call_guidance = _render_latest(
+            "native_tool_call_guidance.txt",
+            call_requirement=call_requirement,
+            selector_strategy=_MAIN_SELECTOR_STRATEGY_GUIDANCE,
+        ).rstrip("\n")
         return _render_latest(
             "tool_parameters_system.txt",
-            max_committed_tools_per_batch=cap_value,
+            native_tool_call_guidance=native_tool_call_guidance,
         )
 
     def build_native_tool_call_shared_guidance(
@@ -437,39 +458,22 @@ class ToolPlanningPromptBuilder:
         *,
         max_committed_tools_per_batch: int = 1,
     ) -> str:
-        """Return exact selector-independent guidance from the native builder.
+        """Return exact selector-independent guidance for subagent tool calls.
 
         A subagent binds its complete bounded tool profile directly, so
         it must not inherit the main planner's upstream-selector paragraph.
-        This method keeps the reusable instructions single-sourced in the
-        canonical parameter-builder prompt while returning only:
-
-        - native call count, candidate, concrete-parameter, and intent rules;
-        - execution-strategy guidance;
-        - batch examples; and
-        - commit rules.
+        The versioned guidance component is shared with the main planner while
+        the call requirement and selector paragraph remain caller-specific.
         """
-
-        prompt = self.build_tool_parameters_system_prompt(
-            max_committed_tools_per_batch=max_committed_tools_per_batch,
+        cap_value = _normalize_committed_tool_cap(max_committed_tools_per_batch)
+        call_requirement = _SUBAGENT_NATIVE_TOOL_CALL_REQUIREMENT.format(
+            max_committed_tools_per_batch=cap_value,
         )
-        selector_header = "Execution strategy (read from Selector Decision"
-        selector_start = prompt.find(selector_header)
-        if selector_start < 0:
-            raise ValueError(
-                "Canonical tool builder prompt is missing selector strategy guidance"
-            )
-        intro = prompt[:selector_start].rstrip()
-        strategy = _extract_tagged_prompt_section(
-            prompt,
-            "execution_strategy_guidance",
-        )
-        examples = _extract_tagged_prompt_section(prompt, "examples")
-        commit_start = prompt.find("Commit rules:")
-        if commit_start < 0:
-            raise ValueError("Canonical tool builder prompt is missing Commit rules")
-        commit_rules = prompt[commit_start:].strip()
-        return "\n\n".join((intro, strategy, examples, commit_rules))
+        return _render_latest(
+            "native_tool_call_guidance.txt",
+            call_requirement=call_requirement,
+            selector_strategy="",
+        ).rstrip()
 
     def build_resolve_tools_prompt(
         self,

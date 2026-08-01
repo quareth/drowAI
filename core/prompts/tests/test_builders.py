@@ -97,6 +97,9 @@ def test_tool_planning_builder_renders_prompts() -> None:
     ]
 
     system_prompt = builder.build_system_prompt(user_message=user_message, conversation_history=history)
+    tool_parameters_system_prompt = builder.build_tool_parameters_system_prompt(
+        max_committed_tools_per_batch=3,
+    )
     resolve_prompt = builder.build_resolve_tools_prompt(
         user_message=user_message,
         conversation_history=history,
@@ -136,6 +139,10 @@ def test_tool_planning_builder_renders_prompts() -> None:
     )
 
     assert_golden("tool_planning__system.txt", system_prompt)
+    assert_golden(
+        "tool_planning__tool_parameters_system.txt",
+        tool_parameters_system_prompt,
+    )
     assert_golden("tool_planning__resolve_tools.txt", resolve_prompt)
     assert_golden("tool_planning__select_tools.txt", select_prompt)
     assert_golden("tool_planning__tool_parameters.txt", params_prompt)
