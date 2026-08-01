@@ -471,55 +471,36 @@ class ProcessLocalAgentRunRegistry:
         if max_results is not None and max_results < 1:
             raise ValueError("max_results must be positive")
         async with self._lock:
-            candidates = sorted(
-                (
-                    entry
-                    for entry in self._runs.values()
-                    if entry.tenant_id == tenant_id
-                    and entry.task_id == task_id
-                    and (
-                        conversation_id is None
-                        or entry.conversation_id == conversation_id
+            candidates: list[LocalAgentRun] = []
+            claimed_ready_count = 0
+            active_entries: list[LocalAgentRun] = []
+            for entry in self._runs.values():
+                if (
+                    entry.tenant_id != tenant_id
+                    or entry.task_id != task_id
+                    or (
+                        conversation_id is not None
+                        and entry.conversation_id != conversation_id
                     )
-                    and entry.result is not None
-                    and not entry.result_consumed
-                    and entry.result_claim_id is None
-                    and entry.status in TERMINAL_AGENT_RUN_STATUSES
-                ),
-                key=_run_sort_key,
-            )
+                ):
+                    continue
+                if entry.status in ACTIVE_AGENT_RUN_STATUSES:
+                    active_entries.append(entry)
+                if (
+                    entry.result is None
+                    or entry.result_consumed
+                    or entry.status not in TERMINAL_AGENT_RUN_STATUSES
+                ):
+                    continue
+                if entry.result_claim_id is None:
+                    candidates.append(entry)
+                else:
+                    claimed_ready_count += 1
+
+            candidates.sort(key=_run_sort_key)
             if max_results is not None:
                 candidates = candidates[:max_results]
-            claimed_ready_count = sum(
-                1
-                for entry in self._runs.values()
-                if entry.tenant_id == tenant_id
-                and entry.task_id == task_id
-                and (
-                    conversation_id is None
-                    or entry.conversation_id == conversation_id
-                )
-                and entry.result is not None
-                and not entry.result_consumed
-                and entry.result_claim_id is not None
-                and entry.status in TERMINAL_AGENT_RUN_STATUSES
-            )
-            active_runs = tuple(
-                sorted(
-                    (
-                        entry
-                        for entry in self._runs.values()
-                        if entry.tenant_id == tenant_id
-                        and entry.task_id == task_id
-                        and (
-                            conversation_id is None
-                            or entry.conversation_id == conversation_id
-                        )
-                        and entry.status in ACTIVE_AGENT_RUN_STATUSES
-                    ),
-                    key=_run_sort_key,
-                )
-            )
+            active_runs = tuple(sorted(active_entries, key=_run_sort_key))
             if not candidates:
                 if claimed_ready_count:
                     safe_inc("agent_run_handoff_duplicate_claim_suppressed")

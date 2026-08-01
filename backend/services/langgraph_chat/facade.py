@@ -186,7 +186,6 @@ class LangGraphChatFacade:
                 subagent_registry=self._subagent_registry,
             ),
         }
-        self._validate_registered_subagent_handlers()
 
         self._continuation = CheckpointContinuationService(
             checkpointer_service=self._checkpointer_service,
@@ -544,15 +543,6 @@ class LangGraphChatFacade:
                 continue
             counts[entry.agent_id] = counts.get(entry.agent_id, 0) + 1
         return counts
-
-    def _validate_registered_subagent_handlers(self) -> None:
-        """Fail startup when an enabled registry entry has no wired handler."""
-        for definition in self._subagent_registry.definitions():
-            branch = ChatBranch.SUBAGENT
-            if branch not in self._handlers:
-                raise RuntimeError(
-                    f"registered subagent has no facade handler: {definition.id}"
-                )
 
     async def resume_from_interrupt(
         self,

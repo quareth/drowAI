@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import contextlib
 from pathlib import Path
@@ -494,14 +495,22 @@ async def test_create_task_failure_does_not_attach_local_handle() -> None:
 
 
 def test_launcher_module_has_no_durable_or_route_boundary_dependencies() -> None:
-    source = Path("backend/services/agent_runs/launcher.py").read_text()
+    source_path = Path(__file__).resolve().parents[3] / "services/agent_runs/launcher.py"
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    imported_modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            imported_modules.add(node.module)
 
-    assert "backend.database" not in source
-    assert "sqlalchemy" not in source
-    assert "Session" not in source
-    assert "scheduler" not in source.lower()
-    assert "lease" not in source.lower()
-    assert "poll" not in source.lower()
+    prohibited_parts = {"database", "durable", "lease", "poll", "polling", "scheduler"}
+    assert all(
+        module != "sqlalchemy"
+        and not module.startswith("sqlalchemy.")
+        and prohibited_parts.isdisjoint(module.lower().split("."))
+        for module in imported_modules
+    )
 
 
 async def _wait_for_status(

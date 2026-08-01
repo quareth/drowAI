@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import inspect
 import logging
 from typing import Any, Optional
 
@@ -73,79 +72,6 @@ _ROUTER_ACTION_MAP = build_router_action_map(
     call_tool_target="select_tool_categories",
     finalize_target="format_results",
 )
-
-
-def _accepted_runtime_kwargs(node: Any, runtime_kwargs: dict[str, Any]) -> dict[str, Any]:
-    """Return runtime kwargs accepted by the currently bound node."""
-    signature_target = node
-    mock_side_effect = getattr(node, "side_effect", None)
-    if callable(mock_side_effect):
-        signature_target = mock_side_effect
-
-    signature = inspect.signature(signature_target)
-    if any(
-        parameter.kind is inspect.Parameter.VAR_KEYWORD
-        for parameter in signature.parameters.values()
-    ):
-        return runtime_kwargs
-    return {
-        key: value
-        for key, value in runtime_kwargs.items()
-        if key in signature.parameters
-    }
-
-
-def _call_bound_node(node_name: str, state: Any, **runtime_kwargs: Any) -> Any:
-    """Invoke a node from this module so tests can patch builder-local names."""
-    node = globals()[node_name]
-    return node(state, **_accepted_runtime_kwargs(node, runtime_kwargs))
-
-
-def _late_bound_node(node_name: str) -> Any:
-    """Build a sync adapter that resolves the module node at call time."""
-
-    def _runner(
-        state: Any,
-        context: Any = None,
-        config: Any = None,
-        writer: Any = None,
-        **kwargs: Any,
-    ) -> Any:
-        return _call_bound_node(
-            node_name,
-            state,
-            context=context,
-            config=config,
-            writer=writer,
-            **kwargs,
-        )
-
-    return _runner
-
-
-def _late_bound_async_node(node_name: str) -> Any:
-    """Build an async adapter that resolves the module node at call time."""
-
-    async def _runner(
-        state: Any,
-        context: Any = None,
-        config: Any = None,
-        writer: Any = None,
-        **kwargs: Any,
-    ) -> Any:
-        result = _call_bound_node(
-            node_name,
-            state,
-            context=context,
-            config=config,
-            writer=writer,
-            **kwargs,
-        )
-        if inspect.isawaitable(result):
-            return await result
-        return result
-
-    return _runner
 
 
 def _route_after_router(interactive: InteractiveState) -> str:
@@ -250,42 +176,36 @@ def build_simple_tool_graph(*, checkpointer=None, build_only: bool = False) -> A
     # so observability decouples from the wrapped node's signature.
     graph.add_node(
         "classification",
-        wrap_with_context(_late_bound_node("classify_turn")),
+        wrap_with_context(classify_turn),
     )
     graph.add_node(
         "update_working_memory",
-        wrap_with_context(_late_bound_node("update_working_memory_node")),
+        wrap_with_context(update_working_memory_node),
     )
     graph.add_node(
         "memory_retrieval",
-        wrap_with_context_async(_late_bound_async_node("memory_retrieval_node")),
+        wrap_with_context_async(memory_retrieval_node),
     )
     add_direct_tool_action_nodes(
         graph,
         on_wrap_log=_log_node_wrapper_context,
-        select_tool_categories_node_fn=_late_bound_async_node(
-            "select_tool_categories_node"
-        ),
-        articulate_tool_intent_fn=_late_bound_async_node("articulate_tool_intent"),
-        prepare_tool_execution_plan_fn=_late_bound_async_node(
-            "prepare_tool_execution_plan"
-        ),
-        approval_gate_node_fn=_late_bound_async_node("approval_gate_node"),
-        dispatch_tool_execution_node_fn=_late_bound_async_node(
-            "dispatch_tool_execution_node"
-        ),
-        synthesize_tool_output_fn=_late_bound_async_node("synthesize_tool_output"),
+        select_tool_categories_node_fn=select_tool_categories_node,
+        articulate_tool_intent_fn=articulate_tool_intent,
+        prepare_tool_execution_plan_fn=prepare_tool_execution_plan,
+        approval_gate_node_fn=approval_gate_node,
+        dispatch_tool_execution_node_fn=dispatch_tool_execution_node,
+        synthesize_tool_output_fn=synthesize_tool_output,
     )
     add_post_action_continuation_nodes(
         graph,
         on_wrap_log=_log_node_wrapper_context,
-        reasoning_node=_late_bound_async_node("post_tool_reasoning"),
-        decision_router_node=_late_bound_async_node("decision_router"),
-        think_more_node_fn=_late_bound_async_node("think_more_node"),
-        reflect_node_fn=_late_bound_async_node("reflect_node"),
-        synthesis_node_fn=_late_bound_async_node("synthesis_node"),
-        finalize_results_fn=_late_bound_async_node("finalize_results"),
-        finalize_turn_fn=_late_bound_node("finalize_turn"),
+        reasoning_node=post_tool_reasoning,
+        decision_router_node=decision_router,
+        think_more_node_fn=think_more_node,
+        reflect_node_fn=reflect_node,
+        synthesis_node_fn=synthesis_node,
+        finalize_results_fn=finalize_results,
+        finalize_turn_fn=finalize_turn,
     )
 
     graph.set_entry_point("classification")

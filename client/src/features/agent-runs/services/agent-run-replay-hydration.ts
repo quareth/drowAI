@@ -12,6 +12,7 @@ import type { StreamEvent, StreamPacket } from "@/types/packets";
 
 import {
   readLocalAgentRuns,
+  readStreamSequence,
   type LocalAgentRunStatusProjection,
 } from "../contracts/agent-run";
 import {
@@ -71,12 +72,12 @@ export function hydrateAgentRunStoreFromReplayItems(
   let replayedPackets = 0;
   let lastSequence: number | null = readNonNegativeInt(nextAfter);
   for (const item of items) {
-    const sequence = readReplaySequence(item);
+    const replayItem = item as StreamPacket | StreamEvent;
+    const sequence = readStreamSequence(replayItem);
     if (sequence !== null) {
       advanceStreamSequence(taskId, sequence);
       lastSequence = lastSequence === null ? sequence : Math.max(lastSequence, sequence);
     }
-    const replayItem = item as StreamPacket | StreamEvent;
     const isAgentRunPacket = applyAgentRunActivityPayload(
       taskId,
       replayItem,
@@ -130,7 +131,7 @@ async function fetchRecentTaskReplay(
   return { items, nextAfter };
 }
 
-async function fetchLocalAgentRuns(
+export async function fetchLocalAgentRuns(
   taskId: number,
   options?: { signal?: AbortSignal },
 ): Promise<LocalAgentRunStatusProjection[] | null> {
@@ -143,22 +144,6 @@ async function fetchLocalAgentRuns(
   }
   const payload = await response.json().catch(() => null);
   return readLocalAgentRuns(payload, taskId);
-}
-
-function readReplaySequence(value: unknown): number | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-  const record = value as {
-    sequence?: unknown;
-    obj?: { metadata?: Record<string, unknown> };
-    metadata?: Record<string, unknown>;
-  };
-  return (
-    readNonNegativeInt(record.sequence) ??
-    readNonNegativeInt(record.obj?.metadata?.sequence) ??
-    readNonNegativeInt(record.metadata?.sequence)
-  );
 }
 
 function readNonNegativeInt(value: unknown): number | null {

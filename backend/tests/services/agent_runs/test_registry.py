@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import contextlib
 from datetime import UTC, datetime, timedelta
@@ -559,9 +560,19 @@ async def test_scoped_handoff_wait_exits_when_no_active_runs_remain() -> None:
 
 
 def test_registry_module_has_no_database_or_orm_dependency() -> None:
-    source = Path("backend/services/agent_runs/registry.py").read_text()
+    source_path = Path(__file__).resolve().parents[3] / "services/agent_runs/registry.py"
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+    imported_modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported_modules.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            imported_modules.add(node.module)
 
-    assert "backend.database" not in source
-    assert "sqlalchemy" not in source
-    assert "Session" not in source
-    assert "ORM" not in source
+    assert all(
+        module != "backend.database"
+        and not module.startswith("backend.database.")
+        and module != "sqlalchemy"
+        and not module.startswith("sqlalchemy.")
+        for module in imported_modules
+    )

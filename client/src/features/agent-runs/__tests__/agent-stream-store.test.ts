@@ -1,3 +1,7 @@
+/**
+ * This test-only module verifies the agent-run store's lifecycle merging,
+ * bounded activity retention, local-status reconciliation, and drawer presentation contracts.
+ */
 import { afterEach, describe, expect, it } from "vitest";
 
 import {

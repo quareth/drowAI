@@ -8,7 +8,7 @@
  */
 import { useEffect, useMemo } from "react";
 
-import { apiFetch } from "@/lib/api-config";
+import { fetchLocalAgentRuns } from "../services/agent-run-replay-hydration";
 import {
   getAgentRunParentGroupingKey,
   reconcileAgentRunsWithLocalStatus,
@@ -17,7 +17,6 @@ import {
 } from "../state/agent-stream-store";
 import {
   isAgentRunTerminalStatus,
-  readLocalAgentRuns,
   type AgentRunPresentationState,
 } from "../contracts/agent-run";
 
@@ -94,15 +93,9 @@ export function useAgentRunLocalStatusHydration(
     let cancelled = false;
 
     async function hydrateLocalStatus() {
-      const response = await apiFetch(`/api/tasks/${scopedTaskId}/agent-runs/local`, {
-        method: "GET",
+      const localRuns = await fetchLocalAgentRuns(scopedTaskId, {
         signal: controller.signal,
       });
-      if (!response.ok || cancelled) {
-        return;
-      }
-      const payload = await response.json();
-      const localRuns = readLocalAgentRuns(payload, scopedTaskId);
       if (cancelled || localRuns === null) {
         return;
       }

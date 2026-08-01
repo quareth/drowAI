@@ -109,7 +109,6 @@ def _set_validation_ready(state, **_kwargs):
 @pytest.mark.asyncio
 async def test_simple_tool_synthesizer_integration():
     """Synthesizer should enrich metadata for downstream nodes."""
-    graph = build_simple_tool_graph()
     initial_state = sample_simple_tool_state(success=True)
 
     async def synthesize(state, **_kwargs):
@@ -136,6 +135,7 @@ async def test_simple_tool_synthesizer_integration():
         patch("agent.graph.builders.simple_tool_builder.synthesize_tool_output", new_callable=AsyncMock, side_effect=synthesize), \
         patch("agent.graph.builders.simple_tool_builder.post_tool_reasoning", new_callable=AsyncMock, side_effect=_post_tool_format_async), \
         patch("agent.graph.builders.simple_tool_builder.finalize_results", new_callable=AsyncMock, side_effect=_noop_return_state_async):
+        graph = build_simple_tool_graph()
         final_state = None
         async for event in graph.astream(
             initial_state, {"configurable": {"thread_id": "synth-int"}}, stream_mode="values"
@@ -151,7 +151,6 @@ async def test_simple_tool_synthesizer_integration():
 @pytest.mark.asyncio
 async def test_simple_tool_format_results_integration():
     """format_results node should stream structured data without retry metadata."""
-    graph = build_simple_tool_graph()
     initial_state = sample_simple_tool_state(success=True, summary="initial")
 
     async def format_results(state, **_kwargs):
@@ -177,6 +176,7 @@ async def test_simple_tool_format_results_integration():
         patch("agent.graph.builders.simple_tool_builder.synthesize_tool_output", new_callable=AsyncMock, side_effect=_noop_return_state_async), \
         patch("agent.graph.builders.simple_tool_builder.post_tool_reasoning", new_callable=AsyncMock, side_effect=_post_tool_format_async), \
         patch("agent.graph.builders.simple_tool_builder.finalize_results", new_callable=AsyncMock, side_effect=format_results):
+        graph = build_simple_tool_graph()
         final_state = None
         async for event in graph.astream(
             initial_state, {"configurable": {"thread_id": "format-int"}}, stream_mode="values"
@@ -191,7 +191,6 @@ async def test_simple_tool_format_results_integration():
 @pytest.mark.asyncio
 async def test_simple_tool_end_to_end_success():
     """End-to-end simple tool flow completes successfully without retry nodes."""
-    graph = build_simple_tool_graph()
     invoked: List[str] = []
 
     def track_sync(name: str):
@@ -225,6 +224,7 @@ async def test_simple_tool_end_to_end_success():
         patch("agent.graph.builders.simple_tool_builder.post_tool_reasoning", new_callable=AsyncMock, side_effect=_post_tool_track), \
         patch("agent.graph.builders.simple_tool_builder.finalize_results", new_callable=AsyncMock, side_effect=await track_async("format_results")), \
         patch("agent.graph.builders.simple_tool_builder.finalize_turn", side_effect=track_sync("finalize")):
+        graph = build_simple_tool_graph()
         final_state = None
         async for event in graph.astream(
             initial_state, {"configurable": {"thread_id": "success-e2e"}}, stream_mode="values"
@@ -251,7 +251,6 @@ async def test_simple_tool_end_to_end_success():
 @pytest.mark.asyncio
 async def test_simple_tool_end_to_end_with_failure():
     """End-to-end failure completes without retry and preserves failure metadata."""
-    graph = build_simple_tool_graph()
     invoked: List[str] = []
     initial_state = sample_simple_tool_state(success=False, stderr="network down")
 
@@ -285,6 +284,7 @@ async def test_simple_tool_end_to_end_with_failure():
         patch("agent.graph.builders.simple_tool_builder.post_tool_reasoning", new_callable=AsyncMock, side_effect=_post_tool_track_fail), \
         patch("agent.graph.builders.simple_tool_builder.finalize_results", new_callable=AsyncMock, side_effect=await track_async("format_results")), \
         patch("agent.graph.builders.simple_tool_builder.finalize_turn", side_effect=track_sync("finalize")):
+        graph = build_simple_tool_graph()
         final_state = None
         async for event in graph.astream(
             initial_state, {"configurable": {"thread_id": "failure-e2e"}}, stream_mode="values"
@@ -300,7 +300,6 @@ async def test_simple_tool_end_to_end_with_failure():
 @pytest.mark.asyncio
 async def test_simple_tool_metadata_flow():
     """Metadata (api_key, model, synthesized output) flows through all nodes."""
-    graph = build_simple_tool_graph()
     initial_state = sample_simple_tool_state(success=True, summary="orig summary")
 
     async def synthesize(state, **_kwargs):
@@ -329,6 +328,7 @@ async def test_simple_tool_metadata_flow():
         patch("agent.graph.builders.simple_tool_builder.synthesize_tool_output", new_callable=AsyncMock, side_effect=synthesize), \
         patch("agent.graph.builders.simple_tool_builder.post_tool_reasoning", new_callable=AsyncMock, side_effect=_post_tool_format_async), \
         patch("agent.graph.builders.simple_tool_builder.finalize_results", new_callable=AsyncMock, side_effect=finalize):
+        graph = build_simple_tool_graph()
         final_state = None
         async for event in graph.astream(
             initial_state, {"configurable": {"thread_id": "meta-flow"}}, stream_mode="values"

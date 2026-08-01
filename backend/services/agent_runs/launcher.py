@@ -206,12 +206,6 @@ class AgentRunLauncher:
                 task_id=assignment.task_id,
                 agent_run_id=assignment.agent_run_id,
             )
-            if transition.changed:
-                await self._publish_terminal_lifecycle(
-                    transition.entry,
-                    parent_run_id=parent_run_id,
-                )
-            return
         except SubagentRunPaused as exc:
             usage_records = child_usage_records_from_state(
                 getattr(exc.execution_result, "final_state", None),
@@ -224,12 +218,6 @@ class AgentRunLauncher:
                 agent_run_id=assignment.agent_run_id,
                 accounted_usage_record_count=len(usage_records),
             )
-            if transition.changed:
-                await self._publish_terminal_lifecycle(
-                    transition.entry,
-                    parent_run_id=parent_run_id,
-                )
-            return
         except Exception:
             logger.warning(
                 "Subagent worker failed for tenant_id=%s task_id=%s agent_run_id=%s",
@@ -244,19 +232,13 @@ class AgentRunLauncher:
                 agent_run_id=assignment.agent_run_id,
                 safe_error="Subagent worker failed",
             )
-            if transition.changed:
-                await self._publish_terminal_lifecycle(
-                    transition.entry,
-                    parent_run_id=parent_run_id,
-                )
-            return
-
-        transition = await self._registry.record_completed(
-            tenant_id=assignment.tenant_id,
-            task_id=assignment.task_id,
-            agent_run_id=assignment.agent_run_id,
-            result=completion.result,
-        )
+        else:
+            transition = await self._registry.record_completed(
+                tenant_id=assignment.tenant_id,
+                task_id=assignment.task_id,
+                agent_run_id=assignment.agent_run_id,
+                result=completion.result,
+            )
         if transition.changed:
             await self._publish_terminal_lifecycle(
                 transition.entry,

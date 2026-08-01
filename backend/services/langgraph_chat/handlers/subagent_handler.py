@@ -648,7 +648,9 @@ class SubagentHandler(BaseLangGraphHandler):
                     assignment=assignment,
                     runtime_config=child_runtime_config,
                     graph_thread_id=item.graph_thread_id,
-                    parent_run_id=_parent_run_id(runtime_config.metadata),
+                    parent_run_id=parent_run_id_from_metadata(
+                        runtime_config.metadata
+                    ),
                 )
             except Exception as exc:
                 logger.warning(
@@ -1007,7 +1009,7 @@ class SubagentHandler(BaseLangGraphHandler):
     ) -> None:
         event = build_agent_run_lifecycle_event(
             entry,
-            parent_run_id=_parent_run_id(runtime_config.metadata),
+            parent_run_id=parent_run_id_from_metadata(runtime_config.metadata),
         )
         await self._publish_lifecycle(entry.task_id, event)
 
@@ -1405,10 +1407,6 @@ def _safe_launch_error(exc: Exception, *, agent_display_name: str) -> str:
 
 def _new_child_graph_thread_id() -> str:
     return generate_graph_thread_id()
-
-
-def _parent_run_id(metadata: Mapping[str, Any]) -> str | None:
-    return parent_run_id_from_metadata(metadata)
 
 
 def _required_string(value: Any, field_name: str) -> str:

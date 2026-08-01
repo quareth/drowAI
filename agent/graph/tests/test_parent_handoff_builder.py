@@ -6,6 +6,7 @@ from typing import Any
 
 from langgraph.graph import END
 
+import agent.graph.builders.parent_handoff_builder as parent_handoff_builder
 from agent.graph.builders.parent_handoff_builder import (
     _PARENT_ROUTER_ACTION_MAP,
     _prepare_direct_tool_reasoning_context,
@@ -144,3 +145,30 @@ def test_direct_tool_context_preparation_marks_direct_source() -> None:
     assert updated.facts.metadata["synthesized_output"] == {
         "summary": "fresh tool result"
     }
+
+
+async def test_parent_handoff_node_uses_patched_callable_from_graph_construction(
+    monkeypatch: Any,
+) -> None:
+    """Builder-local patches are captured when the graph is constructed."""
+    received: dict[str, Any] = {}
+
+    async def _patched_post_tool_reasoning(
+        state: dict[str, Any],
+        context: Any,
+    ) -> dict[str, Any]:
+        received.update(state=state, context=context)
+        return {"facts": {"message": "patched"}}
+
+    monkeypatch.setattr(
+        parent_handoff_builder,
+        "post_tool_reasoning",
+        _patched_post_tool_reasoning,
+    )
+    graph = build_parent_handoff_graph(build_only=True)
+    state = {"facts": {"metadata": {}}}
+
+    result = await graph.nodes["post_action_reasoning"].runnable.ainvoke(state)
+
+    assert result == {"facts": {"message": "patched"}}
+    assert received == {"state": state, "context": None}

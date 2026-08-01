@@ -18,6 +18,7 @@ from backend.services.langgraph_chat.checkpoint.thread_identity import (
 )
 from backend.services.langgraph_chat.contracts import LangGraphRuntimeConfig
 
+from .assignment_builder import parent_run_id_from_metadata
 from .contracts import AgentAssignment, AgentRuntimeIdentity
 from .contracts import agent_display_name, agent_icon_key
 from .registry import ProcessLocalAgentRunRegistry
@@ -50,9 +51,9 @@ async def build_child_execution_config(
     if entry.graph_thread_id != child_graph_thread_id:
         raise ChildExecutionConfigError("Subagent child thread does not match registry")
 
-    parent_run_id = _parent_run_id(runtime_config.metadata) or _parent_run_id(
-        assignment.relevant_context
-    )
+    parent_run_id = parent_run_id_from_metadata(
+        runtime_config.metadata
+    ) or parent_run_id_from_metadata(assignment.relevant_context)
     runtime_projection = _runtime_projection(
         assignment.runtime_identity,
         child_graph_thread_id=child_graph_thread_id,
@@ -176,14 +177,6 @@ def _runtime_projection(
     projection["parent_run_id"] = parent_run_id
     projection["parent_graph_thread_id"] = assignment.parent_graph_thread_id
     return projection
-
-
-def _parent_run_id(metadata: Mapping[str, Any]) -> str | None:
-    for key in ("parent_run_id", "run_id", "turn_id"):
-        value = _optional_string(metadata.get(key))
-        if value:
-            return value
-    return None
 
 
 def _require_equal(field_name: str, actual: Any, expected: Any) -> None:

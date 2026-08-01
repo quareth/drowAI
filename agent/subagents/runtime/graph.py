@@ -16,6 +16,7 @@ outside the shared graph nodes, or choose between generic and legacy paths.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from functools import partial
 from typing import Any
 
 from langgraph.graph import END, StateGraph
@@ -123,11 +124,11 @@ def build_subagent_graph(
 
     graph.add_node(
         "initialize",
-        wrap_with_context(_bind_initialize(definition)),
+        wrap_with_context(partial(initialize_subagent_state, definition)),
     )
     graph.add_node(
         "model",
-        wrap_with_context_async(_bind_model(definition)),
+        wrap_with_context_async(partial(run_subagent_model_turn, definition)),
     )
     graph.add_node(
         "approval_gate",
@@ -143,11 +144,13 @@ def build_subagent_graph(
     )
     graph.add_node(
         "observation",
-        wrap_with_context(_bind_record_observation(definition)),
+        wrap_with_context(
+            partial(record_subagent_observation_and_budget, definition)
+        ),
     )
     graph.add_node(
         "handoff",
-        wrap_with_context(_bind_complete(definition)),
+        wrap_with_context(partial(complete_subagent_result, definition)),
     )
 
     graph.set_entry_point("initialize")
@@ -191,72 +194,6 @@ def graph_name_for_definition(definition: SubagentDefinition) -> str:
 
     _ = definition
     return GRAPH_NAME_SUBAGENT
-
-
-def _bind_initialize(definition: SubagentDefinition) -> Any:
-    def _initialize(
-        state: Mapping[str, Any] | InteractiveState,
-        context: GraphRuntimeContext | None = None,
-        config: Mapping[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        return initialize_subagent_state(
-            definition,
-            state,
-            context=context,
-            config=config,
-        )
-
-    return _initialize
-
-
-def _bind_model(definition: SubagentDefinition) -> Any:
-    async def _model(
-        state: Mapping[str, Any] | InteractiveState,
-        context: GraphRuntimeContext | None = None,
-        config: Mapping[str, Any] | None = None,
-        writer: Any = None,
-    ) -> dict[str, Any]:
-        return await run_subagent_model_turn(
-            definition,
-            state,
-            context=context,
-            config=config,
-            writer=writer,
-        )
-
-    return _model
-
-
-def _bind_complete(definition: SubagentDefinition) -> Any:
-    def _complete(
-        state: Mapping[str, Any] | InteractiveState,
-        context: GraphRuntimeContext | None = None,
-        config: Mapping[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        return complete_subagent_result(
-            definition,
-            state,
-            context=context,
-            config=config,
-        )
-
-    return _complete
-
-
-def _bind_record_observation(definition: SubagentDefinition) -> Any:
-    def _record_observation(
-        state: Mapping[str, Any] | InteractiveState,
-        context: GraphRuntimeContext | None = None,
-        config: Mapping[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        return record_subagent_observation_and_budget(
-            definition,
-            state,
-            context=context,
-            config=config,
-        )
-
-    return _record_observation
 
 
 def _validate_config_thread(
