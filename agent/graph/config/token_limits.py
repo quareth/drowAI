@@ -10,7 +10,7 @@ Environment Variables:
     FINAL_ANSWER_MAX_TOKENS: User-facing final answer (default: 2000)
     DR_FINAL_MAX_TOKENS: Deep reasoning final answer (default: 2000)
     SYNTHESIS_MAX_TOKENS: Loop recovery synthesis (default: 1500)
-    POST_TOOL_REASONING_MAX_TOKENS: Analysis between tool executions (default: 1500)
+    POST_TOOL_REASONING_MAX_TOKENS: Analysis between tool executions (default: 4000)
     THINK_MORE_MAX_TOKENS: Extended thinking node (default: 1000)
     REFLECT_MAX_TOKENS: Reflection node (default: 800)
     PLANNER_MAX_TOKENS: Planning node (default: 1000)
@@ -69,7 +69,7 @@ class TokenLimits:
     synthesis: int = _env_int("SYNTHESIS_MAX_TOKENS", 1500)
     
     # === REASONING (intermediate thinking) ===
-    post_tool_reasoning: int = _env_int("POST_TOOL_REASONING_MAX_TOKENS", 1500)
+    post_tool_reasoning: int = _env_int("POST_TOOL_REASONING_MAX_TOKENS", 4000)
     think_more: int = _env_int("THINK_MORE_MAX_TOKENS", 1000)
     reflect: int = _env_int("REFLECT_MAX_TOKENS", 800)
     

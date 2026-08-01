@@ -39,24 +39,34 @@ VALID_POST_ACTION_OUTCOME_SOURCES = frozenset(
 )
 
 
-def _normalize_irrelevant_active_run_ids(value: Any) -> list[str]:
-    """Return validated PAR-declared active run IDs that are irrelevant now."""
+def normalize_irrelevant_active_run_ids(
+    value: Any,
+    *,
+    strict: bool = True,
+) -> list[str]:
+    """Return ordered, unique PAR-declared irrelevant active run IDs."""
     if value is None:
         return []
     if not isinstance(value, list | tuple | set | frozenset):
-        raise ValueError("par_irrelevant_active_agent_run_ids must be a list")
+        if strict:
+            raise ValueError("par_irrelevant_active_agent_run_ids must be a list")
+        return []
 
     normalized: list[str] = []
     for item in value:
         if not isinstance(item, str):
-            raise ValueError(
-                "par_irrelevant_active_agent_run_ids entries must be strings"
-            )
+            if strict:
+                raise ValueError(
+                    "par_irrelevant_active_agent_run_ids entries must be strings"
+                )
+            continue
         run_id = item.strip()
         if not run_id:
-            raise ValueError(
-                "par_irrelevant_active_agent_run_ids entries must be non-empty"
-            )
+            if strict:
+                raise ValueError(
+                    "par_irrelevant_active_agent_run_ids entries must be non-empty"
+                )
+            continue
         if run_id not in normalized:
             normalized.append(run_id)
     return normalized
@@ -161,6 +171,8 @@ class ToolIntent(BaseModel):
             "Example: 'PostgreSQL service' or 'open ports' or 'web directories'"
         ),
     )
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class AgentHandoffEntry(BaseModel):
@@ -271,6 +283,8 @@ class TodoProgress(BaseModel):
                 )
         return self
 
+    model_config = ConfigDict(extra="forbid")
+
 
 _VULNERABILITY_OBSERVATION_PATTERN = re.compile(r"^finding\.vulnerability(?:[._]|$)")
 
@@ -280,6 +294,8 @@ class CandidateAttribute(BaseModel):
 
     key: str = Field(..., min_length=1)
     value: str = Field(default="")
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class CandidateEvidenceRef(BaseModel):
@@ -301,6 +317,8 @@ class CandidateEvidenceRef(BaseModel):
             )
         return self
 
+    model_config = ConfigDict(extra="forbid")
+
 
 class CandidateVulnerability(BaseModel):
     """Optional vulnerability metadata for vulnerability candidate rows."""
@@ -308,6 +326,8 @@ class CandidateVulnerability(BaseModel):
     id: str = Field(..., min_length=1)
     title: str = Field(..., min_length=1)
     severity: str = Field(..., min_length=1)
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class CandidateObservation(BaseModel):
@@ -340,20 +360,18 @@ class CandidateObservation(BaseModel):
             )
         return self
 
+    model_config = ConfigDict(extra="forbid")
+
     def to_payload_dict(self) -> dict[str, Any]:
         """Return stable payload dict shape for ingestion mapping."""
         return self.model_dump(exclude_none=True)
 
 
 class PostToolReasoningOutput(BaseModel):
-    """Structured output from post-tool reasoning LLM call.
+    """Combined runtime representation of PTR decision and observation.
 
-    This model ensures the LLM provides both an observation (for streaming
-    to frontend) and a decision (for graph routing) in a single coherent response.
-
-    The key guarantee: what the LLM says it will do in the observation
-    is the same as what actually happens next (because both come from
-    the same response).
+    The combined PTR turn produces optional visible narration and a validated
+    internal commit. The node maps both into this stable downstream contract.
 
     Attributes:
         observation: 4-5 sentence first-person observation about tool results,
@@ -493,7 +511,7 @@ class PostToolReasoningOutput(BaseModel):
     @classmethod
     def _validate_irrelevant_active_run_ids(cls, value: Any) -> list[str]:
         """Normalize and validate PAR-declared irrelevant active run IDs."""
-        return _normalize_irrelevant_active_run_ids(value)
+        return normalize_irrelevant_active_run_ids(value)
 
     @model_validator(mode="after")
     def _validate_agent_handoff_pairing(self) -> "PostToolReasoningOutput":
@@ -510,12 +528,7 @@ class PostToolReasoningOutput(BaseModel):
 
 
 class PostToolReasoningDecisionOutput(BaseModel):
-    """Decision-only post-tool reasoning payload (no observation text).
-
-    Used for the first structured LLM call in Phase 1/2 split.
-    Observation content is populated in a separate call and merged by
-    the post-tool reasoning node.
-    """
+    """Validated internal commit emitted by the combined PTR model turn."""
 
     next_action: PostActionNextAction = Field(
         ...,
@@ -604,7 +617,7 @@ class PostToolReasoningDecisionOutput(BaseModel):
         ),
     )
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     @field_validator("todo_progress", mode="before")
     @classmethod
@@ -618,7 +631,7 @@ class PostToolReasoningDecisionOutput(BaseModel):
     @classmethod
     def _validate_irrelevant_active_run_ids(cls, value: Any) -> list[str]:
         """Normalize and validate PAR-declared irrelevant active run IDs."""
-        return _normalize_irrelevant_active_run_ids(value)
+        return normalize_irrelevant_active_run_ids(value)
 
     @model_validator(mode="after")
     def _validate_agent_handoff_pairing(self) -> "PostToolReasoningDecisionOutput":
@@ -643,7 +656,7 @@ def map_decision_output_to_post_tool_reasoning_output(
     *,
     observation: str,
 ) -> PostToolReasoningOutput:
-    """Merge one-turn visible text and its committed decision for downstream use.
+    """Merge optional visible text and its validated decision for downstream use.
 
     This keeps downstream call sites on the existing combined runtime model.
     """
@@ -675,4 +688,5 @@ __all__ = [
     "CandidateAttribute",
     "CandidateVulnerability",
     "map_decision_output_to_post_tool_reasoning_output",
+    "normalize_irrelevant_active_run_ids",
 ]

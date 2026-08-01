@@ -66,12 +66,10 @@ class TestPostToolReasoningImports:
             _apply_progress_updates,
             _build_progress_summary,
             _extract_json_from_text,
-            _non_streaming_call,
             _parse_reasoning_response,
             _record_decision,
             _record_observation,
             _split_observation_and_decision,
-            _stream_and_parse_response,
         )
 
         assert callable(build_conversation_history_from_state)
@@ -80,8 +78,6 @@ class TestPostToolReasoningImports:
         assert callable(_record_observation)
         assert callable(_split_observation_and_decision)
         assert callable(_extract_json_from_text)
-        assert callable(_stream_and_parse_response)
-        assert callable(_non_streaming_call)
         assert callable(_apply_progress_updates)
         assert callable(_build_progress_summary)
 
@@ -482,5 +478,4 @@ class TestGuardrailsIntegration:
         from agent.graph.builders.common_edges import increment_stuck_counter
 
         assert callable(increment_stuck_counter)
-
 

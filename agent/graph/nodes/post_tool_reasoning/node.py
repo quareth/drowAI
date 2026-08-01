@@ -1,13 +1,8 @@
-"""Unified post-tool reasoning node for deep reasoning flows.
+"""Unified post-action reasoning for visible observations and graph routing.
 
-This module replaces the fragmented observation_articulation → decision_router
-path with a single coherent LLM call that:
-1. Reasons about tool output
-2. Produces observation text (streamed to frontend)
-3. Determines next action based on that observation
-
-This ensures what the agent "says it will do" in observations
-actually drives what happens next.
+One provider-neutral model turn may stream natural language while committing
+the matching internal graph decision through ``ptr_commit``. Missing commits
+are recovered without repeating completed external work.
 """
 
 from __future__ import annotations
@@ -42,15 +37,16 @@ from ...utils.event_identity import (
     resolve_turn_sequence,
 )
 from ...utils import iteration_memory as _iteration_memory
+from ..node_utils import append_usage_to_state
 from agent.providers.llm.core.exceptions import (
     LLMConfigurationError,
     LLMProviderError,
     LLMRefusalError,
 )
 from agent.providers.llm.contracts.tool_contracts import ToolChoice
+from agent.graph.config.token_limits import LIMITS
 from agent.subagents.registry import get_subagent_registry
 from agent.tools.capability_surface import render_capability_surface
-from agent.graph.config.token_limits import LIMITS
 from backend.services.metrics.utils import safe_gauge, safe_inc
 from backend.services.usage_tracking.models import ProviderUsageComponents, UsageData
 from backend.services.usage_tracking.pricing import (
@@ -87,6 +83,9 @@ from .recorders import (
 
 # Import core logic (capability-agnostic)
 from .core import (
+    _ensure_min_length_observation,
+    _generate_observation_text,
+    _make_fallback_observation,
     build_failure_context_from_state,
     detect_failure,
     get_retry_count,
@@ -94,8 +93,12 @@ from .core import (
     increment_retry_count,
     analyze_tool_result,
 )
-from .route_tools import build_post_tool_commit_tool, parse_post_tool_commit_call
-
+from .route_tools import (
+    PTRCommitError,
+    build_post_tool_commit_tool,
+    parse_post_tool_commit_call,
+    recover_post_tool_commit,
+)
 # Import streaming adapters
 from .streaming import StreamingAdapterFactory
 from .streaming.base import STREAMING_STEP_NAME
@@ -383,118 +386,6 @@ def derive_dr_stream_identifiers(
 
 # These are now imported from core.retry_logic, but keep local references for backward compatibility
 from .core.retry_logic import MAX_RETRIES  # noqa: E402
-
-
-def _make_fallback_observation(
-    interactive: InteractiveState,
-    decision_output: PostToolReasoningDecisionOutput,
-) -> str:
-    """Build a non-empty fallback observation when a separate articulation call
-    is not yet executed.
-    """
-    metadata = interactive.facts.safe_metadata
-    synthesized = metadata.get("synthesized_output")
-    if isinstance(synthesized, Mapping):
-        source_observation = synthesized.get("observation_text")
-        if isinstance(source_observation, str) and source_observation.strip():
-            return _ensure_min_length_observation(
-                source_observation.strip(),
-                decision_output,
-            )
-
-        summary = synthesized.get("summary")
-        if isinstance(summary, str) and summary.strip():
-            return _ensure_min_length_observation(
-                summary.strip(),
-                decision_output,
-            )
-
-    if decision_output.tool_intent is not None:
-        details = [decision_output.tool_intent.description]
-        if decision_output.tool_intent.target:
-            details.append(f"target={decision_output.tool_intent.target}")
-        if decision_output.tool_intent.focus:
-            details.append(f"focus={decision_output.tool_intent.focus}")
-        tool_focus = ", ".join(details)
-        return (
-            f"Decision: {decision_output.next_action}. "
-            f"Reasoning: {decision_output.action_reasoning}. "
-            f"Tool intent: {tool_focus}"
-        )
-
-    return (
-        f"Decision: {decision_output.next_action}. "
-        f"Reasoning: {decision_output.action_reasoning}"
-    )
-
-
-def _ensure_min_length_observation(
-    observation: str,
-    decision_output: PostToolReasoningDecisionOutput,
-) -> str:
-    """Ensure fallback observations satisfy model minimum length requirements."""
-    base = str(observation or "").strip()
-    if len(base) >= 10:
-        return base
-
-    parts = [
-        base or "Tool result observed.",
-        f"Action: {decision_output.next_action}.",
-        f"Reasoning: {decision_output.action_reasoning}",
-    ]
-
-    if decision_output.tool_intent:
-        intent_bits = [decision_output.tool_intent.description]
-        if decision_output.tool_intent.target:
-            intent_bits.append(f"target={decision_output.tool_intent.target}")
-        if decision_output.tool_intent.focus:
-            intent_bits.append(f"focus={decision_output.tool_intent.focus}")
-        parts.append("Intent: " + ", ".join(intent_bits))
-
-    return " ".join(parts).strip()
-
-
-async def _generate_observation_text(
-    llm_client: Any,
-    system_prompt: str,
-    user_prompt: str,
-    *,
-    interactive: InteractiveState,
-    reasoning_effort: Optional[str] = None,
-) -> str:
-    """Generate plain-text observation via the dedicated articulation prompt."""
-    if hasattr(llm_client, "chat_with_usage"):
-        response_obj = await llm_client.chat_with_usage(
-            system_prompt,
-            user_prompt,
-            temperature=0.3,
-            max_tokens=MAX_OBSERVATION_TOKENS,
-            reasoning_effort=reasoning_effort,
-        )
-        content = response_obj.content
-
-        if interactive is not None and getattr(response_obj, "usage", None):
-            from ..node_utils import append_usage_to_state
-
-            append_usage_to_state(
-                interactive,
-                response_obj.usage,
-                "post_tool_observation",
-                request_mode="non_streaming",
-            )
-    else:
-        content = await llm_client.chat(
-            system_prompt,
-            user_prompt,
-            temperature=0.3,
-            max_tokens=MAX_OBSERVATION_TOKENS,
-            reasoning_effort=reasoning_effort,
-        )
-
-    observation = str(content or "").strip()
-    if not observation:
-        raise PostToolReasoningError("Articulation LLM returned empty observation")
-    return observation
 
 
 # -----------------------------------------------------------------------------
@@ -823,8 +714,6 @@ _increment_retry_count = _increment_retry_count_in_state
 # Constants (streaming/history/parser constants imported from submodules)
 # -----------------------------------------------------------------------------
 
-MAX_OBSERVATION_TOKENS = 400
-
 # Progress tracking constants
 MAX_TODOS_IN_PROMPT = 10  # Maximum todos to include in prompt (prevent context bloat)
 
@@ -840,21 +729,15 @@ async def post_tool_reasoning(
     config: Optional[Mapping[str, Any]] = None,
     writer: Optional[StreamWriter] = None,
 ) -> Dict[str, Any]:
-    """Unified post-tool reasoning: observe results and decide next action.
-    
-    This node replaces the fragmented observation_articulation → decision_router
-    path with a single coherent LLM call. It:
+    """Analyze completed outcomes and commit the matching next action.
     
     1. Builds context from conversation history and tool output
-    2. Makes ONE LLM call that produces observation + decision
-    3. Streams observation to frontend (if writer provided)
-    4. Records observation to trace.observations
-    5. Records decision to decision_history (drives graph routing)
-    6. Updates history for next iteration context
-    
-    The key guarantee: what the LLM says it will do in the observation
-    is the same as what actually happens next (because both come from
-    the same response).
+    2. Streams optional narrative and receives one internal route commit
+    3. Recovers a missing commit without repeating completed external work
+    4. Streams the observation to the frontend (if writer provided)
+    5. Records observation to trace.observations
+    6. Records decision to decision_history (drives graph routing)
+    7. Updates history for next iteration context
     
     Args:
         state: Current graph state (Mapping or InteractiveState).
@@ -929,8 +812,8 @@ async def post_tool_reasoning(
     else:
         metadata.pop("intent_contract_evaluation", None)
     
-    # Resolve one provider-neutral client for the combined visible observation
-    # and internal route commitment.
+    # Resolve one provider-neutral client for both optional visible narration
+    # and the internal route commitment.
     try:
         decision_llm_client = resolve_llm_client(
             metadata,
@@ -953,7 +836,7 @@ async def post_tool_reasoning(
 
     # Build prompts
     prompt_builder = PostToolReasoningPromptBuilder()
-    system_prompt = prompt_builder.build_route_system_prompt()
+    system_prompt = prompt_builder.build_system_prompt()
     
     if outcome_source == DIRECT_TOOL_OUTCOME_SOURCE:
         failure_detected, failure_category = _detect_tool_failure(interactive)
@@ -997,8 +880,8 @@ async def post_tool_reasoning(
         )
         observation_emitter.emit_observation_start(STREAMING_STEP_NAME)
 
-    # One model turn: ordinary assistant text becomes the visible observation;
-    # exactly one completed internal route tool becomes the graph decision.
+    # One model turn: optional assistant text becomes the observation and one
+    # completed internal commit becomes the graph decision.
     logger.info(
         f"[POST_TOOL_REASONING] Making LLM call for task {facts.task_id} "
         f"(iteration {facts.iterations}, streaming={writer is not None})"
@@ -1047,7 +930,6 @@ async def post_tool_reasoning(
                     legacy_output
                 )
                 observation = ""
-
             if writer is not None:
                 observation, streamed, streaming_usage = (
                     await adapter.stream_observation_text(
@@ -1086,6 +968,7 @@ async def post_tool_reasoning(
                 decision_output,
                 streamed,
                 streaming_usage,
+                recovery_usage,
             ) = await adapter.stream_observation_with_route(
                 writer=writer,
                 llm_client=decision_llm_client,
@@ -1102,10 +985,12 @@ async def post_tool_reasoning(
                 suppress_observation_start=True,
             )
             metadata["observation_streamed"] = streamed
-            if streaming_usage is not None:
+            for usage_record in (streaming_usage, recovery_usage):
+                if usage_record is None:
+                    continue
                 if interactive.trace.usage_records is None:
                     interactive.trace.usage_records = []
-                interactive.trace.usage_records.append(streaming_usage)
+                interactive.trace.usage_records.append(usage_record)
         else:
             route_result = await decision_llm_client.chat_with_tools_with_usage(
                 system_prompt,
@@ -1117,22 +1002,52 @@ async def post_tool_reasoning(
                 reasoning_effort=decision_reasoning_effort,
                 parallel_tool_calls=False,
             )
-            observation = str(route_result.content or "").strip()
-            if not observation:
-                raise PostToolReasoningError(
-                    "LLM route turn returned no visible observation text"
-                )
-            decision_output = parse_post_tool_commit_call(route_result.tool_calls)
             if route_result.usage is not None:
-                from ..node_utils import append_usage_to_state
-
                 append_usage_to_state(
                     interactive,
                     route_result.usage,
                     "post_tool_analysis",
                     request_mode="non_streaming",
                 )
+            try:
+                decision_output = parse_post_tool_commit_call(
+                    route_result.tool_calls
+                )
+            except PTRCommitError as exc:
+                outcome = getattr(route_result, "outcome", None)
+                incomplete = getattr(outcome, "status", None) == "incomplete"
+                if not incomplete and exc.code not in {
+                    "missing_commit",
+                    "invalid_commit_json",
+                }:
+                    raise
+                logger.warning(
+                    "[POST_TOOL_REASONING] Recovering PTR commit only "
+                    "(reason=%s); completed external work will not be rerun",
+                    getattr(outcome, "reason", None) if incomplete else exc.code,
+                )
+                decision_output, recovered_usage = await recover_post_tool_commit(
+                    llm_client=decision_llm_client,
+                    system_prompt=system_prompt,
+                    user_prompt=decision_user_prompt,
+                    route_tools=decision_tools,
+                    reasoning_effort=decision_reasoning_effort,
+                )
+                if recovered_usage is not None:
+                    append_usage_to_state(
+                        interactive,
+                        recovered_usage,
+                        "post_tool_analysis",
+                        request_mode="non_streaming",
+                    )
+            observation = str(route_result.content or "").strip()
+            if not observation:
+                observation = _ensure_min_length_observation(
+                    decision_output.action_reasoning,
+                    decision_output,
+                )
             metadata["observation_streamed"] = False
+
         decision_candidate_payload = _build_post_tool_candidate_payload(decision_output)
         decision_candidate_usage = _extract_post_tool_decision_usage_summary(
             interactive,

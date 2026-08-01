@@ -358,12 +358,38 @@ def test_post_tool_builder_renders_shared_last_tool_special_sections() -> None:
     assert prompt.index(lossiness_heading) < prompt.index(output_heading)
 
 
-def test_post_tool_latest_version_is_par_aware_v4() -> None:
+def test_post_tool_latest_version_is_merged_ptr_commit_v5() -> None:
     from core.prompts.registry import PromptRegistry
 
     registry = PromptRegistry()
 
-    assert registry.get_latest_version("post_tool") == "v4"
+    assert registry.get_latest_version("post_tool") == "v5"
+
+
+def test_post_tool_builder_injects_direct_executor_policy_only_for_direct_route() -> None:
+    from agent.graph.state import FactsState, InteractiveState, TraceState
+    from core.prompts.builders.post_tool import PostToolReasoningPromptBuilder
+
+    builder = PostToolReasoningPromptBuilder()
+
+    def build_prompt(capability: str) -> str:
+        facts = FactsState(
+            task_id=123,
+            message="Inspect the supplied artifact.",
+            capability=capability,
+        )
+        return builder.build_user_prompt(
+            interactive=InteractiveState(facts=facts, trace=TraceState()),
+            synthesized={},
+        )
+
+    system_prompt = builder.build_system_prompt()
+    direct_prompt = build_prompt("simple_tool_execution")
+    reasoning_prompt = build_prompt("deep_reasoning")
+
+    assert "You are the direct executor" not in system_prompt
+    assert direct_prompt.count("You are the direct executor") == 1
+    assert "You are the direct executor" not in reasoning_prompt
 
 
 def test_post_tool_builder_renders_bounded_handoff_context_without_transcript() -> None:
@@ -473,56 +499,6 @@ def test_post_tool_builder_reads_handoff_context_from_canonical_bundle() -> None
     assert "findings: 5432/tcp closed" in prompt
 
 
-def test_post_tool_articulation_prompts_parent_activity_for_handoff_continuation() -> None:
-    from agent.graph.state import FactsState, InteractiveState, TraceState
-    from core.prompts.builders.post_tool import PostToolReasoningPromptBuilder
-
-    facts = FactsState(
-        task_id=123,
-        message="Continue after delegated service enumeration.",
-        capability="deep_reasoning",
-        current_goal="Map exposed services and decide next action.",
-        metadata={
-            "completed_agent_results": [
-                {
-                    "agent_run_id": "run-1",
-                    "agent_display_name": "Service Enumerator",
-                    "outcome": "completed",
-                    "summary": "Found HTTP on 10.0.0.1:80.",
-                    "child_transcript": "SECRET_CHILD_TRANSCRIPT",
-                }
-            ],
-            "active_agent_runs": [
-                {
-                    "agent_run_id": "run-2",
-                    "assignment_id": "assignment-2",
-                    "agent_display_name": "Web Recon",
-                    "objective": "Fingerprint the discovered HTTP service.",
-                    "status": "running",
-                }
-            ],
-        },
-    )
-
-    prompt = PostToolReasoningPromptBuilder().build_articulation_user_prompt(
-        interactive=InteractiveState(facts=facts, trace=TraceState()),
-        synthesized={},
-        decision_output={
-            "next_action": "wait_for_subagents",
-            "action_reasoning": "A relevant assignment is still running.",
-            "user_goal_achieved": False,
-        },
-        outcome_source="subagent_handoff_batch",
-    )
-
-    assert "## Outcome Source\nsubagent_handoff_batch" in prompt
-    assert "Service Enumerator result (run-1): completed" in prompt
-    assert "Web Recon active run (run-2): running" in prompt
-    assert "concise parent activity update" in prompt
-    assert "without exposing hidden reasoning or writing a final answer" in prompt
-    assert "SECRET_CHILD_TRANSCRIPT" not in prompt
-
-
 def test_post_tool_builder_includes_active_decision_advisory_context() -> None:
     from agent.graph.state import FactsState, InteractiveState, TraceState
     from core.prompts.builders.post_tool import PostToolReasoningPromptBuilder
@@ -575,60 +551,6 @@ def test_post_tool_builder_includes_active_decision_advisory_context() -> None:
     assert "## Prior Active Decision (Advisory)" in prompt
     assert "tool_intent.target: 172.17.0.1" in prompt
     assert "current todo/goal state are authoritative" in prompt
-
-
-def test_post_tool_articulation_prompt_includes_structured_tool_intent() -> None:
-    from agent.graph.state import FactsState, InteractiveState, TraceState
-    from core.prompts.builders.post_tool import PostToolReasoningPromptBuilder
-
-    facts = FactsState(
-        task_id=123,
-        message="Enumerate web service on 10.129.45.6",
-        capability="simple_tool_execution",
-        selected_tool="information_gathering.web_enumeration.http_request",
-        tool_parameters={"target": "http://10.129.45.6:80"},
-        metadata={
-            "last_tool_result_compact": {
-                "summary": "Root page exposes navigation links to /capture and /ip.",
-                "key_findings": ["Gunicorn server", "Link: /capture"],
-                "errors": [],
-            },
-        },
-    )
-    interactive = InteractiveState(facts=facts, trace=TraceState())
-    builder = PostToolReasoningPromptBuilder()
-
-    prompt = builder.build_articulation_user_prompt(
-        interactive=interactive,
-        synthesized={
-            "tool": "information_gathering.web_enumeration.http_request",
-            "summary": "Root page exposes navigation links to /capture and /ip.",
-            "key_findings": ["Gunicorn server", "Link: /capture"],
-        },
-        decision_output={
-            "next_action": "call_tool",
-            "action_reasoning": "The root page was inspected; fetch the linked route next.",
-            "tool_intent": {
-                "description": "Fetch the /capture endpoint",
-                "target": "http://10.129.45.6:80/capture",
-                "focus": "HTTP endpoint enumeration and stack fingerprinting",
-            },
-            "user_goal_achieved": False,
-            "effective_next_goal": "Enumerate linked routes starting with /capture.",
-            "failure_detected": False,
-            "failure_category": None,
-            "retry_suggested": False,
-        },
-    )
-
-    assert "## Decision Context" in prompt
-    assert "tool_intent.description: Fetch the /capture endpoint" in prompt
-    assert "tool_intent.target: http://10.129.45.6:80/capture" in prompt
-    assert (
-        "tool_intent.focus: HTTP endpoint enumeration and stack fingerprinting"
-        in prompt
-    )
-
 
 
 def test_prompt_registry_template_and_builder_access() -> None:
@@ -685,3 +607,18 @@ def test_prompt_registry_template_and_builder_access() -> None:
     assert isinstance(registry.get_chat_builder("deep_reasoning"), DeepReasoningPromptBuilder)
     assert registry.get_tool_planning_builder("tool_planning") is not None
     assert registry.get_post_tool_builder("post_tool_reasoning") is not None
+
+
+def test_intent_prompt_allows_blocked_direct_executor_progress_seed() -> None:
+    """Blocked direct execution keeps a seed until readiness semantics are redesigned."""
+    from core.prompts.constants import CLASSIFIER_SYSTEM_PROMPT
+
+    assert (
+        "`execution_readiness` is `ready` or `blocked`"
+        in CLASSIFIER_SYSTEM_PROMPT
+    )
+    assert (
+        "retain the grounded user objective as the seed"
+        in CLASSIFIER_SYSTEM_PROMPT
+    )
+    assert "Use [] for `plan_executor`, `simple_chat`, blocked" not in CLASSIFIER_SYSTEM_PROMPT

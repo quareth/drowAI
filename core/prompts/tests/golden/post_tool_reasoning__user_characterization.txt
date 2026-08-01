@@ -41,4 +41,5 @@ If Intent Contract Check says NOT SATISFIED and the current-turn evidence does n
 If current-turn evidence already satisfies the user's goal, choose `finalize` even when the latest step was an evidence-processing helper.
 If Outcome Source is `subagent_handoff_batch`, reason globally from the bounded handoff context and active assignments; do not treat the task as child-result summarization.
 For subagent handoff batches, use `wait_for_subagents` when relevant active assignments should finish before new work or finalization, and use `delegate_subagent` only with the shared `agent_handoff` entry.
+If visible active assignments are no longer relevant to the parent goal, put their exact active `agent_run_id` values in `par_irrelevant_active_agent_run_ids`; otherwise use [].
 Consult Prior Current-Turn Phase Memory when deciding whether a hypothesis is still open before acting.

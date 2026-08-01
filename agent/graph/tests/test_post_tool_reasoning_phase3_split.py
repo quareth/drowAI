@@ -20,7 +20,8 @@ from agent.graph.nodes.decision_router.router import decision_router
 from agent.graph.nodes.post_tool_reasoning.models import ToolIntent
 from agent.graph.state import FactsState, InteractiveState, TraceState
 from agent.providers.llm.core.exceptions import LLMRefusalError, LLMRefusalOutcome
-from agent.providers.llm.core.base import ToolCall
+from agent.providers.llm.core.base import LLMResponseOutcome, ToolCall
+from backend.services.usage_tracking.models import UsageData
 from core.llm import ROLE_POST_TOOL_OBSERVATION
 
 
@@ -43,6 +44,7 @@ class Phase3MockLLM:
         self.observation_chunks = observation_chunks
         self.stream_route_calls = 0
         self.non_stream_route_calls = 0
+        self.system_prompts: list[str] = []
 
     def _tool_call(self) -> ToolCall:
         action = self.decision_payload["next_action"]
@@ -66,6 +68,7 @@ class Phase3MockLLM:
         **kwargs: Any,
     ) -> "Phase3MockLLM.Response":
         self.non_stream_route_calls += 1
+        self.system_prompts.append(system_prompt)
         response = self.Response(
             "".join(self.observation_chunks)
             or "I reviewed the completed evidence and selected the next step."
@@ -82,6 +85,7 @@ class Phase3MockLLM:
         **_kwargs: Any,
     ) -> object:
         self.stream_route_calls += 1
+        self.system_prompts.append(system_prompt)
 
         async def iterator():
             for chunk in self.observation_chunks:
@@ -102,6 +106,10 @@ class Phase3MockLLM:
 
             def get_final_tool_calls(inner_self) -> list[ToolCall]:
                 return [self._tool_call()]
+
+            @staticmethod
+            def get_final_outcome() -> LLMResponseOutcome:
+                return LLMResponseOutcome(status="completed")
 
         return StreamResponse()
 
@@ -490,6 +498,10 @@ async def test_phase3_node_uses_one_non_streaming_route_turn() -> None:
         result = await post_tool_reasoning(state)
 
     assert mock_llm.non_stream_route_calls == 1
+    assert len(mock_llm.system_prompts) == 1
+    assert "Call the provided `ptr_commit` function exactly once" in mock_llm.system_prompts[0]
+    assert "## Progress Tracking (CRITICAL)" in mock_llm.system_prompts[0]
+    assert "After 3 unsuccessful attempts" in mock_llm.system_prompts[0]
     assert result["facts"]["metadata"]["observation_streamed"] is False
     assert result["facts"]["metadata"]["last_post_tool_action"] == "think_more"
 
@@ -584,3 +596,180 @@ async def test_route_turn_uses_only_user_selected_post_tool_role() -> None:
 
     assert roles[0] == ROLE_POST_TOOL_OBSERVATION
     assert roles == [ROLE_POST_TOOL_OBSERVATION]
+
+
+@pytest.mark.asyncio
+async def test_missing_non_stream_commit_recovers_only_internal_commit() -> None:
+    """Recovery should request only ptr_commit over already completed evidence."""
+    state = _sample_state_for_phase3()
+
+    class RecoveringCommitLLM(Phase3MockLLM):
+        def __init__(self) -> None:
+            super().__init__(
+                decision_payload={
+                    "next_action": "finalize",
+                    "action_reasoning": "The completed scan resolved the request.",
+                },
+                observation_chunks=["The scan completed and resolved the request."],
+            )
+            self.choices: list[Any] = []
+            self.tool_names: list[list[str]] = []
+
+        async def chat_with_tools_with_usage(
+            self,
+            system_prompt: str,
+            user_prompt: str,
+            tools: list[Any],
+            tool_choice: Any = "auto",
+            **kwargs: Any,
+        ) -> "Phase3MockLLM.Response":
+            self.non_stream_route_calls += 1
+            self.choices.append(tool_choice)
+            self.tool_names.append([tool.name for tool in tools])
+            response = self.Response(
+                "The scan completed and resolved the request."
+                if self.non_stream_route_calls == 1
+                else ""
+            )
+            if self.non_stream_route_calls == 1:
+                response.tool_calls = None
+                response.outcome = LLMResponseOutcome(
+                    status="incomplete",
+                    reason="output_limit",
+                )
+            else:
+                response.tool_calls = [self._tool_call()]
+                response.outcome = LLMResponseOutcome(status="completed")
+            response.usage = UsageData(
+                prompt_tokens=10,
+                completion_tokens=5,
+                total_tokens=15,
+                model="gpt-4o-mini",
+                provider="openai",
+            )
+            return response
+
+    mock_llm = RecoveringCommitLLM()
+    with patch(
+        "agent.graph.nodes.post_tool_reasoning.node.resolve_llm_client",
+        return_value=mock_llm,
+    ):
+        result = await post_tool_reasoning(state)
+
+    assert mock_llm.non_stream_route_calls == 2
+    assert mock_llm.choices[0].mode == "required"
+    assert mock_llm.choices[1].mode == "required"
+    assert mock_llm.tool_names[1] == ["ptr_commit"]
+    assert result["facts"]["metadata"]["last_post_tool_action"] == "finalize"
+    assert len(state.trace.usage_records) == 2
+    assert sum(record["total_tokens"] for record in state.trace.usage_records) == 30
+
+
+@pytest.mark.asyncio
+async def test_narrative_is_optional_when_commit_is_valid() -> None:
+    """A complete commit should supply an LLM-authored observation fallback."""
+    state = _sample_state_for_phase3()
+
+    class CommitOnlyLLM(Phase3MockLLM):
+        async def chat_with_tools_with_usage(
+            self,
+            system_prompt: str,
+            user_prompt: str,
+            tools: list[Any],
+            tool_choice: Any = "auto",
+            **kwargs: Any,
+        ) -> "Phase3MockLLM.Response":
+            self.non_stream_route_calls += 1
+            response = self.Response(None)  # type: ignore[arg-type]
+            response.tool_calls = [self._tool_call()]
+            response.outcome = LLMResponseOutcome(status="completed")
+            return response
+
+    mock_llm = CommitOnlyLLM(
+        decision_payload={
+            "next_action": "finalize",
+            "action_reasoning": "The completed scan resolved the requested check.",
+        },
+        observation_chunks=[],
+    )
+    with patch(
+        "agent.graph.nodes.post_tool_reasoning.node.resolve_llm_client",
+        return_value=mock_llm,
+    ):
+        await post_tool_reasoning(state)
+
+    assert mock_llm.non_stream_route_calls == 1
+    assert state.trace.observations[-1] == (
+        "The completed scan resolved the requested check."
+    )
+
+
+@pytest.mark.asyncio
+async def test_truncated_stream_recovers_commit_without_restarting_observation() -> None:
+    """A truncated route stream should preserve text and recover only control."""
+    state = _sample_state_for_phase3()
+
+    class TruncatedStreamLLM(Phase3MockLLM):
+        async def stream_chat_with_tools_with_usage(
+            self,
+            system_prompt: str,
+            user_prompt: str,
+            tools: list[Any],
+            tool_choice: Any = "auto",
+            **kwargs: Any,
+        ) -> object:
+            self.stream_route_calls += 1
+
+            async def iterator():
+                yield "The completed scan resolved the requested check."
+
+            class StreamResponse:
+                content_iterator = iterator()
+
+                @staticmethod
+                def get_final_usage() -> dict[str, Any]:
+                    return {
+                        "prompt_tokens": 10,
+                        "completion_tokens": 6,
+                        "total_tokens": 16,
+                        "model": "gpt-4o-mini",
+                        "provider": "openai",
+                    }
+
+                @staticmethod
+                def get_final_tool_calls() -> None:
+                    return None
+
+                @staticmethod
+                def get_final_outcome() -> LLMResponseOutcome:
+                    return LLMResponseOutcome(
+                        status="incomplete",
+                        reason="output_limit",
+                    )
+
+            return StreamResponse()
+
+    mock_llm = TruncatedStreamLLM(
+        decision_payload={
+            "next_action": "finalize",
+            "action_reasoning": "The completed scan resolved the requested check.",
+        },
+        observation_chunks=[],
+    )
+    events: list[object] = []
+    with patch(
+        "agent.graph.nodes.post_tool_reasoning.node.resolve_llm_client",
+        return_value=mock_llm,
+    ), patch(
+        "agent.graph.nodes.post_tool_reasoning.node.resolve_turn_sequence",
+        return_value=1,
+    ):
+        result = await post_tool_reasoning(state, writer=events.append)
+
+    assert mock_llm.stream_route_calls == 1
+    assert mock_llm.non_stream_route_calls == 1
+    assert result["facts"]["metadata"]["last_post_tool_action"] == "finalize"
+    observation_starts = [
+        event for event in events if event.get("type") == "observation_start"
+    ]
+    assert len(observation_starts) == 1

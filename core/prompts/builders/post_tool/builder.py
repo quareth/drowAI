@@ -37,10 +37,8 @@ from .sections import (
     is_tool_visible,
 )
 from .templates import (
-    ARTICULATION_SYSTEM_PROMPT,
     CVE_LOOKUP_GUIDANCE_TEXT,
     DIRECT_EXECUTOR_POLICY_TEXT,
-    ROUTE_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     TASK_INSTRUCTION_PROMPT,
 )
@@ -64,10 +62,6 @@ class PostToolReasoningPromptBuilder:
             The system prompt string that defines the LLM's role and output format.
         """
         return SYSTEM_PROMPT
-
-    def build_route_system_prompt(self) -> str:
-        """Return the one-turn visible-text plus route-tool instructions."""
-        return ROUTE_SYSTEM_PROMPT
 
     def build_user_prompt(
         self,
@@ -272,127 +266,6 @@ class PostToolReasoningPromptBuilder:
             prompt_sections.append(f"## Scope Hints\n{scope_hint}")
 
         prompt_sections.append("## Your Task\n" + TASK_INSTRUCTION_PROMPT)
-        return "\n\n".join(section for section in prompt_sections if section.strip())
-
-    def build_articulation_system_prompt(self) -> str:
-        """Return the system prompt for articulation text generation."""
-        return ARTICULATION_SYSTEM_PROMPT
-
-    def build_articulation_user_prompt(
-        self,
-        interactive: Any,
-        synthesized: Mapping[str, Any],
-        decision_output: Mapping[str, Any],
-        *,
-        relevant_findings: Optional[List[Mapping[str, Any]]] = None,
-        environment_context: str = "",
-        outcome_source: str = DIRECT_TOOL_OUTCOME_SOURCE,
-    ) -> str:
-        """Build user prompt for plain-text observation generation."""
-        facts = as_mapping(get_field(interactive, "facts", {}))
-        metadata = as_mapping(get_field(facts, "metadata", {}))
-        is_handoff_batch = outcome_source == SUBAGENT_HANDOFF_BATCH_OUTCOME_SOURCE
-
-        user_input, derived_user_goal = derive_user_input_and_goal(facts)
-        current_goal = str(get_field(facts, "current_goal", "") or "")
-        tool_sections = extract_last_tool_sections(
-            metadata,
-            facts,
-            synthesized,
-            prefer_runtime_evidence=True,
-        )
-
-        next_action = decision_output.get("next_action", "unknown")
-        action_reasoning = decision_output.get("action_reasoning", "No decision reasoning provided.")
-        effective_next_goal = decision_output.get("effective_next_goal")
-        user_goal_achieved = bool(decision_output.get("user_goal_achieved", False))
-        failure_detected = bool(decision_output.get("failure_detected", False))
-        retry_suggested = bool(decision_output.get("retry_suggested", False))
-        failure_category = str(decision_output.get("failure_category", "unknown") or "unknown")
-        tool_intent = as_mapping(decision_output.get("tool_intent"))
-        tool_intent_lines: List[str] = []
-        if tool_intent:
-            description = str(tool_intent.get("description") or "").strip()
-            target = tool_intent.get("target")
-            focus = tool_intent.get("focus")
-            if description:
-                tool_intent_lines.append(f"tool_intent.description: {description}")
-            if target not in (None, ""):
-                tool_intent_lines.append(f"tool_intent.target: {target}")
-            if focus not in (None, ""):
-                tool_intent_lines.append(f"tool_intent.focus: {focus}")
-
-        prompt_sections: List[str] = []
-        if user_input:
-            prompt_sections.append(f"## User Input\n{user_input}")
-        if derived_user_goal:
-            prompt_sections.append(f"## User Goal\n{derived_user_goal}")
-        if current_goal:
-            prompt_sections.append(f"## Current Focus\n{current_goal}")
-        relevant_findings_text = format_relevant_findings(relevant_findings)
-        if relevant_findings_text:
-            prompt_sections.append(f"## Relevant Prior Findings\n{relevant_findings_text}")
-
-        prompt_sections.append(f"## Outcome Source\n{outcome_source}")
-
-        if is_handoff_batch:
-            completed_handoffs = format_handoff_batch_context(metadata)
-            if completed_handoffs:
-                prompt_sections.append(
-                    f"## Completed Bounded Subagent Results\n{completed_handoffs}"
-                )
-            active_handoffs = format_active_handoff_runs_context(metadata)
-            if active_handoffs:
-                prompt_sections.append(
-                    f"## Relevant Active Subagent Assignments\n{active_handoffs}"
-                )
-        else:
-            for heading, section_body in iter_renderable_last_tool_sections(
-                tool_sections,
-                keys=(
-                    "tool_executed",
-                    "tool_output_summary",
-                    "batch_tool_results",
-                    "key_findings",
-                    "tool_errors",
-                    "structured_signals",
-                    "decision_evidence",
-                    "compression_lossiness",
-                    "artifact_refs",
-                    "output_info",
-                ),
-            ):
-                prompt_sections.append(f"## {heading}\n{section_body}")
-
-        decision_context_lines = [
-            f"next_action: {next_action}",
-            f"action_reasoning: {action_reasoning}",
-            *tool_intent_lines,
-            f"user_goal_achieved: {user_goal_achieved}",
-            f"failure_detected: {failure_detected}",
-            f"failure_category: {failure_category}",
-            f"retry_suggested: {retry_suggested}",
-            f"effective_next_goal: {effective_next_goal or 'none'}",
-        ]
-        prompt_sections.append(
-            "## Decision Context\n" + "\n".join(decision_context_lines)
-        )
-
-        env_context = format_environment_context(environment_context)
-        if env_context:
-            prompt_sections.append(f"## Container Environment\n{env_context}")
-
-        if str(next_action) == "finalize":
-            task_instruction = (
-                "Generate a 2-4 sentence plain-text observation in first person.\n"
-                "It should summarize what was learned and connect it to finalization without writing the final answer."
-            )
-        else:
-            task_instruction = (
-                "Generate a 1-3 sentence concise parent activity update in first person.\n"
-                "It should summarize visible progress and connect it to the chosen continuing action without exposing hidden reasoning or writing a final answer."
-            )
-        prompt_sections.append("## Task\n" + task_instruction)
         return "\n\n".join(section for section in prompt_sections if section.strip())
 
     def _format_parameters(self, params: Mapping[str, Any]) -> str:

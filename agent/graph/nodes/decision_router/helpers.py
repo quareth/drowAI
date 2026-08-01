@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Any, Mapping, MutableMapping, Optional
 
 # Import shared utilities from node_utils
 from ..node_utils import determine_post_reflect_action
+from ..post_tool_reasoning.models import normalize_irrelevant_active_run_ids
 from ...utils.plan_progress_authority import ensure_initial_in_progress
 
 if TYPE_CHECKING:
@@ -479,18 +480,6 @@ def normalize_agent_handoff_entry(value: Any) -> dict[str, str]:
     }
 
 
-def normalize_irrelevant_active_run_ids(value: Any) -> frozenset[str]:
-    """Return explicit PAR-recorded active run IDs that are no longer relevant."""
-    if not isinstance(value, list | tuple | set | frozenset):
-        return frozenset()
-    normalized = {
-        str(item).strip()
-        for item in value
-        if isinstance(item, str) and str(item).strip()
-    }
-    return frozenset(normalized)
-
-
 def relevant_active_agent_runs(
     metadata: Mapping[str, Any],
     *,
@@ -503,11 +492,15 @@ def relevant_active_agent_runs(
 
     irrelevant_ids = set(
         normalize_irrelevant_active_run_ids(
-            metadata.get(PAR_IRRELEVANT_ACTIVE_RUN_IDS_METADATA_KEY)
+            metadata.get(PAR_IRRELEVANT_ACTIVE_RUN_IDS_METADATA_KEY),
+            strict=False,
         )
     )
     irrelevant_ids.update(
-        normalize_irrelevant_active_run_ids(candidate_irrelevant_run_ids)
+        normalize_irrelevant_active_run_ids(
+            candidate_irrelevant_run_ids,
+            strict=False,
+        )
     )
     if not irrelevant_ids:
         return runs
@@ -572,28 +565,14 @@ def write_router_outcome(
     }
     if action == "delegate_subagent" and agent_handoff is not None:
         outcome["agent_handoff"] = dict(agent_handoff)
-    irrelevant_ids = _normalize_irrelevant_active_run_ids(
-        irrelevant_active_agent_run_ids
+    irrelevant_ids = normalize_irrelevant_active_run_ids(
+        irrelevant_active_agent_run_ids,
+        strict=False,
     )
     if irrelevant_ids:
         outcome["par_irrelevant_active_agent_run_ids"] = irrelevant_ids
     facts.set_router_outcome(outcome)
     return outcome
-
-
-def _normalize_irrelevant_active_run_ids(value: Any) -> list[str]:
-    """Return non-empty PAR-declared active run IDs without duplicates."""
-    if not isinstance(value, list | tuple | set | frozenset):
-        return []
-
-    normalized: list[str] = []
-    for item in value:
-        if not isinstance(item, str):
-            continue
-        run_id = item.strip()
-        if run_id and run_id not in normalized:
-            normalized.append(run_id)
-    return normalized
 
 
 def update_router_observability(

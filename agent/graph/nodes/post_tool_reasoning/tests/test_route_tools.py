@@ -7,11 +7,15 @@ import json
 import pytest
 
 from agent.providers.llm.core.base import ToolCall
-
 from agent.graph.nodes.post_tool_reasoning.route_tools import (
     PTR_COMMIT_TOOL_NAME,
+    PTRCommitError,
     build_post_tool_commit_tool,
     parse_post_tool_commit_call,
+)
+from agent.graph.nodes.post_tool_reasoning.models import (
+    CandidateObservation,
+    PostToolReasoningDecisionOutput,
 )
 
 
@@ -32,8 +36,15 @@ def _common_arguments() -> dict[str, object]:
     }
 
 
+def _call(arguments: dict[str, object]) -> ToolCall:
+    return ToolCall(
+        id="commit-1",
+        name=PTR_COMMIT_TOOL_NAME,
+        arguments=json.dumps(arguments),
+    )
+
+
 def test_commit_tool_uses_one_expanded_registry_scoped_schema() -> None:
-    """One function should carry every route and the registered-agent enum."""
     tool = build_post_tool_commit_tool(("pathfinder", "cartographer"))
     schema = tool.parameters_schema
 
@@ -46,53 +57,100 @@ def test_commit_tool_uses_one_expanded_registry_scoped_schema() -> None:
         "delegate_subagent",
         "wait_for_subagents",
     ]
-    assert "tool_intent" in schema["properties"]
-    assert schema["properties"]["agent_handoff"]["properties"]["subagent"]["enum"] == [
-        "pathfinder",
-        "cartographer",
-    ]
+    assert schema["properties"]["agent_handoff"]["properties"]["subagent"][
+        "enum"
+    ] == ["pathfinder", "cartographer"]
     assert schema["required"] == list(schema["properties"])
 
 
-def test_completed_commit_call_maps_to_existing_decision_contract() -> None:
-    """A completed commit function should become the existing router payload."""
-    decision = parse_post_tool_commit_call(
-        [
-            ToolCall(
-                id="commit-1",
-                name=PTR_COMMIT_TOOL_NAME,
-                arguments=json.dumps(_common_arguments()),
-            )
-        ]
+def test_provider_and_runtime_decision_fields_stay_aligned() -> None:
+    """The provider function and Pydantic parser must expose the same fields."""
+    schema = build_post_tool_commit_tool(("pathfinder",)).parameters_schema
+
+    assert set(schema["properties"]) == set(
+        PostToolReasoningDecisionOutput.model_fields
     )
+    candidate_schema = schema["properties"]["candidate_observations"]["items"]
+    assert set(candidate_schema["properties"]) == set(
+        CandidateObservation.model_fields
+    )
+
+
+def test_completed_commit_call_maps_to_decision_contract() -> None:
+    decision = parse_post_tool_commit_call([_call(_common_arguments())])
 
     assert decision.next_action == "finalize"
     assert decision.user_goal_achieved is True
-    assert decision.tool_intent is None
 
 
-@pytest.mark.parametrize("tool_calls", [None, [], [
-    ToolCall(id="1", name=PTR_COMMIT_TOOL_NAME, arguments="{}"),
-    ToolCall(id="2", name=PTR_COMMIT_TOOL_NAME, arguments="{}"),
-]])
-def test_commit_parser_rejects_missing_or_multiple_calls(tool_calls: object) -> None:
-    """PTR must commit exactly one route after the text stream completes."""
-    with pytest.raises(ValueError, match="exactly one"):
+@pytest.mark.parametrize(
+    ("tool_calls", "code"),
+    [
+        (None, "missing_commit"),
+        ([], "missing_commit"),
+        (
+            [
+                ToolCall(id="1", name=PTR_COMMIT_TOOL_NAME, arguments="{}"),
+                ToolCall(id="2", name=PTR_COMMIT_TOOL_NAME, arguments="{}"),
+            ],
+            "multiple_commits",
+        ),
+    ],
+)
+def test_commit_parser_classifies_missing_or_multiple_calls(
+    tool_calls: object,
+    code: str,
+) -> None:
+    with pytest.raises(PTRCommitError) as exc_info:
         parse_post_tool_commit_call(tool_calls)  # type: ignore[arg-type]
+    assert exc_info.value.code == code
 
 
-def test_commit_parser_rejects_unknown_internal_function() -> None:
-    """Only the canonical commit function may control PTR routing."""
-    with pytest.raises(ValueError, match="Unknown PTR commit tool"):
+def test_commit_parser_identifies_truncated_json() -> None:
+    with pytest.raises(PTRCommitError) as exc_info:
         parse_post_tool_commit_call(
             [
                 ToolCall(
-                    id="route-1",
-                    name="ptr_finalize",
-                    arguments=json.dumps(_common_arguments()),
+                    id="commit-1",
+                    name=PTR_COMMIT_TOOL_NAME,
+                    arguments='{"next_action":"finalize"',
                 )
             ]
         )
+    assert exc_info.value.code == "invalid_commit_json"
+    assert "0 calls" not in str(exc_info.value)
+
+
+def test_invalid_optional_candidate_is_dropped_without_losing_route() -> None:
+    arguments = _common_arguments()
+    arguments["candidate_observations"] = [
+        {
+            "observation_type": "asset.host",
+            "subject_type": "host",
+            "subject_key_hint": "127.0.0.1",
+            "assertion_level": "candidate",
+            "confidence": 4.0,
+            "attributes": [],
+            "rationale": "out-of-range confidence should not kill routing",
+            "evidence_refs": [],
+            "vulnerability": None,
+            "vulnerability_confidence": None,
+        }
+    ]
+
+    decision = parse_post_tool_commit_call([_call(arguments)])
+
+    assert decision.next_action == "finalize"
+    assert decision.candidate_observations == []
+
+
+def test_invalid_optional_candidate_container_is_dropped() -> None:
+    arguments = _common_arguments()
+    arguments["candidate_observations"] = "not-an-array"
+
+    decision = parse_post_tool_commit_call([_call(arguments)])
+
+    assert decision.candidate_observations == []
 
 
 @pytest.mark.parametrize(
@@ -108,13 +166,12 @@ def test_commit_parser_rejects_unknown_internal_function() -> None:
         ("delegate_subagent", None, None, "agent_handoff is required"),
     ],
 )
-def test_commit_parser_rejects_action_payload_mismatches(
+def test_commit_parser_keeps_required_route_fields_strict(
     next_action: str,
     tool_intent: object,
     agent_handoff: object,
     message: str,
 ) -> None:
-    """Application validation should enforce unified-schema route pairings."""
     arguments = _common_arguments()
     arguments.update(
         {
@@ -124,13 +181,5 @@ def test_commit_parser_rejects_action_payload_mismatches(
         }
     )
 
-    with pytest.raises(ValueError, match=message):
-        parse_post_tool_commit_call(
-            [
-                ToolCall(
-                    id="commit-1",
-                    name=PTR_COMMIT_TOOL_NAME,
-                    arguments=json.dumps(arguments),
-                )
-            ]
-        )
+    with pytest.raises(PTRCommitError, match=message):
+        parse_post_tool_commit_call([_call(arguments)])

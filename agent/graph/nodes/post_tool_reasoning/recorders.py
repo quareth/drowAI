@@ -152,29 +152,11 @@ def _write_router_candidate_decision(
             candidate_payload["agent_handoff"] = agent_handoff.model_dump()
         elif isinstance(agent_handoff, Mapping):
             candidate_payload["agent_handoff"] = dict(agent_handoff)
-    normalized_irrelevant_ids = _normalize_irrelevant_active_run_ids(
-        irrelevant_active_run_ids
-    )
-    if normalized_irrelevant_ids:
+    if irrelevant_active_run_ids:
         candidate_payload["par_irrelevant_active_agent_run_ids"] = (
-            normalized_irrelevant_ids
+            list(irrelevant_active_run_ids)
         )
     interactive.facts.set_candidate_decision(candidate_payload)
-
-
-def _normalize_irrelevant_active_run_ids(value: Any) -> list[str]:
-    """Return non-empty PAR-declared active run IDs without duplicates."""
-    if not isinstance(value, list | tuple | set | frozenset):
-        return []
-
-    normalized: list[str] = []
-    for item in value:
-        if not isinstance(item, str):
-            continue
-        run_id = item.strip()
-        if run_id and run_id not in normalized:
-            normalized.append(run_id)
-    return normalized
 
 
 def _resolve_candidate_phase_sequence(metadata: Mapping[str, Any]) -> Optional[int]:

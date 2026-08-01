@@ -62,29 +62,3 @@ def test_build_user_prompt_accepts_and_renders_relevant_findings() -> None:
 
     assert "## Relevant Prior Findings" in prompt
     assert "[fresh] port_open 10.0.0.1:80/tcp" in prompt
-
-
-def test_build_articulation_user_prompt_accepts_and_renders_relevant_findings() -> None:
-    builder = PostToolReasoningPromptBuilder()
-
-    prompt = builder.build_articulation_user_prompt(
-        interactive=_interactive_state(),
-        synthesized={
-            "tool": "nmap.scan",
-            "summary": "Port 80 is open and speaks HTTP.",
-            "key_findings": ["80/tcp open http"],
-        },
-        decision_output={
-            "next_action": "call_tool",
-            "action_reasoning": "Need HTTP-focused follow-up.",
-            "effective_next_goal": "Inspect the HTTP service.",
-            "user_goal_achieved": False,
-            "failure_detected": False,
-            "failure_category": None,
-            "retry_suggested": False,
-        },
-        relevant_findings=_relevant_findings(),
-    )
-
-    assert "## Relevant Prior Findings" in prompt
-    assert "[fresh] port_open 10.0.0.1:80/tcp" in prompt

@@ -116,16 +116,6 @@ class PromptRegistry:
             filename="system.txt",
         )
         self.register_template_id(
-            "post_tool_articulation_system",
-            family="post_tool",
-            filename="articulation_system.txt",
-        )
-        self.register_template_id(
-            "post_tool_route_system",
-            family="post_tool",
-            filename="route_system.txt",
-        )
-        self.register_template_id(
             "post_tool_task_instruction",
             family="post_tool",
             filename="task_instruction.txt",
