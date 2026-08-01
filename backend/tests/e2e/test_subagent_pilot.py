@@ -42,6 +42,7 @@ from backend.services.agent_runs.completion import (
     AgentRunCompletion,
     build_agent_run_completion,
 )
+from backend.services.agent_runs.launcher import AgentRunLauncher
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
 from backend.services.langgraph_chat.contracts import (
     AgentMode,
@@ -53,7 +54,6 @@ from backend.services.langgraph_chat.facade import LangGraphChatFacade
 from backend.services.langgraph_chat.execution.graph_executor import (
     GraphExecutionResult,
 )
-from backend.services.langgraph_chat.routing.selectors import ChatBranch
 
 
 class _PilotContextBuilder:
@@ -637,10 +637,13 @@ async def test_subagent_pilot_routes_terminal_handoff_through_parent_par(
         intent_classifier=_PilotIntentClassifier(),
         prior_turn_reference_materializer=_NoopPriorTurnReferenceMaterializer(),
         agent_run_registry=registry,
-        agent_run_launcher=None,
+        agent_run_launcher=AgentRunLauncher(
+            registry=registry,
+            worker=worker,
+            lifecycle_publisher=_publish_lifecycle,
+        ),
         agent_run_lifecycle_publisher=_publish_lifecycle,
     )
-    facade._handlers[ChatBranch.SUBAGENT]._launcher._worker = worker
 
     parent_turn = asyncio.create_task(
         facade.handle_turn(_chat_inputs("Run service discovery against 10.0.0.10"))
@@ -739,10 +742,13 @@ async def test_subagent_pilot_par_direct_tool_after_handoff_finalizes_once(
         intent_classifier=_PilotIntentClassifier(),
         prior_turn_reference_materializer=_NoopPriorTurnReferenceMaterializer(),
         agent_run_registry=registry,
-        agent_run_launcher=None,
+        agent_run_launcher=AgentRunLauncher(
+            registry=registry,
+            worker=worker,
+            lifecycle_publisher=_ignore_lifecycle_event,
+        ),
         agent_run_lifecycle_publisher=_ignore_lifecycle_event,
     )
-    facade._handlers[ChatBranch.SUBAGENT]._launcher._worker = worker
 
     result = await asyncio.wait_for(
         facade.handle_turn(
@@ -819,10 +825,13 @@ async def test_subagent_pilot_projects_every_terminal_child_outcome_to_par(
         intent_classifier=_PilotIntentClassifier(),
         prior_turn_reference_materializer=_NoopPriorTurnReferenceMaterializer(),
         agent_run_registry=registry,
-        agent_run_launcher=None,
+        agent_run_launcher=AgentRunLauncher(
+            registry=registry,
+            worker=worker,
+            lifecycle_publisher=_ignore_lifecycle_event,
+        ),
         agent_run_lifecycle_publisher=_ignore_lifecycle_event,
     )
-    facade._handlers[ChatBranch.SUBAGENT]._launcher._worker = worker
 
     result = await asyncio.wait_for(
         facade.handle_turn(
@@ -884,10 +893,13 @@ async def test_subagent_pilot_par_followup_delegation_uses_bounded_objective_onc
         intent_classifier=_PilotIntentClassifier(),
         prior_turn_reference_materializer=_NoopPriorTurnReferenceMaterializer(),
         agent_run_registry=registry,
-        agent_run_launcher=None,
+        agent_run_launcher=AgentRunLauncher(
+            registry=registry,
+            worker=worker,
+            lifecycle_publisher=_ignore_lifecycle_event,
+        ),
         agent_run_lifecycle_publisher=_ignore_lifecycle_event,
     )
-    facade._handlers[ChatBranch.SUBAGENT]._launcher._worker = worker
 
     parent_turn = asyncio.create_task(
         facade.handle_turn(_chat_inputs("Run service discovery against 10.0.0.10"))
@@ -957,11 +969,14 @@ async def test_subagent_pilot_waits_for_active_work_and_keeps_tasks_isolated(
         intent_classifier=_PilotIntentClassifier(),
         prior_turn_reference_materializer=_NoopPriorTurnReferenceMaterializer(),
         agent_run_registry=registry,
-        agent_run_launcher=None,
+        agent_run_launcher=AgentRunLauncher(
+            registry=registry,
+            worker=worker,
+            lifecycle_publisher=_ignore_lifecycle_event,
+        ),
         agent_run_lifecycle_publisher=_ignore_lifecycle_event,
         subagent_registry=_concurrent_pathfinder_registry(),
     )
-    facade._handlers[ChatBranch.SUBAGENT]._launcher._worker = worker
 
     task_42_turn = asyncio.create_task(
         facade.handle_turn(

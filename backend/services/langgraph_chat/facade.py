@@ -14,6 +14,10 @@ from agent.graph.context.transcript import select_full_transcript_window
 from agent.subagents.registry import SubagentRegistry, get_subagent_registry
 from backend.database import SessionLocal
 from backend.services.chat.conversation_history_reader import ConversationHistoryReader
+from backend.services.agent_runs.dispatch_service import (
+    AgentRunLaunchService,
+    LifecyclePublisher,
+)
 from backend.services.agent_runs.local_runtime import (
     get_process_local_agent_run_registry,
 )
@@ -65,7 +69,6 @@ from .handlers import (
     DeepReasoningHandler,
     NormalChatHandler,
     SimpleToolHandler,
-    SubagentHandler,
 )
 from backend.services.langgraph_chat.intent.briefs import (
     ensure_intent_brief_seed_present,
@@ -87,6 +90,9 @@ from backend.services.langgraph_chat.routing.selectors import (
     resolve_branch,
 )
 from backend.services.langgraph_chat.streaming.adapter import LangGraphStreamingAdapter
+from backend.services.langgraph_chat.subagent_composition import (
+    build_subagent_handler,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -124,8 +130,8 @@ class LangGraphChatFacade:
             PriorTurnReferenceMaterializer
         ] = None,
         agent_run_registry: Optional[ProcessLocalAgentRunRegistry] = None,
-        agent_run_launcher: Any = None,
-        agent_run_lifecycle_publisher: Any = None,
+        agent_run_launcher: AgentRunLaunchService | None = None,
+        agent_run_lifecycle_publisher: LifecyclePublisher | None = None,
         agent_run_result_projector: Optional[AgentRunResultProjector] = None,
         session_factory: Optional[Callable[[], Any]] = None,
         conversation_history_reader_factory: Optional[
@@ -175,7 +181,7 @@ class LangGraphChatFacade:
             ChatBranch.SIMPLE_TOOL: SimpleToolHandler(
                 self._checkpointer_service, self._executor, self._streaming_adapter
             ),
-            ChatBranch.SUBAGENT: SubagentHandler(
+            ChatBranch.SUBAGENT: build_subagent_handler(
                 self._checkpointer_service,
                 self._executor,
                 self._streaming_adapter,

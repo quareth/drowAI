@@ -45,6 +45,9 @@ from backend.services.langgraph_chat.facade import LangGraphChatFacade
 from backend.services.langgraph_chat.handlers.subagent_handler import (
     SubagentHandler,
 )
+from backend.services.langgraph_chat.subagent_composition import (
+    build_subagent_handler,
+)
 from backend.services.agent_runs.launcher import (
     SubagentRunCancelled,
     SubagentRunFailed,
@@ -645,7 +648,7 @@ async def test_subagent_handler_uses_registered_agent_identity_for_launch_failur
     async def _publish(_task_id: int, event: dict[str, Any]) -> None:
         events.append(event)
 
-    handler = SubagentHandler(
+    handler = build_subagent_handler(
         object(),
         _CompletingExecutor(),
         object(),
@@ -686,7 +689,7 @@ async def test_subagent_handler_waits_for_pathfinder_and_runs_parent_finalizer()
     async def _publish(task_id: int, event: dict[str, Any]) -> None:
         events.append((task_id, event))
 
-    handler = SubagentHandler(
+    handler = build_subagent_handler(
         object(),
         executor,
         object(),
@@ -793,7 +796,7 @@ async def test_subagent_handler_fails_closed_before_launching_invalid_plan() -> 
     async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
         return None
 
-    handler = SubagentHandler(
+    handler = build_subagent_handler(
         object(),
         _CompletingExecutor(),
         object(),
@@ -847,7 +850,7 @@ async def test_subagent_handler_launches_independent_handoffs_concurrently(
     async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
         return None
 
-    handler = SubagentHandler(
+    handler = build_subagent_handler(
         object(),
         executor,
         object(),
@@ -920,7 +923,7 @@ async def test_subagent_handler_processes_first_ready_handoff_with_active_snapsh
     async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
         return None
 
-    handler = SubagentHandler(
+    handler = build_subagent_handler(
         object(),
         executor,
         object(),
@@ -1017,7 +1020,7 @@ async def test_subagent_handler_does_not_reprocess_irrelevant_active_finalizatio
     async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
         return None
 
-    handler = SubagentHandler(
+    handler = build_subagent_handler(
         object(),
         executor,
         object(),
@@ -1081,7 +1084,7 @@ async def test_subagent_handler_serializes_repeated_agent_handoffs_by_limit() ->
     async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
         return None
 
-    handler = SubagentHandler(
+    handler = build_subagent_handler(
         object(),
         _CompletingExecutor(),
         object(),
@@ -1134,7 +1137,7 @@ async def test_subagent_handler_fails_closed_for_concurrent_same_agent_parent_tu
     async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
         return None
 
-    handler = SubagentHandler(
+    handler = build_subagent_handler(
         object(),
         _CompletingExecutor(),
         object(),
@@ -1172,7 +1175,7 @@ async def test_subagent_handler_attaches_live_runtime_services_only_at_launch() 
     async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
         return None
 
-    handler = SubagentHandler(
+    handler = build_subagent_handler(
         object(),
         _CompletingExecutor(),
         object(),
@@ -1196,7 +1199,7 @@ async def test_subagent_handler_emits_failed_lifecycle_when_launch_fails() -> No
     async def _publish(task_id: int, event: dict[str, Any]) -> None:
         events.append(event)
 
-    handler = SubagentHandler(
+    handler = build_subagent_handler(
         object(),
         executor,
         object(),
@@ -1254,7 +1257,7 @@ async def test_subagent_handler_settles_prior_batch_child_when_later_launch_fail
     async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
         return None
 
-    handler = SubagentHandler(
+    handler = build_subagent_handler(
         object(),
         executor,
         object(),
@@ -1326,7 +1329,7 @@ async def test_subagent_handler_child_cancellation_returns_partial_child_usage()
     async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
         return None
 
-    handler = SubagentHandler(
+    handler = build_subagent_handler(
         object(),
         executor,
         object(),
@@ -1361,7 +1364,7 @@ async def test_subagent_handler_hitl_pause_keeps_parent_open_until_child_resumes
     async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
         return None
 
-    handler = SubagentHandler(
+    handler = build_subagent_handler(
         object(),
         executor,
         object(),
@@ -1391,7 +1394,7 @@ async def test_subagent_handler_child_failure_returns_partial_child_usage() -> N
     async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
         return None
 
-    handler = SubagentHandler(
+    handler = build_subagent_handler(
         object(),
         executor,
         object(),
@@ -1491,7 +1494,7 @@ async def test_subagent_handler_default_launcher_runs_real_worker_to_completion(
         "backend.services.agent_runs.worker.build_subagent_graph",
         lambda _definition, *, checkpointer: {"compiled_with": checkpointer},
     )
-    handler = SubagentHandler(
+    handler = build_subagent_handler(
         _FakeCheckpointerService(),
         executor,
         object(),

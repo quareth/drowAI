@@ -12,30 +12,23 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from agent.subagents.registry import SubagentRegistry, get_subagent_registry
+from agent.subagents.registry import SubagentRegistry
 from backend.services.agent_runs.dispatch_service import (
     AgentRunDispatchStop,
-    LifecyclePublisher,
     SubagentDispatchService,
 )
 from backend.services.agent_runs.dispatch_plan import (
     build_dispatch_plan,
 )
 from backend.services.agent_runs.completion import AgentRunCompletion
-from backend.services.agent_runs.launcher import (
-    AgentRunLauncher,
-    AgentRunWorker,
-)
 from backend.services.agent_runs.parent_handoff_coordinator import (
     ParentHandoffCoordinator,
     ParentHandoffOutcome,
 )
-from backend.services.agent_runs.result_projection import (
-    AgentRunResultProjector,
-)
-from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
-from backend.services.agent_runs.worker import ProcessLocalAgentRunWorker
 from backend.services.chat.event_builders import attach_conversation_ids
+from backend.services.langgraph_chat.checkpoint.checkpointer_service import (
+    CheckpointerService,
+)
 from backend.services.langgraph_chat.contracts import (
     ExecutionMode,
     LangGraphChatResult,
@@ -44,6 +37,8 @@ from backend.services.langgraph_chat.contracts import (
 from backend.services.langgraph_chat.execution.subagent_parent_finalizer import (
     SubagentParentFinalizer,
 )
+from backend.services.langgraph_chat.execution.graph_executor import LangGraphExecutor
+from backend.services.langgraph_chat.streaming.adapter import LangGraphStreamingAdapter
 
 from .base_handler import BaseLangGraphHandler
 from .turn_runtime import (
@@ -58,51 +53,24 @@ class SubagentHandler(BaseLangGraphHandler):
 
     def __init__(
         self,
-        *args: Any,
-        registry: ProcessLocalAgentRunRegistry,
-        launcher: Any = None,
-        worker: AgentRunWorker | None = None,
-        lifecycle_publisher: LifecyclePublisher | None = None,
-        result_projector: AgentRunResultProjector | None = None,
-        subagent_registry: SubagentRegistry | None = None,
-        parent_finalizer: SubagentParentFinalizer | None = None,
-        dispatch_service: SubagentDispatchService | None = None,
-        **kwargs: Any,
+        checkpointer_service: CheckpointerService,
+        executor: LangGraphExecutor,
+        streaming_adapter: LangGraphStreamingAdapter,
+        *,
+        subagent_registry: SubagentRegistry,
+        dispatch_service: SubagentDispatchService,
+        parent_handoff_coordinator: ParentHandoffCoordinator,
+        parent_finalizer: SubagentParentFinalizer,
     ) -> None:
-        super().__init__(*args, **kwargs)
-        self._publish_lifecycle = lifecycle_publisher or _publish_lifecycle_to_hub
-        self._registry = registry
-        self._subagent_registry = subagent_registry or get_subagent_registry()
-        self._result_projector = result_projector or AgentRunResultProjector(
-            registry=registry
+        super().__init__(
+            checkpointer_service,
+            executor,
+            streaming_adapter,
         )
-        self._parent_finalizer = parent_finalizer or SubagentParentFinalizer(
-            executor=self._executor,
-            cancellation_checker_factory=self._build_cancellation_checker,
-        )
-        self._parent_handoff_coordinator = ParentHandoffCoordinator(
-            registry=registry,
-            result_projector=self._result_projector,
-            parent_progress_publisher=self._publish_parent_progress,
-        )
-        resolved_launcher = launcher
-        if resolved_launcher is None:
-            resolved_worker = worker or ProcessLocalAgentRunWorker(
-                registry=registry,
-                checkpointer_service=self._checkpointer,
-                executor=self._executor,
-            )
-            resolved_launcher = AgentRunLauncher(
-                registry=registry,
-                worker=resolved_worker,
-                lifecycle_publisher=self._publish_lifecycle,
-            )
-        self._dispatch_service = dispatch_service or SubagentDispatchService(
-            registry=registry,
-            launcher=resolved_launcher,
-            subagent_registry=self._subagent_registry,
-            lifecycle_publisher=self._publish_lifecycle,
-        )
+        self._subagent_registry = subagent_registry
+        self._dispatch_service = dispatch_service
+        self._parent_handoff_coordinator = parent_handoff_coordinator
+        self._parent_finalizer = parent_finalizer
 
     async def handle(
         self, runtime_config: LangGraphRuntimeConfig
@@ -185,23 +153,6 @@ class SubagentHandler(BaseLangGraphHandler):
         if outcome is None:
             raise RuntimeError("No completed subagent handoff was available to process")
         return outcome.result
-
-    async def _publish_parent_progress(
-        self,
-        task_id: int,
-        events: tuple[dict[str, Any], ...],
-    ) -> None:
-        """Publish parent-owned handoff progress through the task stream."""
-        for event in events:
-            await self._publish_lifecycle(task_id, event)
-
-
-async def _publish_lifecycle_to_hub(task_id: int, event: dict[str, Any]) -> None:
-    """Publish lifecycle events through the existing task stream hub."""
-    from backend.services.streaming.in_memory_hub import get_in_memory_stream_hub
-
-    await get_in_memory_stream_hub().publish(task_id, event)
-
 
 def _ack_result(
     runtime_config: LangGraphRuntimeConfig,
