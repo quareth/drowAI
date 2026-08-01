@@ -19,7 +19,8 @@ from backend.services.agent_runs.dispatch_service import (
     LifecyclePublisher,
 )
 from backend.services.agent_runs.local_runtime import (
-    get_process_local_agent_run_registry,
+    get_process_local_agent_run_runtime,
+    publish_process_local_agent_run_event,
 )
 from backend.services.agent_runs.result_projection import (
     AgentRunResultProjector,
@@ -30,6 +31,9 @@ from backend.services.agent_runs.result_projection import (
 from backend.services.agent_runs.registry import (
     ACTIVE_AGENT_RUN_STATUSES,
     ProcessLocalAgentRunRegistry,
+)
+from backend.services.agent_runs.parent_handoff_coordinator import (
+    ParentHandoffGuardPool,
 )
 
 from backend.config import (
@@ -132,6 +136,7 @@ class LangGraphChatFacade:
         agent_run_registry: Optional[ProcessLocalAgentRunRegistry] = None,
         agent_run_launcher: AgentRunLaunchService | None = None,
         agent_run_lifecycle_publisher: LifecyclePublisher | None = None,
+        agent_run_handoff_guard_pool: ParentHandoffGuardPool | None = None,
         agent_run_result_projector: Optional[AgentRunResultProjector] = None,
         session_factory: Optional[Callable[[], Any]] = None,
         conversation_history_reader_factory: Optional[
@@ -158,9 +163,32 @@ class LangGraphChatFacade:
         self._prior_turn_reference_materializer = (
             prior_turn_reference_materializer or PriorTurnReferenceMaterializer()
         )
-        self._agent_run_registry = (
-            agent_run_registry or get_process_local_agent_run_registry()
-        )
+        using_shared_agent_run_registry = agent_run_registry is None
+        if using_shared_agent_run_registry:
+            process_local_runtime = get_process_local_agent_run_runtime()
+            self._agent_run_registry = process_local_runtime.registry
+            resolved_agent_run_launcher = (
+                agent_run_launcher or process_local_runtime.launcher
+            )
+            resolved_agent_run_lifecycle_publisher = (
+                agent_run_lifecycle_publisher
+                or process_local_runtime.lifecycle_publisher
+            )
+            resolved_agent_run_handoff_guard_pool = (
+                agent_run_handoff_guard_pool
+                or process_local_runtime.parent_handoff_guard_pool
+            )
+        else:
+            assert agent_run_registry is not None
+            self._agent_run_registry = agent_run_registry
+            resolved_agent_run_launcher = agent_run_launcher
+            resolved_agent_run_lifecycle_publisher = (
+                agent_run_lifecycle_publisher
+                or publish_process_local_agent_run_event
+            )
+            resolved_agent_run_handoff_guard_pool = (
+                agent_run_handoff_guard_pool or ParentHandoffGuardPool()
+            )
         self._agent_run_result_projector = (
             agent_run_result_projector
             or AgentRunResultProjector(registry=self._agent_run_registry)
@@ -186,8 +214,11 @@ class LangGraphChatFacade:
                 self._executor,
                 self._streaming_adapter,
                 registry=self._agent_run_registry,
-                launcher=agent_run_launcher,
-                lifecycle_publisher=agent_run_lifecycle_publisher,
+                launcher=resolved_agent_run_launcher,
+                lifecycle_publisher=resolved_agent_run_lifecycle_publisher,
+                parent_handoff_guard_pool=(
+                    resolved_agent_run_handoff_guard_pool
+                ),
                 result_projector=self._agent_run_result_projector,
                 subagent_registry=self._subagent_registry,
             ),
@@ -206,7 +237,7 @@ class LangGraphChatFacade:
             ),
             build_result=facade_helpers.build_result,
             agent_run_registry=self._agent_run_registry,
-            agent_run_lifecycle_publisher=agent_run_lifecycle_publisher,
+            agent_run_lifecycle_publisher=resolved_agent_run_lifecycle_publisher,
         )
 
     async def handle_turn(

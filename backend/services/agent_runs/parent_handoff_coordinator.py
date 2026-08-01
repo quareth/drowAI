@@ -8,20 +8,20 @@ registry internals outside the public claim API.
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import logging
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from time import perf_counter
 from typing import Any
 
 from backend.services.langgraph_chat.contracts import LangGraphChatResult
-from backend.services.agent_runs.ownership_policy import normalize_agent_handoff_entries
+from agent.graph.context.contracts import ActiveAgentRun
 from backend.services.metrics.utils import safe_gauge, safe_inc
 
 from .completion import AgentRunCompletion
 from .event_projection import build_parent_handoff_progress_events
+from .parent_control import ParentControlOutcome, parse_parent_control_outcome
 from .registry import ClaimedHandoffBatch, ProcessLocalAgentRunRegistry
 from .result_projection import (
     AgentRunResultProjector,
@@ -32,7 +32,7 @@ from .result_projection import (
 
 
 ParentContinuationRunner = Callable[
-    [CompletedAgentResultHandoff, tuple[dict[str, Any], ...]],
+    [CompletedAgentResultHandoff, tuple[ActiveAgentRun, ...]],
     Awaitable[LangGraphChatResult],
 ]
 FollowupDelegationDispatcher = Callable[
@@ -45,8 +45,44 @@ ParentProgressPublisher = Callable[[int, tuple[dict[str, Any], ...]], Awaitable[
 logger = logging.getLogger(__name__)
 
 
-_GUARDS_LOCK = asyncio.Lock()
-_GUARDS: dict[tuple[int, int], asyncio.Lock] = {}
+@dataclass(slots=True)
+class _ParentHandoffGuardEntry:
+    """One task guard plus its current holder and waiter count."""
+
+    lock: asyncio.Lock
+    users: int = 0
+
+
+class ParentHandoffGuardPool:
+    """Serialize parent handoffs per task and discard guards when idle."""
+
+    def __init__(self) -> None:
+        self._entries_lock = asyncio.Lock()
+        self._entries: dict[tuple[int, int], _ParentHandoffGuardEntry] = {}
+
+    @asynccontextmanager
+    async def acquire(
+        self,
+        *,
+        tenant_id: int,
+        task_id: int,
+    ) -> AsyncIterator[None]:
+        """Hold the shared guard for one tenant/task while counting waiters."""
+        key = (tenant_id, task_id)
+        async with self._entries_lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                entry = _ParentHandoffGuardEntry(lock=asyncio.Lock())
+                self._entries[key] = entry
+            entry.users += 1
+        try:
+            async with entry.lock:
+                yield
+        finally:
+            async with self._entries_lock:
+                entry.users -= 1
+                if entry.users == 0:
+                    self._entries.pop(key, None)
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,12 +104,11 @@ class ParentFollowupDelegation:
 
 
 @dataclass(frozen=True, slots=True)
-class _ParentControlOutcome:
-    """Backend-owned parent-control action returned by the PAR graph."""
+class _PreparedParentHandoff:
+    """Typed context prepared from one claimed registry snapshot."""
 
-    action: str
-    agent_handoff: Mapping[str, Any] | None = None
-    decision_id: str = ""
+    handoff: CompletedAgentResultHandoff
+    active_runs: tuple[ActiveAgentRun, ...]
 
 
 class ParentHandoffCoordinator:
@@ -83,10 +118,12 @@ class ParentHandoffCoordinator:
         self,
         *,
         registry: ProcessLocalAgentRunRegistry,
+        guard_pool: ParentHandoffGuardPool,
         result_projector: AgentRunResultProjector | None = None,
         parent_progress_publisher: ParentProgressPublisher | None = None,
     ) -> None:
         self._registry = registry
+        self._guard_pool = guard_pool
         self._result_projector = result_projector or AgentRunResultProjector(
             registry=registry
         )
@@ -111,11 +148,10 @@ class ParentHandoffCoordinator:
         The registry claim is released if the continuation raises or returns a
         cancelled result, leaving handoffs claimable by a later retry.
         """
-        guard = await _guard_for(
+        async with self._guard_pool.acquire(
             tenant_id=tenant_id,
             task_id=task_id,
-        )
-        async with guard:
+        ):
             wait_for_next_handoff = False
             while True:
                 claim = await self._registry.claim_ready_handoffs(
@@ -148,96 +184,35 @@ class ParentHandoffCoordinator:
                         continue
                 wait_for_initial_handoff = False
 
-                handoff = self._handoff_from_claim(claim)
-                active_runs = self._active_runs_from_claim(claim)
-                _record_claim_observed(
-                    task_id=task_id,
-                    claim=claim,
-                    active_run_count=len(active_runs),
-                )
-                attach_completed_agent_results_to_context(metadata, handoff)
-                attach_active_agent_runs_to_context(metadata, active_runs)
-                await self._emit_parent_progress(
-                    task_id=task_id,
+                prepared = await self._prepare_claim_context(
+                    metadata=metadata,
                     conversation_id=conversation_id,
                     parent_turn_id=parent_turn_id,
-                    metadata=metadata,
+                    task_id=task_id,
                     claim=claim,
-                    handoff=handoff,
-                    active_runs=active_runs,
-                    action="evaluating",
                 )
 
                 claim_acknowledged = False
                 try:
-                    result = await run_parent_continuation(handoff, active_runs)
-                    control = _extract_parent_control_outcome(
-                        result,
+                    result = await run_parent_continuation(
+                        prepared.handoff,
+                        prepared.active_runs,
+                    )
+                    control = parse_parent_control_outcome(
+                        result.metadata,
                         parent_turn_id=parent_turn_id,
-                        claim=claim,
+                        claimed_agent_run_ids=claim.agent_run_ids,
                     )
                     if control.action == "delegate_subagent":
-                        if dispatch_followup_delegation is None:
-                            safe_inc(
-                                "post_action_reasoning_followup_delegation_rejected"
-                            )
-                            raise RuntimeError(
-                                "PAR follow-up delegation has no dispatcher"
-                            )
-                        assert control.agent_handoff is not None
-                        try:
-                            delegation = await dispatch_followup_delegation(
-                                control.agent_handoff,
-                                control.decision_id,
-                            )
-                        except Exception:
-                            safe_inc(
-                                "post_action_reasoning_followup_delegation_rejected"
-                            )
-                            logger.info(
-                                "PAR follow-up delegation rejected "
-                                "tenant_id=%s task_id=%s claim_id=%s "
-                                "decision_id=%s",
-                                tenant_id,
-                                task_id,
-                                claim.claim_id,
-                                control.decision_id,
-                            )
-                            raise
-                        if delegation.agent_run_ids:
-                            safe_inc(
-                                "post_action_reasoning_followup_delegation_accepted"
-                            )
-                        else:
-                            safe_inc(
-                                "post_action_reasoning_followup_delegation_rejected"
-                            )
-                        logger.info(
-                            "PAR follow-up delegation processed "
-                            "tenant_id=%s task_id=%s claim_id=%s decision_id=%s "
-                            "accepted=%s launched_run_count=%s",
-                            tenant_id,
-                            task_id,
-                            claim.claim_id,
-                            control.decision_id,
-                            bool(delegation.agent_run_ids),
-                            len(delegation.launched_agent_run_ids),
+                        delegation = await self._dispatch_followup(
+                            tenant_id=tenant_id,
+                            task_id=task_id,
+                            metadata=metadata,
+                            claim=claim,
+                            active_runs=prepared.active_runs,
+                            control=control,
+                            dispatcher=dispatch_followup_delegation,
                         )
-                        metadata["last_parent_control_outcome"] = {
-                            "action": control.action,
-                            "decision_id": control.decision_id,
-                            "agent_run_ids": list(delegation.agent_run_ids),
-                            "launched_agent_run_ids": list(
-                                delegation.launched_agent_run_ids
-                            ),
-                            "completed_agent_run_ids": list(claim.agent_run_ids),
-                            "active_agent_run_ids": [
-                                run["agent_run_id"]
-                                for run in active_runs
-                                if isinstance(run.get("agent_run_id"), str)
-                            ],
-                        }
-                        await self._registry.acknowledge_handoffs(claim.claim_id)
                         claim_acknowledged = True
                         if not delegation.agent_run_ids:
                             return ParentHandoffOutcome(
@@ -250,22 +225,12 @@ class ParentHandoffCoordinator:
                         continue
 
                     if control.action == "wait_for_subagents":
-                        if not active_runs:
-                            raise RuntimeError(
-                                "PAR wait_for_subagents outcome had no active "
-                                "subagent runs in the claimed snapshot"
-                            )
-                        metadata["last_parent_control_outcome"] = {
-                            "action": control.action,
-                            "decision_id": control.decision_id,
-                            "completed_agent_run_ids": list(claim.agent_run_ids),
-                            "active_agent_run_ids": [
-                                run["agent_run_id"]
-                                for run in active_runs
-                                if isinstance(run.get("agent_run_id"), str)
-                            ],
-                        }
-                        await self._registry.acknowledge_handoffs(claim.claim_id)
+                        await self._acknowledge_wait_control(
+                            metadata=metadata,
+                            claim=claim,
+                            active_runs=prepared.active_runs,
+                            control=control,
+                        )
                         claim_acknowledged = True
                         version = await self._registry.state_version()
                         wait_status = await self._wait_for_relevant_registry_change(
@@ -296,16 +261,11 @@ class ParentHandoffCoordinator:
                         await self._registry.release_handoffs(claim.claim_id)
                     raise
 
-                if _is_cancelled_result(result):
-                    _record_claim_release_after_parent_exit(
-                        task_id=task_id,
-                        claim=claim,
-                        cause="cancellation",
-                    )
-                    await self._registry.release_handoffs(claim.claim_id)
-                else:
-                    await self._registry.acknowledge_handoffs(claim.claim_id)
-                    safe_inc("post_action_reasoning_parent_finalization_count")
+                await self._settle_parent_result(
+                    task_id=task_id,
+                    claim=claim,
+                    result=result,
+                )
 
                 return ParentHandoffOutcome(
                     result=result,
@@ -313,6 +273,140 @@ class ParentHandoffCoordinator:
                     agent_run_ids=claim.agent_run_ids,
                     child_completions=child_completions,
                 )
+
+    async def _prepare_claim_context(
+        self,
+        *,
+        task_id: int,
+        conversation_id: str,
+        parent_turn_id: str,
+        metadata: dict[str, Any],
+        claim: ClaimedHandoffBatch,
+    ) -> _PreparedParentHandoff:
+        """Project, attach, and announce one claimed handoff snapshot."""
+        handoff = self._handoff_from_claim(claim)
+        active_runs = self._active_runs_from_claim(claim)
+        _record_claim_observed(
+            task_id=task_id,
+            claim=claim,
+            active_run_count=len(active_runs),
+        )
+        attach_completed_agent_results_to_context(metadata, handoff)
+        attach_active_agent_runs_to_context(metadata, active_runs)
+        await self._emit_parent_progress(
+            task_id=task_id,
+            conversation_id=conversation_id,
+            parent_turn_id=parent_turn_id,
+            metadata=metadata,
+            claim=claim,
+            handoff=handoff,
+            active_runs=active_runs,
+            action="evaluating",
+        )
+        return _PreparedParentHandoff(
+            handoff=handoff,
+            active_runs=active_runs,
+        )
+
+    async def _dispatch_followup(
+        self,
+        *,
+        tenant_id: int,
+        task_id: int,
+        metadata: dict[str, Any],
+        claim: ClaimedHandoffBatch,
+        active_runs: tuple[ActiveAgentRun, ...],
+        control: ParentControlOutcome,
+        dispatcher: FollowupDelegationDispatcher | None,
+    ) -> ParentFollowupDelegation:
+        """Dispatch one validated follow-up and consume its current claim."""
+        if dispatcher is None:
+            safe_inc("post_action_reasoning_followup_delegation_rejected")
+            raise RuntimeError("PAR follow-up delegation has no dispatcher")
+        assert control.agent_handoff is not None
+        try:
+            delegation = await dispatcher(
+                control.agent_handoff,
+                control.decision_id,
+            )
+        except Exception:
+            safe_inc("post_action_reasoning_followup_delegation_rejected")
+            logger.info(
+                "PAR follow-up delegation rejected tenant_id=%s task_id=%s "
+                "claim_id=%s decision_id=%s",
+                tenant_id,
+                task_id,
+                claim.claim_id,
+                control.decision_id,
+            )
+            raise
+        metric = (
+            "post_action_reasoning_followup_delegation_accepted"
+            if delegation.agent_run_ids
+            else "post_action_reasoning_followup_delegation_rejected"
+        )
+        safe_inc(metric)
+        logger.info(
+            "PAR follow-up delegation processed tenant_id=%s task_id=%s "
+            "claim_id=%s decision_id=%s accepted=%s launched_run_count=%s",
+            tenant_id,
+            task_id,
+            claim.claim_id,
+            control.decision_id,
+            bool(delegation.agent_run_ids),
+            len(delegation.launched_agent_run_ids),
+        )
+        metadata["last_parent_control_outcome"] = {
+            "action": control.action,
+            "decision_id": control.decision_id,
+            "agent_run_ids": list(delegation.agent_run_ids),
+            "launched_agent_run_ids": list(delegation.launched_agent_run_ids),
+            "completed_agent_run_ids": list(claim.agent_run_ids),
+            "active_agent_run_ids": _active_agent_run_ids(active_runs),
+        }
+        await self._registry.acknowledge_handoffs(claim.claim_id)
+        return delegation
+
+    async def _acknowledge_wait_control(
+        self,
+        *,
+        metadata: dict[str, Any],
+        claim: ClaimedHandoffBatch,
+        active_runs: tuple[ActiveAgentRun, ...],
+        control: ParentControlOutcome,
+    ) -> None:
+        """Validate a wait decision, record it, and consume its current claim."""
+        if not active_runs:
+            raise RuntimeError(
+                "PAR wait_for_subagents outcome had no active subagent runs "
+                "in the claimed snapshot"
+            )
+        metadata["last_parent_control_outcome"] = {
+            "action": control.action,
+            "decision_id": control.decision_id,
+            "completed_agent_run_ids": list(claim.agent_run_ids),
+            "active_agent_run_ids": _active_agent_run_ids(active_runs),
+        }
+        await self._registry.acknowledge_handoffs(claim.claim_id)
+
+    async def _settle_parent_result(
+        self,
+        *,
+        task_id: int,
+        claim: ClaimedHandoffBatch,
+        result: LangGraphChatResult,
+    ) -> None:
+        """Release cancelled work or acknowledge a finalized parent result."""
+        if _is_cancelled_result(result):
+            _record_claim_release_after_parent_exit(
+                task_id=task_id,
+                claim=claim,
+                cause="cancellation",
+            )
+            await self._registry.release_handoffs(claim.claim_id)
+            return
+        await self._registry.acknowledge_handoffs(claim.claim_id)
+        safe_inc("post_action_reasoning_parent_finalization_count")
 
     def _handoff_from_claim(
         self, claim: ClaimedHandoffBatch
@@ -327,7 +421,7 @@ class ParentHandoffCoordinator:
 
     def _active_runs_from_claim(
         self, claim: ClaimedHandoffBatch
-    ) -> tuple[dict[str, Any], ...]:
+    ) -> tuple[ActiveAgentRun, ...]:
         return tuple(
             self._result_projector.project_active_run(entry)
             for entry in claim.active_runs
@@ -392,7 +486,7 @@ class ParentHandoffCoordinator:
         metadata: Mapping[str, Any],
         claim: ClaimedHandoffBatch,
         handoff: CompletedAgentResultHandoff,
-        active_runs: tuple[dict[str, Any], ...],
+        active_runs: tuple[ActiveAgentRun, ...],
         action: str,
     ) -> None:
         if self._publish_parent_progress is None:
@@ -417,31 +511,19 @@ class ParentHandoffCoordinator:
             )
 
 
-async def _guard_for(
-    *,
-    tenant_id: int,
-    task_id: int,
-) -> asyncio.Lock:
-    key = (tenant_id, task_id)
-    current_loop = asyncio.get_running_loop()
-    async with _GUARDS_LOCK:
-        guard = _GUARDS.get(key)
-        bound_loop = getattr(guard, "_loop", None) if guard is not None else None
-        if (
-            guard is not None
-            and bound_loop is not None
-            and bound_loop is not current_loop
-            and not guard.locked()
-        ):
-            guard = None
-        if guard is None:
-            guard = asyncio.Lock()
-            _GUARDS[key] = guard
-        return guard
-
-
 def _is_cancelled_result(result: LangGraphChatResult) -> bool:
     return result.metadata.get("status") == "cancelled"
+
+
+def _active_agent_run_ids(
+    active_runs: tuple[ActiveAgentRun, ...],
+) -> list[str]:
+    """Return serialized run identities from typed active-run context."""
+    return [
+        run["agent_run_id"]
+        for run in active_runs
+        if isinstance(run.get("agent_run_id"), str)
+    ]
 
 
 def _record_claim_observed(
@@ -495,91 +577,12 @@ def _turn_sequence_from_metadata(metadata: Mapping[str, Any]) -> int | None:
         return None
 
 
-def _extract_parent_control_outcome(
-    result: LangGraphChatResult,
-    *,
-    parent_turn_id: str,
-    claim: ClaimedHandoffBatch,
-) -> _ParentControlOutcome:
-    """Return a backend-owned PAR control outcome from result metadata."""
-    source = _control_source(result.metadata)
-    if source is None:
-        return _ParentControlOutcome(action="")
-
-    action = _control_action(source)
-    if action not in {"delegate_subagent", "wait_for_subagents"}:
-        return _ParentControlOutcome(action="")
-
-    decision_id = _control_decision_id(
-        source,
-        action=action,
-        parent_turn_id=parent_turn_id,
-        claim=claim,
-    )
-    if action == "wait_for_subagents":
-        return _ParentControlOutcome(action=action, decision_id=decision_id)
-
-    normalized = normalize_agent_handoff_entries(
-        source.get("agent_handoff"),
-        max_handoffs=1,
-        reject_invalid=True,
-    )
-    if not normalized:
-        safe_inc("post_action_reasoning_followup_delegation_rejected")
-        raise RuntimeError("PAR delegate_subagent outcome missing agent_handoff")
-    return _ParentControlOutcome(
-        action=action,
-        agent_handoff=normalized[0],
-        decision_id=decision_id,
-    )
-
-
-def _control_source(metadata: Mapping[str, Any]) -> Mapping[str, Any] | None:
-    for key in ("router_outcome", "candidate_decision", "parent_control_outcome"):
-        value = metadata.get(key)
-        if isinstance(value, Mapping):
-            return value
-    return metadata
-
-
-def _control_action(source: Mapping[str, Any]) -> str:
-    for key in ("action", "next_action", "last_post_tool_action"):
-        value = source.get(key)
-        if isinstance(value, str):
-            normalized = value.strip().lower().replace(" ", "_")
-            if normalized:
-                return normalized
-    return ""
-
-
-def _control_decision_id(
-    source: Mapping[str, Any],
-    *,
-    action: str,
-    parent_turn_id: str,
-    claim: ClaimedHandoffBatch,
-) -> str:
-    for key in ("decision_id", "candidate_id", "id"):
-        value = source.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    identity = {
-        "action": action,
-        "parent_turn_id": parent_turn_id,
-        "claimed_agent_run_ids": list(claim.agent_run_ids),
-        "agent_handoff": source.get("agent_handoff"),
-    }
-    digest = hashlib.sha256(
-        json.dumps(identity, sort_keys=True, default=str).encode("utf-8")
-    ).hexdigest()[:32]
-    return f"par-decision-{digest}"
-
-
 __all__ = [
     "FollowupDelegationDispatcher",
     "ParentFollowupDelegation",
     "ParentContinuationRunner",
     "ParentHandoffCoordinator",
+    "ParentHandoffGuardPool",
     "ParentHandoffOutcome",
     "ParentProgressPublisher",
 ]

@@ -33,6 +33,7 @@ from backend.services.agent_runs.completion import (
 )
 from backend.services.agent_runs.event_projection import build_agent_run_lifecycle_event
 from backend.services.agent_runs.launcher import (
+    LifecyclePublisher,
     SubagentRunCancelled,
     SubagentRunFailed,
     SubagentRunPaused,
@@ -45,7 +46,6 @@ from backend.services.langgraph_chat.checkpoint.checkpointer_service import (
 from backend.services.langgraph_chat.execution.graph_executor import LangGraphExecutor
 from backend.services.langgraph_chat.hitl_constants import GRAPH_RECURSION_LIMIT
 from backend.services.langgraph_chat.streaming.adapter import LangGraphStreamingAdapter
-from backend.services.streaming.in_memory_hub import get_in_memory_stream_hub
 
 logger = logging.getLogger(__name__)
 
@@ -161,6 +161,7 @@ async def mark_subagent_completed_from_state(
     registry: ProcessLocalAgentRunRegistry,
     entry: LocalAgentRun,
     final_state: Mapping[str, Any],
+    lifecycle_publisher: LifecyclePublisher,
     parent_run_id: str | None = None,
 ) -> AgentRunCompletion:
     """Store, publish, and return terminal subagent completion after HITL resume."""
@@ -182,7 +183,11 @@ async def mark_subagent_completed_from_state(
         agent_run_id=entry.agent_run_id,
         result=completion.result,
     )
-    await _publish_lifecycle_to_hub(completed, parent_run_id=parent_run_id)
+    event = build_agent_run_lifecycle_event(
+        completed,
+        parent_run_id=parent_run_id,
+    )
+    await lifecycle_publisher(completed.task_id, event)
     return completion
 
 
@@ -281,15 +286,6 @@ def _graph_runtime_context_from_projection(
         context["turn_sequence"] = turn_sequence
     context.pop("credential_ref", None)
     return context
-
-
-async def _publish_lifecycle_to_hub(
-    entry: LocalAgentRun,
-    *,
-    parent_run_id: str | None,
-) -> None:
-    event = build_agent_run_lifecycle_event(entry, parent_run_id=parent_run_id)
-    await get_in_memory_stream_hub().publish(entry.task_id, event)
 
 
 class _AsyncCancellationProbe:

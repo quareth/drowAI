@@ -510,7 +510,8 @@ async def test_resume_from_interrupt_marks_subagent_completed_on_success(
         == "pathfinder-run-1"
     )
     assert [event["agent_run"]["status"] for event in lifecycle_events] == [
-        "running"
+        "running",
+        "completed",
     ]
     entry = await registry.get(
         tenant_id=7,
@@ -559,10 +560,17 @@ async def test_mark_subagent_completed_from_state_returns_usage_identity_envelop
         ],
     )
 
+    async def _publish_lifecycle(
+        _task_id: int,
+        _event: dict[str, Any],
+    ) -> None:
+        return None
+
     completion = await mark_subagent_completed_from_state(
         registry=registry,
         entry=entry,
         final_state=final_state,
+        lifecycle_publisher=_publish_lifecycle,
     )
 
     assert completion.result.agent_run_id == "pathfinder-run-1"

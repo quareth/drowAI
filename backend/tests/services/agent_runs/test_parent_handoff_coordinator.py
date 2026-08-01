@@ -16,7 +16,8 @@ from backend.services.agent_runs.contracts import (
 )
 from backend.services.agent_runs.parent_handoff_coordinator import (
     ParentFollowupDelegation,
-    ParentHandoffCoordinator,
+    ParentHandoffCoordinator as _ParentHandoffCoordinator,
+    ParentHandoffGuardPool,
 )
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
 from backend.services.agent_runs.result_projection import (
@@ -121,6 +122,104 @@ def _completed_result(status: str = "completed") -> LangGraphChatResult:
     )
 
 
+def _coordinator(
+    *,
+    registry: ProcessLocalAgentRunRegistry,
+    guard_pool: ParentHandoffGuardPool | None = None,
+    **kwargs: Any,
+) -> _ParentHandoffCoordinator:
+    """Build an isolated coordinator unless a shared guard pool is explicit."""
+    return _ParentHandoffCoordinator(
+        registry=registry,
+        guard_pool=guard_pool or ParentHandoffGuardPool(),
+        **kwargs,
+    )
+
+
+@pytest.mark.asyncio
+async def test_guard_pool_serializes_shared_key_across_coordinators() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    await _register_completed(registry, "run-1")
+    guard_pool = ParentHandoffGuardPool()
+    first_coordinator = _coordinator(registry=registry, guard_pool=guard_pool)
+    second_coordinator = _coordinator(registry=registry, guard_pool=guard_pool)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    parent_calls = 0
+
+    async def _run_parent(
+        _handoff: Any,
+        _active_runs: tuple[dict[str, Any], ...],
+    ) -> LangGraphChatResult:
+        nonlocal parent_calls
+        parent_calls += 1
+        entered.set()
+        await release.wait()
+        return _completed_result()
+
+    first = asyncio.create_task(
+        first_coordinator.process_ready_handoffs(
+            tenant_id=7,
+            task_id=42,
+            conversation_id="conversation-1",
+            parent_turn_id="turn-1",
+            metadata={},
+            run_parent_continuation=_run_parent,
+        )
+    )
+    await entered.wait()
+    second = asyncio.create_task(
+        second_coordinator.process_ready_handoffs(
+            tenant_id=7,
+            task_id=42,
+            conversation_id="conversation-1",
+            parent_turn_id="turn-1",
+            metadata={},
+            run_parent_continuation=_run_parent,
+        )
+    )
+    await asyncio.sleep(0)
+
+    assert parent_calls == 1
+    release.set()
+    first_outcome, second_outcome = await asyncio.gather(first, second)
+
+    assert first_outcome is not None
+    assert second_outcome is None
+    assert parent_calls == 1
+    assert guard_pool._entries == {}
+
+
+@pytest.mark.asyncio
+async def test_guard_pool_cleans_cancelled_waiter_and_erroring_holder() -> None:
+    guard_pool = ParentHandoffGuardPool()
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def _holder() -> None:
+        async with guard_pool.acquire(tenant_id=7, task_id=42):
+            entered.set()
+            await release.wait()
+            raise RuntimeError("expected")
+
+    async def _waiter() -> None:
+        async with guard_pool.acquire(tenant_id=7, task_id=42):
+            return None
+
+    holder = asyncio.create_task(_holder())
+    await entered.wait()
+    waiter = asyncio.create_task(_waiter())
+    await asyncio.sleep(0)
+    waiter.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await waiter
+    release.set()
+    with pytest.raises(RuntimeError, match="expected"):
+        await holder
+
+    assert guard_pool._entries == {}
+
+
 @pytest.mark.asyncio
 async def test_coordinator_claims_ready_results_together_and_acknowledges() -> None:
     registry = ProcessLocalAgentRunRegistry()
@@ -142,7 +241,7 @@ async def test_coordinator_claims_ready_results_together_and_acknowledges() -> N
         observed["active_ids"] = tuple(run["agent_run_id"] for run in active_runs)
         return _completed_result()
 
-    outcome = await ParentHandoffCoordinator(registry=registry).process_ready_handoffs(
+    outcome = await _coordinator(registry=registry).process_ready_handoffs(
         tenant_id=7,
         task_id=42,
         conversation_id="conversation-1",
@@ -189,7 +288,7 @@ async def test_coordinator_records_bounded_handoff_observability() -> None:
     ) as mock_inc, patch(
         "backend.services.agent_runs.parent_handoff_coordinator.safe_gauge"
     ) as mock_gauge:
-        outcome = await ParentHandoffCoordinator(
+        outcome = await _coordinator(
             registry=registry
         ).process_ready_handoffs(
             tenant_id=7,
@@ -236,7 +335,7 @@ async def test_coordinator_emits_one_parent_progress_block_per_handoff_batch() -
     ) -> LangGraphChatResult:
         return _completed_result()
 
-    outcome = await ParentHandoffCoordinator(
+    outcome = await _coordinator(
         registry=registry,
         parent_progress_publisher=_publish_progress,
     ).process_ready_handoffs(
@@ -289,7 +388,7 @@ async def test_parent_progress_section_id_is_stable_across_claim_retry() -> None
     ) -> LangGraphChatResult:
         raise RuntimeError("retryable parent failure")
 
-    coordinator = ParentHandoffCoordinator(
+    coordinator = _coordinator(
         registry=registry,
         parent_progress_publisher=_publish_progress,
     )
@@ -331,7 +430,7 @@ async def test_parent_progress_section_id_is_stable_across_claim_retry() -> None
 async def test_coordinator_serializes_parent_cycles_for_task_turn() -> None:
     registry = ProcessLocalAgentRunRegistry()
     await _register_completed(registry, "run-1")
-    coordinator = ParentHandoffCoordinator(registry=registry)
+    coordinator = _coordinator(registry=registry)
     entered = asyncio.Event()
     release = asyncio.Event()
     parent_calls = 0
@@ -392,7 +491,7 @@ async def test_coordinator_serializes_parent_cycles_for_task_across_turns() -> N
         conversation_id="conversation-b",
         parent_turn_id="turn-b",
     )
-    coordinator = ParentHandoffCoordinator(registry=registry)
+    coordinator = _coordinator(registry=registry)
     entered_first = asyncio.Event()
     release_first = asyncio.Event()
     entered: list[str] = []
@@ -451,7 +550,7 @@ async def test_coordinator_serializes_parent_cycles_for_task_across_turns() -> N
 async def test_handoffs_arriving_during_parent_cycle_remain_for_next_batch() -> None:
     registry = ProcessLocalAgentRunRegistry()
     await _register_completed(registry, "run-1")
-    coordinator = ParentHandoffCoordinator(registry=registry)
+    coordinator = _coordinator(registry=registry)
     entered = asyncio.Event()
     release = asyncio.Event()
     observed_batches: list[tuple[str, ...]] = []
@@ -522,7 +621,7 @@ async def test_parent_failure_releases_claim_without_consuming_result() -> None:
         "backend.services.agent_runs.parent_handoff_coordinator.safe_inc"
     ) as mock_inc:
         with pytest.raises(RuntimeError, match="parent continuation failed"):
-            await ParentHandoffCoordinator(registry=registry).process_ready_handoffs(
+            await _coordinator(registry=registry).process_ready_handoffs(
                 tenant_id=7,
                 task_id=42,
                 conversation_id="conversation-1",
@@ -553,7 +652,7 @@ async def test_cancelled_parent_result_releases_claim_for_retry() -> None:
     ) -> LangGraphChatResult:
         return _completed_result(status="cancelled")
 
-    outcome = await ParentHandoffCoordinator(registry=registry).process_ready_handoffs(
+    outcome = await _coordinator(registry=registry).process_ready_handoffs(
         tenant_id=7,
         task_id=42,
         conversation_id="conversation-1",
@@ -587,7 +686,7 @@ async def test_request_cancellation_releases_claim_for_retry() -> None:
         return _completed_result()
 
     task = asyncio.create_task(
-        ParentHandoffCoordinator(registry=registry).process_ready_handoffs(
+        _coordinator(registry=registry).process_ready_handoffs(
             tenant_id=7,
             task_id=42,
             conversation_id="conversation-1",
@@ -669,7 +768,7 @@ async def test_delegate_subagent_control_launches_followup_and_continues_loop() 
             )
         return _completed_result()
 
-    outcome = await ParentHandoffCoordinator(registry=registry).process_ready_handoffs(
+    outcome = await _coordinator(registry=registry).process_ready_handoffs(
         tenant_id=7,
         task_id=42,
         conversation_id="conversation-1",
@@ -721,7 +820,7 @@ async def test_parent_continuation_calls_direct_tool_after_child_then_finalizes(
             },
         )
 
-    outcome = await ParentHandoffCoordinator(registry=registry).process_ready_handoffs(
+    outcome = await _coordinator(registry=registry).process_ready_handoffs(
         tenant_id=7,
         task_id=42,
         conversation_id="conversation-1",
@@ -781,7 +880,7 @@ async def test_parent_continuation_reflects_after_blocked_child_result() -> None
             },
         )
 
-    outcome = await ParentHandoffCoordinator(registry=registry).process_ready_handoffs(
+    outcome = await _coordinator(registry=registry).process_ready_handoffs(
         tenant_id=7,
         task_id=42,
         conversation_id="conversation-1",
@@ -838,7 +937,7 @@ async def test_wait_for_subagents_blocks_until_scoped_handoff_is_ready() -> None
         return _completed_result()
 
     processing = asyncio.create_task(
-        ParentHandoffCoordinator(registry=registry).process_ready_handoffs(
+        _coordinator(registry=registry).process_ready_handoffs(
             tenant_id=7,
             task_id=42,
             conversation_id="conversation-1",
@@ -925,7 +1024,7 @@ async def test_cancellation_during_wait_emits_no_final_parent_result() -> None:
 
     async def _process() -> None:
         final_outcomes.append(
-            await ParentHandoffCoordinator(registry=registry).process_ready_handoffs(
+            await _coordinator(registry=registry).process_ready_handoffs(
                 tenant_id=7,
                 task_id=42,
                 conversation_id="conversation-1",
@@ -969,7 +1068,7 @@ async def test_wait_for_subagents_requires_active_runs_in_claim_snapshot() -> No
         )
 
     with pytest.raises(RuntimeError, match="no active subagent runs"):
-        await ParentHandoffCoordinator(registry=registry).process_ready_handoffs(
+        await _coordinator(registry=registry).process_ready_handoffs(
             tenant_id=7,
             task_id=42,
             conversation_id="conversation-1",
@@ -1008,7 +1107,7 @@ async def test_wait_for_subagents_timeout_releases_no_processed_claim() -> None:
         )
 
     with pytest.raises(asyncio.TimeoutError):
-        await ParentHandoffCoordinator(registry=registry).process_ready_handoffs(
+        await _coordinator(registry=registry).process_ready_handoffs(
             tenant_id=7,
             task_id=42,
             conversation_id="conversation-1",
@@ -1042,7 +1141,7 @@ async def test_invalid_delegate_subagent_control_releases_claim() -> None:
         )
 
     with pytest.raises(RuntimeError, match="missing agent_handoff"):
-        await ParentHandoffCoordinator(registry=registry).process_ready_handoffs(
+        await _coordinator(registry=registry).process_ready_handoffs(
             tenant_id=7,
             task_id=42,
             conversation_id="conversation-1",

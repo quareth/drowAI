@@ -19,6 +19,7 @@ from backend.services.agent_runs.dispatch_service import (
 from backend.services.agent_runs.launcher import AgentRunLauncher, AgentRunWorker
 from backend.services.agent_runs.parent_handoff_coordinator import (
     ParentHandoffCoordinator,
+    ParentHandoffGuardPool,
 )
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
 from backend.services.agent_runs.result_projection import AgentRunResultProjector
@@ -45,12 +46,12 @@ def build_subagent_handler(
     registry: ProcessLocalAgentRunRegistry,
     launcher: AgentRunLaunchService | None = None,
     worker: AgentRunWorker | None = None,
-    lifecycle_publisher: LifecyclePublisher | None = None,
+    lifecycle_publisher: LifecyclePublisher,
+    parent_handoff_guard_pool: ParentHandoffGuardPool | None = None,
     result_projector: AgentRunResultProjector | None = None,
     subagent_registry: SubagentRegistry | None = None,
 ) -> SubagentHandler:
     """Build the subagent chat adapter and its process-local collaborators."""
-    publisher = lifecycle_publisher or publish_agent_run_event_to_hub
     definitions = subagent_registry or get_subagent_registry()
     projector = result_projector or AgentRunResultProjector(registry=registry)
     resolved_launcher = launcher
@@ -63,19 +64,20 @@ def build_subagent_handler(
         resolved_launcher = AgentRunLauncher(
             registry=registry,
             worker=resolved_worker,
-            lifecycle_publisher=publisher,
+            lifecycle_publisher=lifecycle_publisher,
         )
 
     dispatch_service = SubagentDispatchService(
         registry=registry,
         launcher=resolved_launcher,
         subagent_registry=definitions,
-        lifecycle_publisher=publisher,
+        lifecycle_publisher=lifecycle_publisher,
     )
     handoff_coordinator = ParentHandoffCoordinator(
         registry=registry,
+        guard_pool=parent_handoff_guard_pool or ParentHandoffGuardPool(),
         result_projector=projector,
-        parent_progress_publisher=_parent_progress_publisher(publisher),
+        parent_progress_publisher=_parent_progress_publisher(lifecycle_publisher),
     )
     parent_finalizer = SubagentParentFinalizer(
         executor=executor,
@@ -92,16 +94,6 @@ def build_subagent_handler(
     )
 
 
-async def publish_agent_run_event_to_hub(
-    task_id: int,
-    event: dict[str, Any],
-) -> None:
-    """Publish one agent-run event through the existing task stream hub."""
-    from backend.services.streaming.in_memory_hub import get_in_memory_stream_hub
-
-    await get_in_memory_stream_hub().publish(task_id, event)
-
-
 def _parent_progress_publisher(
     publisher: LifecyclePublisher,
 ) -> ParentProgressPublisher:
@@ -115,4 +107,4 @@ def _parent_progress_publisher(
     return publish
 
 
-__all__ = ["build_subagent_handler", "publish_agent_run_event_to_hub"]
+__all__ = ["build_subagent_handler"]

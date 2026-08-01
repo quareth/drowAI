@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Any, Mapping
 
 from agent.graph.context.builder import METADATA_CONTEXT_BUNDLE_KEY
+from agent.graph.context.contracts import ActiveAgentRun, CompletedAgentResult
 
 from .contracts import AgentResultProjection, agent_display_name
 from .registry import ACTIVE_AGENT_RUN_STATUSES, ProcessLocalAgentRunRegistry
@@ -43,7 +44,7 @@ _SECRET_VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
 class CompletedAgentResultHandoff:
     """Projected result payload plus registry IDs to mark consumed after use."""
 
-    results: tuple[dict[str, Any], ...]
+    results: tuple[CompletedAgentResult, ...]
     agent_run_ids: tuple[str, ...]
 
 
@@ -100,7 +101,7 @@ class AgentRunResultProjector:
             ),
         )
 
-        results: list[dict[str, Any]] = []
+        results: list[CompletedAgentResult] = []
         agent_run_ids: list[str] = []
         for entry in candidates[: self._max_results]:
             assert entry.result is not None
@@ -118,7 +119,7 @@ class AgentRunResultProjector:
         tenant_id: int,
         task_id: int,
         conversation_id: str,
-    ) -> tuple[dict[str, Any], ...]:
+    ) -> tuple[ActiveAgentRun, ...]:
         """Return bounded active subagent runs for one task conversation."""
         if self._max_active_runs <= 0 or not conversation_id:
             return ()
@@ -160,15 +161,15 @@ class AgentRunResultProjector:
                 agent_run_id=agent_run_id,
             )
 
-    def project_result(self, result: Any) -> dict[str, Any]:
+    def project_result(self, result: Any) -> CompletedAgentResult:
         """Return the same bounded projection used by next-turn collection."""
         return self._bounded_projection(result)
 
-    def project_active_run(self, entry: Any) -> dict[str, Any]:
+    def project_active_run(self, entry: Any) -> ActiveAgentRun:
         """Return the same bounded active-run projection used by context collection."""
         return self._bounded_active_projection(entry)
 
-    def _bounded_projection(self, result: Any) -> dict[str, Any]:
+    def _bounded_projection(self, result: Any) -> CompletedAgentResult:
         projection = AgentResultProjection.from_result(result).model_dump(mode="json")
         return {
             "agent_run_id": _bounded_text(
@@ -212,7 +213,7 @@ class AgentRunResultProjector:
             ),
         }
 
-    def _bounded_active_projection(self, entry: Any) -> dict[str, Any]:
+    def _bounded_active_projection(self, entry: Any) -> ActiveAgentRun:
         assignment = entry.assignment
         return {
             "agent_run_id": _bounded_text(
@@ -251,7 +252,7 @@ def attach_completed_agent_results_to_context(
 
 def attach_active_agent_runs_to_context(
     metadata: dict[str, Any],
-    active_runs: tuple[dict[str, Any], ...],
+    active_runs: tuple[ActiveAgentRun, ...],
 ) -> None:
     """Attach bounded active-run projections to metadata and context bundle."""
     runs = [dict(item) for item in active_runs]

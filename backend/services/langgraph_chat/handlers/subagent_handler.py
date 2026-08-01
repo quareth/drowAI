@@ -13,6 +13,7 @@ import logging
 from typing import Any
 
 from agent.subagents.registry import SubagentRegistry
+from agent.graph.context.contracts import ActiveAgentRun
 from backend.services.agent_runs.dispatch_service import (
     AgentRunDispatchStop,
     SubagentDispatchService,
@@ -89,7 +90,7 @@ class SubagentHandler(BaseLangGraphHandler):
 
         async def run_parent_continuation(
             handoff: Any,
-            _active_runs: tuple[dict[str, Any], ...],
+            _active_runs: tuple[ActiveAgentRun, ...],
         ) -> LangGraphChatResult:
             child_completions = await self._dispatch_service.completions_for_handoff(
                 handoff,

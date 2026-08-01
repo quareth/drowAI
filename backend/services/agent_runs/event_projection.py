@@ -18,6 +18,7 @@ from agent.graph.contracts.streaming_constants import (
     STEP_REASONING_SECTION_END,
     STEP_REASONING_START,
 )
+from agent.graph.context.contracts import ActiveAgentRun, CompletedAgentResult
 from agent.graph.emission.agent_run_attribution import resolve_agent_run_attribution
 from backend.core.time_utils import format_iso, utc_now
 from backend.services.agent_runs.contracts import (
@@ -95,8 +96,8 @@ def build_agent_run_lifecycle_event(
 
 def build_parent_handoff_progress_events(
     *,
-    completed_results: tuple[dict[str, Any], ...],
-    active_runs: tuple[dict[str, Any], ...],
+    completed_results: tuple[CompletedAgentResult, ...],
+    active_runs: tuple[ActiveAgentRun, ...],
     conversation_id: str,
     parent_turn_id: str,
     claim_id: str,
@@ -235,8 +236,8 @@ def _parent_progress_section_id(
 
 def _parent_progress_content(
     *,
-    completed_results: tuple[dict[str, Any], ...],
-    active_runs: tuple[dict[str, Any], ...],
+    completed_results: tuple[CompletedAgentResult, ...],
+    active_runs: tuple[ActiveAgentRun, ...],
     action: str,
 ) -> str:
     completed_count = len(completed_results)
@@ -270,7 +271,9 @@ def _assignment_label(count: int) -> str:
     return "assignment" if count == 1 else "assignments"
 
 
-def _display_names(items: tuple[dict[str, Any], ...]) -> list[str]:
+def _display_names(
+    items: tuple[CompletedAgentResult, ...] | tuple[ActiveAgentRun, ...],
+) -> list[str]:
     names: list[str] = []
     for item in items:
         name = _string_value(item.get("agent_display_name")) or _string_value(

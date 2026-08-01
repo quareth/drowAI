@@ -18,23 +18,16 @@ from backend.services.agent_runs.continuation import (
     SUBAGENT_PARENT_CONTINUATION_PENDING,
     SubagentContinuationContext,
     SubagentContinuationError,
+    build_subagent_continuation_attribution,
+    complete_subagent_continuation,
     is_subagent_graph_name,
-    mark_subagent_running,
-    mark_subagent_waiting_for_approval,
+    pause_subagent_continuation,
     prepare_subagent_resume,
+    resume_subagent_continuation,
 )
-from backend.services.agent_runs.execution_config import build_child_event_attribution
-from backend.services.agent_runs.event_projection import (
-    build_agent_run_lifecycle_event,
-)
-from backend.services.agent_runs.registry import (
-    LocalAgentRun,
-    ProcessLocalAgentRunRegistry,
-)
-from backend.services.agent_runs.worker import mark_subagent_completed_from_state
+from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
 from backend.services.agent_runs.completion import (
     AgentRunCompletion,
-    child_usage_records_from_state,
     usage_envelopes_from_child_records,
 )
 from backend.services.chat.message_service import ChatMessageService
@@ -220,12 +213,13 @@ class CheckpointContinuationService:
             if subagent_context is not None:
                 graph_thread_id = subagent_context.graph_thread_id
                 checkpoint_id = subagent_context.checkpoint_id
-                running_entry = await mark_subagent_running(
+                await resume_subagent_continuation(
                     registry=self._require_agent_run_registry(),
                     context=subagent_context,
+                    lifecycle_publisher=(
+                        self._require_agent_run_lifecycle_publisher()
+                    ),
                 )
-                if running_entry is not None:
-                    await self._publish_subagent_lifecycle(running_entry)
             return await self.continue_from_checkpoint(
                 task_id=task_id,
                 user_id=user_id,
@@ -256,36 +250,6 @@ class CheckpointContinuationService:
             msg = f"[HITL] Resume failed for task {task_id}: {exc}"
             logger.error(msg, exc_info=True)
             raise HITLError(msg) from exc
-
-    async def _publish_subagent_lifecycle(self, entry: LocalAgentRun) -> None:
-        """Best-effort publish of an immediate subagent lifecycle transition."""
-        parent_run_id = entry.assignment.relevant_context.get("parent_run_id")
-        normalized_parent_run_id = (
-            str(parent_run_id).strip()
-            if parent_run_id is not None and str(parent_run_id).strip()
-            else None
-        )
-        event = build_agent_run_lifecycle_event(
-            entry,
-            parent_run_id=normalized_parent_run_id,
-        )
-        try:
-            publisher = self._agent_run_lifecycle_publisher
-            if publisher is None:
-                from backend.services.streaming.in_memory_hub import (
-                    get_in_memory_stream_hub,
-                )
-
-                publisher = get_in_memory_stream_hub().publish
-            await publisher(entry.task_id, event)
-        except Exception:
-            logger.debug(
-                "Subagent lifecycle publish failed during approval resume "
-                "for task_id=%s agent_run_id=%s",
-                entry.task_id,
-                entry.agent_run_id,
-                exc_info=True,
-            )
 
     async def retry_from_checkpoint(
         self,
@@ -409,99 +373,35 @@ class CheckpointContinuationService:
             HITLError: If continuation cannot produce/parse final state.
         """
         from agent.graph import InteractiveState
-        from backend.services.chat.event_builders import attach_conversation_ids
-
         state_container = ChatStateContainer(reserved_message_id=reserved_message_id)
-        subagent_event_attribution: dict[str, Any] | None = None
-
-        async with self._checkpointer_service.get_checkpointer(task_id) as checkpointer:
-            compiled = await self._compile_graph_for_name(
-                task_id=task_id,
-                graph_name=graph_name,
-                checkpointer=checkpointer,
-                subagent_agent_id=(
-                    subagent_continuation_context.entry.agent_id
-                    if subagent_continuation_context is not None
-                    else None
-                ),
-            )
-            runtime_dependency_cleanup: Optional[Callable[[], None]] = None
-            try:
-                checkpoint_hint = await self._load_checkpoint_runtime_hint(
-                    compiled=compiled,
-                    task_id=task_id,
-                    graph_thread_id=graph_thread_id,
-                    graph_name=graph_name,
-                    checkpoint_id=checkpoint_id,
-                )
-                (
-                    llm_runtime_selection,
-                    runtime_services,
-                    runtime_dependency_cleanup,
-                ) = self._prepare_runtime_dependencies(
-                    user_id=user_id,
-                    llm_runtime_selection=llm_runtime_selection,
-                    runtime_services=runtime_services,
-                    checkpoint_hint=checkpoint_hint,
-                )
-                config = self._build_checkpoint_execution_config(
-                    task_id=task_id,
-                    graph_name=graph_name,
-                    graph_thread_id=graph_thread_id,
-                    user_id=user_id,
-                    tenant_id=tenant_id,
-                    runtime_placement_mode=runtime_placement_mode,
-                    workspace_id=workspace_id,
-                    actor_type=actor_type,
-                    actor_id=actor_id,
-                    runner_id=runner_id,
-                    execution_site_id=execution_site_id,
-                    llm_runtime_selection=llm_runtime_selection,
-                    runtime_services=runtime_services,
-                    checkpoint_id=checkpoint_id,
-                    interrupt_id=interrupt_id,
-                    approval_received_at=approval_received_at,
-                    resume_worker_start_at=resume_worker_start_at,
-                    retry_context=retry_context,
-                )
-                if subagent_continuation_context is not None:
-                    entry = subagent_continuation_context.entry
-                    parent_run_id = entry.assignment.relevant_context.get(
-                        "parent_run_id"
-                    )
-                    subagent_event_attribution = build_child_event_attribution(
-                        assignment=entry.assignment,
-                        child_graph_thread_id=(
-                            subagent_continuation_context.graph_thread_id
-                        ),
-                        parent_run_id=(
-                            str(parent_run_id).strip()
-                            if parent_run_id is not None
-                            and str(parent_run_id).strip()
-                            else None
-                        ),
-                        lifecycle_version=entry.lifecycle_version,
-                    )
-                    config["configurable"].update(subagent_event_attribution)
-                if resume_worker_start_at is not None:
-                    logger.info(
-                        "[HITL] Continue using checkpoint_id=%s for task %s",
-                        config["configurable"].get("checkpoint_id", "latest"),
-                        task_id,
-                    )
-
-                logger.info("[HITL] Continuing graph=%s for task %s", graph_name, task_id)
-                execution_result = await self._executor.stream_graph(
-                    compiled,
-                    graph_input,
-                    config,
-                    task_id,
-                    state_container=state_container,
-                    should_cancel=should_cancel,
-                )
-            finally:
-                if runtime_dependency_cleanup is not None:
-                    runtime_dependency_cleanup()
+        (
+            execution_result,
+            llm_runtime_selection,
+            subagent_event_attribution,
+        ) = await self._execute_continuation(
+            task_id=task_id,
+            user_id=user_id,
+            graph_thread_id=graph_thread_id,
+            graph_name=graph_name,
+            graph_input=graph_input,
+            tenant_id=tenant_id,
+            runtime_placement_mode=runtime_placement_mode,
+            workspace_id=workspace_id,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            runner_id=runner_id,
+            execution_site_id=execution_site_id,
+            checkpoint_id=checkpoint_id,
+            approval_received_at=approval_received_at,
+            resume_worker_start_at=resume_worker_start_at,
+            interrupt_id=interrupt_id,
+            should_cancel=should_cancel,
+            retry_context=retry_context,
+            llm_runtime_selection=llm_runtime_selection,
+            runtime_services=runtime_services,
+            state_container=state_container,
+            subagent_continuation_context=subagent_continuation_context,
+        )
 
         if not execution_result.final_state:
             if execution_result.interrupted:
@@ -559,90 +459,138 @@ class CheckpointContinuationService:
             )
 
         if execution_result.interrupted:
-            usage = None
-            unaccounted_usage_records: tuple[dict[str, Any], ...] = ()
-            if subagent_continuation_context is not None:
-                accounted_usage_record_count = (
-                    subagent_continuation_context.entry.accounted_usage_record_count
-                )
-                usage_records = child_usage_records_from_state(
-                    execution_result.final_state,
-                    assignment=subagent_continuation_context.entry.assignment,
-                    graph_thread_id=subagent_continuation_context.graph_thread_id,
-                )
-                unaccounted_usage_records = child_usage_records_from_state(
-                    execution_result.final_state,
-                    assignment=subagent_continuation_context.entry.assignment,
-                    graph_thread_id=subagent_continuation_context.graph_thread_id,
-                    skip_usage_records=accounted_usage_record_count,
-                )
-                await mark_subagent_waiting_for_approval(
-                    registry=self._require_agent_run_registry(),
-                    context=subagent_continuation_context,
-                    accounted_usage_record_count=len(usage_records),
-                )
-            logger.info(
-                "[HITL] Continuation hit another interrupt for task %s", task_id
-            )
-            conversation_id = (
-                interactive_state.facts.conversation_id
-                if interactive_state is not None
-                else self._extract_resume_conversation_id(execution_result.final_state)
-            ) or ""
-            turn_number = self._resolve_resume_turn_number(
-                reserved_message_id=reserved_message_id
-            )
-            turn_id = (
-                f"task-{task_id}-turn-{turn_number}"
-                if turn_number
-                else f"task-{task_id}"
-            )
-            if unaccounted_usage_records:
-                usage = usage_envelopes_from_child_records(
-                    unaccounted_usage_records,
-                    execution_branch="subagent_child",
-                    turn_index=turn_number if isinstance(turn_number, int) else None,
-                )
-            self._persist_chat_message_from_container(
+            return await self._build_interrupted_continuation_result(
                 task_id=task_id,
-                turn_id=turn_id,
-                reserved_message_id=reserved_message_id,
+                graph_name=graph_name,
+                execution_result=execution_result,
+                interactive_state=interactive_state,
                 state_container=state_container,
-                final_message=None,
-                error="interrupted",
-                reason=interrupt_persist_reason,
-                conversation_id=conversation_id,
-                turn_number=turn_number,
+                reserved_message_id=reserved_message_id,
+                interrupt_persist_reason=interrupt_persist_reason,
                 replace_turn_events=replace_turn_events,
+                llm_runtime_selection=llm_runtime_selection,
                 event_attribution=subagent_event_attribution,
+                subagent_context=subagent_continuation_context,
             )
 
-            interrupt_metadata = {"interrupt": True, "graph_name": graph_name}
-            if isinstance(execution_result.metadata, dict):
-                interrupt_metadata.update(execution_result.metadata)
-            safe_runtime_selection = checkpoint_safe_llm_runtime_selection(
-                llm_runtime_selection,
-            )
-            if safe_runtime_selection:
-                interrupt_metadata["llm_runtime_selection"] = safe_runtime_selection
+        assert interactive_state is not None
+        return await self._build_completed_continuation_result(
+            task_id=task_id,
+            graph_name=graph_name,
+            execution_result=execution_result,
+            interactive_state=interactive_state,
+            state_container=state_container,
+            reserved_message_id=reserved_message_id,
+            success_persist_reason=success_persist_reason,
+            replace_turn_events=replace_turn_events,
+            llm_runtime_selection=llm_runtime_selection,
+            event_attribution=subagent_event_attribution,
+            subagent_context=subagent_continuation_context,
+        )
 
-            return LangGraphChatResult(
-                final_text=None,
-                conversation_id=None,
-                metadata=interrupt_metadata,
-                persistence_handled=True,
-                usage=usage,
+    async def _build_interrupted_continuation_result(
+        self,
+        *,
+        task_id: int,
+        graph_name: str,
+        execution_result: Any,
+        interactive_state: Optional["InteractiveState"],
+        state_container: ChatStateContainer,
+        reserved_message_id: Optional[int],
+        interrupt_persist_reason: str,
+        replace_turn_events: bool,
+        llm_runtime_selection: Optional[Mapping[str, Any]],
+        event_attribution: dict[str, Any] | None,
+        subagent_context: SubagentContinuationContext | None,
+    ) -> LangGraphChatResult:
+        """Persist and return a continuation that paused on another interrupt."""
+        interrupted_usage = None
+        if subagent_context is not None:
+            interrupted_usage = await pause_subagent_continuation(
+                registry=self._require_agent_run_registry(),
+                context=subagent_context,
+                final_state=execution_result.final_state,
             )
+        usage_records = (
+            interrupted_usage.unaccounted_records
+            if interrupted_usage is not None
+            else ()
+        )
+        logger.info("[HITL] Continuation hit another interrupt for task %s", task_id)
+        conversation_id = (
+            interactive_state.facts.conversation_id
+            if interactive_state is not None
+            else self._extract_resume_conversation_id(execution_result.final_state)
+        ) or ""
+        turn_number = self._resolve_resume_turn_number(
+            reserved_message_id=reserved_message_id
+        )
+        turn_id = (
+            f"task-{task_id}-turn-{turn_number}"
+            if turn_number
+            else f"task-{task_id}"
+        )
+        usage = None
+        if usage_records:
+            usage = usage_envelopes_from_child_records(
+                usage_records,
+                execution_branch="subagent_child",
+                turn_index=turn_number if isinstance(turn_number, int) else None,
+            )
+        self._persist_chat_message_from_container(
+            task_id=task_id,
+            turn_id=turn_id,
+            reserved_message_id=reserved_message_id,
+            state_container=state_container,
+            final_message=None,
+            error="interrupted",
+            reason=interrupt_persist_reason,
+            conversation_id=conversation_id,
+            turn_number=turn_number,
+            replace_turn_events=replace_turn_events,
+            event_attribution=event_attribution,
+        )
+        metadata = {"interrupt": True, "graph_name": graph_name}
+        if isinstance(execution_result.metadata, dict):
+            metadata.update(execution_result.metadata)
+        safe_runtime_selection = checkpoint_safe_llm_runtime_selection(
+            llm_runtime_selection
+        )
+        if safe_runtime_selection:
+            metadata["llm_runtime_selection"] = safe_runtime_selection
+        return LangGraphChatResult(
+            final_text=None,
+            conversation_id=None,
+            metadata=metadata,
+            persistence_handled=True,
+            usage=usage,
+        )
+
+    async def _build_completed_continuation_result(
+        self,
+        *,
+        task_id: int,
+        graph_name: str,
+        execution_result: Any,
+        interactive_state: "InteractiveState",
+        state_container: ChatStateContainer,
+        reserved_message_id: Optional[int],
+        success_persist_reason: str,
+        replace_turn_events: bool,
+        llm_runtime_selection: Optional[Mapping[str, Any]],
+        event_attribution: dict[str, Any] | None,
+        subagent_context: SubagentContinuationContext | None,
+    ) -> LangGraphChatResult:
+        """Persist and return one successfully completed continuation."""
+        from backend.services.chat.event_builders import attach_conversation_ids
+        from backend.services.langgraph_chat.handlers.normal_chat_handler import (
+            _extract_usage_from_state,
+        )
 
         logger.info(
             "[HITL] Continuation completed for task %s, parsing state...", task_id
         )
-        # Success path: parse failure raised above for non-interrupt paths,
-        # so ``interactive_state`` is guaranteed non-None here.
-        assert interactive_state is not None
-        final_text = (
-            interactive_state.trace.final_text or interactive_state.facts.message
-        )
+        final_text = interactive_state.trace.final_text or interactive_state.facts.message
         interactive_state.trace.final_text = final_text
         conversation_id = interactive_state.facts.conversation_id
         turn_number = self._resolve_resume_turn_number(
@@ -651,31 +599,27 @@ class CheckpointContinuationService:
         turn_id = (
             f"task-{task_id}-turn-{turn_number}" if turn_number else f"task-{task_id}"
         )
-
         self._persist_chat_message_from_container(
             task_id=task_id,
             turn_id=turn_id,
             reserved_message_id=reserved_message_id,
             state_container=state_container,
-            final_message=(
-                None if subagent_continuation_context is not None else final_text
-            ),
+            final_message=None if subagent_context is not None else final_text,
             error=None,
             reason=success_persist_reason,
             conversation_id=conversation_id or "",
             turn_number=turn_number,
             replace_turn_events=replace_turn_events,
-            event_attribution=subagent_event_attribution,
+            event_attribution=event_attribution,
         )
-
         subagent_completion: AgentRunCompletion | None = None
-        if subagent_continuation_context is not None:
-            subagent_completion = await mark_subagent_completed_from_state(
+        if subagent_context is not None:
+            subagent_completion = await complete_subagent_continuation(
                 registry=self._require_agent_run_registry(),
-                entry=subagent_continuation_context.entry,
+                context=subagent_context,
                 final_state=execution_result.final_state,
+                lifecycle_publisher=self._require_agent_run_lifecycle_publisher(),
             )
-
         metadata = attach_conversation_ids(
             {"role": "assistant", "streaming": False, "graph_name": graph_name},
             conversation_id or "",
@@ -686,22 +630,13 @@ class CheckpointContinuationService:
         if isinstance(execution_result.metadata, dict):
             metadata.update(execution_result.metadata)
         safe_runtime_selection = checkpoint_safe_llm_runtime_selection(
-            llm_runtime_selection,
+            llm_runtime_selection
         )
         if safe_runtime_selection:
             metadata["llm_runtime_selection"] = safe_runtime_selection
         if subagent_completion is not None:
             metadata[SUBAGENT_PARENT_CONTINUATION_PENDING] = True
 
-        from backend.services.langgraph_chat.handlers.normal_chat_handler import (
-            _extract_usage_from_state,
-        )
-
-        # Map the HITL graph_name to the canonical branch label used by the
-        # non-interrupt handlers. graph_name mirrors the branch name for
-        # deep_reasoning/simple_tool; anything else (including the E2E
-        # "interrupt_resume" scenario) falls back to "unknown" so downstream
-        # metadata stays honest rather than silently claiming simple_chat.
         resume_execution_branch = (
             GRAPH_NAME_DEEP_REASONING
             if graph_name == GRAPH_NAME_DEEP_REASONING
@@ -710,18 +645,19 @@ class CheckpointContinuationService:
             else "unknown"
         )
         turn_index = turn_number if isinstance(turn_number, int) else None
-        if subagent_completion is not None:
-            usage = usage_envelopes_from_child_records(
+        usage = (
+            usage_envelopes_from_child_records(
                 subagent_completion.usage_records,
                 execution_branch="subagent_child",
                 turn_index=turn_index,
             )
-        else:
-            usage = _extract_usage_from_state(
+            if subagent_completion is not None
+            else _extract_usage_from_state(
                 interactive_state,
                 execution_branch=resume_execution_branch,
                 turn_index=turn_index,
             )
+        )
         if usage:
             logger.info(
                 "[HITL] Extracted %s usage records for task %s, total_tokens=%s",
@@ -729,9 +665,8 @@ class CheckpointContinuationService:
                 task_id,
                 sum(entry.usage.total_tokens for entry in usage),
             )
-
-        result_obj = self._build_result(
-            final_text=(None if subagent_completion is not None else final_text),
+        result = self._build_result(
+            final_text=None if subagent_completion is not None else final_text,
             conversation_id=conversation_id,
             interactive_state=interactive_state,
             metadata=metadata,
@@ -739,8 +674,110 @@ class CheckpointContinuationService:
             turn_id=turn_id,
             usage=usage,
         )
-        result_obj.persistence_handled = True
-        return result_obj
+        result.persistence_handled = True
+        return result
+
+    async def _execute_continuation(
+        self,
+        *,
+        task_id: int,
+        user_id: Optional[int],
+        graph_thread_id: Optional[str],
+        graph_name: str,
+        graph_input: Any,
+        tenant_id: Optional[int],
+        runtime_placement_mode: Optional[str],
+        workspace_id: Optional[str],
+        actor_type: Optional[str],
+        actor_id: Optional[str],
+        runner_id: Optional[str],
+        execution_site_id: Optional[str],
+        checkpoint_id: Optional[int | str],
+        approval_received_at: Optional[float],
+        resume_worker_start_at: Optional[float],
+        interrupt_id: Optional[str],
+        should_cancel: Optional[Callable[[], bool]],
+        retry_context: Optional[Mapping[str, Any]],
+        llm_runtime_selection: Optional[Mapping[str, Any]],
+        runtime_services: Any,
+        state_container: ChatStateContainer,
+        subagent_continuation_context: SubagentContinuationContext | None,
+    ) -> tuple[Any, Optional[Mapping[str, Any]], dict[str, Any] | None]:
+        """Compile and execute one checkpoint continuation with live dependencies."""
+        attribution = build_subagent_continuation_attribution(
+            subagent_continuation_context
+        )
+        async with self._checkpointer_service.get_checkpointer(task_id) as checkpointer:
+            compiled = await self._compile_graph_for_name(
+                task_id=task_id,
+                graph_name=graph_name,
+                checkpointer=checkpointer,
+                subagent_agent_id=(
+                    subagent_continuation_context.entry.agent_id
+                    if subagent_continuation_context is not None
+                    else None
+                ),
+            )
+            runtime_dependency_cleanup: Optional[Callable[[], None]] = None
+            try:
+                checkpoint_hint = await self._load_checkpoint_runtime_hint(
+                    compiled=compiled,
+                    task_id=task_id,
+                    graph_thread_id=graph_thread_id,
+                    graph_name=graph_name,
+                    checkpoint_id=checkpoint_id,
+                )
+                (
+                    llm_runtime_selection,
+                    runtime_services,
+                    runtime_dependency_cleanup,
+                ) = self._prepare_runtime_dependencies(
+                    user_id=user_id,
+                    llm_runtime_selection=llm_runtime_selection,
+                    runtime_services=runtime_services,
+                    checkpoint_hint=checkpoint_hint,
+                )
+                config = self._build_checkpoint_execution_config(
+                    task_id=task_id,
+                    graph_name=graph_name,
+                    graph_thread_id=graph_thread_id,
+                    user_id=user_id,
+                    tenant_id=tenant_id,
+                    runtime_placement_mode=runtime_placement_mode,
+                    workspace_id=workspace_id,
+                    actor_type=actor_type,
+                    actor_id=actor_id,
+                    runner_id=runner_id,
+                    execution_site_id=execution_site_id,
+                    llm_runtime_selection=llm_runtime_selection,
+                    runtime_services=runtime_services,
+                    checkpoint_id=checkpoint_id,
+                    interrupt_id=interrupt_id,
+                    approval_received_at=approval_received_at,
+                    resume_worker_start_at=resume_worker_start_at,
+                    retry_context=retry_context,
+                )
+                if attribution is not None:
+                    config["configurable"].update(attribution)
+                if resume_worker_start_at is not None:
+                    logger.info(
+                        "[HITL] Continue using checkpoint_id=%s for task %s",
+                        config["configurable"].get("checkpoint_id", "latest"),
+                        task_id,
+                    )
+                logger.info("[HITL] Continuing graph=%s for task %s", graph_name, task_id)
+                execution_result = await self._executor.stream_graph(
+                    compiled,
+                    graph_input,
+                    config,
+                    task_id,
+                    state_container=state_container,
+                    should_cancel=should_cancel,
+                )
+                return execution_result, llm_runtime_selection, attribution
+            finally:
+                if runtime_dependency_cleanup is not None:
+                    runtime_dependency_cleanup()
 
     def _prepare_runtime_dependencies(
         self,
@@ -929,6 +966,16 @@ class CheckpointContinuationService:
                 "Subagent resume requires the process-local agent-run registry"
             )
         return self._agent_run_registry
+
+    def _require_agent_run_lifecycle_publisher(
+        self,
+    ) -> Callable[[int, dict[str, Any]], Awaitable[None]]:
+        """Return the configured publisher for a verified subagent continuation."""
+        if self._agent_run_lifecycle_publisher is None:
+            raise RuntimeError(
+                "Subagent continuation requires an agent-run lifecycle publisher"
+            )
+        return self._agent_run_lifecycle_publisher
 
 
 __all__ = [

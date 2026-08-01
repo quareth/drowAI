@@ -243,6 +243,7 @@ class CompletedAgentResult(TypedDict, total=False):
     """Bounded same-process subagent result summary for prompt context."""
 
     agent_run_id: str
+    agent_id: str
     agent_kind: str
     agent_display_name: str
     outcome: str
