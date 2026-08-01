@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
+from agent.subagents.registry import SubagentRegistry, get_subagent_registry
 from agent.graph.context.builder import (
     METADATA_CONTEXT_BUNDLE_KEY,
     build_conversation_context_bundle,
@@ -129,6 +132,7 @@ async def test_collect_projects_completed_unconsumed_results_for_conversation() 
 
     projector = AgentRunResultProjector(
         registry=registry,
+        subagent_registry=get_subagent_registry(),
         max_results=1,
         max_list_items=2,
         max_text_chars=48,
@@ -193,6 +197,7 @@ async def test_collect_projects_task_local_active_runs_with_bounded_fields() -> 
 
     projector = AgentRunResultProjector(
         registry=registry,
+        subagent_registry=get_subagent_registry(),
         max_active_runs=3,
         max_text_chars=64,
     )
@@ -231,7 +236,10 @@ async def test_mark_consumed_is_idempotent_after_acceptance() -> None:
         agent_run_id="run-1",
         result=_result("run-1"),
     )
-    projector = AgentRunResultProjector(registry=registry)
+    projector = AgentRunResultProjector(
+        registry=registry,
+        subagent_registry=get_subagent_registry(),
+    )
     handoff = await projector.collect_for_context(
         tenant_id=7,
         task_id=42,
@@ -253,6 +261,44 @@ async def test_mark_consumed_is_idempotent_after_acceptance() -> None:
     )
     assert second_handoff.results == ()
     assert second_handoff.agent_run_ids == ()
+
+
+@pytest.mark.asyncio
+async def test_projection_uses_the_injected_definition_registry() -> None:
+    default_definition = get_subagent_registry().require("pathfinder")
+    definitions = SubagentRegistry(
+        (
+            replace(
+                default_definition,
+                id="web_mapper",
+                display_name="Web Mapper",
+                icon="web-mapper",
+            ),
+        )
+    )
+    registry = ProcessLocalAgentRunRegistry()
+    assignment = _assignment().model_copy(update={"agent_id": "web_mapper"})
+    result = _result().model_copy(update={"agent_id": "web_mapper"})
+    await registry.register(assignment, graph_thread_id="child-custom")
+    await registry.mark_completed(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="run-1",
+        result=result,
+    )
+    projector = AgentRunResultProjector(
+        registry=registry,
+        subagent_registry=definitions,
+    )
+
+    handoff = await projector.collect_for_context(
+        tenant_id=7,
+        task_id=42,
+        conversation_id="conversation-1",
+    )
+
+    assert handoff.results[0]["agent_id"] == "web_mapper"
+    assert handoff.results[0]["agent_display_name"] == "Web Mapper"
 
 
 def test_attach_completed_agent_results_updates_metadata_and_context_bundle() -> None:

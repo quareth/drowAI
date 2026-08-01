@@ -408,6 +408,7 @@ class SubagentDispatchService:
                     assignment=assignment,
                     runtime_config=runtime_config,
                     registry=self._registry,
+                    subagent_registry=self._subagent_registry,
                     graph_thread_id=item.graph_thread_id,
                 )
                 if runtime_config.runtime_services is not None:
@@ -649,6 +650,7 @@ class SubagentDispatchService:
     ) -> None:
         event = build_agent_run_lifecycle_event(
             entry,
+            display_metadata=self._subagent_registry.display_metadata(entry.agent_id),
             parent_run_id=parent_run_id_from_metadata(runtime_config.metadata),
         )
         await self._publish_lifecycle(entry.task_id, event)

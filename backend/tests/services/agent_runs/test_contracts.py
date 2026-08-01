@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 from agent.subagents import contracts as agent_contracts
+from agent.subagents.registry import get_subagent_registry
 from backend.services.agent_runs import contracts as backend_contracts
 from backend.services.agent_runs.contracts import (
     AgentAssignment,
@@ -15,7 +16,6 @@ from backend.services.agent_runs.contracts import (
     AgentResultProjection,
     AgentRunLifecycleProjection,
     AgentRuntimeIdentity,
-    agent_display_name,
 )
 
 
@@ -80,16 +80,14 @@ def test_assignment_validates_deterministically_and_keeps_display_name_separate(
 
     assert assignment.agent_kind == "recon"
     assert "agent_display_name" not in assignment.model_dump()
-    assert agent_display_name(assignment.agent_id) == "Pathfinder"
+    assert (
+        get_subagent_registry().display_metadata(assignment.agent_id).display_name
+        == "Pathfinder"
+    )
 
     dumped = assignment.model_dump(mode="json")
     round_tripped = AgentAssignment.model_validate(dumped)
     assert round_tripped == assignment
-
-
-def test_agent_display_name_requires_declarative_definition() -> None:
-    with pytest.raises(KeyError, match="unknown subagent definition id"):
-        agent_display_name("unknown_agent")
 
 
 def test_runtime_identity_rejects_non_serializable_values() -> None:
@@ -164,7 +162,10 @@ def test_contracts_reject_post_validation_mutation_of_safe_payloads() -> None:
         recommended_next_steps=["Review HTTP service headers"],
         final_checkpoint_id="checkpoint-1",
     )
-    result_projection = AgentResultProjection.from_result(result)
+    result_projection = AgentResultProjection.from_result(
+        result,
+        agent_display_name="Pathfinder",
+    )
     lifecycle_projection = AgentRunLifecycleProjection(
         agent_run_id="run-1",
         agent_id="pathfinder",
@@ -218,7 +219,10 @@ def test_result_and_lifecycle_projections_exclude_raw_activity() -> None:
         final_checkpoint_id="checkpoint-1",
     )
 
-    result_projection = AgentResultProjection.from_result(result)
+    result_projection = AgentResultProjection.from_result(
+        result,
+        agent_display_name="Pathfinder",
+    )
     lifecycle_projection = AgentRunLifecycleProjection(
         agent_run_id="run-1",
         agent_id="pathfinder",
@@ -244,13 +248,13 @@ def test_result_and_lifecycle_projections_exclude_raw_activity() -> None:
     assert dumped_result["agent_display_name"] == "Pathfinder"
 
 
-def test_lifecycle_projection_requires_display_metadata_match() -> None:
-    with pytest.raises(ValidationError, match="display metadata"):
+def test_lifecycle_projection_requires_non_empty_display_metadata() -> None:
+    with pytest.raises(ValidationError, match="agent_display_name"):
         AgentRunLifecycleProjection(
             agent_run_id="run-1",
             agent_id="pathfinder",
             agent_kind="recon",
-            agent_display_name="Recon",
+            agent_display_name=" ",
             agent_icon_key="pathfinder",
             status="running",
             lifecycle_version=1,
@@ -260,14 +264,14 @@ def test_lifecycle_projection_requires_display_metadata_match() -> None:
         )
 
 
-def test_lifecycle_projection_requires_icon_metadata_match() -> None:
+def test_lifecycle_projection_requires_non_empty_icon_metadata() -> None:
     with pytest.raises(ValidationError, match="icon_key"):
         AgentRunLifecycleProjection(
             agent_run_id="run-1",
             agent_id="pathfinder",
             agent_kind="recon",
             agent_display_name="Pathfinder",
-            agent_icon_key="generic",
+            agent_icon_key=" ",
             status="running",
             lifecycle_version=1,
             task_id=42,

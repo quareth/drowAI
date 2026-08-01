@@ -12,6 +12,7 @@ from typing import Any
 
 from agent.graph.graph_names import GRAPH_NAME_SUBAGENT
 from agent.graph.infrastructure.state_models import checkpoint_safe_llm_runtime_selection
+from agent.subagents.registry import SubagentDisplayMetadata, SubagentRegistry
 from backend.services.langgraph_chat.checkpoint.thread_identity import (
     format_graph_thread_id,
     require_graph_thread_id,
@@ -20,7 +21,6 @@ from backend.services.langgraph_chat.contracts import LangGraphRuntimeConfig
 
 from .assignment_builder import parent_run_id_from_metadata
 from .contracts import AgentAssignment, AgentRuntimeIdentity
-from .contracts import agent_display_name, agent_icon_key
 from .registry import ProcessLocalAgentRunRegistry
 
 
@@ -33,6 +33,7 @@ async def build_child_execution_config(
     assignment: AgentAssignment,
     runtime_config: LangGraphRuntimeConfig,
     registry: ProcessLocalAgentRunRegistry,
+    subagent_registry: SubagentRegistry,
     graph_thread_id: str,
 ) -> dict[str, Any]:
     """Return checkpoint-safe LangGraph config for one registered subagent child run."""
@@ -54,6 +55,7 @@ async def build_child_execution_config(
     parent_run_id = parent_run_id_from_metadata(
         runtime_config.metadata
     ) or parent_run_id_from_metadata(assignment.relevant_context)
+    display_metadata = subagent_registry.display_metadata(assignment.agent_id)
     runtime_projection = _runtime_projection(
         assignment.runtime_identity,
         child_graph_thread_id=child_graph_thread_id,
@@ -71,6 +73,7 @@ async def build_child_execution_config(
             child_graph_thread_id=child_graph_thread_id,
             parent_run_id=parent_run_id,
             lifecycle_version=entry.lifecycle_version,
+            display_metadata=display_metadata,
         ),
         "runtime_projection": runtime_projection,
     }
@@ -91,6 +94,7 @@ def build_child_event_attribution(
     child_graph_thread_id: str,
     parent_run_id: str | None,
     lifecycle_version: int,
+    display_metadata: SubagentDisplayMetadata,
 ) -> dict[str, Any]:
     """Return stable stream ownership metadata for a child execution attempt."""
     return {
@@ -99,8 +103,8 @@ def build_child_event_attribution(
         "agent_run_id": assignment.agent_run_id,
         "agent_id": assignment.agent_id,
         "agent_kind": assignment.agent_kind,
-        "agent_display_name": agent_display_name(assignment.agent_id),
-        "agent_icon_key": agent_icon_key(assignment.agent_id),
+        "agent_display_name": display_metadata.display_name,
+        "agent_icon_key": display_metadata.icon,
         "parent_turn_id": assignment.parent_turn_id,
         "parent_run_id": parent_run_id,
         "parent_graph_thread_id": assignment.parent_graph_thread_id,

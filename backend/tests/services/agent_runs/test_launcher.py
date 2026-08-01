@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from agent.subagents.registry import get_subagent_registry
 from backend.services.agent_runs.contracts import (
     AgentAssignment,
     AgentResult,
@@ -129,7 +130,11 @@ async def test_launch_attaches_task_and_completion_callback_stores_result() -> N
         await release_worker.wait()
         return _completion(assignment)
 
-    launcher = AgentRunLauncher(registry=registry, worker=_worker)
+    launcher = AgentRunLauncher(
+        registry=registry,
+        subagent_registry=get_subagent_registry(),
+        worker=_worker,
+    )
 
     task = await launcher.launch(
         assignment=assignment,
@@ -169,6 +174,7 @@ async def test_terminal_completion_publishes_attributed_lifecycle_event() -> Non
 
     launcher = AgentRunLauncher(
         registry=registry,
+        subagent_registry=get_subagent_registry(),
         worker=_worker,
         lifecycle_publisher=_publish,
     )
@@ -209,7 +215,11 @@ async def test_worker_failure_is_sanitized_and_contained() -> None:
     async def _worker(**_kwargs: Any) -> AgentRunCompletion:
         raise RuntimeError("secret token=abc123")
 
-    launcher = AgentRunLauncher(registry=registry, worker=_worker)
+    launcher = AgentRunLauncher(
+        registry=registry,
+        subagent_registry=get_subagent_registry(),
+        worker=_worker,
+    )
 
     task = await launcher.launch(
         assignment=assignment,
@@ -246,6 +256,7 @@ async def test_done_callback_cannot_overwrite_richer_terminal_result() -> None:
 
     launcher = AgentRunLauncher(
         registry=registry,
+        subagent_registry=get_subagent_registry(),
         worker=_worker,
         lifecycle_publisher=_publish,
     )
@@ -310,6 +321,7 @@ async def test_specialized_worker_errors_use_fallback_terminalization(
 
     launcher = AgentRunLauncher(
         registry=registry,
+        subagent_registry=get_subagent_registry(),
         worker=_worker,
         lifecycle_publisher=_publish,
     )
@@ -352,7 +364,11 @@ async def test_cancellation_signal_is_scoped_to_exact_local_run() -> None:
         await asyncio.sleep(60)
         return _completion(kwargs["assignment"], graph_thread_id=kwargs["graph_thread_id"])
 
-    launcher = AgentRunLauncher(registry=registry, worker=_worker)
+    launcher = AgentRunLauncher(
+        registry=registry,
+        subagent_registry=get_subagent_registry(),
+        worker=_worker,
+    )
     first_task = await launcher.launch(
         assignment=first,
         runtime_config=object(),
@@ -424,6 +440,7 @@ async def test_paused_approval_cancellation_becomes_terminal_and_publishes() -> 
 
     launcher = AgentRunLauncher(
         registry=registry,
+        subagent_registry=get_subagent_registry(),
         worker=_worker,
         lifecycle_publisher=_publish,
     )
@@ -477,6 +494,7 @@ async def test_create_task_failure_does_not_attach_local_handle() -> None:
 
     launcher = AgentRunLauncher(
         registry=registry,
+        subagent_registry=get_subagent_registry(),
         worker=_worker,
         task_factory=_failing_task_factory,
     )

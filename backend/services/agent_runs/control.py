@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
+from agent.subagents.registry import SubagentDisplayMetadata, SubagentRegistry
 from pydantic import BaseModel, ConfigDict
 
 from .contracts import (
@@ -16,8 +17,6 @@ from .contracts import (
     AgentKind,
     AgentResultProjection,
     AgentRunStatus,
-    agent_display_name,
-    agent_icon_key,
 )
 from .registry import (
     ACTIVE_AGENT_RUN_STATUSES,
@@ -72,14 +71,19 @@ class LocalAgentRunStatusProjection(BaseModel):
     completed_at: datetime | None = None
 
     @classmethod
-    def from_entry(cls, entry: LocalAgentRun) -> "LocalAgentRunStatusProjection":
+    def from_entry(
+        cls,
+        entry: LocalAgentRun,
+        *,
+        display_metadata: SubagentDisplayMetadata,
+    ) -> "LocalAgentRunStatusProjection":
         """Project a registry entry without exposing live task handles."""
         return cls(
             agent_run_id=entry.agent_run_id,
             agent_id=entry.agent_id,
             agent_kind=entry.agent_kind,
-            agent_display_name=agent_display_name(entry.agent_id),
-            agent_icon_key=agent_icon_key(entry.agent_id),
+            agent_display_name=display_metadata.display_name,
+            agent_icon_key=display_metadata.icon,
             status=entry.status,
             lifecycle_version=entry.lifecycle_version,
             task_id=entry.task_id,
@@ -89,7 +93,10 @@ class LocalAgentRunStatusProjection(BaseModel):
             result=(
                 None
                 if entry.result is None
-                else AgentResultProjection.from_result(entry.result)
+                else AgentResultProjection.from_result(
+                    entry.result,
+                    agent_display_name=display_metadata.display_name,
+                )
             ),
             safe_error=entry.safe_error,
             cancel_requested=entry.cancel_requested,
@@ -107,9 +114,11 @@ class AgentRunControlService:
         *,
         registry: ProcessLocalAgentRunRegistry,
         launcher: ScopedAgentRunLauncher,
+        subagent_registry: SubagentRegistry,
     ) -> None:
         self._registry = registry
         self._launcher = launcher
+        self._subagent_registry = subagent_registry
 
     async def list_local_runs(
         self,
@@ -123,7 +132,7 @@ class AgentRunControlService:
             task_id=task_id,
         )
         entries.sort(key=lambda entry: (entry.created_at, entry.agent_run_id))
-        return [LocalAgentRunStatusProjection.from_entry(entry) for entry in entries]
+        return [self._project_entry(entry) for entry in entries]
 
     async def request_cancellation(
         self,
@@ -156,7 +165,13 @@ class AgentRunControlService:
         )
         if updated.status not in ACTIVE_AGENT_RUN_STATUSES and not cancelled_by_request:
             raise AgentRunNotActiveError(agent_run_id)
-        return LocalAgentRunStatusProjection.from_entry(updated)
+        return self._project_entry(updated)
+
+    def _project_entry(self, entry: LocalAgentRun) -> LocalAgentRunStatusProjection:
+        return LocalAgentRunStatusProjection.from_entry(
+            entry,
+            display_metadata=self._subagent_registry.display_metadata(entry.agent_id),
+        )
 
 
 __all__ = [

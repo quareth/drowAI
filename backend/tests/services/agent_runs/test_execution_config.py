@@ -12,6 +12,7 @@ import pytest
 
 from agent.graph.graph_names import GRAPH_NAME_SUBAGENT
 from agent.subagents.definition import load_subagent_definitions
+from agent.subagents.registry import get_subagent_registry
 from agent.subagents.runtime.graph import initialize_subagent_state
 from agent.subagents.runtime.state import build_subagent_initial_state
 from backend.services.agent_runs.contracts import (
@@ -148,6 +149,7 @@ async def test_child_execution_config_inherits_runner_identity_without_live_obje
         assignment=assignment,
         runtime_config=_runtime_config(metadata_overrides={"run_id": "run-42"}),
         registry=registry,
+        subagent_registry=get_subagent_registry(),
         graph_thread_id=child_graph_thread_id,
     )
 
@@ -217,6 +219,7 @@ async def test_child_execution_config_preserves_explicit_local_lane() -> None:
             execution_site_id=None,
         ),
         registry=registry,
+        subagent_registry=get_subagent_registry(),
         graph_thread_id=child_graph_thread_id,
     )
 
@@ -238,6 +241,7 @@ async def test_child_execution_config_fails_when_parent_identity_differs() -> No
             assignment=assignment,
             runtime_config=_runtime_config(metadata_overrides={"tenant_id": 8}),
             registry=registry,
+            subagent_registry=get_subagent_registry(),
             graph_thread_id=child_graph_thread_id,
         )
 
@@ -253,6 +257,7 @@ async def test_child_execution_config_fails_when_child_thread_not_registered() -
             assignment=assignment,
             runtime_config=_runtime_config(),
             registry=registry,
+            subagent_registry=get_subagent_registry(),
             graph_thread_id=generate_graph_thread_id(),
         )
 
@@ -268,6 +273,7 @@ async def test_child_execution_config_thread_id_initializes_subagent_state() -> 
         assignment=assignment,
         runtime_config=_runtime_config(),
         registry=registry,
+        subagent_registry=get_subagent_registry(),
         graph_thread_id=child_graph_thread_id,
     )
     definition = next(

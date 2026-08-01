@@ -13,7 +13,7 @@ import pytest
 
 from agent.graph.graph_names import GRAPH_NAME_SUBAGENT
 from agent.subagents.definition import SubagentDefinition
-from agent.subagents.registry import SubagentRegistry
+from agent.subagents.registry import SubagentRegistry, get_subagent_registry
 from agent.subagents.runtime.model import SUBAGENT_RESULT_METADATA_KEY
 from backend.services.agent_runs import continuation
 from backend.services.agent_runs.continuation import (
@@ -568,6 +568,7 @@ async def test_mark_subagent_completed_from_state_returns_usage_identity_envelop
 
     completion = await mark_subagent_completed_from_state(
         registry=registry,
+        definition_registry=get_subagent_registry(),
         entry=entry,
         final_state=final_state,
         lifecycle_publisher=_publish_lifecycle,
@@ -625,10 +626,6 @@ async def test_interrupt_snapshot_hydrates_matching_subagent_graph_with_two_defi
 
     compiled_agent_ids: list[str] = []
     monkeypatch.setattr(
-        "agent.subagents.registry.get_subagent_registry",
-        lambda: definition_registry,
-    )
-    monkeypatch.setattr(
         "agent.subagents.runtime.graph.build_subagent_graph",
         lambda definition, *, checkpointer: (
             compiled_agent_ids.append(definition.id) or compiled
@@ -637,6 +634,7 @@ async def test_interrupt_snapshot_hydrates_matching_subagent_graph_with_two_defi
     service = InterruptStateService(
         checkpointer_service=_FakeCheckpointerService(),
         agent_run_registry=registry,
+        subagent_registry=definition_registry,
     )
 
     result = await service.get_pending_interrupt(
@@ -802,5 +800,6 @@ def _build_subagent_resume_service(
             usage=kwargs["usage"],
         ),
         agent_run_registry=registry,
+        subagent_registry=get_subagent_registry(),
         agent_run_lifecycle_publisher=_publish_lifecycle,
     )

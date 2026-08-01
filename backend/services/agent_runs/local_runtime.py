@@ -10,6 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from agent.subagents.registry import SubagentRegistry, get_subagent_registry
 from backend.services.langgraph_chat.checkpoint.checkpointer_service import (
     get_shared_checkpointer_service,
 )
@@ -21,11 +22,13 @@ from .parent_handoff_coordinator import ParentHandoffGuardPool
 from .registry import ProcessLocalAgentRunRegistry
 from .worker import ProcessLocalAgentRunWorker
 
+
 @dataclass(frozen=True, slots=True)
 class ProcessLocalAgentRunRuntime:
     """Shared process-local collaborators for subagent execution and control."""
 
     registry: ProcessLocalAgentRunRegistry
+    subagent_registry: SubagentRegistry
     streaming_adapter: LangGraphStreamingAdapter
     executor: LangGraphExecutor
     worker: ProcessLocalAgentRunWorker
@@ -51,22 +54,26 @@ def get_process_local_agent_run_runtime() -> ProcessLocalAgentRunRuntime:
     """Return the lazily composed process-local subagent runtime."""
     global _PROCESS_LOCAL_RUNTIME
     if _PROCESS_LOCAL_RUNTIME is None:
+        subagent_registry = get_subagent_registry()
         registry = ProcessLocalAgentRunRegistry()
         streaming_adapter = LangGraphStreamingAdapter()
         executor = LangGraphExecutor(streaming_adapter=streaming_adapter)
         worker = ProcessLocalAgentRunWorker(
             registry=registry,
+            definition_registry=subagent_registry,
             checkpointer_service=get_shared_checkpointer_service(),
             executor=executor,
         )
         launcher = AgentRunLauncher(
             registry=registry,
+            subagent_registry=subagent_registry,
             worker=worker,
             lifecycle_publisher=publish_process_local_agent_run_event,
         )
         parent_handoff_guard_pool = ParentHandoffGuardPool()
         _PROCESS_LOCAL_RUNTIME = ProcessLocalAgentRunRuntime(
             registry=registry,
+            subagent_registry=subagent_registry,
             streaming_adapter=streaming_adapter,
             executor=executor,
             worker=worker,

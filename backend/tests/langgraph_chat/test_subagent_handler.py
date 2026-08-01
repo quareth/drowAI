@@ -634,14 +634,9 @@ def _ordered_handoff_runtime_config(
 
 @pytest.mark.asyncio
 async def test_subagent_handler_uses_registered_agent_identity_for_launch_failure(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     definition = _second_agent_definition()
     definition_registry = DefinitionSubagentRegistry([definition])
-    monkeypatch.setattr(
-        "agent.subagents.registry.get_subagent_registry",
-        lambda: definition_registry,
-    )
     registry = ProcessLocalAgentRunRegistry()
     events: list[dict[str, Any]] = []
 
@@ -830,7 +825,6 @@ async def test_subagent_handler_fails_closed_before_launching_invalid_plan() -> 
 
 @pytest.mark.asyncio
 async def test_subagent_handler_launches_independent_handoffs_concurrently(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry = ProcessLocalAgentRunRegistry()
     launcher = _ControlledLauncher(registry)
@@ -842,11 +836,6 @@ async def test_subagent_handler_launches_independent_handoffs_concurrently(
             second_definition,
         ]
     )
-    monkeypatch.setattr(
-        "agent.subagents.registry.get_subagent_registry",
-        lambda: definition_registry,
-    )
-
     async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
         return None
 
@@ -903,7 +892,6 @@ async def test_subagent_handler_launches_independent_handoffs_concurrently(
 
 @pytest.mark.asyncio
 async def test_subagent_handler_processes_first_ready_handoff_with_active_snapshot(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry = ProcessLocalAgentRunRegistry()
     launcher = _ControlledLauncher(registry)
@@ -915,11 +903,6 @@ async def test_subagent_handler_processes_first_ready_handoff_with_active_snapsh
             second_definition,
         ]
     )
-    monkeypatch.setattr(
-        "agent.subagents.registry.get_subagent_registry",
-        lambda: definition_registry,
-    )
-
     async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
         return None
 
@@ -1000,7 +983,6 @@ async def test_subagent_handler_processes_first_ready_handoff_with_active_snapsh
 
 @pytest.mark.asyncio
 async def test_subagent_handler_does_not_reprocess_irrelevant_active_finalization(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry = ProcessLocalAgentRunRegistry()
     launcher = _ControlledLauncher(registry)
@@ -1012,11 +994,6 @@ async def test_subagent_handler_does_not_reprocess_irrelevant_active_finalizatio
             second_definition,
         ]
     )
-    monkeypatch.setattr(
-        "agent.subagents.registry.get_subagent_registry",
-        lambda: definition_registry,
-    )
-
     async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
         return None
 
@@ -1067,7 +1044,10 @@ async def test_subagent_handler_does_not_reprocess_irrelevant_active_finalizatio
     assert [entry.agent_id for entry in entries] == ["cartographer", "pathfinder"]
     assert [entry.status for entry in entries] == ["completed", "completed"]
     assert [entry.result_consumed for entry in entries] == [True, True]
-    later_handoff = await AgentRunResultProjector(registry=registry).collect_for_context(
+    later_handoff = await AgentRunResultProjector(
+        registry=registry,
+        subagent_registry=get_definition_subagent_registry(),
+    ).collect_for_context(
         tenant_id=7,
         task_id=42,
         conversation_id="conv-42",
@@ -1237,7 +1217,6 @@ async def test_subagent_handler_emits_failed_lifecycle_when_launch_fails() -> No
 
 @pytest.mark.asyncio
 async def test_subagent_handler_settles_prior_batch_child_when_later_launch_fails(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     registry = ProcessLocalAgentRunRegistry()
     launcher = _FailingSecondLaunchAfterCompletionLauncher(registry)
@@ -1249,11 +1228,6 @@ async def test_subagent_handler_settles_prior_batch_child_when_later_launch_fail
             second_definition,
         ]
     )
-    monkeypatch.setattr(
-        "agent.subagents.registry.get_subagent_registry",
-        lambda: definition_registry,
-    )
-
     async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
         return None
 
@@ -1312,7 +1286,10 @@ async def test_subagent_handler_settles_prior_batch_child_when_later_launch_fail
     assert [entry.status for entry in entries] == ["failed", "completed"]
     assert entries[0].result_consumed is True
     assert entries[1].result_consumed is True
-    later_handoff = await AgentRunResultProjector(registry=registry).collect_for_context(
+    later_handoff = await AgentRunResultProjector(
+        registry=registry,
+        subagent_registry=get_definition_subagent_registry(),
+    ).collect_for_context(
         tenant_id=7,
         task_id=42,
         conversation_id="conv-42",

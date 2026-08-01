@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
+from agent.subagents.registry import get_subagent_registry
 from backend.services.agent_runs.contracts import (
     AgentAssignment,
     AgentResult,
@@ -131,6 +132,7 @@ def _coordinator(
     """Build an isolated coordinator unless a shared guard pool is explicit."""
     return _ParentHandoffCoordinator(
         registry=registry,
+        subagent_registry=get_subagent_registry(),
         guard_pool=guard_pool or ParentHandoffGuardPool(),
         **kwargs,
     )

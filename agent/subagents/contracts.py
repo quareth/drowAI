@@ -460,13 +460,7 @@ class AgentRunLifecycleProjection(_StrictContract):
         return _validate_non_empty(normalized, info.field_name)
 
     @model_validator(mode="after")
-    def _display_name_matches_agent_kind(self) -> "AgentRunLifecycleProjection":
-        expected = agent_display_name(self.agent_id)
-        if self.agent_display_name != expected:
-            raise ValueError("agent_display_name must match agent_id display metadata")
-        expected_icon = agent_icon_key(self.agent_id)
-        if self.agent_icon_key != expected_icon:
-            raise ValueError("agent_icon_key must match agent_id display metadata")
+    def _nested_identity_matches_projection(self) -> "AgentRunLifecycleProjection":
         if self.assignment is not None and self.assignment.agent_id != self.agent_id:
             raise ValueError("assignment.agent_id must match lifecycle projection")
         if self.result is not None and self.result.agent_run_id != self.agent_run_id:
@@ -493,11 +487,16 @@ class AgentResultProjection(_StrictContract):
     final_checkpoint_id: str | None = None
 
     @classmethod
-    def from_result(cls, result: AgentResult) -> "AgentResultProjection":
+    def from_result(
+        cls,
+        result: AgentResult,
+        *,
+        agent_display_name: str,
+    ) -> "AgentResultProjection":
         """Build the public projection for a validated terminal result."""
         return cls(
             **result.model_dump(),
-            agent_display_name=agent_display_name(result.agent_id),
+            agent_display_name=agent_display_name,
         )
 
     @field_validator("agent_display_name")
@@ -528,36 +527,6 @@ class AgentResultProjection(_StrictContract):
     ) -> tuple[_FrozenDict, ...]:
         return AgentResult._freeze_evidence_refs(value)
 
-    @model_validator(mode="after")
-    def _display_name_matches_agent_kind(self) -> "AgentResultProjection":
-        expected = agent_display_name(self.agent_id)
-        if self.agent_display_name != expected:
-            raise ValueError("agent_display_name must match agent_id display metadata")
-        return self
-
-
-def agent_display_name(agent_id: AgentId) -> str:
-    """Return presentation text for a declarative agent identity."""
-    normalized = _validate_non_empty(str(agent_id), "agent_id").lower()
-    try:
-        from agent.subagents.registry import get_subagent_registry
-
-        return get_subagent_registry().display_metadata(normalized).display_name
-    except Exception as exc:
-        raise KeyError(f"unknown subagent definition id: {agent_id}") from exc
-
-
-def agent_icon_key(agent_id: AgentId) -> str:
-    """Return presentation icon key for a declarative agent identity."""
-    normalized = _validate_non_empty(str(agent_id), "agent_id").lower()
-    try:
-        from agent.subagents.registry import get_subagent_registry
-
-        return get_subagent_registry().display_metadata(normalized).icon
-    except Exception as exc:
-        raise KeyError(f"unknown subagent definition id: {agent_id}") from exc
-
-
 __all__ = [
     "AgentAssignment",
     "AgentCapability",
@@ -571,6 +540,4 @@ __all__ = [
     "AgentRunStatus",
     "AgentRuntimeIdentity",
     "JsonValue",
-    "agent_display_name",
-    "agent_icon_key",
 ]

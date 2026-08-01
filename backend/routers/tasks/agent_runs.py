@@ -20,8 +20,7 @@ from backend.services.agent_runs.control import (
     LocalAgentRunStatusProjection,
 )
 from backend.services.agent_runs.local_runtime import (
-    get_process_local_agent_run_launcher,
-    get_process_local_agent_run_registry,
+    get_process_local_agent_run_runtime,
 )
 from backend.services.tenant.authorization import ACTION_TASK_CONTROL, ACTION_TASK_READ
 from backend.services.tenant.context import TenantRequestContext
@@ -54,9 +53,11 @@ class LocalAgentRunCancelResponse(BaseModel):
 
 def get_agent_run_control_service() -> AgentRunControlService:
     """Build the process-local status/cancel service dependency."""
+    runtime = get_process_local_agent_run_runtime()
     return AgentRunControlService(
-        registry=get_process_local_agent_run_registry(),
-        launcher=get_process_local_agent_run_launcher(),
+        registry=runtime.registry,
+        launcher=runtime.launcher,
+        subagent_registry=runtime.subagent_registry,
     )
 
 

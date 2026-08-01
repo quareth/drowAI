@@ -10,9 +10,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from agent.subagents.contracts import agent_display_name, agent_icon_key
-
-
 AGENT_RUN_ATTRIBUTION_KEYS: tuple[str, ...] = (
     "producer_type",
     "agent_run_id",
@@ -47,14 +44,8 @@ def resolve_agent_run_attribution(
 
     if source.get("agent_run_id") and source.get("producer_type") is None:
         source["producer_type"] = "subagent"
-    display_name = _registered_agent_display_name(source.get("agent_id"))
-    if display_name is not None:
-        source["agent_display_name"] = display_name
-    elif source.get("agent_display_name") is None:
+    if source.get("agent_display_name") is None:
         source["agent_display_name"] = _format_agent_kind(source.get("agent_kind"))
-    icon_key = _registered_agent_icon_key(source.get("agent_id"))
-    if icon_key is not None:
-        source["agent_icon_key"] = icon_key
 
     attribution: dict[str, Any] = {}
     for key in AGENT_RUN_ATTRIBUTION_KEYS:
@@ -100,26 +91,6 @@ def _safe_attribution_value(key: str, value: Any) -> str | int | bool | None:
         normalized = value.strip()
         return normalized or None
     return None
-
-
-def _registered_agent_display_name(value: Any) -> str | None:
-    if not isinstance(value, str):
-        return None
-    normalized = value.strip()
-    try:
-        return agent_display_name(normalized)
-    except KeyError:
-        return None
-
-
-def _registered_agent_icon_key(value: Any) -> str | None:
-    if not isinstance(value, str):
-        return None
-    normalized = value.strip()
-    try:
-        return agent_icon_key(normalized)
-    except KeyError:
-        return None
 
 
 def _format_agent_kind(value: Any) -> str | None:

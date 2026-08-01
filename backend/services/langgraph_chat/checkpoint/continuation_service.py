@@ -12,6 +12,7 @@ import logging
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Dict, Mapping, Optional
 
 from agent.graph.infrastructure.state_models import checkpoint_safe_llm_runtime_selection
+from agent.subagents.registry import SubagentRegistry, get_subagent_registry
 from backend.config import E2E_DETERMINISTIC_MODE
 from backend.database import SessionLocal
 from backend.services.agent_runs.continuation import (
@@ -122,6 +123,7 @@ class CheckpointContinuationService:
         persist_chat_message_from_container: Callable[..., None],
         build_result: Callable[..., LangGraphChatResult],
         agent_run_registry: Optional[ProcessLocalAgentRunRegistry] = None,
+        subagent_registry: SubagentRegistry | None = None,
         agent_run_lifecycle_publisher: Optional[
             Callable[[int, dict[str, Any]], Awaitable[None]]
         ] = None,
@@ -152,6 +154,7 @@ class CheckpointContinuationService:
         self._persist_chat_message_from_container = persist_chat_message_from_container
         self._build_result = build_result
         self._agent_run_registry = agent_run_registry
+        self._subagent_registry = subagent_registry or get_subagent_registry()
         self._agent_run_lifecycle_publisher = agent_run_lifecycle_publisher
 
     async def resume_from_interrupt(
@@ -215,6 +218,7 @@ class CheckpointContinuationService:
                 checkpoint_id = subagent_context.checkpoint_id
                 await resume_subagent_continuation(
                     registry=self._require_agent_run_registry(),
+                    subagent_registry=self._subagent_registry,
                     context=subagent_context,
                     lifecycle_publisher=(
                         self._require_agent_run_lifecycle_publisher()
@@ -616,6 +620,7 @@ class CheckpointContinuationService:
         if subagent_context is not None:
             subagent_completion = await complete_subagent_continuation(
                 registry=self._require_agent_run_registry(),
+                subagent_registry=self._subagent_registry,
                 context=subagent_context,
                 final_state=execution_result.final_state,
                 lifecycle_publisher=self._require_agent_run_lifecycle_publisher(),
@@ -705,7 +710,8 @@ class CheckpointContinuationService:
     ) -> tuple[Any, Optional[Mapping[str, Any]], dict[str, Any] | None]:
         """Compile and execute one checkpoint continuation with live dependencies."""
         attribution = build_subagent_continuation_attribution(
-            subagent_continuation_context
+            subagent_continuation_context,
+            subagent_registry=self._subagent_registry,
         )
         async with self._checkpointer_service.get_checkpointer(task_id) as checkpointer:
             compiled = await self._compile_graph_for_name(
@@ -916,7 +922,6 @@ class CheckpointContinuationService:
             compile_deep_reasoning_graph,
         )
         from agent.graph.builders.simple_tool_builder import build_simple_tool_graph
-        from agent.subagents.registry import get_subagent_registry
         from agent.subagents.runtime.graph import build_subagent_graph
 
         if E2E_DETERMINISTIC_MODE or graph_name == GRAPH_NAME_INTERRUPT_RESUME:
@@ -924,7 +929,7 @@ class CheckpointContinuationService:
         if graph_name == GRAPH_NAME_DEEP_REASONING:
             return compile_deep_reasoning_graph(checkpointer=checkpointer)
         if is_subagent_graph_name(graph_name):
-            definition_registry = get_subagent_registry()
+            definition_registry = self._subagent_registry
             if subagent_agent_id is None:
                 definitions = definition_registry.definitions()
                 if len(definitions) != 1:

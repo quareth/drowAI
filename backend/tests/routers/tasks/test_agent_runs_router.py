@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
 
+from agent.subagents.registry import get_subagent_registry
 from backend.routers import tasks as composed_task_routes
 from backend.routers.tasks import agent_runs as agent_run_routes
 from backend.services.agent_runs.contracts import AgentAssignment, AgentRuntimeIdentity
@@ -81,7 +82,11 @@ class _RecordingLauncher:
 def agent_run_client(monkeypatch: pytest.MonkeyPatch):
     registry = ProcessLocalAgentRunRegistry()
     launcher = _RecordingLauncher(registry)
-    service = AgentRunControlService(registry=registry, launcher=launcher)
+    service = AgentRunControlService(
+        registry=registry,
+        launcher=launcher,
+        subagent_registry=get_subagent_registry(),
+    )
     app = FastAPI()
     app.include_router(agent_run_routes.router, prefix="/api/tasks")
 

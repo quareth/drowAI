@@ -17,6 +17,7 @@ from typing import Any
 
 from backend.services.langgraph_chat.contracts import LangGraphChatResult
 from agent.graph.context.contracts import ActiveAgentRun
+from agent.subagents.registry import SubagentRegistry
 from backend.services.metrics.utils import safe_gauge, safe_inc
 
 from .completion import AgentRunCompletion
@@ -118,6 +119,7 @@ class ParentHandoffCoordinator:
         self,
         *,
         registry: ProcessLocalAgentRunRegistry,
+        subagent_registry: SubagentRegistry,
         guard_pool: ParentHandoffGuardPool,
         result_projector: AgentRunResultProjector | None = None,
         parent_progress_publisher: ParentProgressPublisher | None = None,
@@ -125,7 +127,8 @@ class ParentHandoffCoordinator:
         self._registry = registry
         self._guard_pool = guard_pool
         self._result_projector = result_projector or AgentRunResultProjector(
-            registry=registry
+            registry=registry,
+            subagent_registry=subagent_registry,
         )
         self._publish_parent_progress = parent_progress_publisher
 

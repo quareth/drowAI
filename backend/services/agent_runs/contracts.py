@@ -21,8 +21,6 @@ from agent.subagents.contracts import (
     AgentRunStatus,
     AgentRuntimeIdentity,
     JsonValue,
-    agent_display_name,
-    agent_icon_key,
 )
 
 __all__ = [
@@ -38,6 +36,4 @@ __all__ = [
     "AgentRunStatus",
     "AgentRuntimeIdentity",
     "JsonValue",
-    "agent_display_name",
-    "agent_icon_key",
 ]

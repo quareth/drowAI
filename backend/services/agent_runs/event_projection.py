@@ -20,12 +20,11 @@ from agent.graph.contracts.streaming_constants import (
 )
 from agent.graph.context.contracts import ActiveAgentRun, CompletedAgentResult
 from agent.graph.emission.agent_run_attribution import resolve_agent_run_attribution
+from agent.subagents.registry import SubagentDisplayMetadata
 from backend.core.time_utils import format_iso, utc_now
 from backend.services.agent_runs.contracts import (
     AgentRunLifecycleProjection,
     AgentResultProjection,
-    agent_display_name,
-    agent_icon_key,
 )
 from backend.services.agent_runs.registry import LocalAgentRun
 from backend.services.chat.event_builders import attach_conversation_ids
@@ -38,6 +37,7 @@ _PARENT_PROGRESS_SECTION = "parent_progress"
 def build_agent_run_lifecycle_event(
     entry: LocalAgentRun,
     *,
+    display_metadata: SubagentDisplayMetadata,
     parent_run_id: str | None,
 ) -> dict[str, Any]:
     """Return a task-stream status packet for one subagent lifecycle update."""
@@ -45,10 +45,13 @@ def build_agent_run_lifecycle_event(
     result_projection = (
         None
         if entry.result is None
-        else AgentResultProjection.from_result(entry.result)
+        else AgentResultProjection.from_result(
+            entry.result,
+            agent_display_name=display_metadata.display_name,
+        )
     )
-    display_name = agent_display_name(entry.agent_id)
-    icon_key = agent_icon_key(entry.agent_id)
+    display_name = display_metadata.display_name
+    icon_key = display_metadata.icon
     projection = AgentRunLifecycleProjection(
         agent_run_id=entry.agent_run_id,
         agent_id=entry.agent_id,

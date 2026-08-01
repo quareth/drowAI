@@ -159,6 +159,7 @@ class ProcessLocalAgentRunWorker:
 async def mark_subagent_completed_from_state(
     *,
     registry: ProcessLocalAgentRunRegistry,
+    definition_registry: SubagentRegistry,
     entry: LocalAgentRun,
     final_state: Mapping[str, Any],
     lifecycle_publisher: LifecyclePublisher,
@@ -185,6 +186,7 @@ async def mark_subagent_completed_from_state(
     )
     event = build_agent_run_lifecycle_event(
         completed,
+        display_metadata=definition_registry.display_metadata(completed.agent_id),
         parent_run_id=parent_run_id,
     )
     await lifecycle_publisher(completed.task_id, event)

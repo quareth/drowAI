@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
+from agent.subagents.registry import SubagentRegistry, get_subagent_registry
 from backend.services.agent_runs.continuation import is_subagent_graph_name
 from backend.services.agent_runs.registry import (
     LocalAgentRun,
@@ -48,6 +49,7 @@ class InterruptStateService:
         self,
         checkpointer_service: Optional[CheckpointerService] = None,
         agent_run_registry: Optional[ProcessLocalAgentRunRegistry] = None,
+        subagent_registry: SubagentRegistry | None = None,
     ) -> None:
         """Initialize service with checkpointer dependency.
 
@@ -57,6 +59,7 @@ class InterruptStateService:
         """
         self._checkpointer = checkpointer_service or CheckpointerService()
         self._agent_run_registry = agent_run_registry
+        self._subagent_registry = subagent_registry or get_subagent_registry()
 
     async def get_pending_interrupt(
         self,
@@ -144,7 +147,6 @@ class InterruptStateService:
         from agent.graph.builders.deep_reasoning_builder import (
             compile_deep_reasoning_graph,
         )
-        from agent.subagents.registry import get_subagent_registry
         from agent.subagents.runtime.graph import build_subagent_graph
 
         resolved_thread_id = (
@@ -165,7 +167,7 @@ class InterruptStateService:
                         tenant_id=tenant_id,
                         resolved_thread_id=resolved_thread_id,
                     )
-                    definition = get_subagent_registry().require(
+                    definition = self._subagent_registry.require(
                         agent_run_entry.agent_id
                     )
                     compiled = build_subagent_graph(

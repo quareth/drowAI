@@ -11,7 +11,7 @@ from agent.context.token_counter_registry import estimate_llm_request_tokens
 from agent.graph.context.builder import METADATA_CONTEXT_BUNDLE_KEY
 from agent.graph.context.contracts import CLASSIFIER_TRANSCRIPT_WINDOW_KEY
 from agent.graph.context.transcript import select_full_transcript_window
-from agent.subagents.registry import SubagentRegistry, get_subagent_registry
+from agent.subagents.registry import SubagentRegistry
 from backend.database import SessionLocal
 from backend.services.chat.conversation_history_reader import ConversationHistoryReader
 from backend.services.agent_runs.dispatch_service import (
@@ -152,9 +152,13 @@ class LangGraphChatFacade:
         self._executor = executor or LangGraphExecutor(
             streaming_adapter=self._streaming_adapter
         )
+        process_local_runtime = get_process_local_agent_run_runtime()
         self._intent_phase_streamer = IntentPhaseStreamer(self._streaming_adapter)
         self._context_builder = context_builder or LangGraphContextBuilder()
-        self._subagent_registry = subagent_registry or get_subagent_registry()
+        using_shared_subagent_registry = subagent_registry is None
+        self._subagent_registry = (
+            subagent_registry or process_local_runtime.subagent_registry
+        )
         self._intent_classifier = intent_classifier or IntentClassifier(
             client_timeout=LLM_TIMEOUT_INTENT_CLASSIFIER_SEC,
             subagent_registry=self._subagent_registry,
@@ -165,10 +169,14 @@ class LangGraphChatFacade:
         )
         using_shared_agent_run_registry = agent_run_registry is None
         if using_shared_agent_run_registry:
-            process_local_runtime = get_process_local_agent_run_runtime()
             self._agent_run_registry = process_local_runtime.registry
             resolved_agent_run_launcher = (
-                agent_run_launcher or process_local_runtime.launcher
+                agent_run_launcher
+                or (
+                    process_local_runtime.launcher
+                    if using_shared_subagent_registry
+                    else None
+                )
             )
             resolved_agent_run_lifecycle_publisher = (
                 agent_run_lifecycle_publisher
@@ -191,7 +199,10 @@ class LangGraphChatFacade:
             )
         self._agent_run_result_projector = (
             agent_run_result_projector
-            or AgentRunResultProjector(registry=self._agent_run_registry)
+            or AgentRunResultProjector(
+                registry=self._agent_run_registry,
+                subagent_registry=self._subagent_registry,
+            )
         )
         self._session_factory = session_factory or SessionLocal
         self._conversation_history_reader_factory = (
@@ -237,6 +248,7 @@ class LangGraphChatFacade:
             ),
             build_result=facade_helpers.build_result,
             agent_run_registry=self._agent_run_registry,
+            subagent_registry=self._subagent_registry,
             agent_run_lifecycle_publisher=resolved_agent_run_lifecycle_publisher,
         )
 

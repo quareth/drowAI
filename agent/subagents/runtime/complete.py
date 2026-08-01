@@ -52,7 +52,10 @@ def complete_subagent_result(
     subagent = subagent_state_from_graph_state(interactive, definition=definition)
     result = _resolve_result(interactive, subagent)
     _validate_result_identity(result, subagent)
-    projection = AgentResultProjection.from_result(result)
+    projection = AgentResultProjection.from_result(
+        result,
+        agent_display_name=definition.display_name,
+    )
 
     metadata = interactive.facts.ensure_metadata()
     metadata[SUBAGENT_RESULT_METADATA_KEY] = result.model_dump(mode="json")

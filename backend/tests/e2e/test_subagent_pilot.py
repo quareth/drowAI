@@ -639,6 +639,7 @@ async def test_subagent_pilot_routes_terminal_handoff_through_parent_par(
         agent_run_registry=registry,
         agent_run_launcher=AgentRunLauncher(
             registry=registry,
+            subagent_registry=get_subagent_registry(),
             worker=worker,
             lifecycle_publisher=_publish_lifecycle,
         ),
@@ -744,6 +745,7 @@ async def test_subagent_pilot_par_direct_tool_after_handoff_finalizes_once(
         agent_run_registry=registry,
         agent_run_launcher=AgentRunLauncher(
             registry=registry,
+            subagent_registry=get_subagent_registry(),
             worker=worker,
             lifecycle_publisher=_ignore_lifecycle_event,
         ),
@@ -827,6 +829,7 @@ async def test_subagent_pilot_projects_every_terminal_child_outcome_to_par(
         agent_run_registry=registry,
         agent_run_launcher=AgentRunLauncher(
             registry=registry,
+            subagent_registry=get_subagent_registry(),
             worker=worker,
             lifecycle_publisher=_ignore_lifecycle_event,
         ),
@@ -895,6 +898,7 @@ async def test_subagent_pilot_par_followup_delegation_uses_bounded_objective_onc
         agent_run_registry=registry,
         agent_run_launcher=AgentRunLauncher(
             registry=registry,
+            subagent_registry=get_subagent_registry(),
             worker=worker,
             lifecycle_publisher=_ignore_lifecycle_event,
         ),
@@ -963,6 +967,7 @@ async def test_subagent_pilot_waits_for_active_work_and_keeps_tasks_isolated(
         return final
 
     parent_executor = _ScriptedParentParExecutor(_decide)
+    definitions = _concurrent_pathfinder_registry()
     facade = LangGraphChatFacade(
         context_builder=_PilotContextBuilder(),
         executor=parent_executor,
@@ -971,11 +976,12 @@ async def test_subagent_pilot_waits_for_active_work_and_keeps_tasks_isolated(
         agent_run_registry=registry,
         agent_run_launcher=AgentRunLauncher(
             registry=registry,
+            subagent_registry=definitions,
             worker=worker,
             lifecycle_publisher=_ignore_lifecycle_event,
         ),
         agent_run_lifecycle_publisher=_ignore_lifecycle_event,
-        subagent_registry=_concurrent_pathfinder_registry(),
+        subagent_registry=definitions,
     )
 
     task_42_turn = asyncio.create_task(

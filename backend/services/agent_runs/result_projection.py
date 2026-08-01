@@ -16,8 +16,9 @@ from typing import Any, Mapping
 
 from agent.graph.context.builder import METADATA_CONTEXT_BUNDLE_KEY
 from agent.graph.context.contracts import ActiveAgentRun, CompletedAgentResult
+from agent.subagents.registry import SubagentRegistry
 
-from .contracts import AgentResultProjection, agent_display_name
+from .contracts import AgentResultProjection
 from .registry import ACTIVE_AGENT_RUN_STATUSES, ProcessLocalAgentRunRegistry
 
 
@@ -55,6 +56,7 @@ class AgentRunResultProjector:
         self,
         *,
         registry: ProcessLocalAgentRunRegistry,
+        subagent_registry: SubagentRegistry,
         max_results: int = DEFAULT_MAX_RESULTS,
         max_active_runs: int = DEFAULT_MAX_ACTIVE_RUNS,
         max_list_items: int = DEFAULT_MAX_LIST_ITEMS,
@@ -63,6 +65,7 @@ class AgentRunResultProjector:
         max_evidence_value_chars: int = DEFAULT_MAX_EVIDENCE_VALUE_CHARS,
     ) -> None:
         self._registry = registry
+        self._subagent_registry = subagent_registry
         self._max_results = max(0, max_results)
         self._max_active_runs = max(0, max_active_runs)
         self._max_list_items = max(0, max_list_items)
@@ -170,7 +173,11 @@ class AgentRunResultProjector:
         return self._bounded_active_projection(entry)
 
     def _bounded_projection(self, result: Any) -> CompletedAgentResult:
-        projection = AgentResultProjection.from_result(result).model_dump(mode="json")
+        display = self._subagent_registry.display_metadata(result.agent_id)
+        projection = AgentResultProjection.from_result(
+            result,
+            agent_display_name=display.display_name,
+        ).model_dump(mode="json")
         return {
             "agent_run_id": _bounded_text(
                 projection["agent_run_id"], max_chars=self._max_evidence_value_chars
@@ -224,7 +231,9 @@ class AgentRunResultProjector:
             ),
             "agent_id": entry.agent_id,
             "agent_kind": entry.agent_kind,
-            "agent_display_name": agent_display_name(entry.agent_id),
+            "agent_display_name": self._subagent_registry.display_metadata(
+                entry.agent_id
+            ).display_name,
             "objective": _bounded_text(
                 assignment.objective, max_chars=self._max_text_chars
             ),

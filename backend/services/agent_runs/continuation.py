@@ -14,6 +14,7 @@ from collections.abc import Mapping
 from typing import Any, Callable
 
 from agent.graph.graph_names import GRAPH_NAME_SUBAGENT
+from agent.subagents.registry import SubagentRegistry
 from backend.database import SessionLocal
 from backend.models.hitl import InterruptTicket
 from backend.services.langgraph_chat.checkpoint.thread_identity import (
@@ -143,6 +144,7 @@ async def mark_subagent_running(
 async def resume_subagent_continuation(
     *,
     registry: ProcessLocalAgentRunRegistry,
+    subagent_registry: SubagentRegistry,
     context: SubagentContinuationContext | None,
     lifecycle_publisher: LifecyclePublisher,
 ) -> LocalAgentRun | None:
@@ -155,6 +157,7 @@ async def resume_subagent_continuation(
     )
     event = build_agent_run_lifecycle_event(
         entry,
+        display_metadata=subagent_registry.display_metadata(entry.agent_id),
         parent_run_id=parent_run_id,
     )
     try:
@@ -190,6 +193,8 @@ async def mark_subagent_waiting_for_approval(
 
 def build_subagent_continuation_attribution(
     context: SubagentContinuationContext | None,
+    *,
+    subagent_registry: SubagentRegistry,
 ) -> dict[str, Any] | None:
     """Build canonical event attribution for a verified child continuation."""
     if context is None:
@@ -203,6 +208,7 @@ def build_subagent_continuation_attribution(
         child_graph_thread_id=context.graph_thread_id,
         parent_run_id=parent_run_id,
         lifecycle_version=entry.lifecycle_version,
+        display_metadata=subagent_registry.display_metadata(entry.agent_id),
     )
 
 
@@ -240,6 +246,7 @@ async def pause_subagent_continuation(
 async def complete_subagent_continuation(
     *,
     registry: ProcessLocalAgentRunRegistry,
+    subagent_registry: SubagentRegistry,
     context: SubagentContinuationContext | None,
     final_state: Mapping[str, Any],
     lifecycle_publisher: LifecyclePublisher,
@@ -249,6 +256,7 @@ async def complete_subagent_continuation(
         return None
     return await mark_subagent_completed_from_state(
         registry=registry,
+        definition_registry=subagent_registry,
         entry=context.entry,
         final_state=final_state,
         lifecycle_publisher=lifecycle_publisher,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from agent.subagents.registry import get_subagent_registry
 from backend.services.agent_runs.contracts import AgentAssignment, AgentRuntimeIdentity
 from backend.services.agent_runs.event_projection import (
     apply_agent_run_metadata,
@@ -48,7 +49,11 @@ async def test_lifecycle_event_carries_agent_identity_in_metadata() -> None:
     registry = ProcessLocalAgentRunRegistry()
     entry = await registry.register(_assignment(), graph_thread_id="child-thread-1")
 
-    event = build_agent_run_lifecycle_event(entry, parent_run_id="parent-run-1")
+    event = build_agent_run_lifecycle_event(
+        entry,
+        display_metadata=get_subagent_registry().display_metadata(entry.agent_id),
+        parent_run_id="parent-run-1",
+    )
 
     metadata = event["metadata"]
     assert event["type"] == "status"
@@ -91,7 +96,7 @@ def test_apply_agent_run_metadata_preserves_generic_subagent_identity() -> None:
     assert metadata["agent_icon_key"] == "reviewer"
 
 
-def test_apply_agent_run_metadata_canonicalizes_registered_display_name() -> None:
+def test_apply_agent_run_metadata_preserves_boundary_display_metadata() -> None:
     processed: dict[str, object] = {
         "type": "reasoning_delta",
         "metadata": {"agent_display_name": "Spoofed"},
@@ -115,5 +120,5 @@ def test_apply_agent_run_metadata_canonicalizes_registered_display_name() -> Non
 
     metadata = processed["metadata"]
     assert isinstance(metadata, dict)
-    assert metadata["agent_display_name"] == "Pathfinder"
-    assert metadata["agent_icon_key"] == "pathfinder"
+    assert metadata["agent_display_name"] == "Spoofed"
+    assert metadata["agent_icon_key"] == "spoofed"

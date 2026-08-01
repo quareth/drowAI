@@ -13,6 +13,8 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Coroutine, Protocol
 
+from agent.subagents.registry import SubagentRegistry
+
 from .contracts import AgentAssignment
 from .completion import AgentRunCompletion, child_usage_records_from_state
 from .event_projection import build_agent_run_lifecycle_event
@@ -72,11 +74,13 @@ class AgentRunLauncher:
         self,
         *,
         registry: ProcessLocalAgentRunRegistry,
+        subagent_registry: SubagentRegistry,
         worker: AgentRunWorker | None = None,
         task_factory: TaskFactory = asyncio.create_task,
         lifecycle_publisher: LifecyclePublisher | None = None,
     ) -> None:
         self._registry = registry
+        self._subagent_registry = subagent_registry
         self._worker = worker or _unavailable_worker
         self._task_factory = task_factory
         self._publish_lifecycle = lifecycle_publisher
@@ -253,7 +257,11 @@ class AgentRunLauncher:
     ) -> None:
         if self._publish_lifecycle is None:
             return
-        event = build_agent_run_lifecycle_event(entry, parent_run_id=parent_run_id)
+        event = build_agent_run_lifecycle_event(
+            entry,
+            display_metadata=self._subagent_registry.display_metadata(entry.agent_id),
+            parent_run_id=parent_run_id,
+        )
         try:
             await self._publish_lifecycle(entry.task_id, event)
         except Exception:

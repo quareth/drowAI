@@ -53,16 +53,21 @@ def build_subagent_handler(
 ) -> SubagentHandler:
     """Build the subagent chat adapter and its process-local collaborators."""
     definitions = subagent_registry or get_subagent_registry()
-    projector = result_projector or AgentRunResultProjector(registry=registry)
+    projector = result_projector or AgentRunResultProjector(
+        registry=registry,
+        subagent_registry=definitions,
+    )
     resolved_launcher = launcher
     if resolved_launcher is None:
         resolved_worker = worker or ProcessLocalAgentRunWorker(
             registry=registry,
+            definition_registry=definitions,
             checkpointer_service=checkpointer_service,
             executor=executor,
         )
         resolved_launcher = AgentRunLauncher(
             registry=registry,
+            subagent_registry=definitions,
             worker=resolved_worker,
             lifecycle_publisher=lifecycle_publisher,
         )
@@ -75,6 +80,7 @@ def build_subagent_handler(
     )
     handoff_coordinator = ParentHandoffCoordinator(
         registry=registry,
+        subagent_registry=definitions,
         guard_pool=parent_handoff_guard_pool or ParentHandoffGuardPool(),
         result_projector=projector,
         parent_progress_publisher=_parent_progress_publisher(lifecycle_publisher),
