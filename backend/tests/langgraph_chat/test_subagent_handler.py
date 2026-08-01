@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import copy
 import os
-from types import SimpleNamespace
 from typing import Any
 
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg2://test:test@localhost/test")
@@ -25,6 +24,7 @@ from agent.subagents.registry import (
 from agent.subagents.runtime.model import SUBAGENT_RESULT_METADATA_KEY
 from backend.services.agent_runs.contracts import AgentResult
 from backend.services.agent_runs.dispatch_plan import build_assignment
+from backend.services.agent_runs.dispatch_service import SubagentDispatchService
 from backend.services.agent_runs.completion import (
     AgentRunCompletion,
     build_agent_run_completion,
@@ -1425,31 +1425,28 @@ async def test_par_followup_delegation_replay_does_not_launch_duplicate() -> Non
     async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
         return None
 
-    handler = SubagentHandler(
-        object(),
-        _CompletingExecutor(),
-        object(),
+    dispatch_service = SubagentDispatchService(
         registry=registry,
         launcher=launcher,
+        subagent_registry=get_definition_subagent_registry(),
         lifecycle_publisher=_publish,
     )
     runtime_config = _runtime_config()
-    turn = SimpleNamespace(turn_id="task-42-turn-5", turn_number=5)
     agent_handoff = {
         "agent_handoff": "required",
         "subagent": "pathfinder",
         "objective": "Check the unresolved HTTPS service evidence.",
     }
 
-    first = await handler._dispatch_par_followup_delegation(
+    first = await dispatch_service.dispatch_followup(
         runtime_config,
-        turn=turn,
+        parent_turn_id="task-42-turn-5",
         agent_handoff=agent_handoff,
         decision_id="par-candidate-1",
     )
-    second = await handler._dispatch_par_followup_delegation(
+    second = await dispatch_service.dispatch_followup(
         runtime_config,
-        turn=turn,
+        parent_turn_id="task-42-turn-5",
         agent_handoff=agent_handoff,
         decision_id="par-candidate-1",
     )
