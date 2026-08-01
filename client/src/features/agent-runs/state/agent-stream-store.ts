@@ -9,7 +9,7 @@
 import { useSyncExternalStore } from "react";
 
 import { terminalizeAgentRunStreams } from "@/state/chat-stream-store";
-import { isStreamPacket, type StreamEvent, type StreamPacket } from "@/types/packets";
+import { isStreamPacket } from "@/types/packets";
 
 import {
   CLOSED_AGENT_RUN_PRESENTATION_STATE,
@@ -34,6 +34,8 @@ import {
 } from "../contracts/agent-run";
 
 export const MAX_AGENT_RUN_ACTIVITY_EVENTS = 5000;
+export const MAX_AGENT_RUN_TASK_STATES = 20;
+export const MAX_AGENT_RUNS_PER_TASK = 100;
 
 export interface AgentRunActivityEntry {
   taskId: number;
@@ -104,6 +106,8 @@ function ensureState(taskId: number): AgentRunsTaskState {
     };
     taskStates.set(taskId, state);
     snapshotCache.set(taskId, buildSnapshot(state));
+  } else {
+    touchTaskState(taskId, state);
   }
   return state;
 }
@@ -160,11 +164,17 @@ function mutateTaskState(
   const draft = cloneState(current);
   const result = mutator(draft);
   if (!result.changed) {
+    const evicted = pruneTaskStates();
+    if (evicted) {
+      emit();
+    }
     return;
   }
+  pruneRuns(draft);
   draft.version = current.version + 1;
-  taskStates.set(taskId, draft);
+  touchTaskState(taskId, draft);
   snapshotCache.set(taskId, buildSnapshot(draft));
+  pruneTaskStates();
   emit();
 }
 
@@ -215,7 +225,7 @@ export function applyAgentRunLifecycleUpdate(
     if (existing && sameRunRecord(existing, next)) {
       return { changed: false };
     }
-    draft.runs.set(next.agentRunId, next);
+    touchRun(draft, next);
     return { changed: true };
   });
   if (isAgentRunTerminalStatus(projection.status)) {
@@ -272,7 +282,7 @@ export function applyAgentRunActivityPayload(
     if (activity === nextRun.activity) {
       return { changed: false };
     }
-    draft.runs.set(identity.agentRunId, {
+    touchRun(draft, {
       ...nextRun,
       agentId: identity.agentId,
       agentDisplayName: resolveAgentDisplayName(
@@ -308,11 +318,11 @@ export function reconcileAgentRunsWithLocalStatus(
   mutateTaskState(taskId, draft => {
     let changed = false;
     const now = Date.now();
-    for (const [agentRunId, run] of draft.runs.entries()) {
+    for (const [agentRunId, run] of Array.from(draft.runs.entries())) {
       if (localRunsById.has(agentRunId) || isAgentRunTerminalStatus(run.status)) {
         continue;
       }
-      draft.runs.set(agentRunId, {
+      touchRun(draft, {
         ...run,
         status: "interrupted",
         safeError:
@@ -374,6 +384,10 @@ export function openAgentRunDetail(
       return { changed: false };
     }
     draft.presentation = next;
+    const selectedRun = draft.runs.get(normalizedAgentRunId);
+    if (selectedRun) {
+      touchRun(draft, selectedRun);
+    }
     return { changed: true };
   });
 }
@@ -426,6 +440,10 @@ export function getAgentRunSnapshot(taskId: number | null | undefined): AgentRun
   }
   const cached = snapshotCache.get(taskId);
   if (cached) {
+    const state = taskStates.get(taskId);
+    if (state) {
+      touchTaskState(taskId, state);
+    }
     return cached;
   }
   const state = taskStates.get(taskId);
@@ -433,6 +451,7 @@ export function getAgentRunSnapshot(taskId: number | null | undefined): AgentRun
     return defaultSnapshot;
   }
   const snapshot = buildSnapshot(state);
+  touchTaskState(taskId, state);
   snapshotCache.set(taskId, snapshot);
   return snapshot;
 }
@@ -465,6 +484,86 @@ function subscribe(listener: () => void): () => void {
   return () => {
     listeners.delete(listener);
   };
+}
+
+function touchTaskState(taskId: number, state: AgentRunsTaskState): void {
+  taskStates.delete(taskId);
+  taskStates.set(taskId, state);
+}
+
+function touchRun(state: AgentRunsTaskState, run: AgentRunRecord): void {
+  state.runs.delete(run.agentRunId);
+  state.runs.set(run.agentRunId, run);
+}
+
+function pruneRuns(state: AgentRunsTaskState): void {
+  while (state.runs.size > MAX_AGENT_RUNS_PER_TASK) {
+    const selectedRunId = state.presentation.selectedAgentRunId;
+    const candidates = Array.from(state.runs.values()).filter(
+      run => run.agentRunId !== selectedRunId,
+    );
+    const evictionPool = candidates.length > 0 ? candidates : Array.from(state.runs.values());
+    evictionPool.sort(compareRunEvictionPriority);
+    const evicted = evictionPool[0];
+    if (!evicted) {
+      return;
+    }
+    state.runs.delete(evicted.agentRunId);
+    if (evicted.agentRunId === selectedRunId) {
+      state.presentation = {
+        ...state.presentation,
+        view: "list",
+        selectedAgentRunId: null,
+        activityExpanded: false,
+      };
+    }
+  }
+}
+
+function compareRunEvictionPriority(a: AgentRunRecord, b: AgentRunRecord): number {
+  return (
+    Number(!isAgentRunTerminalStatus(a.status)) -
+    Number(!isAgentRunTerminalStatus(b.status))
+  );
+}
+
+function pruneTaskStates(): boolean {
+  let changed = false;
+  while (taskStates.size > MAX_AGENT_RUN_TASK_STATES) {
+    let candidate: [number, AgentRunsTaskState] | null = null;
+    let candidatePriority = Number.MAX_SAFE_INTEGER;
+    for (const entry of taskStates.entries()) {
+      const priority = taskEvictionPriority(entry[1]);
+      if (priority < candidatePriority) {
+        candidate = entry;
+        candidatePriority = priority;
+      }
+    }
+    if (!candidate) {
+      break;
+    }
+    taskStates.delete(candidate[0]);
+    snapshotCache.delete(candidate[0]);
+    changed = true;
+  }
+  return changed;
+}
+
+function taskEvictionPriority(state: AgentRunsTaskState): number {
+  const closed = !state.presentation.isOpen;
+  const terminalOnly =
+    state.runs.size === 0 ||
+    Array.from(state.runs.values()).every(run => isAgentRunTerminalStatus(run.status));
+  if (closed && terminalOnly) {
+    return 0;
+  }
+  if (terminalOnly) {
+    return 1;
+  }
+  if (closed) {
+    return 2;
+  }
+  return 3;
 }
 
 function emptyRunFromActivity(identity: AgentRunActivityIdentity): AgentRunRecord {

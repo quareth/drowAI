@@ -11,6 +11,8 @@ import {
   closeAgentRunDrawer,
   getAgentRunSnapshot,
   MAX_AGENT_RUN_ACTIVITY_EVENTS,
+  MAX_AGENT_RUN_TASK_STATES,
+  MAX_AGENT_RUNS_PER_TASK,
   openAgentRunDetail,
   openAgentRunList,
   reconcileAgentRunsWithLocalStatus,
@@ -82,6 +84,33 @@ function lifecycle(
     safe_error: null,
     ...overrides,
   };
+}
+
+function scopedLifecycle(
+  taskId: number,
+  agentRunId: string,
+  status: AgentRunLifecycleProjection["status"] = "running",
+): AgentRunLifecycleProjection {
+  return lifecycle({
+    agent_run_id: agentRunId,
+    status,
+    task_id: taskId,
+    conversation_id: `conv-${taskId}`,
+    parent_turn_id: `turn-${taskId}`,
+    parent_run_id: `parent-${taskId}`,
+    assignment: assignment({
+      assignment_id: `assignment-${agentRunId}`,
+      agent_run_id: agentRunId,
+      task_id: taskId,
+      conversation_id: `conv-${taskId}`,
+      parent_turn_id: `turn-${taskId}`,
+      runtime_identity: {
+        ...assignment().runtime_identity,
+        task_id: taskId,
+        workspace_id: `workspace-${taskId}`,
+      },
+    }),
+  });
 }
 
 function lifecycleEvent(
@@ -420,5 +449,117 @@ describe("agent-stream-store presentation state", () => {
       activityExpanded: false,
     });
   });
-}
-);
+});
+
+describe("agent-stream-store bounded retention", () => {
+  it("retains only the most recently accessed task states", () => {
+    for (let taskId = 1; taskId <= MAX_AGENT_RUN_TASK_STATES; taskId += 1) {
+      applyAgentRunLifecycleUpdate(taskId, scopedLifecycle(taskId, `run-${taskId}`));
+    }
+    getAgentRunSnapshot(1);
+
+    const addedTaskId = MAX_AGENT_RUN_TASK_STATES + 1;
+    applyAgentRunLifecycleUpdate(
+      addedTaskId,
+      scopedLifecycle(addedTaskId, `run-${addedTaskId}`),
+    );
+
+    expect(getAgentRunSnapshot(1).runs).toHaveLength(1);
+    expect(getAgentRunSnapshot(2).runs).toHaveLength(0);
+    expect(getAgentRunSnapshot(addedTaskId).runs).toHaveLength(1);
+  });
+
+  it("evicts closed terminal-only tasks before active task state", () => {
+    applyAgentRunLifecycleUpdate(1, scopedLifecycle(1, "run-1", "completed"));
+    for (let taskId = 2; taskId <= MAX_AGENT_RUN_TASK_STATES; taskId += 1) {
+      applyAgentRunLifecycleUpdate(taskId, scopedLifecycle(taskId, `run-${taskId}`));
+    }
+    getAgentRunSnapshot(1);
+
+    const addedTaskId = MAX_AGENT_RUN_TASK_STATES + 1;
+    applyAgentRunLifecycleUpdate(
+      addedTaskId,
+      scopedLifecycle(addedTaskId, `run-${addedTaskId}`),
+    );
+
+    expect(getAgentRunSnapshot(1).runs).toHaveLength(0);
+    expect(getAgentRunSnapshot(2).runs).toHaveLength(1);
+  });
+
+  it("evicts terminal runs before active runs at the per-task cap", () => {
+    applyAgentRunLifecycleUpdate(
+      TASK_ID,
+      scopedLifecycle(TASK_ID, "run-terminal", "completed"),
+    );
+    for (let index = 1; index < MAX_AGENT_RUNS_PER_TASK; index += 1) {
+      applyAgentRunLifecycleUpdate(
+        TASK_ID,
+        scopedLifecycle(TASK_ID, `run-${index}`),
+      );
+    }
+
+    applyAgentRunLifecycleUpdate(
+      TASK_ID,
+      scopedLifecycle(TASK_ID, `run-${MAX_AGENT_RUNS_PER_TASK}`),
+    );
+
+    const snapshot = getAgentRunSnapshot(TASK_ID);
+    expect(snapshot.runs).toHaveLength(MAX_AGENT_RUNS_PER_TASK);
+    expect(snapshot.runsById["run-terminal"]).toBeUndefined();
+    expect(snapshot.runsById[`run-${MAX_AGENT_RUNS_PER_TASK}`]).toBeDefined();
+  });
+
+  it("refreshes run recency when a run is mutated", () => {
+    for (let index = 1; index <= MAX_AGENT_RUNS_PER_TASK; index += 1) {
+      applyAgentRunLifecycleUpdate(
+        TASK_ID,
+        scopedLifecycle(TASK_ID, `run-${index}`),
+      );
+    }
+    applyAgentRunLifecycleUpdate(
+      TASK_ID,
+      {
+        ...scopedLifecycle(TASK_ID, "run-1", "running"),
+        lifecycle_version: 2,
+      },
+    );
+
+    applyAgentRunLifecycleUpdate(
+      TASK_ID,
+      scopedLifecycle(TASK_ID, `run-${MAX_AGENT_RUNS_PER_TASK + 1}`),
+    );
+
+    const snapshot = getAgentRunSnapshot(TASK_ID);
+    expect(snapshot.runsById["run-1"]).toBeDefined();
+    expect(snapshot.runsById["run-2"]).toBeUndefined();
+  });
+
+  it("preserves the selected run when another eviction candidate exists", () => {
+    applyAgentRunLifecycleUpdate(
+      TASK_ID,
+      scopedLifecycle(TASK_ID, "selected-run", "completed"),
+    );
+    for (let index = 1; index < MAX_AGENT_RUNS_PER_TASK; index += 1) {
+      applyAgentRunLifecycleUpdate(
+        TASK_ID,
+        scopedLifecycle(TASK_ID, `run-${index}`),
+      );
+    }
+    openAgentRunDetail(TASK_ID, `parent-${TASK_ID}`, "selected-run");
+
+    applyAgentRunLifecycleUpdate(
+      TASK_ID,
+      scopedLifecycle(TASK_ID, `run-${MAX_AGENT_RUNS_PER_TASK}`),
+    );
+
+    const snapshot = getAgentRunSnapshot(TASK_ID);
+    expect(snapshot.runs).toHaveLength(MAX_AGENT_RUNS_PER_TASK);
+    expect(snapshot.runsById["selected-run"]).toBeDefined();
+    expect(snapshot.runsById["run-1"]).toBeUndefined();
+    expect(snapshot.presentation).toMatchObject({
+      isOpen: true,
+      view: "detail",
+      selectedAgentRunId: "selected-run",
+    });
+  });
+});

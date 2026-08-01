@@ -11,8 +11,10 @@ import {
   hydrateAgentRunStoreFromReplayItems,
 } from "../services/agent-run-replay-hydration";
 import {
+  applyAgentRunLifecycleUpdate,
   closeAgentRunDrawer,
   getAgentRunSnapshot,
+  MAX_AGENT_RUN_TASK_STATES,
   resetAgentRunStoreForTests,
 } from "../state/agent-stream-store";
 import { clearTaskState, getTaskStreamSnapshot } from "@/state/chat-stream-store";
@@ -193,6 +195,46 @@ describe("agent-run replay hydration", () => {
       agentDisplayName: "Reviewer",
       agentIconKey: "reviewer",
     });
+  });
+
+  it("rehydrates a task after bounded task-state eviction", () => {
+    hydrateAgentRunStoreFromReplayItems(TASK_ID, [lifecyclePacket(1)], 1);
+    for (let index = 1; index <= MAX_AGENT_RUN_TASK_STATES; index += 1) {
+      const taskId = 70000 + index;
+      applyAgentRunLifecycleUpdate(
+        taskId,
+        lifecycle({
+          agent_run_id: `other-run-${index}`,
+          task_id: taskId,
+          conversation_id: `other-conversation-${index}`,
+          parent_turn_id: `other-turn-${index}`,
+          parent_run_id: `other-parent-${index}`,
+          assignment: {
+            ...assignment(),
+            assignment_id: `other-assignment-${index}`,
+            agent_run_id: `other-run-${index}`,
+            task_id: taskId,
+            conversation_id: `other-conversation-${index}`,
+            parent_turn_id: `other-turn-${index}`,
+            runtime_identity: {
+              ...assignment().runtime_identity,
+              task_id: taskId,
+              workspace_id: `workspace-${taskId}`,
+            },
+          },
+        }),
+      );
+    }
+    expect(getAgentRunSnapshot(TASK_ID).runs).toHaveLength(0);
+
+    const replayResult = hydrateAgentRunStoreFromReplayItems(
+      TASK_ID,
+      [lifecyclePacket(2)],
+      2,
+    );
+
+    expect(replayResult.replayedPackets).toBe(1);
+    expect(getAgentRunSnapshot(TASK_ID).runsById["pathfinder-run-1"]).toBeDefined();
   });
 
   it("marks a replayed nonterminal Pathfinder run interrupted when local status is empty", async () => {

@@ -22,6 +22,7 @@ import type { Task } from "@/types";
 import { clearTaskState } from "@/state/chat-stream-store";
 import { clearChatSession } from "@/state/chat-session-store";
 import { getActiveChatTaskId, setActiveChatTaskId } from "@/state/active-chat-task-store";
+import { clearAgentRunStateForTask } from "@/features/agent-runs/state/agent-stream-store";
 
 export type TaskPanelViewMode = "grouped" | "flat";
 
@@ -229,6 +230,7 @@ export function useTaskPanelMutations(options: UseTaskPanelMutationsOptions) {
       );
       clearTaskState(taskId);
       clearChatSession(taskId);
+      clearAgentRunStateForTask(taskId);
       clearPlanState(taskId);
       if (getActiveChatTaskId() === taskId) {
         setActiveChatTaskId(null);
