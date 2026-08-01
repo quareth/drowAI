@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 
 os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
@@ -38,17 +39,72 @@ def test_builder_graph_names_are_runtime_names() -> None:
         GRAPH_NAME_SIMPLE_TOOL,
         GRAPH_NAME_SUBAGENT,
     )
-    from agent.subagents.definition import load_subagent_definitions
-    from agent.subagents.runtime.graph import graph_name_for_definition
-
     assert simple_tool_name == GRAPH_NAME_SIMPLE_TOOL
     assert deep_reasoning_name == GRAPH_NAME_DEEP_REASONING
+    assert GRAPH_NAME_SUBAGENT == "subagent"
+
+
+def test_subagent_graph_cache_key_covers_the_complete_definition() -> None:
+    from agent.subagents.definition import load_subagent_definitions
+    from agent.subagents.runtime.graph import graph_cache_key_for_definition
+
     definition = next(
         definition
         for definition in load_subagent_definitions()
         if definition.id == "pathfinder"
     )
-    assert graph_name_for_definition(definition) == GRAPH_NAME_SUBAGENT
+    equivalent = replace(definition)
+    changed = replace(definition, instructions=f"{definition.instructions}\nChanged")
+
+    assert graph_cache_key_for_definition(definition) == graph_cache_key_for_definition(
+        equivalent
+    )
+    assert graph_cache_key_for_definition(definition) != graph_cache_key_for_definition(
+        changed
+    )
+
+
+def test_subagent_graph_registry_isolates_definitions(monkeypatch) -> None:
+    from agent.graph.infrastructure.graph_registry import GraphRegistry
+    from agent.subagents.definition import load_subagent_definitions
+    from agent.subagents.runtime import graph as graph_runtime
+
+    definition = next(
+        definition
+        for definition in load_subagent_definitions()
+        if definition.id == "pathfinder"
+    )
+    changed = replace(definition, instructions=f"{definition.instructions}\nChanged")
+
+    class FakeGraph:
+        def __init__(self, bound_definition):
+            self.bound_definition = bound_definition
+
+        def compile(self, *, checkpointer):
+            return {
+                "definition": self.bound_definition,
+                "checkpointer": checkpointer,
+            }
+
+    monkeypatch.setattr(
+        graph_runtime,
+        "build_subagent_graph",
+        lambda bound_definition, *, build_only: FakeGraph(bound_definition),
+    )
+    monkeypatch.setattr(graph_runtime, "get_default_checkpointer", lambda: object())
+    registry = GraphRegistry()
+
+    first = graph_runtime.get_compiled_subagent_graph(definition, registry=registry)
+    duplicate = graph_runtime.get_compiled_subagent_graph(
+        replace(definition),
+        registry=registry,
+    )
+    second = graph_runtime.get_compiled_subagent_graph(changed, registry=registry)
+
+    assert duplicate is first
+    assert second is not first
+    assert first["definition"] == definition
+    assert second["definition"] == changed
 
 
 def test_usage_extractor_import_path_stays_compatible() -> None:

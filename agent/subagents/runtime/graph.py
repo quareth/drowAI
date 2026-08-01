@@ -15,7 +15,10 @@ outside the shared graph nodes, or choose between generic and legacy paths.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Mapping
+from dataclasses import asdict
 from functools import partial
 from typing import Any
 
@@ -183,17 +186,26 @@ def get_compiled_subagent_graph(
 
     return get_or_register_compiled_graph(
         registry=registry or get_default_graph_registry(),
-        name=graph_name_for_definition(definition),
+        name=graph_cache_key_for_definition(definition),
         build_uncompiled=lambda: build_subagent_graph(definition, build_only=True),
         checkpointer_factory=get_default_checkpointer,
     )
 
 
-def graph_name_for_definition(definition: SubagentDefinition) -> str:
-    """Return the stable graph type name for definition-configured child graphs."""
+def graph_cache_key_for_definition(definition: SubagentDefinition) -> str:
+    """Return a stable cache key for one complete immutable definition."""
 
-    _ = definition
-    return GRAPH_NAME_SUBAGENT
+    payload = json.dumps(
+        asdict(definition),
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    fingerprint = hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    return (
+        f"{GRAPH_NAME_SUBAGENT}:{definition.id}:"
+        f"v{definition.schema_version}:{fingerprint}"
+    )
 
 
 def _validate_config_thread(
@@ -226,6 +238,6 @@ __all__ = [
     "GRAPH_NAME_SUBAGENT",
     "build_subagent_graph",
     "get_compiled_subagent_graph",
-    "graph_name_for_definition",
+    "graph_cache_key_for_definition",
     "initialize_subagent_state",
 ]
