@@ -118,6 +118,19 @@ class AgentRunNotFoundError(KeyError):
     """Raised when a process-local subagent run key is not present."""
 
 
+class AgentRunIdentityCollisionError(RuntimeError):
+    """Raised when a scoped run id is reused for different immutable identity."""
+
+    def __init__(self, *, tenant_id: int, task_id: int, agent_run_id: str) -> None:
+        super().__init__(
+            "Agent run identity collision for "
+            f"tenant_id={tenant_id}, task_id={task_id}, agent_run_id={agent_run_id}"
+        )
+        self.tenant_id = tenant_id
+        self.task_id = task_id
+        self.agent_run_id = agent_run_id
+
+
 class HandoffClaimNotFoundError(KeyError):
     """Raised when a process-local handoff claim is not present."""
 
@@ -159,7 +172,16 @@ class ProcessLocalAgentRunRegistry:
             )
             existing = self._runs.get(key)
             if existing is not None:
-                return existing
+                if (
+                    existing.assignment == assignment
+                    and existing.graph_thread_id == graph_thread_id
+                ):
+                    return existing
+                raise AgentRunIdentityCollisionError(
+                    tenant_id=assignment.tenant_id,
+                    task_id=assignment.task_id,
+                    agent_run_id=assignment.agent_run_id,
+                )
             if max_active_runs_per_task is not None:
                 active_same_agent = [
                     entry
@@ -949,6 +971,7 @@ __all__ = [
     "TERMINAL_AGENT_RUN_STATUSES",
     "ActiveAgentRunExistsError",
     "AgentRunKey",
+    "AgentRunIdentityCollisionError",
     "AgentRunNotFoundError",
     "AgentRunTransition",
     "ClaimedHandoffBatch",

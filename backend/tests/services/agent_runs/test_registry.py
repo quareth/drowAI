@@ -18,6 +18,7 @@ from backend.services.agent_runs.contracts import (
 )
 from backend.services.agent_runs.registry import (
     ActiveAgentRunExistsError,
+    AgentRunIdentityCollisionError,
     AgentRunNotFoundError,
     ProcessLocalAgentRunRegistry,
 )
@@ -103,6 +104,45 @@ async def test_register_creates_queued_process_local_entry() -> None:
     assert entry.result_consumed is False
     assert entry.result_claim_id is None
     assert entry.accounted_usage_record_count == 0
+
+
+@pytest.mark.asyncio
+async def test_register_is_idempotent_for_the_same_immutable_identity() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    assignment = _assignment()
+
+    first = await registry.register(assignment, graph_thread_id="child-thread-1")
+    duplicate = await registry.register(
+        _assignment(),
+        graph_thread_id="child-thread-1",
+    )
+
+    assert duplicate is first
+
+
+@pytest.mark.asyncio
+async def test_register_rejects_assignment_identity_collision() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    assignment = _assignment()
+    await registry.register(assignment, graph_thread_id="child-thread-1")
+    changed = assignment.model_copy(update={"objective": "Different objective."})
+
+    with pytest.raises(AgentRunIdentityCollisionError) as exc_info:
+        await registry.register(changed, graph_thread_id="child-thread-1")
+
+    assert exc_info.value.tenant_id == 7
+    assert exc_info.value.task_id == 42
+    assert exc_info.value.agent_run_id == "run-1"
+
+
+@pytest.mark.asyncio
+async def test_register_rejects_graph_thread_identity_collision() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    assignment = _assignment()
+    await registry.register(assignment, graph_thread_id="child-thread-1")
+
+    with pytest.raises(AgentRunIdentityCollisionError):
+        await registry.register(assignment, graph_thread_id="child-thread-2")
 
 
 @pytest.mark.asyncio

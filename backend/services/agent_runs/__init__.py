@@ -14,6 +14,7 @@ from .result_projection import (
 )
 from .registry import (
     ActiveAgentRunExistsError,
+    AgentRunIdentityCollisionError,
     AgentRunNotFoundError,
     LocalAgentRun,
     ProcessLocalAgentRunRegistry,
@@ -22,6 +23,7 @@ from .registry import (
 __all__ = [
     "ActiveAgentRunExistsError",
     "AgentRunLauncher",
+    "AgentRunIdentityCollisionError",
     "AgentRunNotFoundError",
     "AgentRunResultProjector",
     "ACTIVE_AGENT_RUNS_KEY",
