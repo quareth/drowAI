@@ -32,11 +32,13 @@ import {
   useAgentRuns,
 } from "@/features/agent-runs/hooks/use-agent-run";
 import {
-  closeAgentRunDrawer,
   getAgentRunParentGroupingKey,
-  openAgentRunList,
   type AgentRunRecord,
 } from "@/features/agent-runs/state/agent-stream-store";
+import {
+  closeAgentRunDrawer,
+  openAgentRunList,
+} from "@/features/agent-runs/state/agent-run-presentation-store";
 import { apiFetch } from "@/lib/api-config";
 import { cn } from "@/lib/utils";
 import {

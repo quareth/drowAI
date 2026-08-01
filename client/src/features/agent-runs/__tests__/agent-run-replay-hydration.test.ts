@@ -12,11 +12,15 @@ import {
 } from "../services/agent-run-replay-hydration";
 import {
   applyAgentRunLifecycleUpdate,
-  closeAgentRunDrawer,
   getAgentRunSnapshot,
   MAX_AGENT_RUN_TASK_STATES,
   resetAgentRunStoreForTests,
 } from "../state/agent-stream-store";
+import {
+  closeAgentRunDrawer,
+  getAgentRunPresentationSnapshot,
+  resetAgentRunPresentationStoreForTests,
+} from "../state/agent-run-presentation-store";
 import { clearTaskState, getTaskStreamSnapshot } from "@/state/chat-stream-store";
 import type { AgentAssignment, AgentRunLifecycleProjection } from "../contracts/agent-run";
 import type { StreamEvent } from "@/types/packets";
@@ -34,6 +38,7 @@ const TASK_ID = 62101;
 afterEach(() => {
   vi.clearAllMocks();
   resetAgentRunStoreForTests();
+  resetAgentRunPresentationStoreForTests();
   clearTaskState(TASK_ID);
 });
 
@@ -159,7 +164,7 @@ describe("agent-run replay hydration", () => {
     expect(snapshot.runs).toHaveLength(1);
     expect(snapshot.runsById["pathfinder-run-1"].activity).toHaveLength(1);
     expect(snapshot.runsById["pathfinder-run-1"].agentIconKey).toBe("pathfinder");
-    expect(snapshot.presentation).toEqual({
+    expect(getAgentRunPresentationSnapshot(TASK_ID)).toEqual({
       isOpen: false,
       parentRunId: null,
       view: "list",
@@ -284,7 +289,7 @@ describe("agent-run replay hydration", () => {
     expect(snapshot.runsById["pathfinder-run-1"].safeError).toContain(
       "current backend process no longer owns it",
     );
-    expect(snapshot.presentation.isOpen).toBe(false);
+    expect(getAgentRunPresentationSnapshot(TASK_ID).isOpen).toBe(false);
     expect(getTaskStreamSnapshot(TASK_ID).items).toHaveLength(2);
     expect(
       getTaskStreamSnapshot(TASK_ID).items.some(

@@ -18,11 +18,13 @@ import {
   useSelectedAgentRun,
 } from "../hooks/use-agent-run";
 import {
+  type AgentRunRecord,
+} from "../state/agent-stream-store";
+import {
   closeAgentRunDrawer,
   openAgentRunDetail,
   returnAgentRunDrawerToList,
-  type AgentRunRecord,
-} from "../state/agent-stream-store";
+} from "../state/agent-run-presentation-store";
 import { AgentRunDetail } from "./AgentRunDetail";
 import { AgentIdentityIcon } from "./AgentIdentityIcon";
 import { AgentRunList } from "./AgentRunList";

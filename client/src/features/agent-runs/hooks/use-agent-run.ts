@@ -3,8 +3,8 @@
  *
  * Responsibilities:
  * - expose task-scoped run snapshots without mutating stream state
- * - derive conversation, parent-run, and selected-run views for drawer components
- * - keep drawer presentation selectors separate from lifecycle hydration
+ * - derive conversation and parent-run views from lifecycle data
+ * - compose data and presentation stores only for selected-run lookup
  */
 import { useEffect, useMemo } from "react";
 
@@ -15,10 +15,11 @@ import {
   useAgentRunStoreSnapshot,
   type AgentRunRecord,
 } from "../state/agent-stream-store";
+import { isAgentRunTerminalStatus } from "../contracts/agent-run";
 import {
-  isAgentRunTerminalStatus,
+  useAgentRunPresentationSnapshot,
   type AgentRunPresentationState,
-} from "../contracts/agent-run";
+} from "../state/agent-run-presentation-store";
 
 export function useAgentRuns(taskId: number | null | undefined): AgentRunRecord[] {
   return useAgentRunStoreSnapshot(taskId).runs;
@@ -55,7 +56,8 @@ export function useSelectedAgentRun(
   taskId: number | null | undefined,
 ): AgentRunRecord | null {
   const snapshot = useAgentRunStoreSnapshot(taskId);
-  const selectedAgentRunId = snapshot.presentation.selectedAgentRunId;
+  const presentation = useAgentRunPresentationSnapshot(taskId);
+  const selectedAgentRunId = presentation.selectedAgentRunId;
   if (!selectedAgentRunId) {
     return null;
   }
@@ -65,7 +67,7 @@ export function useSelectedAgentRun(
 export function useAgentRunPresentation(
   taskId: number | null | undefined,
 ): AgentRunPresentationState {
-  return useAgentRunStoreSnapshot(taskId).presentation;
+  return useAgentRunPresentationSnapshot(taskId);
 }
 
 export function useAgentRunLocalStatusHydration(

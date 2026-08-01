@@ -76,6 +76,10 @@ import {
   getAgentRunSnapshot,
   resetAgentRunStoreForTests,
 } from "@/features/agent-runs/state/agent-stream-store";
+import {
+  getAgentRunPresentationSnapshot,
+  resetAgentRunPresentationStoreForTests,
+} from "@/features/agent-runs/state/agent-run-presentation-store";
 import { clearTaskState, getTaskStreamSnapshot } from "@/state/chat-stream-store";
 import type {
   AgentAssignment,
@@ -98,6 +102,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   resetAgentRunStoreForTests();
+  resetAgentRunPresentationStoreForTests();
   clearTaskState(TASK_ID);
   apiFetchMock.mockReset();
   vi.unstubAllGlobals();
@@ -639,7 +644,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
       screen.getByRole("button", { name: /open subagents for map exposed services/i }),
     ).toBeTruthy();
     expect(screen.queryByText("replayed Pathfinder reasoning")).toBeNull();
-    expect(getAgentRunSnapshot(TASK_ID).presentation).toMatchObject({
+    expect(getAgentRunPresentationSnapshot(TASK_ID)).toMatchObject({
       isOpen: false,
       parentRunId: null,
       view: "list",
@@ -667,7 +672,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
     expect(
       screen.queryByText("Pathfinder has started a recon run and will hand off findings when it finishes."),
     ).toBeNull();
-    expect(getAgentRunSnapshot(TASK_ID).presentation).toMatchObject({
+    expect(getAgentRunPresentationSnapshot(TASK_ID)).toMatchObject({
       isOpen: false,
       parentRunId: null,
       view: "list",
@@ -698,7 +703,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /open subagents/i }));
 
-    expect(getAgentRunSnapshot(TASK_ID).presentation).toMatchObject({
+    expect(getAgentRunPresentationSnapshot(TASK_ID)).toMatchObject({
       isOpen: true,
       parentRunId: "turn-parent",
       view: "list",
@@ -739,7 +744,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
     expect(screen.getByText("working")).toBeTruthy();
     expect(screen.queryByText("agent_run_lifecycle")).toBeNull();
     expect(screen.queryByText("internal chain of thought")).toBeNull();
-    expect(getAgentRunSnapshot(TASK_ID).presentation).toMatchObject({
+    expect(getAgentRunPresentationSnapshot(TASK_ID)).toMatchObject({
       isOpen: false,
       parentRunId: null,
       view: "list",
@@ -776,7 +781,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
     const conversation = screen.getByRole("region", { name: /conversation history/i });
     fireEvent.click(screen.getByRole("button", { name: /open subagents/i }));
 
-    expect(getAgentRunSnapshot(TASK_ID).presentation).toMatchObject({
+    expect(getAgentRunPresentationSnapshot(TASK_ID)).toMatchObject({
       isOpen: true,
       parentRunId: "parent-run-1",
       view: "list",
@@ -792,7 +797,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
 
     expect(screen.getByTestId("agent-run-detail")).toBeTruthy();
     expect(screen.getByTestId("agent-activity-timeline")).toBeTruthy();
-    expect(getAgentRunSnapshot(TASK_ID).presentation).toMatchObject({
+    expect(getAgentRunPresentationSnapshot(TASK_ID)).toMatchObject({
       view: "detail",
       selectedAgentRunId: "pathfinder-run-1",
     });
@@ -936,7 +941,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
     ).toBeNull();
 
     fireEvent.click(screen.getByTestId("agent-run-row-pathfinder-run-port-80"));
-    expect(getAgentRunSnapshot(TASK_ID).presentation.selectedAgentRunId).toBe(
+    expect(getAgentRunPresentationSnapshot(TASK_ID).selectedAgentRunId).toBe(
       "pathfinder-run-port-80",
     );
     expect(screen.getByText("Reasoning for port 80")).toBeTruthy();
@@ -944,7 +949,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Back to subagent list" }));
     fireEvent.click(screen.getByTestId("agent-run-row-pathfinder-run-port-443"));
-    expect(getAgentRunSnapshot(TASK_ID).presentation.selectedAgentRunId).toBe(
+    expect(getAgentRunPresentationSnapshot(TASK_ID).selectedAgentRunId).toBe(
       "pathfinder-run-port-443",
     );
     expect(screen.getByText("Reasoning for port 443")).toBeTruthy();
@@ -977,7 +982,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
     fireEvent.click(screen.getByTestId("collapse-subagents-panel"));
 
     await waitFor(() => {
-      expect(getAgentRunSnapshot(TASK_ID).presentation.isOpen).toBe(false);
+      expect(getAgentRunPresentationSnapshot(TASK_ID).isOpen).toBe(false);
     });
     expect(screen.queryByRole("complementary", { name: /subagents/i })).toBeNull();
   });
@@ -1070,7 +1075,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
     expect(screen.getByTestId("agent-activity-timeline").dataset.activityChain).toBe("true");
     expect(screen.getByTestId("agent-activity-timeline-node-0")).toBeTruthy();
     expect(screen.getByTestId("reasoning-step-0:reasoning-pathfinder-reasoning-1")).toBeTruthy();
-    expect(getAgentRunSnapshot(TASK_ID).presentation).toMatchObject({
+    expect(getAgentRunPresentationSnapshot(TASK_ID)).toMatchObject({
       view: "detail",
       selectedAgentRunId: "pathfinder-run-1",
       activityExpanded: false,
@@ -1180,7 +1185,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
     expect(screen.queryByText("Findings")).toBeNull();
     expect(screen.queryByText("Next Steps")).toBeNull();
     expect(screen.queryByText("Streaming response…")).toBeNull();
-    expect(getAgentRunSnapshot(TASK_ID).presentation).toMatchObject({
+    expect(getAgentRunPresentationSnapshot(TASK_ID)).toMatchObject({
       isOpen: true,
       view: "detail",
       selectedAgentRunId: "pathfinder-run-1",
@@ -1225,7 +1230,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /close subagents/i }));
     await waitFor(() => {
-      expect(getAgentRunSnapshot(TASK_ID).presentation.isOpen).toBe(false);
+      expect(getAgentRunPresentationSnapshot(TASK_ID).isOpen).toBe(false);
     });
   });
 
@@ -1254,7 +1259,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
     expect(
       screen.getAllByText(/current backend process no longer owns it/i).length,
     ).toBeGreaterThan(0);
-    expect(getAgentRunSnapshot(TASK_ID).presentation).toMatchObject({
+    expect(getAgentRunPresentationSnapshot(TASK_ID)).toMatchObject({
       isOpen: true,
       parentRunId: "parent-run-1",
       view: "detail",

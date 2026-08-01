@@ -1,6 +1,6 @@
 /**
  * This test-only module verifies the agent-run store's lifecycle merging,
- * bounded activity retention, local-status reconciliation, and drawer presentation contracts.
+ * bounded activity retention, local-status reconciliation, and data retention.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -8,17 +8,12 @@ import {
   applyAgentRunActivityPayload,
   applyAgentRunLifecyclePayload,
   applyAgentRunLifecycleUpdate,
-  closeAgentRunDrawer,
   getAgentRunSnapshot,
   MAX_AGENT_RUN_ACTIVITY_EVENTS,
   MAX_AGENT_RUN_TASK_STATES,
   MAX_AGENT_RUNS_PER_TASK,
-  openAgentRunDetail,
-  openAgentRunList,
   reconcileAgentRunsWithLocalStatus,
   resetAgentRunStoreForTests,
-  returnAgentRunDrawerToList,
-  setAgentRunActivityExpanded,
 } from "../state/agent-stream-store";
 import { resolveAgentDisplayName } from "../contracts/agent-run";
 import type {
@@ -275,20 +270,12 @@ describe("agent-stream-store lifecycle state", () => {
     expect(snapshot.runsById["run-late"].conversationId).toBe("conv-late");
   });
 
-  it("hydrates lifecycle payloads without opening drawer presentation state", () => {
-    expect(getAgentRunSnapshot(TASK_ID).presentation.isOpen).toBe(false);
-
+  it("hydrates lifecycle payloads into the task-scoped data snapshot", () => {
     applyAgentRunLifecyclePayload(TASK_ID, lifecycleEvent(lifecycle(), 5));
 
     const snapshot = getAgentRunSnapshot(TASK_ID);
     expect(snapshot.runs).toHaveLength(1);
-    expect(snapshot.presentation).toEqual({
-      isOpen: false,
-      parentRunId: null,
-      view: "list",
-      selectedAgentRunId: null,
-      activityExpanded: false,
-    });
+    expect(snapshot.runsById["run-1"].firstSequence).toBe(5);
   });
 
   it("accepts any backend-attributed subagent kind without rewriting its identity", () => {
@@ -321,7 +308,6 @@ describe("agent-stream-store lifecycle state", () => {
 
   it("marks replayed nonterminal runs interrupted when absent from local status", () => {
     applyAgentRunLifecycleUpdate(TASK_ID, lifecycle({ status: "running" }), 10);
-    openAgentRunList(TASK_ID, "parent-run-1");
 
     reconcileAgentRunsWithLocalStatus(TASK_ID, []);
 
@@ -330,12 +316,6 @@ describe("agent-stream-store lifecycle state", () => {
     expect(run.status).toBe("interrupted");
     expect(run.lifecycleVersion).toBe(1);
     expect(run.safeError).toContain("current backend process no longer owns it");
-    expect(snapshot.presentation).toMatchObject({
-      isOpen: true,
-      parentRunId: "parent-run-1",
-      view: "list",
-      selectedAgentRunId: null,
-    });
   });
 
   it("overlays matching local status without downgrading newer lifecycle versions", () => {
@@ -405,49 +385,6 @@ describe("agent-stream-store activity state", () => {
     });
 
     expect(getAgentRunSnapshot(TASK_ID).runs).toHaveLength(0);
-  });
-});
-
-describe("agent-stream-store presentation state", () => {
-  it("opens list/detail only through presentation actions and resets expansion", () => {
-    applyAgentRunLifecycleUpdate(TASK_ID, lifecycle(), 1);
-
-    openAgentRunList(TASK_ID, "parent-run-1");
-    expect(getAgentRunSnapshot(TASK_ID).presentation).toMatchObject({
-      isOpen: true,
-      parentRunId: "parent-run-1",
-      view: "list",
-      selectedAgentRunId: null,
-      activityExpanded: false,
-    });
-
-    openAgentRunDetail(TASK_ID, "parent-run-1", "run-1");
-    expect(getAgentRunSnapshot(TASK_ID).presentation).toMatchObject({
-      isOpen: true,
-      view: "detail",
-      selectedAgentRunId: "run-1",
-      activityExpanded: false,
-    });
-
-    setAgentRunActivityExpanded(TASK_ID, true);
-    expect(getAgentRunSnapshot(TASK_ID).presentation.activityExpanded).toBe(true);
-
-    returnAgentRunDrawerToList(TASK_ID);
-    expect(getAgentRunSnapshot(TASK_ID).presentation).toMatchObject({
-      isOpen: true,
-      view: "list",
-      selectedAgentRunId: null,
-      activityExpanded: false,
-    });
-
-    closeAgentRunDrawer(TASK_ID);
-    expect(getAgentRunSnapshot(TASK_ID).presentation).toEqual({
-      isOpen: false,
-      parentRunId: null,
-      view: "list",
-      selectedAgentRunId: null,
-      activityExpanded: false,
-    });
   });
 });
 
@@ -534,32 +471,4 @@ describe("agent-stream-store bounded retention", () => {
     expect(snapshot.runsById["run-2"]).toBeUndefined();
   });
 
-  it("preserves the selected run when another eviction candidate exists", () => {
-    applyAgentRunLifecycleUpdate(
-      TASK_ID,
-      scopedLifecycle(TASK_ID, "selected-run", "completed"),
-    );
-    for (let index = 1; index < MAX_AGENT_RUNS_PER_TASK; index += 1) {
-      applyAgentRunLifecycleUpdate(
-        TASK_ID,
-        scopedLifecycle(TASK_ID, `run-${index}`),
-      );
-    }
-    openAgentRunDetail(TASK_ID, `parent-${TASK_ID}`, "selected-run");
-
-    applyAgentRunLifecycleUpdate(
-      TASK_ID,
-      scopedLifecycle(TASK_ID, `run-${MAX_AGENT_RUNS_PER_TASK}`),
-    );
-
-    const snapshot = getAgentRunSnapshot(TASK_ID);
-    expect(snapshot.runs).toHaveLength(MAX_AGENT_RUNS_PER_TASK);
-    expect(snapshot.runsById["selected-run"]).toBeDefined();
-    expect(snapshot.runsById["run-1"]).toBeUndefined();
-    expect(snapshot.presentation).toMatchObject({
-      isOpen: true,
-      view: "detail",
-      selectedAgentRunId: "selected-run",
-    });
-  });
 });

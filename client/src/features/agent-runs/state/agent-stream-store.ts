@@ -4,7 +4,7 @@
  * Responsibilities:
  * - merge process-local lifecycle projections by monotonic lifecycle version
  * - retain bounded, sequence-ordered subagent activity per task/run
- * - keep drawer presentation state separate from stream and replay hydration
+ * - expose stable task-scoped data snapshots for stream and replay consumers
  */
 import { useSyncExternalStore } from "react";
 
@@ -12,7 +12,6 @@ import { terminalizeAgentRunStreams } from "@/state/chat-stream-store";
 import { isStreamPacket } from "@/types/packets";
 
 import {
-  CLOSED_AGENT_RUN_PRESENTATION_STATE,
   isAgentRunTerminalStatus,
   readAgentRunActivityIdentity,
   readAgentRunLifecycleProjection,
@@ -27,7 +26,6 @@ import {
   type AgentResultProjection,
   type AgentRunActivityIdentity,
   type AgentRunLifecycleProjection,
-  type AgentRunPresentationState,
   type AgentRunStatus,
   type AgentRunStreamPayload,
   type LocalAgentRunStatusProjection,
@@ -71,13 +69,11 @@ export interface AgentRunRecord {
 export interface AgentRunsSnapshot {
   runs: AgentRunRecord[];
   runsById: Record<string, AgentRunRecord>;
-  presentation: AgentRunPresentationState;
   version: number;
 }
 
 interface AgentRunsTaskState {
   runs: Map<string, AgentRunRecord>;
-  presentation: AgentRunPresentationState;
   version: number;
 }
 
@@ -88,7 +84,6 @@ interface MutationResult {
 const defaultSnapshot: AgentRunsSnapshot = {
   runs: [],
   runsById: {},
-  presentation: CLOSED_AGENT_RUN_PRESENTATION_STATE,
   version: 0,
 };
 
@@ -101,7 +96,6 @@ function ensureState(taskId: number): AgentRunsTaskState {
   if (!state) {
     state = {
       runs: new Map<string, AgentRunRecord>(),
-      presentation: { ...CLOSED_AGENT_RUN_PRESENTATION_STATE },
       version: 0,
     };
     taskStates.set(taskId, state);
@@ -121,7 +115,6 @@ function buildSnapshot(state: AgentRunsTaskState): AgentRunsSnapshot {
   return {
     runs,
     runsById,
-    presentation: state.presentation,
     version: state.version,
   };
 }
@@ -138,7 +131,6 @@ function compareRuns(a: AgentRunRecord, b: AgentRunRecord): number {
 function cloneState(state: AgentRunsTaskState): AgentRunsTaskState {
   return {
     runs: new Map(state.runs),
-    presentation: { ...state.presentation },
     version: state.version,
   };
 }
@@ -341,97 +333,8 @@ export function reconcileAgentRunsWithLocalStatus(
   }
 }
 
-export function openAgentRunList(taskId: number, parentRunId: string): void {
-  const normalizedParentRunId = parentRunId.trim();
-  if (!normalizedParentRunId) {
-    return;
-  }
-  mutateTaskState(taskId, draft => {
-    const next: AgentRunPresentationState = {
-      isOpen: true,
-      parentRunId: normalizedParentRunId,
-      view: "list",
-      selectedAgentRunId: null,
-      activityExpanded: false,
-    };
-    if (samePresentationState(draft.presentation, next)) {
-      return { changed: false };
-    }
-    draft.presentation = next;
-    return { changed: true };
-  });
-}
-
-export function openAgentRunDetail(
-  taskId: number,
-  parentRunId: string,
-  agentRunId: string,
-): void {
-  const normalizedParentRunId = parentRunId.trim();
-  const normalizedAgentRunId = agentRunId.trim();
-  if (!normalizedParentRunId || !normalizedAgentRunId) {
-    return;
-  }
-  mutateTaskState(taskId, draft => {
-    const next: AgentRunPresentationState = {
-      isOpen: true,
-      parentRunId: normalizedParentRunId,
-      view: "detail",
-      selectedAgentRunId: normalizedAgentRunId,
-      activityExpanded: false,
-    };
-    if (samePresentationState(draft.presentation, next)) {
-      return { changed: false };
-    }
-    draft.presentation = next;
-    const selectedRun = draft.runs.get(normalizedAgentRunId);
-    if (selectedRun) {
-      touchRun(draft, selectedRun);
-    }
-    return { changed: true };
-  });
-}
-
 export function getAgentRunParentGroupingKey(run: AgentRunRecord): string {
   return run.parentRunId ?? run.parentTurnId;
-}
-
-export function setAgentRunActivityExpanded(taskId: number, expanded: boolean): void {
-  mutateTaskState(taskId, draft => {
-    if (draft.presentation.activityExpanded === expanded) {
-      return { changed: false };
-    }
-    draft.presentation = {
-      ...draft.presentation,
-      activityExpanded: expanded,
-    };
-    return { changed: true };
-  });
-}
-
-export function returnAgentRunDrawerToList(taskId: number): void {
-  mutateTaskState(taskId, draft => {
-    if (!draft.presentation.isOpen || draft.presentation.view === "list") {
-      return { changed: false };
-    }
-    draft.presentation = {
-      ...draft.presentation,
-      view: "list",
-      selectedAgentRunId: null,
-      activityExpanded: false,
-    };
-    return { changed: true };
-  });
-}
-
-export function closeAgentRunDrawer(taskId: number): void {
-  mutateTaskState(taskId, draft => {
-    if (samePresentationState(draft.presentation, CLOSED_AGENT_RUN_PRESENTATION_STATE)) {
-      return { changed: false };
-    }
-    draft.presentation = { ...CLOSED_AGENT_RUN_PRESENTATION_STATE };
-    return { changed: true };
-  });
 }
 
 export function getAgentRunSnapshot(taskId: number | null | undefined): AgentRunsSnapshot {
@@ -498,25 +401,13 @@ function touchRun(state: AgentRunsTaskState, run: AgentRunRecord): void {
 
 function pruneRuns(state: AgentRunsTaskState): void {
   while (state.runs.size > MAX_AGENT_RUNS_PER_TASK) {
-    const selectedRunId = state.presentation.selectedAgentRunId;
-    const candidates = Array.from(state.runs.values()).filter(
-      run => run.agentRunId !== selectedRunId,
-    );
-    const evictionPool = candidates.length > 0 ? candidates : Array.from(state.runs.values());
+    const evictionPool = Array.from(state.runs.values());
     evictionPool.sort(compareRunEvictionPriority);
     const evicted = evictionPool[0];
     if (!evicted) {
       return;
     }
     state.runs.delete(evicted.agentRunId);
-    if (evicted.agentRunId === selectedRunId) {
-      state.presentation = {
-        ...state.presentation,
-        view: "list",
-        selectedAgentRunId: null,
-        activityExpanded: false,
-      };
-    }
   }
 }
 
@@ -550,20 +441,10 @@ function pruneTaskStates(): boolean {
 }
 
 function taskEvictionPriority(state: AgentRunsTaskState): number {
-  const closed = !state.presentation.isOpen;
   const terminalOnly =
     state.runs.size === 0 ||
     Array.from(state.runs.values()).every(run => isAgentRunTerminalStatus(run.status));
-  if (closed && terminalOnly) {
-    return 0;
-  }
-  if (terminalOnly) {
-    return 1;
-  }
-  if (closed) {
-    return 2;
-  }
-  return 3;
+  return terminalOnly ? 0 : 1;
 }
 
 function emptyRunFromActivity(identity: AgentRunActivityIdentity): AgentRunRecord {
@@ -671,18 +552,5 @@ function sameRunRecord(a: AgentRunRecord, b: AgentRunRecord): boolean {
     a.firstSequence === b.firstSequence &&
     a.lastSequence === b.lastSequence &&
     a.activity === b.activity
-  );
-}
-
-function samePresentationState(
-  a: AgentRunPresentationState,
-  b: AgentRunPresentationState,
-): boolean {
-  return (
-    a.isOpen === b.isOpen &&
-    a.parentRunId === b.parentRunId &&
-    a.view === b.view &&
-    a.selectedAgentRunId === b.selectedAgentRunId &&
-    a.activityExpanded === b.activityExpanded
   );
 }

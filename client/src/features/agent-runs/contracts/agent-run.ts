@@ -68,8 +68,6 @@ export type AgentRunOutcome =
 
 export type AgentCapability = string;
 
-export type AgentRunDrawerView = "list" | "detail";
-
 export interface LocalAgentRunListResponse {
   process_local: true;
   task_id: number;
@@ -101,22 +99,6 @@ export interface LocalAgentRunCancelResponse {
   cancelled: boolean;
   agent_run: LocalAgentRunStatusProjection;
 }
-
-export interface AgentRunPresentationState {
-  isOpen: boolean;
-  parentRunId: string | null;
-  view: AgentRunDrawerView;
-  selectedAgentRunId: string | null;
-  activityExpanded: boolean;
-}
-
-export const CLOSED_AGENT_RUN_PRESENTATION_STATE: AgentRunPresentationState = {
-  isOpen: false,
-  parentRunId: null,
-  view: "list",
-  selectedAgentRunId: null,
-  activityExpanded: false,
-};
 
 export type AgentRunStreamPayload = StreamPacket | StreamEvent;
 

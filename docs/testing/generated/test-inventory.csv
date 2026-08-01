@@ -949,6 +949,7 @@ client/src/components/workbench/__tests__/overview-shell.test.tsx,vitest,fronten
 client/src/components/workspace/__tests__/workspace-tab-bar.test.tsx,vitest,frontend,frontend/components/workspace,component,,untriaged,,
 client/src/contexts/__tests__/PlanContext.test.tsx,vitest,frontend,frontend/contexts,component,,untriaged,,
 client/src/features/agent-runs/__tests__/agent-run-contracts.test.ts,vitest,frontend,frontend/features/agent-runs,contract,,untriaged,,
+client/src/features/agent-runs/__tests__/agent-run-presentation-store.test.ts,vitest,frontend,frontend/features/agent-runs,unit,,untriaged,,
 client/src/features/agent-runs/__tests__/agent-run-replay-hydration.test.ts,vitest,frontend,frontend/features/agent-runs,unit,,untriaged,,
 client/src/features/agent-runs/__tests__/agent-stream-store.test.ts,vitest,frontend,frontend/features/agent-runs,unit,,untriaged,,
 client/src/features/agent-runs/components/__tests__/AgentRunCard.test.tsx,vitest,frontend,frontend/features/agent-runs,component,,untriaged,,

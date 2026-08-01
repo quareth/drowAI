@@ -10,9 +10,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   applyAgentRunActivityPayload,
   getAgentRunSnapshot,
-  openAgentRunDetail,
   resetAgentRunStoreForTests,
 } from "@/features/agent-runs/state/agent-stream-store";
+import {
+  getAgentRunPresentationSnapshot,
+  openAgentRunDetail,
+  resetAgentRunPresentationStoreForTests,
+} from "@/features/agent-runs/state/agent-run-presentation-store";
 import { useTaskPanelMutations } from "@/hooks/use-task-panel";
 import { queryClient } from "@/lib/queryClient";
 import type { Task } from "@/types";
@@ -41,6 +45,7 @@ afterEach(() => {
   mocked.apiRequest.mockReset();
   queryClient.clear();
   resetAgentRunStoreForTests();
+  resetAgentRunPresentationStoreForTests();
 });
 
 describe("useTaskPanelMutations", () => {
@@ -61,7 +66,7 @@ describe("useTaskPanelMutations", () => {
       },
     });
     openAgentRunDetail(TASK_ID, "parent-run-1", "run-1");
-    expect(getAgentRunSnapshot(TASK_ID).presentation.selectedAgentRunId).toBe("run-1");
+    expect(getAgentRunPresentationSnapshot(TASK_ID).selectedAgentRunId).toBe("run-1");
 
     mocked.apiRequest.mockResolvedValue(new Response(null, { status: 204 }));
     const task: Task = {
@@ -88,12 +93,10 @@ describe("useTaskPanelMutations", () => {
       `/api/tasks/${TASK_ID}`,
     );
     expect(clearPlanState).toHaveBeenCalledWith(TASK_ID);
-    expect(getAgentRunSnapshot(TASK_ID)).toMatchObject({
-      runs: [],
-      presentation: {
-        isOpen: false,
-        selectedAgentRunId: null,
-      },
+    expect(getAgentRunSnapshot(TASK_ID).runs).toEqual([]);
+    expect(getAgentRunPresentationSnapshot(TASK_ID)).toMatchObject({
+      isOpen: false,
+      selectedAgentRunId: null,
     });
   });
 });

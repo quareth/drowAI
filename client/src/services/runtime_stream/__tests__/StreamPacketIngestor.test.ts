@@ -9,6 +9,10 @@ import {
   getAgentRunSnapshot,
   resetAgentRunStoreForTests,
 } from "@/features/agent-runs/state/agent-stream-store";
+import {
+  getAgentRunPresentationSnapshot,
+  resetAgentRunPresentationStoreForTests,
+} from "@/features/agent-runs/state/agent-run-presentation-store";
 import { groupMessages } from "@/hooks/useMessageGrouping";
 import type { RuntimeAgentReasoningEnvelope } from "../types";
 import { StreamPacketIngestor } from "../StreamPacketIngestor";
@@ -27,6 +31,7 @@ function envelope(packet: Record<string, unknown>, sequence = 10): RuntimeAgentR
 afterEach(() => {
   clearTaskState(TASK_ID);
   resetAgentRunStoreForTests();
+  resetAgentRunPresentationStoreForTests();
 });
 
 describe("StreamPacketIngestor", () => {
@@ -196,7 +201,7 @@ describe("StreamPacketIngestor", () => {
     const run = getAgentRunSnapshot(TASK_ID).runsById["pathfinder-run-1"];
     expect(run.status).toBe("running");
     expect(run.lifecycleVersion).toBe(1);
-    expect(getAgentRunSnapshot(TASK_ID).presentation.isOpen).toBe(false);
+    expect(getAgentRunPresentationSnapshot(TASK_ID).isOpen).toBe(false);
     expect(getTaskStreamSnapshot(TASK_ID).items.map((item) => item.type)).toContain("status");
     expect(getLastSequence(TASK_ID)).toBe(43);
   });

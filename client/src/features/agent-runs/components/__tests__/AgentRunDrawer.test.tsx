@@ -8,10 +8,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentAssignment, AgentRunLifecycleProjection } from "../../contracts/agent-run";
 import {
   applyAgentRunLifecycleUpdate,
-  openAgentRunDetail,
-  openAgentRunList,
   resetAgentRunStoreForTests,
 } from "../../state/agent-stream-store";
+import {
+  openAgentRunDetail,
+  openAgentRunList,
+  resetAgentRunPresentationStoreForTests,
+} from "../../state/agent-run-presentation-store";
 import { AgentRunDrawer } from "../AgentRunDrawer";
 
 const TASK_ID = 71201;
@@ -19,6 +22,7 @@ const TASK_ID = 71201;
 afterEach(() => {
   cleanup();
   resetAgentRunStoreForTests();
+  resetAgentRunPresentationStoreForTests();
 });
 
 function assignment(overrides: Partial<AgentAssignment> = {}): AgentAssignment {
