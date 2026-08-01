@@ -15,6 +15,7 @@ from ...core.base import (
     ChatMessage,
     LLMClient,
     LLMResponse,
+    LLMResponseOutcome,
     LLMStreamingResponse,
     LLMToolStreamingResponse,
     StructuredOutputSpec,
@@ -66,6 +67,17 @@ ANTHROPIC_AVAILABLE = True
 
 
 logger = logging.getLogger(__name__)
+
+
+def _anthropic_outcome(stop_reason: Any) -> LLMResponseOutcome:
+    """Normalize an Anthropic Messages stop reason."""
+    reason = str(stop_reason or "").strip().lower()
+    if reason == "max_tokens":
+        return LLMResponseOutcome(status="incomplete", reason="output_limit")
+    if reason in {"end_turn", "tool_use", "stop_sequence"}:
+        return LLMResponseOutcome(status="completed", reason=reason)
+    return LLMResponseOutcome(status="unknown", reason=reason or None)
+
 
 DEFAULT_MAX_TOKENS = 4096
 DEFAULT_RETRY_COUNT = 2
@@ -399,6 +411,7 @@ class AnthropicMessagesClient(LLMClient):
         request_kwargs["tool_choice"] = normalize_anthropic_tool_choice(tool_choice)
         final_usage: list[Any] = [None]
         final_tool_calls: list[Any] = [None]
+        final_outcome: list[LLMResponseOutcome | None] = [None]
 
         async def content_generator() -> AsyncIterator[str]:
             partial_chunks: list[str] = []
@@ -413,6 +426,9 @@ class AnthropicMessagesClient(LLMClient):
                     final_message = await self._resolve_stream_final_message(stream)
                     if final_message is not None:
                         final_usage[0] = self._extract_usage(final_message)
+                        final_outcome[0] = _anthropic_outcome(
+                            getattr(final_message, "stop_reason", None)
+                        )
                         raise_for_anthropic_refusal(
                             final_message,
                             model=self._model,
@@ -436,6 +452,7 @@ class AnthropicMessagesClient(LLMClient):
             content_iterator=content_generator(),
             get_final_tool_calls=lambda: final_tool_calls[0],
             get_final_usage=lambda: final_usage[0],
+            get_final_outcome=lambda: final_outcome[0],
         )
 
     async def chat_with_tools_with_usage(
@@ -498,6 +515,7 @@ class AnthropicMessagesClient(LLMClient):
                 tool_calls=tool_calls or None,
                 raw=response,
                 usage=usage,
+                outcome=_anthropic_outcome(getattr(response, "stop_reason", None)),
             )
         except (LLMResponseError, LLMConfigurationError):
             raise

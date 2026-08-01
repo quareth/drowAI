@@ -742,6 +742,52 @@ class TestOpenAIChatClientStreaming:
             '{"action_reasoning":"The request is resolved."}'
         )
         assert response.get_final_usage().total_tokens == 14
+
+    @pytest.mark.asyncio
+    async def test_stream_tool_call_reports_output_limit_as_incomplete(
+        self, client_with_mock
+    ) -> None:
+        """A length finish must not be misreported as zero completed calls."""
+        client, mock = client_with_mock
+
+        async def mock_stream():
+            delta = SimpleNamespace(content="Partial observation", tool_calls=[])
+            yield SimpleNamespace(
+                id="chatcmpl_truncated",
+                choices=[SimpleNamespace(delta=delta, finish_reason=None)],
+                usage=None,
+            )
+            yield SimpleNamespace(
+                id="chatcmpl_truncated",
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(content=None, tool_calls=[]),
+                        finish_reason="length",
+                    )
+                ],
+                usage=None,
+            )
+
+        mock.chat.completions.create.return_value = mock_stream()
+        tool = FunctionToolSpec(
+            tool_id="ptr_commit",
+            name="ptr_commit",
+            description="Finish",
+            parameters_schema={"type": "object", "properties": {}},
+        )
+
+        response = await client.stream_chat_with_tools_with_usage(
+            "system",
+            "user",
+            [tool],
+            tool_choice=ToolChoice(mode="required"),
+        )
+        assert [chunk async for chunk in response.content_iterator] == [
+            "Partial observation"
+        ]
+        assert response.get_final_tool_calls() is None
+        assert response.get_final_outcome().status == "incomplete"
+        assert response.get_final_outcome().reason == "output_limit"
     
     @pytest.mark.asyncio
     async def test_stream_yields_chunks(self, client_with_mock) -> None:

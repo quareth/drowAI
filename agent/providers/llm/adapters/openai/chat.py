@@ -22,6 +22,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 from ...core.base import (
     LLMClient,
     LLMResponse,
+    LLMResponseOutcome,
     LLMStreamingResponse,
     LLMToolStreamingResponse,
     StructuredOutputSpec,
@@ -78,6 +79,16 @@ except ImportError:
     UsageData = None  # type: ignore
 
 logger = logging.getLogger(__name__)
+
+
+def _chat_response_outcome(finish_reason: Any) -> LLMResponseOutcome:
+    """Normalize a Chat Completions finish reason."""
+    reason = str(finish_reason or "").strip().lower()
+    if reason == "length":
+        return LLMResponseOutcome(status="incomplete", reason="output_limit")
+    if reason in {"stop", "tool_calls", "function_call"}:
+        return LLMResponseOutcome(status="completed", reason=reason)
+    return LLMResponseOutcome(status="unknown", reason=reason or None)
 
 
 def _final_text_content(content: Any) -> str | None:
@@ -854,6 +865,7 @@ class OpenAIChatClient(LLMClient):
                     content=None if content_was_tool_call else content,
                     tool_calls=tool_calls,
                     raw=response,
+                    outcome=_chat_response_outcome(choice.finish_reason),
                 )
                 
             except (APIError, APIConnectionError, RateLimitError, APIStatusError) as e:
@@ -895,6 +907,7 @@ class OpenAIChatClient(LLMClient):
         """Stream visible Chat Completions text and buffer tool-call deltas."""
         final_usage: List[Optional["UsageData"]] = [None]
         final_tool_calls: List[Optional[List[ToolCall]]] = [None]
+        final_outcome: List[Optional[LLMResponseOutcome]] = [None]
         tool_buffers: Dict[int, Dict[str, str]] = {}
 
         async def content_generator() -> AsyncIterator[str]:
@@ -934,6 +947,8 @@ class OpenAIChatClient(LLMClient):
                         response_chunk = chunk
 
                     choice = chunk.choices[0] if getattr(chunk, "choices", None) else None
+                    if choice is not None and getattr(choice, "finish_reason", None):
+                        final_outcome[0] = _chat_response_outcome(choice.finish_reason)
                     delta = getattr(choice, "delta", None) if choice is not None else None
                     if delta is not None:
                         content = _final_text_content(getattr(delta, "content", None))
@@ -997,6 +1012,7 @@ class OpenAIChatClient(LLMClient):
             content_iterator=content_generator(),
             get_final_tool_calls=lambda: final_tool_calls[0],
             get_final_usage=lambda: final_usage[0],
+            get_final_outcome=lambda: final_outcome[0],
         )
     
     async def chat_with_tools_with_usage(
@@ -1081,6 +1097,7 @@ class OpenAIChatClient(LLMClient):
                     tool_calls=tool_calls,
                     raw=response,
                     usage=usage,
+                    outcome=_chat_response_outcome(choice.finish_reason),
                 )
                 
             except (APIError, APIConnectionError, RateLimitError, APIStatusError) as e:

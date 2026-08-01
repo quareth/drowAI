@@ -15,7 +15,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import math
-from typing import Any, AsyncIterator, Callable, Dict, List, Mapping, Optional, TYPE_CHECKING
+from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Mapping, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from backend.services.usage_tracking.models import UsageData
@@ -49,6 +49,14 @@ class ToolCall:
     arguments: str  # JSON string
 
 
+@dataclass(frozen=True, slots=True)
+class LLMResponseOutcome:
+    """Provider-neutral terminal state for one model response."""
+
+    status: Literal["completed", "incomplete", "unknown"]
+    reason: Optional[str] = None
+
+
 @dataclass
 class ToolCallResult:
     """Standardized result from chat_with_tools().
@@ -61,11 +69,13 @@ class ToolCallResult:
         tool_calls: Optional list of tool calls requested by the model
         raw: Original provider response for debugging/logging
         usage: Optional token usage data (only set when using chat_with_tools_with_usage)
+        outcome: Provider-neutral completion or truncation state when available
     """
     content: Optional[str]
     tool_calls: Optional[List[ToolCall]]
     raw: Any  # Original response for debugging
     usage: Optional["UsageData"] = None
+    outcome: Optional[LLMResponseOutcome] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,12 +220,14 @@ class LLMToolStreamingResponse:
 
     Provider adapters must never expose partial tool-call arguments through the
     content iterator. Callers consume ordinary assistant text as it arrives,
-    then read normalized tool calls only after the iterator is exhausted.
+    then read normalized tool calls and the terminal response outcome only
+    after the iterator is exhausted.
     """
 
     content_iterator: AsyncIterator[str]
     get_final_tool_calls: Callable[[], Optional[List[ToolCall]]]
     get_final_usage: Callable[[], Optional["UsageData"]]
+    get_final_outcome: Callable[[], Optional[LLMResponseOutcome]] = lambda: None
 
 
 class LLMClient(ABC):
@@ -499,6 +511,8 @@ class LLMClient(ABC):
             content_iterator=content_generator(),
             get_final_tool_calls=lambda: result.tool_calls,
             get_final_usage=lambda: result.usage,
+            get_final_outcome=lambda: result.outcome
+            or LLMResponseOutcome(status="completed"),
         )
 
 
@@ -507,6 +521,7 @@ __all__ = [
     "LLMCallOptions",
     "LLMClient",
     "LLMResponse",
+    "LLMResponseOutcome",
     "LLMStreamingResponse",
     "LLMToolStreamingResponse",
     "StructuredOutputSpec",

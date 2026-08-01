@@ -68,6 +68,7 @@ from .core.base import (
     ChatMessage,
     LLMClient,
     LLMResponse,
+    LLMResponseOutcome,
     LLMStreamingResponse,
     StructuredOutputSpec,
     ToolChoiceInput,
@@ -166,6 +167,7 @@ __all__ = [
     "OpenAIResponsesClient",
     # Response types with usage
     "LLMResponse",
+    "LLMResponseOutcome",
     "LLMStreamingResponse",
     "StructuredOutputSpec",
     "ToolSpecInput",

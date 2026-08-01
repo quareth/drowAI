@@ -451,6 +451,7 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
             ),
             get_final_tool_calls=response.get_final_tool_calls,
             get_final_usage=response.get_final_usage,
+            get_final_outcome=response.get_final_outcome,
         )
 
     def _validate_tool_call(

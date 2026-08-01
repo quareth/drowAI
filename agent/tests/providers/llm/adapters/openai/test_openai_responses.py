@@ -44,8 +44,10 @@ class MockResponsesResponse:
         output: list | None = None,
         incomplete_reason: str | None = None,
         response_id: str | None = None,
+        status: str = "completed",
     ) -> None:
         self.id = response_id
+        self.status = status
         self.output_text = output_text
         self.output = output or []
         self.incomplete_details = (
@@ -1060,6 +1062,54 @@ class TestOpenAIResponsesClientStreaming:
             '{"action_reasoning":"The request is resolved."}'
         )
         assert response.get_final_usage().total_tokens == 14
+        assert response.get_final_outcome().status == "completed"
+
+    @pytest.mark.asyncio
+    async def test_stream_tool_call_reports_incomplete_response_reason(
+        self, client_with_mock
+    ) -> None:
+        """Responses truncation should remain distinct from a missing commit."""
+        client, mock = client_with_mock
+        incomplete_response = MockResponsesResponse(
+            output_text="Partial observation",
+            incomplete_reason="max_output_tokens",
+            status="incomplete",
+        )
+        incomplete_response.usage = MagicMock(
+            input_tokens=10,
+            output_tokens=4,
+            total_tokens=14,
+            input_tokens_details=None,
+            output_tokens_details=None,
+        )
+        mock.responses.stream.return_value = MockAsyncContextManager(
+            [
+                MockStreamEvent(delta="Partial observation"),
+                MockStreamEvent(
+                    event_type="response.incomplete",
+                    response=incomplete_response,
+                ),
+            ]
+        )
+        tool = FunctionToolSpec(
+            tool_id="ptr_commit",
+            name="ptr_commit",
+            description="Finish",
+            parameters_schema={"type": "object", "properties": {}},
+        )
+
+        response = await client.stream_chat_with_tools_with_usage(
+            "system",
+            "user",
+            [tool],
+            tool_choice=ToolChoice(mode="required"),
+        )
+        assert [chunk async for chunk in response.content_iterator] == [
+            "Partial observation"
+        ]
+        assert response.get_final_tool_calls() is None
+        assert response.get_final_outcome().status == "incomplete"
+        assert response.get_final_outcome().reason == "max_output_tokens"
 
     @pytest.mark.asyncio
     async def test_stream_yields_chunks(self, client_with_mock) -> None:

@@ -391,6 +391,41 @@ async def test_stream_tool_call_keeps_text_and_completed_route_separate(
         '{"action_reasoning":"The request is resolved."}'
     )
     assert response.get_final_usage().total_tokens == 14
+    assert response.get_final_outcome().status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_stream_tool_call_reports_max_tokens_as_incomplete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Anthropic max_tokens termination should be provider-neutral truncation."""
+    final_message = SimpleNamespace(
+        id="msg_truncated",
+        stop_reason="max_tokens",
+        content=[SimpleNamespace(type="text", text="Partial observation")],
+        usage=SimpleNamespace(input_tokens=9, output_tokens=5),
+    )
+    client, messages = _client(monkeypatch, final_message)
+    messages.stream_response = _FakeStream(["Partial observation"], final_message)
+    tool = FunctionToolSpec(
+        tool_id="ptr_commit",
+        name="ptr_commit",
+        description="Finish",
+        parameters_schema={"type": "object", "properties": {}},
+    )
+
+    response = await client.stream_chat_with_tools_with_usage(
+        "system",
+        "user",
+        [tool],
+        tool_choice=ToolChoice(mode="required"),
+    )
+    assert [chunk async for chunk in response.content_iterator] == [
+        "Partial observation"
+    ]
+    assert response.get_final_tool_calls() is None
+    assert response.get_final_outcome().status == "incomplete"
+    assert response.get_final_outcome().reason == "output_limit"
 
 
 @pytest.mark.asyncio

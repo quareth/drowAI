@@ -30,6 +30,7 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 from ....core.base import (
     LLMClient,
     LLMResponse,
+    LLMResponseOutcome,
     LLMStreamingResponse,
     LLMToolStreamingResponse,
     StructuredOutputSpec,
@@ -109,6 +110,21 @@ def _safe_obj_value(value: Any, key: str, default: Any = None) -> Any:
     if isinstance(value, dict):
         return value.get(key, default)
     return getattr(value, key, default)
+
+
+def _responses_outcome(response: Any) -> LLMResponseOutcome:
+    """Normalize a Responses API terminal status and incomplete reason."""
+    status = str(_safe_obj_value(response, "status", "") or "").strip().lower()
+    if status == "incomplete":
+        details = _safe_obj_value(response, "incomplete_details", None)
+        reason = _safe_obj_value(details, "reason", None)
+        return LLMResponseOutcome(
+            status="incomplete",
+            reason=str(reason or "incomplete_response"),
+        )
+    if status == "completed":
+        return LLMResponseOutcome(status="completed")
+    return LLMResponseOutcome(status="unknown", reason=status or None)
 
 
 def _summarize_tool_names(tools: List[Dict[str, Any]]) -> List[str]:
@@ -998,6 +1014,7 @@ class OpenAIResponsesClient(LLMClient):
                     content=content,
                     tool_calls=tool_calls,
                     raw=response,
+                    outcome=_responses_outcome(response),
                 )
 
             except (APIError, APIConnectionError, RateLimitError, APIStatusError) as e:
@@ -1042,6 +1059,7 @@ class OpenAIResponsesClient(LLMClient):
         responses_tools = self._convert_tools_for_responses(tools)
         final_usage: List[Optional["UsageData"]] = [None]
         final_tool_calls: List[Optional[List[ToolCall]]] = [None]
+        final_outcome: List[Optional[LLMResponseOutcome]] = [None]
 
         async def content_generator() -> AsyncIterator[str]:
             partial_chunks: List[str] = []
@@ -1064,7 +1082,14 @@ class OpenAIResponsesClient(LLMClient):
                             extracted_usage = self._extract_usage_from_response(response)
                             if extracted_usage is not None:
                                 final_usage[0] = extracted_usage
-                        if is_done_event(event) and response is not None:
+                            outcome = _responses_outcome(response)
+                            if outcome.status != "unknown":
+                                final_outcome[0] = outcome
+                        if response is not None and (
+                            is_done_event(event)
+                            or final_outcome[0] is not None
+                            and final_outcome[0].status == "incomplete"
+                        ):
                             final_tool_calls[0] = self._extract_tool_calls(response)
 
                         chunk = extract_output_text_delta(event)
@@ -1101,6 +1126,7 @@ class OpenAIResponsesClient(LLMClient):
             content_iterator=content_generator(),
             get_final_tool_calls=lambda: final_tool_calls[0],
             get_final_usage=lambda: final_usage[0],
+            get_final_outcome=lambda: final_outcome[0],
         )
     
     async def chat_with_tools_with_usage(
@@ -1183,6 +1209,7 @@ class OpenAIResponsesClient(LLMClient):
                     tool_calls=tool_calls,
                     raw=response,
                     usage=usage,
+                    outcome=_responses_outcome(response),
                 )
 
             except (APIError, APIConnectionError, RateLimitError, APIStatusError) as e:
