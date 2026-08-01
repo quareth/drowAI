@@ -49,6 +49,34 @@ function makeMessage(
 }
 
 describe("MessageList activity collapse", () => {
+  it("allows a caller to render a matching activity group", () => {
+    render(
+      <MessageList
+        messages={[
+          makeMessage("tool-start", "tool_start", "", {
+            ind: 1,
+            tool_call_id: "tc-custom",
+          }),
+          makeMessage("tool-end", "tool_end", "", {
+            ind: 1,
+            tool_call_id: "tc-custom",
+            status: "success",
+          }),
+        ]}
+        taskId={42}
+        isLoading={false}
+        renderActivityGroup={(group) =>
+          group.primaryType === "tool" ? (
+            <div data-testid="custom-activity-group">Custom tool activity</div>
+          ) : undefined
+        }
+      />,
+    );
+
+    expect(screen.getByTestId("custom-activity-group")).toBeTruthy();
+    expect(screen.queryByTestId("message-group-tool")).toBeNull();
+  });
+
   it("collapses completed-turn activity while keeping the final answer visible", () => {
     render(
       <MessageList
@@ -77,7 +105,6 @@ describe("MessageList activity collapse", () => {
         ]}
         taskId={42}
         isLoading={false}
-        isConnected
       />,
     );
 
@@ -130,7 +157,6 @@ describe("MessageList activity collapse", () => {
         ]}
         taskId={42}
         isLoading={false}
-        isConnected
       />,
     );
 

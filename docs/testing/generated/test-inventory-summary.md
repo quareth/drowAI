@@ -23,9 +23,9 @@ Trust status describes current evidence, not test quality. `untriaged` means no 
 | Classification | Files |
 |---|---:|
 | `unit` | 945 |
-| `component` | 100 |
+| `component` | 99 |
 | `contract` | 83 |
-| `integration` | 52 |
+| `integration` | 53 |
 | `end-to-end` | 29 |
 | `architecture` | 15 |
 | `security` | 6 |

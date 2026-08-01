@@ -7,10 +7,6 @@
  */
 
 import type { MessageGroup } from "@/hooks/useMessageGrouping";
-import {
-  isAgentRunLifecyclePayload,
-  isAgentRunParentControlPayload,
-} from "@/features/agent-runs/contracts/agent-run";
 import type { ChatMessage } from "./types";
 
 export interface TurnActivitySummary {
@@ -97,17 +93,9 @@ function hasSuccessfulFinalMessage(group: MessageGroup): boolean {
   return hasFinal && !hasOpenContentStream;
 }
 
-export function isAgentRunEventGroup(group: MessageGroup): boolean {
-  return group.messages.some(
-    message =>
-      isAgentRunLifecyclePayload(message) ||
-      isAgentRunParentControlPayload(message),
-  );
-}
-
 function isCollapsibleIntermediate(group: MessageGroup): boolean {
   return (
-    isAgentRunEventGroup(group) ||
+    group.primaryType === "activity" ||
     group.primaryType === "reasoning" ||
     group.primaryType === "tool" ||
     group.primaryType === "observation"
@@ -136,25 +124,25 @@ function collectToolIds(group: MessageGroup, ids: Set<string>): void {
   }
 }
 
-function collectAgentRunIds(group: MessageGroup, ids: Set<string>): void {
+function collectActivityIds(group: MessageGroup, ids: Set<string>): void {
   for (const message of group.messages) {
-    const agentRunId = message.metadata?.agent_run_id;
-    if (typeof agentRunId === "string" && agentRunId.trim().length > 0) {
-      ids.add(agentRunId.trim());
+    const activityId = message.metadata?.transcript_activity_id;
+    if (typeof activityId === "string" && activityId.trim().length > 0) {
+      ids.add(activityId.trim());
     }
   }
 }
 
 export function summarizeActivityGroups(groups: MessageGroup[]): TurnActivitySummary {
   const toolIds = new Set<string>();
-  const agentRunIds = new Set<string>();
+  const activityIds = new Set<string>();
   let toolGroupsWithoutIds = 0;
   let thoughtCount = 0;
   let observationCount = 0;
 
   for (const group of groups) {
-    if (isAgentRunEventGroup(group)) {
-      collectAgentRunIds(group, agentRunIds);
+    if (group.primaryType === "activity") {
+      collectActivityIds(group, activityIds);
       continue;
     }
     if (group.primaryType === "reasoning") {
@@ -173,7 +161,7 @@ export function summarizeActivityGroups(groups: MessageGroup[]): TurnActivitySum
   return {
     thoughtCount,
     toolCount: toolIds.size + toolGroupsWithoutIds,
-    agentCount: agentRunIds.size,
+    agentCount: activityIds.size,
     observationCount,
   };
 }

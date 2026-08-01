@@ -31,6 +31,7 @@ import {
   getFirstCatalogDefaultSelection,
   sameDeploymentRef,
 } from "@/features/llm-provider/catalog";
+import { AgentRunTranscriptIntegration } from "@/features/agent-runs/components/AgentRunTranscriptIntegration";
 import {
   getDefaultVisibleReasoningEffort,
   getSupportedReasoningEffortForPayload,
@@ -48,7 +49,6 @@ import { useChatStop } from "@/hooks/useChatStop";
 import { useInterruptState } from "@/hooks/useInterruptState";
 import QueueIndicator from "./QueueIndicator";
 
-import MessageList from "./MessageList";
 import ChatInput from "./ChatInput";
 import TaskModelSelectors from "./TaskModelSelectors";
 import type { ReasoningEffort } from "./TaskModelSelectors";
@@ -996,7 +996,7 @@ export function UnifiedAgentChat({
   return (
     <div className="flex h-full min-h-0 flex-col bg-slate-950">
       {header}
-      <MessageList
+      <AgentRunTranscriptIntegration
         messages={chatProvider.messages}
         taskId={activeTaskId}
         isLoading={chatProvider.isLoading || chatBootstrap.isPending}

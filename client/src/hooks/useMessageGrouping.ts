@@ -7,13 +7,19 @@
 
 import { useMemo } from "react";
 import type { ChatMessage } from "@/components/chat/types";
-import { isAgentRunLifecyclePayload } from "@/features/agent-runs/contracts/agent-run";
 
 export interface MessageGroup {
   key: string;
   ind: number;
   messages: ChatMessage[];
-  primaryType: "user" | "reasoning" | "tool" | "observation" | "message" | "other";
+  primaryType:
+    | "user"
+    | "reasoning"
+    | "tool"
+    | "observation"
+    | "message"
+    | "activity"
+    | "other";
 }
 
 function coerceNumber(value: unknown): number | undefined {
@@ -74,12 +80,14 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
       typeof stepType === "string" &&
       (stepType.startsWith("reasoning") || stepType === "retry_start" || stepType === "retry_attempt");
     const isToolPhase = Boolean(stepType?.startsWith("tool"));
-    const agentRunId =
-      typeof message.metadata?.agent_run_id === "string" &&
-      message.metadata.agent_run_id.trim().length > 0
-        ? message.metadata.agent_run_id.trim()
-        : undefined;
-    const isAgentRunLifecycle = isAgentRunLifecyclePayload(message);
+    const transcriptActivityKind =
+      typeof message.metadata?.transcript_activity_kind === "string"
+        ? message.metadata.transcript_activity_kind.trim()
+        : "";
+    const transcriptActivityId =
+      typeof message.metadata?.transcript_activity_id === "string"
+        ? message.metadata.transcript_activity_id.trim()
+        : "";
     const toolCallId =
       typeof (message.metadata as any)?.tool_call_id === "string"
         ? (message.metadata as any).tool_call_id
@@ -94,8 +102,8 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
         : undefined;
 
     let baseId: string;
-    if (isAgentRunLifecycle) {
-      baseId = `agent-run-${agentRunId}`;
+    if (transcriptActivityKind && transcriptActivityId) {
+      baseId = `activity-${transcriptActivityKind}-${transcriptActivityId}`;
     } else if (isReasoningLifecycleStep(stepType)) {
       const reasoningSectionId = (message.metadata as any)?.reasoning_section_id;
       if (typeof reasoningSectionId !== "string" || reasoningSectionId.length === 0) {
@@ -167,8 +175,16 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
         break;
       }
       const stepType = msg.metadata?.step_type ?? (msg.metadata as any)?.stepType;
+      const isTranscriptActivity =
+        typeof msg.metadata?.transcript_activity_kind === "string" &&
+        msg.metadata.transcript_activity_kind.trim().length > 0 &&
+        typeof msg.metadata?.transcript_activity_id === "string" &&
+        msg.metadata.transcript_activity_id.trim().length > 0;
 
-      if (
+      if (isTranscriptActivity) {
+        primaryType = "activity";
+        break;
+      } else if (
         stepType?.startsWith("reasoning") ||
         stepType === "retry_start" ||
         stepType === "retry_attempt"
@@ -246,6 +262,7 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
         return 0;
       case "tool":
       case "observation":
+      case "activity":
         return 1;
       case "message":
         return 2;

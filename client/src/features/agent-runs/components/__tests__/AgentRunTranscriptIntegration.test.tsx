@@ -66,7 +66,7 @@ vi.mock("@/components/ui/resizable", () => ({
     ),
 }));
 
-import { MessageList } from "@/components/chat/MessageList";
+import { AgentRunTranscriptIntegration } from "../AgentRunTranscriptIntegration";
 import type { ChatMessage } from "@/components/chat/types";
 import { apiFetch } from "@/lib/api-config";
 import { hydrateAgentRunStoreFromReplayItems } from "@/features/agent-runs/services/agent-run-replay-hydration";
@@ -299,12 +299,12 @@ function lifecycleReplayPacket(sequence: number): Record<string, unknown> {
   };
 }
 
-describe("MessageList Pathfinder agent-run cards", () => {
+describe("AgentRunTranscriptIntegration Pathfinder agent-run cards", () => {
   it("renders a stored Pathfinder run after reasoning inside the parent activity group", () => {
     applyAgentRunLifecycleUpdate(TASK_ID, lifecycle(), 12);
 
     render(
-      <MessageList
+      <AgentRunTranscriptIntegration
         messages={[
           {
             id: "turn-parent",
@@ -397,7 +397,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
     applyAgentRunLifecycleUpdate(TASK_ID, lifecycle(), 12);
 
     render(
-      <MessageList
+      <AgentRunTranscriptIntegration
         messages={[
           {
             id: "turn-parent-live-reasoning-start",
@@ -494,7 +494,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
     );
 
     render(
-      <MessageList
+      <AgentRunTranscriptIntegration
         messages={[
           {
             id: "turn-parent-reasoning-1",
@@ -631,7 +631,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
     const replayedMessages = getTaskStreamSnapshot(TASK_ID).items as unknown as ChatMessage[];
 
     render(
-      <MessageList
+      <AgentRunTranscriptIntegration
         messages={replayedMessages}
         taskId={TASK_ID}
         isLoading={false}
@@ -657,7 +657,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
     applyAgentRunLifecycleUpdate(TASK_ID, lifecycle(), 12);
 
     render(
-      <MessageList
+      <AgentRunTranscriptIntegration
         messages={[reconParentAcknowledgementMessage()]}
         taskId={TASK_ID}
         isLoading={false}
@@ -685,7 +685,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
     applyAgentRunLifecycleUpdate(TASK_ID, lifecycle({ parent_run_id: null }), 12);
 
     render(
-      <MessageList
+      <AgentRunTranscriptIntegration
         messages={[
           {
             ...lifecycleMessage(),
@@ -731,7 +731,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
     });
 
     render(
-      <MessageList
+      <AgentRunTranscriptIntegration
         messages={[lifecycleMessage()]}
         taskId={TASK_ID}
         isLoading={false}
@@ -756,7 +756,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
     applyAgentRunLifecycleUpdate(TASK_ID, lifecycle(), 12);
 
     render(
-      <MessageList
+      <AgentRunTranscriptIntegration
         messages={[
           lifecycleMessage(),
           pathfinderActivityMessage("reasoning_start", "", 13, {
@@ -916,7 +916,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
     );
 
     render(
-      <MessageList
+      <AgentRunTranscriptIntegration
         messages={[
           firstLifecycleMessage,
           firstActivityMessage,
@@ -960,7 +960,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
     applyAgentRunLifecycleUpdate(TASK_ID, lifecycle(), 12);
 
     render(
-      <MessageList
+      <AgentRunTranscriptIntegration
         messages={[lifecycleMessage()]}
         taskId={TASK_ID}
         isLoading={false}
@@ -1045,7 +1045,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
     });
 
     render(
-      <MessageList
+      <AgentRunTranscriptIntegration
         messages={[
           lifecycleMessage(),
           pathfinderActivityMessage("reasoning_start", "", 13, {
@@ -1102,7 +1102,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
     });
 
     const { rerender } = render(
-      <MessageList
+      <AgentRunTranscriptIntegration
         messages={[reconParentAcknowledgementMessage()]}
         taskId={TASK_ID}
         isLoading={false}
@@ -1161,7 +1161,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
       17,
     );
     rerender(
-      <MessageList
+      <AgentRunTranscriptIntegration
         messages={[
           reconParentAcknowledgementMessage(),
           pathfinderActivityMessage("message_start", "", 14, { ind: 2 }),
@@ -1204,7 +1204,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
     );
 
     render(
-      <MessageList
+      <AgentRunTranscriptIntegration
         messages={[lifecycleMessage()]}
         taskId={TASK_ID}
         isLoading={false}
@@ -1239,7 +1239,7 @@ describe("MessageList Pathfinder agent-run cards", () => {
     applyAgentRunLifecycleUpdate(TASK_ID, lifecycle({ status: "running" }), 12);
 
     render(
-      <MessageList
+      <AgentRunTranscriptIntegration
         messages={[lifecycleMessage()]}
         taskId={TASK_ID}
         isLoading={false}
