@@ -29,6 +29,17 @@ from backend.services.agent_runs.dispatch_plan import PlannedAgentInvocation
 from backend.services.agent_runs.parent_handoff_coordinator import ParentHandoffOutcome
 
 
+_FORBIDDEN_SUPPORT_IMPORTS = (
+    "backend.services.agent_runs.dispatch_service",
+    "backend.services.langgraph_chat.handlers",
+    "backend.services.langgraph_chat.facade",
+    "backend.routers",
+    "backend.database",
+    "backend.models",
+    "agent.graph",
+)
+
+
 class _TerminalAwaitable:
     def __await__(self) -> Iterator[Any]:
         if False:
@@ -46,6 +57,17 @@ def _completion() -> AgentRunCompletion:
 
 def _stop() -> AgentRunDispatchStop:
     return AgentRunDispatchStop(invocation=_invocation(), status="failed")
+
+
+def _imports_for(path: Path) -> list[str]:
+    tree = ast.parse(path.read_text())
+    imports: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imports.extend(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module is not None:
+            imports.append(node.module)
+    return imports
 
 
 def test_existing_dispatch_contract_shapes_are_preserved() -> None:
@@ -141,15 +163,26 @@ def test_dispatch_support_modules_do_not_import_facade() -> None:
     assert support_modules
 
     for path in support_modules:
-        tree = ast.parse(path.read_text())
-        imports: list[str] = []
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imports.extend(alias.name for alias in node.names)
-            elif isinstance(node, ast.ImportFrom) and node.module is not None:
-                imports.append(node.module)
+        imports = _imports_for(path)
         assert "backend.services.agent_runs.dispatch_service" not in imports
         assert "dispatch_service" not in imports
+
+
+def test_dispatch_support_modules_stay_out_of_application_edges() -> None:
+    package_root = Path("backend/services/agent_runs")
+    support_modules = sorted(
+        path
+        for path in package_root.glob("dispatch_*.py")
+        if path.name != "dispatch_service.py"
+    )
+    assert support_modules
+
+    for path in support_modules:
+        imports = _imports_for(path)
+        for imported in imports:
+            assert not imported.startswith(_FORBIDDEN_SUPPORT_IMPORTS), (
+                f"{path} imports application edge {imported}"
+            )
 
 
 def test_moved_dispatch_contracts_have_single_canonical_definitions() -> None:
@@ -204,3 +237,50 @@ def test_dispatch_facade_exports_only_the_retained_service() -> None:
 
     assert "_LaunchBatchFailure" not in defined_names
     assert exported_names == ["SubagentDispatchService"]
+
+
+def test_dispatch_facade_private_helpers_are_only_admission_or_parent_ready_policy() -> None:
+    tree = ast.parse(Path("backend/services/agent_runs/dispatch_service.py").read_text())
+
+    module_private_helpers = {
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("_")
+        and node.name != "__all__"
+    }
+    service = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "SubagentDispatchService"
+    )
+    service_private_helpers = {
+        node.name
+        for node in service.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and node.name.startswith("_")
+    }
+
+    assert module_private_helpers == {
+        "_cancel_ready_handoff_task",
+        "_irrelevant_active_run_ids_from_outcome",
+        "_normalized_non_empty_strings",
+    }
+    assert service_private_helpers == {"__init__", "_active_counts_for_plan"}
+
+
+def test_dispatch_facade_no_longer_owns_extracted_helper_bodies() -> None:
+    tree = ast.parse(Path("backend/services/agent_runs/dispatch_service.py").read_text())
+    defined_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            defined_names.add(node.name)
+
+    assert not {
+        "_completion_for_terminal_exception",
+        "_existing_replayable_followup",
+        "_launch_batch",
+        "_publish_entry_lifecycle",
+        "_safe_launch_error",
+        "_settle_launched_batch_on_failure",
+    } & defined_names

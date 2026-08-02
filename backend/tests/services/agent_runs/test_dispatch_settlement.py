@@ -179,6 +179,75 @@ async def test_terminal_exception_recovers_failed_and_cancelled_usage() -> None:
     ) is None
 
 
+@pytest.mark.asyncio
+async def test_settle_child_result_returns_typed_batch_facts() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    settlement = DispatchSettlement(registry=registry)
+    completed_item, paused_item, failed_item, unexpected_item = _plan(
+        "pathfinder",
+        "cartographer",
+        "scribe",
+        "auditor",
+    )
+    completion = _completion(
+        completed_item.assignment,
+        graph_thread_id=completed_item.graph_thread_id,
+    )
+    await registry.register(
+        failed_item.assignment,
+        graph_thread_id=failed_item.graph_thread_id,
+    )
+    await registry.mark_failed(
+        tenant_id=TENANT_ID,
+        task_id=TASK_ID,
+        agent_run_id=failed_item.assignment.agent_run_id,
+        safe_error="Subagent worker failed",
+    )
+
+    completed = await settlement.settle_child_result(
+        completion,
+        item=completed_item,
+        task_id=TASK_ID,
+        turn_index=5,
+    )
+    paused = await settlement.settle_child_result(
+        SubagentRunPaused(
+            execution_result=GraphExecutionResult(
+                final_state=_final_state(paused_item.assignment.agent_run_id)
+            )
+        ),
+        item=paused_item,
+        task_id=TASK_ID,
+        turn_index=5,
+    )
+    failed = await settlement.settle_child_result(
+        SubagentRunFailed(
+            "Subagent graph completed without a valid terminal result",
+            GraphExecutionResult(
+                final_state=_final_state(failed_item.assignment.agent_run_id)
+            ),
+        ),
+        item=failed_item,
+        task_id=TASK_ID,
+        turn_index=5,
+    )
+    unexpected = await settlement.settle_child_result(
+        RuntimeError("child task exploded"),
+        item=unexpected_item,
+        task_id=TASK_ID,
+        turn_index=5,
+    )
+
+    assert completed.completion is completion
+    assert paused.paused is True
+    assert failed.completion is not None
+    assert failed.completion.result.outcome == "failed"
+    assert failed.completion.usage_records[0]["agent_run_id"] == "run-3"
+    assert unexpected.stop is not None
+    assert unexpected.stop.status == "failed"
+    assert unexpected.stop.invocation is unexpected_item
+
+
 def test_stop_for_child_exception_preserves_status_and_usage_mapping() -> None:
     settlement = DispatchSettlement(registry=ProcessLocalAgentRunRegistry())
     item = _plan("pathfinder")[0]

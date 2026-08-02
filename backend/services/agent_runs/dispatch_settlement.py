@@ -25,6 +25,7 @@ from .completion import (
 from .contracts import AgentAssignment, AgentResult
 from .dispatch_contracts import (
     AgentRunDispatchStop,
+    DispatchChildSettlement,
     DispatchStopStatus,
 )
 from .dispatch_plan import PlannedAgentInvocation
@@ -114,6 +115,35 @@ class DispatchSettlement:
             result=terminal.result,
             usage_records=usage_records,
             graph_thread_id=item.graph_thread_id,
+        )
+
+    async def settle_child_result(
+        self,
+        result: AgentRunCompletion | BaseException,
+        *,
+        item: PlannedAgentInvocation,
+        task_id: int,
+        turn_index: int | None,
+    ) -> DispatchChildSettlement:
+        """Translate one gathered child result into a typed dispatch fact."""
+        if isinstance(result, AgentRunCompletion):
+            return DispatchChildSettlement(item, completion=result)
+        if isinstance(result, SubagentRunPaused):
+            return DispatchChildSettlement(item, paused=True)
+        terminal_completion = await self.completion_for_terminal_exception(
+            result,
+            item=item,
+        )
+        if terminal_completion is not None:
+            return DispatchChildSettlement(item, completion=terminal_completion)
+        return DispatchChildSettlement(
+            item,
+            stop=self.stop_for_child_exception(
+                result,
+                item=item,
+                task_id=task_id,
+                turn_index=turn_index,
+            ),
         )
 
     def stop_for_child_exception(

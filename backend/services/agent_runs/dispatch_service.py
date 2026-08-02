@@ -32,10 +32,7 @@ from .dispatch_plan import (
     stable_par_assignment_identity,
 )
 from .dispatch_settlement import DispatchSettlement
-from .launcher import (
-    LifecyclePublisher,
-    SubagentRunPaused,
-)
+from .launcher import LifecyclePublisher
 from .ownership_policy import normalize_agent_handoff_entries, resolve_subagent_handoff
 from .parent_handoff_coordinator import (
     ParentFollowupDelegation,
@@ -150,29 +147,21 @@ class SubagentDispatchService:
                     0,
                     active_counts.get(item.assignment.agent_id, 0) - 1,
                 )
-                if isinstance(batch_result, BaseException):
-                    if isinstance(batch_result, SubagentRunPaused):
-                        paused = True
-                        continue
-                    terminal_completion = (
-                        await self._settlement.completion_for_terminal_exception(
-                            batch_result,
-                            item=item,
-                        )
-                    )
-                    if terminal_completion is not None:
-                        completions[item.index] = terminal_completion
-                        continue
+                settlement = await self._settlement.settle_child_result(
+                    batch_result,
+                    item=item,
+                    task_id=runtime_config.chat_inputs.task_id,
+                    turn_index=parent_turn_sequence,
+                )
+                if settlement.paused:
+                    paused = True
+                    continue
+                if settlement.completion is not None:
+                    completions[item.index] = settlement.completion
+                    continue
+                if settlement.stop is not None:
                     await _cancel_ready_handoff_task(ready_handoff_task)
-                    return AgentRunDispatchResult(
-                        stop=self._settlement.stop_for_child_exception(
-                            batch_result,
-                            item=item,
-                            task_id=runtime_config.chat_inputs.task_id,
-                            turn_index=parent_turn_sequence,
-                        )
-                    )
-                completions[item.index] = batch_result
+                    return AgentRunDispatchResult(stop=settlement.stop)
 
             batch_completions = tuple(
                 completions[item.index]
