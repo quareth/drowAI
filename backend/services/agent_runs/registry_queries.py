@@ -9,7 +9,6 @@ methods; the registry facade commits deletions and mutations.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Iterable, Mapping
 
@@ -20,15 +19,6 @@ from .registry_contracts import (
     HandoffWaitStatus,
     LocalAgentRun,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class ReadyHandoffProjection:
-    """Pure snapshot of scoped handoff candidates and active runs."""
-
-    candidates: tuple[LocalAgentRun, ...]
-    claimed_ready_count: int
-    active_runs: tuple[LocalAgentRun, ...]
 
 
 def datetime_sort_key(value: datetime | None) -> str:
@@ -136,59 +126,11 @@ def handoff_wait_status(
     return "inactive"
 
 
-def project_ready_handoffs(
-    entries: Iterable[LocalAgentRun],
-    *,
-    tenant_id: int,
-    task_id: int,
-    conversation_id: str | None = None,
-    max_results: int | None = None,
-) -> ReadyHandoffProjection:
-    """Return sorted ready terminal candidates and scoped active snapshots."""
-
-    candidates: list[LocalAgentRun] = []
-    claimed_ready_count = 0
-    active_entries: list[LocalAgentRun] = []
-    for entry in entries:
-        if (
-            entry.tenant_id != tenant_id
-            or entry.task_id != task_id
-            or (
-                conversation_id is not None
-                and entry.conversation_id != conversation_id
-            )
-        ):
-            continue
-        if entry.status in ACTIVE_AGENT_RUN_STATUSES:
-            active_entries.append(entry)
-        if (
-            entry.result is None
-            or entry.result_consumed
-            or entry.status not in TERMINAL_AGENT_RUN_STATUSES
-        ):
-            continue
-        if entry.result_claim_id is None:
-            candidates.append(entry)
-        else:
-            claimed_ready_count += 1
-
-    candidates.sort(key=run_sort_key)
-    if max_results is not None:
-        candidates = candidates[:max_results]
-    return ReadyHandoffProjection(
-        candidates=tuple(candidates),
-        claimed_ready_count=claimed_ready_count,
-        active_runs=tuple(sorted(active_entries, key=run_sort_key)),
-    )
-
-
 __all__ = [
-    "ReadyHandoffProjection",
     "datetime_sort_key",
     "find_active_by_graph_thread",
     "handoff_wait_status",
     "list_task_runs",
-    "project_ready_handoffs",
     "run_sort_key",
     "select_stale_finished_keys",
 ]

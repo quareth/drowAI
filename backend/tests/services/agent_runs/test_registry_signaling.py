@@ -161,6 +161,7 @@ def test_registry_signal_boundary_and_facade_delegates_to_signal() -> None:
     assert "safe_inc" not in signal_source
     assert "safe_gauge" not in signal_source
     assert "logger" not in signal_source
+    assert "current_version_locked" not in signal_source
     assert RegistryStateSignal.__module__.endswith("registry_signaling")
 
     registry_source = registry_path.read_text(encoding="utf-8")

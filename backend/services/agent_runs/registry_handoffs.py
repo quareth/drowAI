@@ -10,16 +10,26 @@ registry methods; the registry facade commits claim and run replacements.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
-from typing import Mapping
+from typing import Iterable, Mapping
 
 from .contracts import AgentResult
 from .registry_contracts import (
+    ACTIVE_AGENT_RUN_STATUSES,
     TERMINAL_AGENT_RUN_STATUSES,
     AgentRunKey,
     ClaimedHandoffBatch,
     LocalAgentRun,
 )
-from .registry_queries import ReadyHandoffProjection, project_ready_handoffs
+from .registry_queries import run_sort_key
+
+
+@dataclass(frozen=True, slots=True)
+class ReadyHandoffProjection:
+    """Pure snapshot of scoped handoff candidates and active runs."""
+
+    candidates: tuple[LocalAgentRun, ...]
+    claimed_ready_count: int
+    active_runs: tuple[LocalAgentRun, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,21 +72,48 @@ def agent_run_key(entry: LocalAgentRun) -> AgentRunKey:
 
 
 def select_ready_handoffs(
-    entries: tuple[LocalAgentRun, ...],
+    entries: Iterable[LocalAgentRun],
     *,
     tenant_id: int,
     task_id: int,
     conversation_id: str | None = None,
     max_results: int | None = None,
 ) -> ReadyHandoffProjection:
-    """Return the current scoped ready-handoff projection."""
+    """Return sorted ready terminal candidates and scoped active snapshots."""
 
-    return project_ready_handoffs(
-        entries,
-        tenant_id=tenant_id,
-        task_id=task_id,
-        conversation_id=conversation_id,
-        max_results=max_results,
+    candidates: list[LocalAgentRun] = []
+    claimed_ready_count = 0
+    active_entries: list[LocalAgentRun] = []
+    for entry in entries:
+        if (
+            entry.tenant_id != tenant_id
+            or entry.task_id != task_id
+            or (
+                conversation_id is not None
+                and entry.conversation_id != conversation_id
+            )
+        ):
+            continue
+        if entry.status in ACTIVE_AGENT_RUN_STATUSES:
+            active_entries.append(entry)
+        if (
+            entry.result is None
+            or entry.result_consumed
+            or entry.status not in TERMINAL_AGENT_RUN_STATUSES
+        ):
+            continue
+        if entry.result_claim_id is None:
+            candidates.append(entry)
+        else:
+            claimed_ready_count += 1
+
+    candidates.sort(key=run_sort_key)
+    if max_results is not None:
+        candidates = candidates[:max_results]
+    return ReadyHandoffProjection(
+        candidates=tuple(candidates),
+        claimed_ready_count=claimed_ready_count,
+        active_runs=tuple(sorted(active_entries, key=run_sort_key)),
     )
 
 
@@ -197,6 +234,7 @@ def build_consumption_decision(
 __all__ = [
     "ConsumptionDecision",
     "HandoffClaimDecision",
+    "ReadyHandoffProjection",
     "RunReplacement",
     "SettlementDecision",
     "agent_run_key",

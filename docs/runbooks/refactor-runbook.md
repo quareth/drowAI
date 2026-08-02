@@ -1,6 +1,6 @@
 # Refactor Rules (Binding)
 
-**Document Version**: 1.2
+**Document Version**: 1.3
 **Created**: 2026-05-29  
 **Status**: Authoritative  
 **Applies to**: every refactor guide and every implementation under `docs/devdocs/refactor/`
@@ -108,19 +108,51 @@ are migrated.
   toggles to gate the refactor. (Internal imports a module needs for its own use
   are normal usage, not a compatibility layer.)
 
-### Rule 5 — Quality: no monoliths, clear boundaries
+### Rule 5 — Quality: clear boundaries, no monoliths
 
-- **No monolithic files, classes, or functions** in the resulting structure.
-  Each new file/module is single-responsibility and small.
-- **Mandatory module docstring.** Every new file opens with a docstring (first
-  lines) stating its **purpose** and **scope boundary**. Code in the file must
-  not violate that stated boundary.
-- **Single source of truth.** After migration, each moved symbol is defined
-  **exactly once**, in its new home — no residual or duplicate definition.
-- **Clean imports.** Absolute imports; stdlib → third-party → local ordering;
-  no import cycles (dependencies point one direction).
-- **Separation of concerns.** Keep orchestration, domain models, I/O, and helpers
-  in distinct modules; do not mix layers in one file.
+- **Refactor by responsibility, not file size.** Line count and function count
+  are signals only. They do not justify creating a new module, service, helper,
+  manager, utility, or wrapper.
+
+- **Map responsibilities first.** Before splitting a monolithic file, identify
+  the architectural responsibilities it currently owns. Do not mechanically
+  move small functions into separate files.
+
+- **Search the repository before creating anything.** Inspect existing modules,
+  imports, callers, entrypoints, tests, and dependency direction to find the
+  current owner of each responsibility. Do not rely on filenames alone.
+
+- **Reuse the canonical owner.** When an appropriate owner exists, migrate the
+  logic into it and repoint callers. Do not create parallel components with
+  overlapping responsibility.
+
+- **Resolve ownership conflicts.** If multiple modules appear to own the same
+  concern, select one canonical owner and consolidate the behavior before
+  continuing.
+
+- **Create a new component only for a genuinely independent responsibility.**
+  It must have a clear purpose, stable boundary, clear dependency direction,
+  and an independent reason to change. Convenience wrappers and arbitrary
+  groups of small functions do not qualify.
+
+- **Prefer cohesive modules over micro-files.** Related functions, classes, and
+  private helpers may remain together when they implement the same
+  responsibility.
+
+- **No monolithic units.** Files, classes, and functions must not combine
+  unrelated responsibilities. Size alone does not make something monolithic.
+
+- **Document new module boundaries.** Every new file must begin with a docstring
+  stating its purpose, what it owns, and what it does not own.
+
+- **Maintain one source of truth.** After migration, remove duplicate
+  definitions, dead wrappers, residual implementations, and unused imports.
+
+- **Keep dependencies clean.** Use absolute imports, standard import ordering,
+  one-way dependency direction, and no import cycles.
+
+- **Verify the result.** Each responsibility must have one canonical owner, all
+  callers must use it, and no overlapping implementation may remain.
 
 ### Rule 6 — Documentation discipline
 
@@ -149,6 +181,9 @@ are migrated.
       the refactor.
 - [ ] No duplicate definitions: every moved symbol is defined exactly once
       (single source of truth, Rule 5).
+- [ ] No parallel or overlapping owner remains: each responsibility resolves to
+      one canonical module, and every new component satisfies the extraction
+      criteria in Rule 5.
 - [ ] No fallbacks, no compatibility shims/re-exports, no new flags exist
       (Rule 4).
 - [ ] Every caller/reference points at the new canonical location; nothing still
@@ -182,13 +217,20 @@ When a program renames symbols, env keys, wire protocol strings, or DB objects
 For each task in a refactor guide, the implementer must:
 
 1. [ ] Identify/author relevant tests; run and **lock the baseline** (Rule 2).
-2. [ ] Apply the program's migration sequence (Rule 3 for structural; Rule 8 for
-      rename layers).
-3. [ ] **Migrate** all references; verify the system runs on the new structure or
-      names (Rules 3–4, Rule 8).
-4. [ ] **Remove legacy** only after migration is green (Rule 3, Rule 4).
-5. [ ] Re-run the locked tests; confirm functionally equivalent outcomes (Rule 0, Rule 2).
-6. [ ] Confirm quality gates: no monolith, docstrings, single source of truth, no cycles (Rule 5).
+2. [ ] Map the source file's behavior by architectural responsibility; do not
+       use function size or line count as the target-module map (Rule 5).
+3. [ ] Search the wired repository for each responsibility's existing owner;
+       record the candidate modules, selected canonical owner, and why a new
+       coherent component is necessary if no existing owner fits (Rule 5).
+4. [ ] Apply the program's migration sequence (Rule 3 for structural; Rule 8 for
+       rename layers).
+5. [ ] **Migrate** all references; verify the system runs on the new structure or
+       names (Rules 3–4, Rule 8).
+6. [ ] **Remove legacy** only after migration is green (Rule 3, Rule 4).
+7. [ ] Re-run the locked tests; confirm functionally equivalent outcomes (Rule 0, Rule 2).
+8. [ ] Confirm quality gates: one canonical owner per responsibility, no
+       overlapping modules, no monolith, docstrings, single source of truth, and
+       no cycles (Rule 5).
 
 A guide's final phase then runs the [Review & Cleanup acceptance criteria](#review--cleanup-acceptance-criteria-must-all-pass) over the whole guide scope.
 
@@ -220,3 +262,4 @@ A guide's final phase then runs the [Review & Cleanup acceptance criteria](#revi
 | 1.0 | 2026-05-29 | Initial binding refactor rules. |
 | 1.1 | 2026-06-10 | Generalized for all refactor programs and added Rule 8 for identifier rename programs. |
 | 1.2 | 2026-07-25 | Relocated the rulebook under `docs/runbooks/` and corrected the canonical program root. |
+| 1.3 | 2026-08-02 | Added repository-first responsibility ownership discovery and canonical-owner extraction gates. |

@@ -31,11 +31,6 @@ class RegistryStateSignal:
         async with self._owner_lock:
             return self._state_version
 
-    def current_version_locked(self) -> int:
-        """Return the current mutation version while the owner lock is held."""
-
-        return self._state_version
-
     def mark_changed_locked(self) -> None:
         """Record one committed mutation while the owner lock is held."""
 

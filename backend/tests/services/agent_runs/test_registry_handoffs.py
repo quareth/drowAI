@@ -300,6 +300,7 @@ def test_registry_handoffs_are_pure_and_facade_delegates_to_policy() -> None:
     assert registry_handoffs.__all__ == [
         "ConsumptionDecision",
         "HandoffClaimDecision",
+        "ReadyHandoffProjection",
         "RunReplacement",
         "SettlementDecision",
         "agent_run_key",

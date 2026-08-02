@@ -262,62 +262,6 @@ def test_handoff_wait_status_matches_scoped_ready_inactive_and_active_states() -
     )
 
 
-def test_ready_handoff_projection_matches_inline_selection_and_order() -> None:
-    early = _completed(
-        _entry("run-c", conversation_id="conversation-1"),
-        completed_at=datetime(2026, 8, 2, 12, 1, tzinfo=UTC),
-    )
-    late = _completed(
-        _entry("run-a", conversation_id="conversation-1"),
-        completed_at=datetime(2026, 8, 2, 12, 3, tzinfo=UTC),
-    )
-    middle = _completed(
-        _entry("run-b", conversation_id="conversation-1"),
-        completed_at=datetime(2026, 8, 2, 12, 2, tzinfo=UTC),
-    )
-    claimed = replace(
-        _completed(_entry("run-claimed", conversation_id="conversation-1")),
-        result_claim_id="claim-1",
-    )
-    consumed = replace(
-        _completed(_entry("run-consumed", conversation_id="conversation-1")),
-        result_consumed=True,
-    )
-    foreign_conversation = _completed(
-        _entry("run-foreign-conversation", conversation_id="conversation-2")
-    )
-    active_late = _running(
-        _entry("run-active-late", conversation_id="conversation-1"),
-        started_at=datetime(2026, 8, 2, 12, 4, tzinfo=UTC),
-    )
-    active_early = _running(
-        _entry("run-active-early", conversation_id="conversation-1"),
-        started_at=datetime(2026, 8, 2, 12, 0, tzinfo=UTC),
-    )
-    entries = (
-        late,
-        claimed,
-        active_late,
-        early,
-        consumed,
-        foreign_conversation,
-        active_early,
-        middle,
-    )
-
-    projection = registry_queries.project_ready_handoffs(
-        entries,
-        tenant_id=7,
-        task_id=42,
-        conversation_id="conversation-1",
-        max_results=2,
-    )
-
-    assert projection.candidates == (early, middle)
-    assert projection.claimed_ready_count == 1
-    assert projection.active_runs == (active_early, active_late)
-
-
 def test_registry_queries_are_pure_and_facade_delegates_to_policy() -> None:
     queries_path = (
         Path(__file__).resolve().parents[3] / "services/agent_runs/registry_queries.py"
@@ -336,7 +280,6 @@ def test_registry_queries_are_pure_and_facade_delegates_to_policy() -> None:
 
     assert imports == {
         (0, "__future__"),
-        (0, "dataclasses"),
         (0, "datetime"),
         (0, "typing"),
         (1, "registry_contracts"),
@@ -347,12 +290,10 @@ def test_registry_queries_are_pure_and_facade_delegates_to_policy() -> None:
     assert "_clock" not in queries_source
     assert "del " not in queries_source
     assert registry_queries.__all__ == [
-        "ReadyHandoffProjection",
         "datetime_sort_key",
         "find_active_by_graph_thread",
         "handoff_wait_status",
         "list_task_runs",
-        "project_ready_handoffs",
         "run_sort_key",
         "select_stale_finished_keys",
     ]
