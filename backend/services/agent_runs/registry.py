@@ -17,6 +17,7 @@ from backend.services.metrics.utils import safe_gauge, safe_inc
 
 from . import registry_contracts as _registry_contracts
 from . import registry_lifecycle as _registry_lifecycle
+from . import registry_queries as _registry_queries
 from .contracts import AgentAssignment, AgentResult, AgentRunStatus
 
 
@@ -427,10 +428,12 @@ class ProcessLocalAgentRunRegistry:
                 else:
                     claimed_ready_count += 1
 
-            candidates.sort(key=_run_sort_key)
+            candidates.sort(key=_registry_queries.run_sort_key)
             if max_results is not None:
                 candidates = candidates[:max_results]
-            active_runs = tuple(sorted(active_entries, key=_run_sort_key))
+            active_runs = tuple(
+                sorted(active_entries, key=_registry_queries.run_sort_key)
+            )
             if not candidates:
                 if claimed_ready_count:
                     safe_inc("agent_run_handoff_duplicate_claim_suppressed")
@@ -571,12 +574,10 @@ class ProcessLocalAgentRunRegistry:
         """Drop finished entries older than the process-local retention window."""
         cutoff = self._clock() - self._finished_retention
         async with self._lock:
-            stale_keys = [
-                key
-                for key, entry in self._runs.items()
-                if entry.completed_at is not None and entry.completed_at <= cutoff
-                and entry.result_claim_id is None
-            ]
+            stale_keys = _registry_queries.select_stale_finished_keys(
+                self._runs,
+                cutoff=cutoff,
+            )
             for key in stale_keys:
                 del self._runs[key]
             if stale_keys:
@@ -604,11 +605,11 @@ class ProcessLocalAgentRunRegistry:
     ) -> list[_registry_contracts.LocalAgentRun]:
         """List process-local entries for one authorized task scope."""
         async with self._lock:
-            return [
-                entry
-                for entry in self._runs.values()
-                if entry.tenant_id == tenant_id and entry.task_id == task_id
-            ]
+            return _registry_queries.list_task_runs(
+                self._runs.values(),
+                tenant_id=tenant_id,
+                task_id=task_id,
+            )
 
     async def find_active_by_graph_thread(
         self,
@@ -620,17 +621,12 @@ class ProcessLocalAgentRunRegistry:
         """Return the active local run for one task child graph thread."""
         graph_thread_id = _require_non_empty(graph_thread_id, "graph_thread_id")
         async with self._lock:
-            candidates = [
-                entry
-                for entry in self._runs.values()
-                if entry.task_id == task_id
-                and entry.graph_thread_id == graph_thread_id
-                and entry.status in _registry_contracts.ACTIVE_AGENT_RUN_STATUSES
-                and (tenant_id is None or entry.tenant_id == tenant_id)
-            ]
-            if len(candidates) != 1:
-                return None
-            return candidates[0]
+            return _registry_queries.find_active_by_graph_thread(
+                self._runs.values(),
+                task_id=task_id,
+                graph_thread_id=graph_thread_id,
+                tenant_id=tenant_id,
+            )
 
     async def state_version(self) -> int:
         """Return the current process-local registry mutation version."""
@@ -672,7 +668,8 @@ class ProcessLocalAgentRunRegistry:
         """
         while True:
             async with self._lock:
-                status = self._handoff_wait_status_locked(
+                status = _registry_queries.handoff_wait_status(
+                    self._runs.values(),
                     tenant_id=tenant_id,
                     task_id=task_id,
                     conversation_id=conversation_id,
@@ -682,7 +679,8 @@ class ProcessLocalAgentRunRegistry:
 
             async with self._state_changed:
                 async with self._lock:
-                    status = self._handoff_wait_status_locked(
+                    status = _registry_queries.handoff_wait_status(
+                        self._runs.values(),
                         tenant_id=tenant_id,
                         task_id=task_id,
                         conversation_id=conversation_id,
@@ -731,37 +729,6 @@ class ProcessLocalAgentRunRegistry:
     def _mark_state_changed_locked(self) -> None:
         self._state_version += 1
 
-    def _handoff_wait_status_locked(
-        self,
-        *,
-        tenant_id: int,
-        task_id: int,
-        conversation_id: str | None,
-    ) -> _registry_contracts.HandoffWaitStatus | None:
-        has_active = False
-        for entry in self._runs.values():
-            if (
-                entry.tenant_id != tenant_id
-                or entry.task_id != task_id
-                or (
-                    conversation_id is not None
-                    and entry.conversation_id != conversation_id
-                )
-            ):
-                continue
-            if (
-                entry.result is not None
-                and not entry.result_consumed
-                and entry.result_claim_id is None
-                and entry.status in _registry_contracts.TERMINAL_AGENT_RUN_STATUSES
-            ):
-                return "ready"
-            if entry.status in _registry_contracts.ACTIVE_AGENT_RUN_STATUSES:
-                has_active = True
-        if has_active:
-            return None
-        return "inactive"
-
     async def _notify_state_changed(self) -> None:
         async with self._state_changed:
             self._state_changed.notify_all()
@@ -774,20 +741,6 @@ def _key(
     agent_run_id: str,
 ) -> _registry_contracts.AgentRunKey:
     return (tenant_id, task_id, agent_run_id)
-
-
-def _run_sort_key(entry: _registry_contracts.LocalAgentRun) -> tuple[str, str, str]:
-    return (
-        _datetime_sort_key(entry.completed_at or entry.started_at),
-        _datetime_sort_key(entry.created_at),
-        entry.agent_run_id,
-    )
-
-
-def _datetime_sort_key(value: datetime | None) -> str:
-    if value is None:
-        return ""
-    return value.isoformat()
 
 
 def _record_duplicate_terminal_suppressed(
