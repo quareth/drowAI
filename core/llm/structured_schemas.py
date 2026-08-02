@@ -1006,35 +1006,9 @@ ENGAGEMENT_REPORT_SECTION_STRUCTURED_OUTPUT = _spec(
     engagement_report_section_json_schema(),
 )
 
-FINAL_ANSWER_STRUCTURED_OUTPUT = _spec(
-    "final_answer_sections",
-    {
-        "type": "object",
-        "properties": {
-            "action": {"type": "string", "minLength": 1, "maxLength": 16000},
-            "findings": {"type": "string", "minLength": 1, "maxLength": 16000},
-            "impact": {"type": "string", "minLength": 1, "maxLength": 16000},
-            "recommended_next_action": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 16000,
-            },
-        },
-        "required": [
-            "action",
-            "findings",
-            "impact",
-            "recommended_next_action",
-        ],
-        "additionalProperties": False,
-    },
-)
-
-
 __all__ = [
     "DECISION_ROUTER_STRUCTURED_OUTPUT",
     "ENGAGEMENT_REPORT_SECTION_STRUCTURED_OUTPUT",
-    "FINAL_ANSWER_STRUCTURED_OUTPUT",
     "GENERIC_CANDIDATE_EXTRACTOR_STRUCTURED_OUTPUT",
     "INTENT_CLASSIFIER_STRUCTURED_OUTPUT",
     "build_intent_classifier_structured_output",

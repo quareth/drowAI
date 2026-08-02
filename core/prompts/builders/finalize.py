@@ -212,22 +212,15 @@ def _build_output_format_section(requested_output_format: Optional[str]) -> str:
         return (
             "## Output Format Request\n"
             "The user requested the final answer in **JSON** format.\n"
-            "Fill the structured section fields normally. The application will "
-            "serialize the validated fields as JSON."
+            "You MUST wrap your JSON output in a markdown code fence like this:\n"
+            "```json\n{...your JSON here...}\n```\n"
+            "This ensures proper syntax highlighting in the UI."
         )
-    if requested_output_format == "csv":
+    if requested_output_format in {"csv", "markdown"}:
         return (
             "## Output Format Request\n"
-            "The user requested the final answer in **CSV** format.\n"
-            "Fill the structured section fields normally. The application will "
-            "serialize the validated fields as CSV."
-        )
-    if requested_output_format == "markdown":
-        return (
-            "## Output Format Request\n"
-            "The user requested the final answer in **MARKDOWN** format.\n"
-            "Fill the structured section fields normally; the application will "
-            "render the validated fields as Markdown."
+            f"The user requested the final answer in **{requested_output_format.upper()}** format.\n"
+            "Follow that request in your final response."
         )
     return ""
 

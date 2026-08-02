@@ -39,11 +39,10 @@ The format is based on
 
 ### Fixed
 
+- Final answers now stream provider text chunks live again instead of appearing
+  only after a buffered structured response completes.
 - Process-local subagent replay now accepts the backend-owned response marker,
   allowing orphaned nonterminal runs to reconcile to interrupted state.
-- Final answers now render only validated structured sections, preventing
-  pending tool-call JSON from leaking into assistant messages when router
-  guardrails override an action and force finalization.
 - Post-action reasoning now applies its complete progress, repetition, retry,
   and stopping policies while committing routes through `ptr_commit`, restoring
   reflection or finalization after repeated no-progress actions.

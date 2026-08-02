@@ -4,7 +4,6 @@ import pytest
 
 from agent.graph.nodes import finalize as finalize_module
 from agent.graph.state import FactsState, InteractiveState, TraceState
-from agent.providers.llm.core.base import LLMResponse
 from backend.services.usage_tracking.models import UsageData
 
 
@@ -17,24 +16,28 @@ class DummyWriter:
 
 
 class DummyClient:
-    async def chat_messages_with_usage(self, messages, **kwargs):
-        return LLMResponse(
-            content='{"internal":"ignored"}',
-            structured_output={
-                "action": "Completed deep service enumeration on 127.0.0.1.",
-                "findings": "- PostgreSQL was detected on port 5432.",
-                "impact": "The PostgreSQL service is reachable from the tested path.",
-                "recommended_next_action": "Restrict network access and enumerate PostgreSQL.",
-            },
-            usage=UsageData(
-                prompt_tokens=10,
-                completion_tokens=3,
-                total_tokens=13,
-                model="gpt-5.2",
-                provider="openai",
-                api_surface="responses",
-            ),
-        )
+    async def stream_chat_messages(self, messages, **kwargs):
+        yield "Findings: PostgreSQL detected on port 5432.\n"
+        yield "Impact: Database exposure could lead to data breaches.\n"
+        yield "Recommendation: Restrict network access and update PostgreSQL.\n"
+
+    async def stream_chat_messages_with_usage(self, messages, **kwargs):
+        iterator = self.stream_chat_messages(messages, **kwargs)
+
+        class _StreamWithUsage:
+            content_iterator = iterator
+
+            def get_final_usage(self):
+                return UsageData(
+                    prompt_tokens=10,
+                    completion_tokens=3,
+                    total_tokens=13,
+                    model="gpt-5.2",
+                    provider="openai",
+                    api_surface="responses",
+                )
+
+        return _StreamWithUsage()
 
 
 @pytest.mark.asyncio
@@ -89,12 +92,22 @@ async def test_finalize_deep_reasoning_streams_final_answer(monkeypatch):
 
     final_text = result["trace"]["final_text"]
     assert "PostgreSQL" in final_text
-    assert "Recommended Next Action" in final_text
+    assert "Recommendation" in final_text
 
     step_types = [event.get("step_type") for event in dummy_writer.events]
     assert "message_start" in step_types
     assert "message_delta" in step_types
     assert "message_section_end" in step_types
+    deltas = [
+        event["content"]
+        for event in dummy_writer.events
+        if event.get("step_type") == "message_delta"
+    ]
+    assert deltas == [
+        "Findings: PostgreSQL detected on port 5432.\n",
+        "Impact: Database exposure could lead to data breaches.\n",
+        "Recommendation: Restrict network access and update PostgreSQL.\n",
+    ]
 
 
 @pytest.mark.asyncio

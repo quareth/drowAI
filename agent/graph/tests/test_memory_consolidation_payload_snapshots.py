@@ -50,31 +50,27 @@ class _StreamingLLMStub:
         for chunk in self.chunks:
             yield chunk
 
-    async def chat_messages_with_usage(
+    async def stream_chat_messages_with_usage(
         self,
         messages: List[Dict[str, str]],
-        **_: Any,
+        **kwargs: Any,
     ) -> Any:
-        self.messages_payloads.append(list(messages))
-        payload = {
-            "action": "".join(self.chunks),
-            "findings": "- Snapshot evidence was captured.",
-            "impact": "The snapshot path completed.",
-            "recommended_next_action": "Continue with the next snapshot step.",
-        }
-        return SimpleNamespace(
-            content=json.dumps(payload),
-            structured_output=payload,
-            usage=UsageData(
-                prompt_tokens=10,
-                completion_tokens=5,
-                total_tokens=15,
-                model="gpt-5.2",
-                provider="openai",
-                api_surface="responses",
-            ),
-        )
+        iterator = self.stream_chat_messages(messages, **kwargs)
 
+        class _StreamWithUsage:
+            content_iterator = iterator
+
+            def get_final_usage(self) -> UsageData:
+                return UsageData(
+                    prompt_tokens=10,
+                    completion_tokens=5,
+                    total_tokens=15,
+                    model="gpt-5.2",
+                    provider="openai",
+                    api_surface="responses",
+                )
+
+        return _StreamWithUsage()
 
 class _UsageLLMStub:
     """Non-streaming chat_with_usage stub that captures prompt payloads."""

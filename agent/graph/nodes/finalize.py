@@ -1,6 +1,6 @@
 """Unified finalizer node for both simple-tool and deep reasoning graphs.
 
-This is the canonical final-answer node. It replaces the two
+This is the canonical "stream the final answer" node. It replaces the two
 prior implementations:
 
 - ``finalize_tool_results`` (simple-tool path)
@@ -15,8 +15,7 @@ The unified flow:
    targets for deep reasoning).
 3. Build the operator-voice 4-part prompt via
    ``core.prompts.builders.finalize.build_finalize_prompts``.
-4. Generate validated structured sections and render them deterministically,
-   then use capability-branched emitter selection
+4. Stream the LLM response with capability-branched emitter selection
    (``create_simple`` for simple-tool, ``create_turn_level`` for deep
    reasoning) so existing UI behavior is preserved.
 5. Persist ``trace.final_text`` and the usage record.
@@ -38,6 +37,7 @@ answer stays aligned with the user's full conversation arc.
 
 from __future__ import annotations
 
+import inspect
 import logging
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
@@ -64,17 +64,20 @@ from agent.graph.utils.llm_resolver import (
     resolve_llm_call_settings,
     resolve_llm_client,
 )
-from agent.providers.llm.core.exceptions import LLMConfigurationError, LLMResponseError
+from agent.graph.utils.streaming_usage import (
+    require_final_stream_usage,
+    require_usage_aware_streaming,
+)
 from core.llm import (
+    LLM_STREAM_IDLE_TIMEOUT_CONVERSATION_MAIN_SEC,
     LLM_TIMEOUT_CONVERSATION_MAIN_SEC,
+    iter_with_idle_timeout,
     wait_for_with_timeout,
 )
-from core.llm.structured_schemas import FINAL_ANSWER_STRUCTURED_OUTPUT
 from core.prompts.builders.finalize import build_finalize_prompts
 
 from ._finalize_helpers import resolve_simple_tool_retry_context
-from .final_answer_contract import render_final_answer
-from .node_utils import _usage_to_dict
+from .node_utils import _usage_to_dict, normalize_stream_chunk
 
 logger = logging.getLogger(__name__)
 
@@ -272,58 +275,80 @@ def _build_messages(
 
 
 # ---------------------------------------------------------------------------
-# Final-answer generation
+# Streaming
 # ---------------------------------------------------------------------------
 
 
-async def _generate_and_capture_usage(
+async def _stream_and_capture_usage(
     *,
     llm_client: Any,
     call_settings: Any,
     messages: List[Dict[str, Any]],
     interactive: InteractiveState,
+    writer: Any,
+    emitter: Any,
     operation_label: str,
-    output_format: str | None,
 ) -> Tuple[str, Optional[Dict[str, Any]]]:
-    """Generate validated sections, render them, and capture provider usage."""
-    if not hasattr(llm_client, "chat_messages_with_usage"):
-        raise LLMConfigurationError(
-            "Usage-aware structured finalization is required for final answers."
-        )
+    """Run the LLM stream, push deltas through the emitter, capture usage."""
+    reasoning_effort = get_llm_reasoning_effort(llm_client)
+    final_text = ""
+    captured_usage: Optional[Dict[str, Any]] = None
 
-    response = await wait_for_with_timeout(
-        llm_client.chat_messages_with_usage(
-            messages,
-            temperature=0.35,
-            max_tokens=LIMITS.deep_reasoning_final,
-            reasoning_effort=get_llm_reasoning_effort(llm_client, call_settings),
-            structured_output=FINAL_ANSWER_STRUCTURED_OUTPUT,
-        ),
-        timeout_sec=LLM_TIMEOUT_CONVERSATION_MAIN_SEC,
+    require_usage_aware_streaming(
+        llm_client,
+        call_settings,
+        operation=f"{operation_label}_stream",
+        task_id=interactive.facts.task_id,
+    )
+    stream_response_candidate = llm_client.stream_chat_messages_with_usage(
+        messages,
+        temperature=0.35,
+        max_tokens=LIMITS.deep_reasoning_final,
+        reasoning_effort=reasoning_effort,
+    )
+    stream_response = (
+        await wait_for_with_timeout(
+            stream_response_candidate,
+            timeout_sec=LLM_TIMEOUT_CONVERSATION_MAIN_SEC,
+            component="CONVERSATION_MAIN",
+            operation=f"{operation_label}_stream_setup",
+            logger=logger,
+            task_id=interactive.facts.task_id,
+            outcome=f"{operation_label}_timeout",
+        )
+        if inspect.isawaitable(stream_response_candidate)
+        else stream_response_candidate
+    )
+    async for chunk in iter_with_idle_timeout(
+        stream_response.content_iterator,
+        timeout_sec=LLM_STREAM_IDLE_TIMEOUT_CONVERSATION_MAIN_SEC,
         component="CONVERSATION_MAIN",
-        operation=f"{operation_label}_structured_call",
+        operation=f"{operation_label}_stream",
         logger=logger,
         task_id=interactive.facts.task_id,
-        outcome=f"{operation_label}_timeout",
-    )
+        outcome="stream_idle_timeout",
+    ):
+        text = normalize_stream_chunk(chunk)
+        if not text:
+            continue
+        final_text += text
+        if writer and emitter:
+            emitter.emit_message_delta(text)
 
-    if response.usage is None:
-        raise LLMResponseError(
-            "Usage-aware finalizer call completed without usage data."
-        )
-
-    final_text = render_final_answer(
-        getattr(response, "structured_output", None),
-        output_format=output_format,
+    usage = require_final_stream_usage(
+        stream_response.get_final_usage(),
+        call_settings,
+        operation=f"{operation_label}_stream",
+        task_id=interactive.facts.task_id,
     )
     captured_usage = _usage_to_dict(
-        response.usage,
+        usage,
         operation_label,
-        request_mode="non_streaming",
+        request_mode="streaming",
     )
     if captured_usage:
         logger.debug(
-            "[FINALIZE] Captured structured-call usage: %s tokens",
+            "[FINALIZE] Captured streaming usage: %s tokens",
             captured_usage.get("total_tokens", 0),
         )
 
@@ -386,7 +411,7 @@ async def finalize_results(
     context: Optional[GraphRuntimeContext] = None,
     config: Optional[Dict[str, Any]] = None,
 ) -> dict:
-    """Run a single LLM pass producing a validated user-facing final answer.
+    """Run a single LLM pass producing the streamed user-facing final answer.
 
     The capability ladder governs section selection and emitter choice:
 
@@ -455,13 +480,14 @@ async def finalize_results(
             {"role": "user", "content": user_prompt},
         ]
 
-        final_text, captured_usage = await _generate_and_capture_usage(
+        final_text, captured_usage = await _stream_and_capture_usage(
             llm_client=llm_client,
             call_settings=call_settings,
             messages=messages,
             interactive=interactive,
+            writer=writer,
+            emitter=emitter,
             operation_label=operation_label,
-            output_format=_collected.get("requested_output_format"),
         )
 
         final_text = final_text.strip()
@@ -469,7 +495,6 @@ async def finalize_results(
             raise RuntimeError("Final LLM response was empty.")
 
         if writer and emitter:
-            emitter.emit_message_delta(final_text)
             emitter.emit_section_end("final_answer")
             message_section_open = False
 
@@ -477,7 +502,7 @@ async def finalize_results(
         if writer and emitter and message_section_open:
             try:
                 emitter.emit_stream_error(
-                    "Final response generation failed.",
+                    "Final response stream failed.",
                     recoverable=False,
                 )
                 emitter.emit_section_end("final_answer")

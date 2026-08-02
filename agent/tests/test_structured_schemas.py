@@ -16,7 +16,6 @@ from backend.services.agent_runs.ownership_policy import MAX_AGENT_HANDOFFS
 from core.llm.structured_schemas import (
     DECISION_ROUTER_STRUCTURED_OUTPUT,
     ENGAGEMENT_REPORT_SECTION_STRUCTURED_OUTPUT,
-    FINAL_ANSWER_STRUCTURED_OUTPUT,
     GENERIC_CANDIDATE_EXTRACTOR_STRUCTURED_OUTPUT,
     INTENT_CLASSIFIER_STRUCTURED_OUTPUT,
     MEMORY_EXTRACTION_STRUCTURED_OUTPUT,
@@ -32,24 +31,6 @@ from core.llm.structured_schemas import (
     build_intent_classifier_structured_output,
     build_post_tool_decision_structured_output,
 )
-
-
-def test_final_answer_schema_requires_exact_user_visible_sections() -> None:
-    payload = {
-        "action": "Ran the scan.",
-        "findings": "- 443/tcp open.",
-        "impact": "HTTPS is reachable.",
-        "recommended_next_action": "Enumerate 443/tcp.",
-    }
-
-    validate(payload, FINAL_ANSWER_STRUCTURED_OUTPUT.schema)
-    validate_openai_strict_schema(FINAL_ANSWER_STRUCTURED_OUTPUT)
-
-    with pytest.raises(ValidationError):
-        validate(
-            {**payload, "tool": "filesystem.find_paths"},
-            FINAL_ANSWER_STRUCTURED_OUTPUT.schema,
-        )
 
 
 def _collect_required_coverage_errors(schema: Dict[str, Any], path: str = "$") -> List[str]:

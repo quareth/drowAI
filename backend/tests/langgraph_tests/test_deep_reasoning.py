@@ -221,44 +221,6 @@ def _stub_llm_client(monkeypatch: pytest.MonkeyPatch) -> None:
             }
             return SimpleNamespace(content=content, usage=usage, structured_output=structured_payload)
 
-        async def chat_messages_with_usage(
-            self,
-            messages: list[dict[str, Any]],
-            **kwargs: Any,
-        ) -> SimpleNamespace:
-            if getattr(kwargs.get("structured_output"), "name", "") == "final_answer_sections":
-                payload = {
-                    "action": "Completed the bounded reconnaissance workflow.",
-                    "findings": "- SSH port 22 and HTTP port 80 were observed open.",
-                    "impact": "The target exposes remote-access and web services.",
-                    "recommended_next_action": "Enumerate the HTTP service on port 80.",
-                }
-                return SimpleNamespace(
-                    content=json.dumps(payload),
-                    usage={
-                        "prompt_tokens": 20,
-                        "completion_tokens": 30,
-                        "total_tokens": 50,
-                        "model": "stub-model",
-                        "provider": "test",
-                    },
-                    structured_output=payload,
-                )
-
-            user_prompt = str(messages[-1].get("content") or "") if messages else ""
-            content, structured_payload = self._response_for_prompt(user_prompt)
-            return SimpleNamespace(
-                content=content,
-                usage={
-                    "prompt_tokens": 20,
-                    "completion_tokens": 30,
-                    "total_tokens": 50,
-                    "model": "stub-model",
-                    "provider": "test",
-                },
-                structured_output=structured_payload,
-            )
-
         async def stream_chat_messages(self, _messages: Any, **_kwargs: Any):
             yield "Recon complete. Open ports: 22 and 80."
 

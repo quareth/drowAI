@@ -55,31 +55,33 @@ def _make_dr_finalize_state(
 
 
 def _make_streaming_llm_client(chunks: List[str]):
-    """Return a mock client with validated final-answer sections."""
+    """Return a mock LLMClient that yields usage-aware stream chunks."""
 
-    class _Client:
-        async def chat_messages_with_usage(self, *args: Any, **kwargs: Any):
-            return type(
-                "_Response",
-                (),
-                {
-                    "content": '{"internal":"ignored"}',
-                    "structured_output": {
-                        "action": "".join(chunks),
-                        "findings": "- Test evidence was captured.",
-                        "impact": "The test path completed.",
-                        "recommended_next_action": "Continue with the next test step.",
-                    },
-                    "usage": UsageData(
+    async def _stream():
+        for c in chunks:
+            yield c
+
+    class _StreamWithUsage:
+        content_iterator = None
+
+        def get_final_usage(self):
+            return UsageData(
                 prompt_tokens=10,
                 completion_tokens=len(chunks),
                 total_tokens=10 + len(chunks),
                 model="gpt-5.2",
                 provider="openai",
                 api_surface="responses",
-                    ),
-                },
-            )()
+            )
+
+    class _Client:
+        def stream_chat_messages(self, *args: Any, **kwargs: Any):
+            return _stream()
+
+        async def stream_chat_messages_with_usage(self, *args: Any, **kwargs: Any):
+            s = _StreamWithUsage()
+            s.content_iterator = _stream()
+            return s
 
     return _Client()
 

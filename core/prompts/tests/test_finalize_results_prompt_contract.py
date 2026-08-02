@@ -60,12 +60,12 @@ def test_finalize_results_prompt_contract_synthesizer_fallback() -> None:
         _render_messages(system_prompt, user_prompt),
     )
 
-    # Structural anchors for the four-part structured operator contract.
+    # Structural anchors for the four-part operator skeleton.
     assert SYSTEM_BASE.strip() in system_prompt
     assert "## User Request" in user_prompt
     assert "## Tool Summary (nmap.scan)" in user_prompt
-    assert "`action`" in user_prompt
-    assert "`recommended_next_action`" in user_prompt
+    assert "## Action" in user_prompt
+    assert "## Recommended Next Action" in user_prompt
 
 
 def test_finalize_results_prompt_contract_no_intent_classifier_leak() -> None:
@@ -299,5 +299,5 @@ def test_finalize_results_prompt_contract_deep_reasoning_sections() -> None:
     assert "## Key Observations" in user_prompt
     assert "## Tool Activity" in user_prompt
     # Closer is shared across capabilities.
-    assert "`recommended_next_action`" in user_prompt
+    assert "## Recommended Next Action" in user_prompt
     assert "summarize the engagement chronologically" not in user_prompt.lower()

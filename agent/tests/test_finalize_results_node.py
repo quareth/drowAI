@@ -7,10 +7,8 @@ import pytest
 from agent.graph.nodes import finalize as finalize_module  # noqa: E402
 from agent.graph.state import FactsState, InteractiveState, TraceState  # noqa: E402
 from agent.graph.utils import iteration_memory as _iteration_memory  # noqa: E402
-from agent.providers.llm.core.base import LLMResponse
 from agent.providers.llm.core.exceptions import LLMConfigurationError, LLMResponseError
 from backend.services.usage_tracking.models import UsageData
-from core.llm.structured_schemas import FINAL_ANSWER_STRUCTURED_OUTPUT
 
 
 class DummyWriter:
@@ -26,36 +24,36 @@ class DummyClient:
         self.api_key = api_key
         self.model = model
 
-    async def chat_messages_with_usage(self, messages, **kwargs):
-        return LLMResponse(
-            content='{"provider_internal":"ignored"}',
-            structured_output={
-                "action": "Scanned the target for PostgreSQL exposure.",
-                "findings": "- PostgreSQL was detected on port 5432.",
-                "impact": "The service is reachable from the tested network path.",
-                "recommended_next_action": "Restrict PostgreSQL access to trusted hosts.",
-            },
-            usage=UsageData(
-                prompt_tokens=10,
-                completion_tokens=2,
-                total_tokens=12,
-                model="gpt-5.2",
-                provider="openai",
-                api_surface="responses",
-            ),
-        )
+    async def stream_chat_messages(self, messages, **kwargs):
+        yield "Findings: host exposes PostgreSQL.\n"
+        yield "Recommendation: restrict access.\n"
+
+    async def stream_chat_messages_with_usage(self, messages, **kwargs):
+        iterator = self.stream_chat_messages(messages, **kwargs)
+
+        class _StreamWithUsage:
+            content_iterator = iterator
+
+            def get_final_usage(self):
+                return UsageData(
+                    prompt_tokens=10,
+                    completion_tokens=2,
+                    total_tokens=12,
+                    model="gpt-5.2",
+                    provider="openai",
+                    api_surface="responses",
+                )
+
+        return _StreamWithUsage()
 
 
 class CapturingClient(DummyClient):
     def __init__(self, api_key: str, model: str) -> None:
         super().__init__(api_key=api_key, model=model)
         self.calls: List[List[dict[str, Any]]] = []
-        self.call_kwargs: List[dict[str, Any]] = []
-
-    async def chat_messages_with_usage(self, messages, **kwargs):
+    async def stream_chat_messages(self, messages, **kwargs):
         self.calls.append(messages)
-        self.call_kwargs.append(kwargs)
-        return await super().chat_messages_with_usage(messages, **kwargs)
+        yield "Final answer body.\n"
 
 
 class PlainStreamingOnlyClient:
@@ -64,24 +62,31 @@ class PlainStreamingOnlyClient:
 
 
 class MissingUsageClient(DummyClient):
-    async def chat_messages_with_usage(self, messages, **kwargs):
-        response = await super().chat_messages_with_usage(messages, **kwargs)
-        response.usage = None
-        return response
+    async def stream_chat_messages_with_usage(self, messages, **kwargs):
+        iterator = self.stream_chat_messages(messages, **kwargs)
+
+        class _StreamWithoutUsage:
+            content_iterator = iterator
+
+            def get_final_usage(self):
+                return None
+
+        return _StreamWithoutUsage()
 
 
-class FailingStructuredClient(DummyClient):
-    async def chat_messages_with_usage(self, messages, **kwargs):
-        raise RuntimeError("structured call failed")
+class FailingUsageStreamClient(DummyClient):
+    async def stream_chat_messages_with_usage(self, messages, **kwargs):
+        async def _failing_iterator():
+            yield "partial final text"
+            raise RuntimeError("stream failed")
 
+        class _FailingStream:
+            content_iterator = _failing_iterator()
 
-class LeakyRawContentClient(DummyClient):
-    async def chat_messages_with_usage(self, messages, **kwargs):
-        response = await super().chat_messages_with_usage(messages, **kwargs)
-        response.content = (
-            '{"tool":"filesystem.find_paths","parameters":{"path":"/workspace"}}'
-        )
-        return response
+            def get_final_usage(self):
+                return None
+
+        return _FailingStream()
 
 
 def _minimal_state() -> dict[str, Any]:
@@ -136,13 +141,22 @@ async def test_finalize_tool_results_streams_final_answer(monkeypatch):
 
     final_text = result["trace"]["final_text"]
     assert "PostgreSQL" in final_text
-    assert "Recommended Next Action" in final_text
+    assert "Recommendation" in final_text
 
     # Ensure streaming events were emitted with assistant message phase
     step_types = [event.get("step_type") for event in dummy_writer.events if isinstance(event, dict)]
     assert "message_start" in step_types
     assert "message_delta" in step_types
     assert "message_section_end" in step_types
+    deltas = [
+        event["content"]
+        for event in dummy_writer.events
+        if event.get("step_type") == "message_delta"
+    ]
+    assert deltas == [
+        "Findings: host exposes PostgreSQL.\n",
+        "Recommendation: restrict access.\n",
+    ]
 
 
 @pytest.mark.asyncio
@@ -262,7 +276,6 @@ async def test_finalize_tool_results_includes_ptr_context_sections(monkeypatch):
     )
 
     assert client.calls, "expected finalizer LLM call to be captured"
-    assert client.call_kwargs[-1]["structured_output"] is FINAL_ANSWER_STRUCTURED_OUTPUT
     user_prompt = client.calls[-1][1]["content"]
     assert "## Prior Current-Turn Phase Memory" in user_prompt
     assert "## Effective Goal" in user_prompt
@@ -306,8 +319,8 @@ async def test_finalize_results_keeps_main_prompt_for_subagent_metadata(monkeypa
     assert client.calls
     system_prompt = client.calls[-1][0]["content"]
     user_prompt = client.calls[-1][1]["content"]
-    assert "fill exactly the four structured fields" in system_prompt.lower()
-    assert "`recommended_next_action`" in user_prompt
+    assert "exactly the four `##` headings" in system_prompt.lower()
+    assert "## Recommended Next Action" in user_prompt
     assert any(
         "(simple_tool_execution)" in entry
         for entry in result["trace"]["reasoning"]
@@ -315,8 +328,8 @@ async def test_finalize_results_keeps_main_prompt_for_subagent_metadata(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_finalize_results_closes_subagent_message_section_on_generation_failure(monkeypatch):
-    """An opened child final-answer section must close after generation fails."""
+async def test_finalize_results_closes_subagent_message_section_on_stream_failure(monkeypatch):
+    """An opened child final-answer stream must emit a terminal section on failure."""
     interactive = InteractiveState(
         facts=FactsState(
             task_id=42,
@@ -339,11 +352,11 @@ async def test_finalize_results_closes_subagent_message_section_on_generation_fa
     monkeypatch.setattr(
         finalize_module,
         "resolve_llm_client",
-        lambda *_args, **_kwargs: FailingStructuredClient("test-key", "gpt-5.2"),
+        lambda *_args, **_kwargs: FailingUsageStreamClient("test-key", "gpt-5.2"),
     )
     monkeypatch.setattr(finalize_module, "get_stream_writer", lambda: dummy_writer)
 
-    with pytest.raises(RuntimeError, match="structured call failed"):
+    with pytest.raises(RuntimeError, match="stream failed"):
         await finalize_module.finalize_results(
             interactive.model_dump(),
             context=None,
@@ -360,12 +373,12 @@ async def test_finalize_results_closes_subagent_message_section_on_generation_fa
 
 
 @pytest.mark.asyncio
-async def test_finalize_tool_results_requires_usage_aware_structured_client(monkeypatch):
-    """Finalizer must fail closed without usage-aware structured generation."""
+async def test_finalize_tool_results_rejects_plain_streaming_client(monkeypatch):
+    """Finalizer must fail closed instead of falling back to plain streaming."""
     monkeypatch.setattr(finalize_module, "resolve_llm_client", lambda *_args, **_kwargs: PlainStreamingOnlyClient())
     monkeypatch.setattr(finalize_module, "get_stream_writer", lambda: None)
 
-    with pytest.raises(LLMConfigurationError, match="structured finalization is required"):
+    with pytest.raises(LLMConfigurationError, match="Usage-aware streaming is required"):
         await finalize_module.finalize_results(
             _minimal_state(),
             context=None,
@@ -374,41 +387,14 @@ async def test_finalize_tool_results_requires_usage_aware_structured_client(monk
 
 
 @pytest.mark.asyncio
-async def test_finalize_tool_results_rejects_missing_usage(monkeypatch):
-    """Finalizer must fail closed when structured generation omits usage."""
+async def test_finalize_tool_results_rejects_missing_stream_usage(monkeypatch):
+    """Finalizer must fail closed when usage-aware streaming omits final usage."""
     monkeypatch.setattr(finalize_module, "resolve_llm_client", lambda *_args, **_kwargs: MissingUsageClient("test-key", "gpt-5.2"))
     monkeypatch.setattr(finalize_module, "get_stream_writer", lambda: None)
 
-    with pytest.raises(LLMResponseError, match="completed without usage data"):
+    with pytest.raises(LLMResponseError, match="completed without final usage"):
         await finalize_module.finalize_results(
             _minimal_state(),
             context=None,
             config={"configurable": {"thread_id": "lg-42"}},
         )
-
-
-@pytest.mark.asyncio
-async def test_finalize_results_never_emits_untrusted_provider_content(monkeypatch):
-    """Only validated final-answer fields may cross into assistant-visible text."""
-    writer = DummyWriter()
-    monkeypatch.setattr(
-        finalize_module,
-        "resolve_llm_client",
-        lambda *_args, **_kwargs: LeakyRawContentClient("test-key", "gpt-5.2"),
-    )
-    monkeypatch.setattr(finalize_module, "get_stream_writer", lambda: writer)
-
-    result = await finalize_module.finalize_results(
-        _minimal_state(),
-        context=None,
-        config={"configurable": {"thread_id": "lg-42"}},
-    )
-
-    visible_text = "".join(
-        str(event.get("content") or event.get("delta") or event.get("text") or "")
-        for event in writer.events
-        if event.get("step_type") == "message_delta"
-    )
-    assert "filesystem.find_paths" not in result["trace"]["final_text"]
-    assert "filesystem.find_paths" not in visible_text
-    assert result["trace"]["final_text"].startswith("## Action\n")
