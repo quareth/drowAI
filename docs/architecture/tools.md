@@ -498,17 +498,111 @@ adding tool-specific downstream interpretation.
 
 ## Current Tool Completion Reference
 
-Code-verified on July 28, 2026.
+Code-verified on July 31, 2026.
 
-Completion means more than "the wrapper executes." A tool is treated as
-finished for the current tooling architecture when it has:
+Completion means more than "the wrapper executes." Registration, functional
+wiring, LLM visibility, mechanical validation, and broad runtime certification
+are separate states:
 
-- execution-facing Pydantic args and safe command construction;
-- a rich parser that converts raw CLI output into bounded structured metadata;
-- supported semantic observations/evidence when the output should update
-  canonical task knowledge or pentest deterministic compact projection;
-- catalog policy that intentionally marks whether the tool is visible,
-  hidden, utility, system, or internal-only.
+- **Registered:** a concrete `BaseTool` with one stable tool id is discoverable
+  through the active registry.
+- **Functionally wired:** the tool has safe schema/command behavior, truthful
+  structured result semantics, required artifact/provenance handling, and the
+  applicable reusable semantic, Knowledge, compact-output, and post-tool
+  reasoning paths described below.
+- **LLM-visible:** a functionally wired tool is intentionally admitted by
+  catalog policy and is reachable through category selection and the
+  provider-neutral function-spec path.
+- **Mechanically validated:** minimal/full parameters and applicable
+  success/empty/partial/failure cases have been exercised through safe real
+  Kali and current GUI paths.
+- **Broadly certified:** supported environments, versions, scale, and
+  operational edge cases have received wider validation. Functional wiring or
+  visibility alone does not claim this level.
+
+A tool is treated as functionally wired for the current architecture when it
+has:
+
+1. Execution-facing Pydantic args, safe target/path validation, and safe command
+   construction inside the tool boundary.
+2. An intentional native capture contract and one parser authority that turns
+   stdout/stderr and declared runtime outputs into bounded structured metadata.
+3. Truthful success, empty, partial/timeout, and failure semantics without
+   false-positive success.
+4. Workspace-safe artifact declarations and execution/artifact provenance when
+   the tool produces durable outputs.
+5. Producer-owned semantic observations/evidence for facts that should reach
+   durable Knowledge or pentest deterministic compact projection.
+6. Canonical fact admission through
+   `runtime_shared.semantic.pentest_facts.compile_facts()` and the existing
+   fact-family consumers; no per-tool Knowledge or compact adapter.
+7. Universal primary compact output plus applicable canonical-fact secondary
+   projection reaching result-state/batch and post-tool-reasoning consumers.
+8. Focused schema, command, parser, result-state, security, semantic compiler,
+   compact projection, Knowledge bridge/projection, and catalog tests for the
+   paths the tool uses.
+9. Catalog policy that intentionally marks the tool visible, hidden, utility,
+   system, or internal-only. Visibility is the final enablement decision.
+10. Product Runner and explicit local-provider behavior verified through
+    existing `agent/tool_runtime` and runtime-provider boundaries.
+
+### Reusable Knowledge And Compression Wiring
+
+For a pentest tool, the reusable path is:
+
+```text
+native result
+  -> tool-owned parse_output()
+  -> tool-owned emit_semantic_observations()/emit_semantic_evidence()
+  -> agent.tool_runtime.result_enrichment
+  -> flat semantic envelope persisted with execution metadata
+       |-> KnowledgeIngestionService -> Knowledge fact bridge -> observation ledger
+       `-> compress_tool_output -> compile_facts -> compact fact projection
+```
+
+The flat envelope contains only `semantic_schema_version`,
+`capability_family`, `semantic_observations`, and `semantic_evidence`.
+`agent/semantic/enrichment.py` assembles and validates transport fields;
+tool-specific parsing must not move into that module.
+
+Knowledge wiring is automatic for supported semantic rows:
+
+1. Emit an exact observation/subject pair admitted by
+   `runtime_shared/semantic/pentest_facts/policy.py`, using the shared canonical
+   host, service, web, finding, and relationship identity helpers.
+2. Let `KnowledgeIngestionService` rebuild the envelope and call
+   `backend/services/knowledge/pentest_facts/bridge.py`.
+3. Let the bridge compile facts, attach backend-owned lineage and
+   archive-scoped evidence, and emit `ObservationCreate` values for the existing
+   ledger and projectors.
+4. Verify the resulting assets, services, web paths, findings, relationships,
+   engagement links, and evidence/provenance expected for the fact family.
+
+Do not add a tool-id branch, Knowledge adapter, metadata parser, artifact-text
+fallback, or compact-output fallback to deterministic Knowledge ingestion.
+Unsupported or invalid semantic rows must produce bounded diagnostics or zero
+deterministic observations rather than being reinterpreted downstream.
+
+Pentest deterministic compact wiring is also automatic for supported facts:
+
+1. `compress_tool_output()` rebuilds the envelope and independently calls
+   `compile_facts()`; it never receives Knowledge DTOs or a Knowledge-compiled
+   instance.
+2. `agent/graph/compression/pentest_facts/projection.py` deterministically
+   selects bounded facts/evidence and records exact omission counts and
+   lossiness.
+3. `presentation.py` renders existing fact families into compact summary,
+   findings, structured signals, and decision evidence.
+4. The universal primary compact value remains the graph/stream compatibility
+   lane. The canonical-fact secondary value is persisted in batch/cache records
+   and may supplement post-tool reasoning; Knowledge does not consume it.
+
+Do not add a per-tool compression adapter, registry entry, compressor import,
+or new pentest `compact_*` metadata override. A tool emitting an existing fact
+family should require producer and end-to-end tests, not consumer code. When a
+genuinely new fact family is required, extend the shared contract/admission
+policy first, then the Knowledge and compact fact-family presentation
+boundaries, with parity tests proving both consumers.
 
 Functionally wired visible domain/runtime tools:
 
@@ -575,16 +669,22 @@ Use this sequence when graduating a tool from wrapper/backlog to finished:
 6. If the tool requires a new fact family, add that support at the semantic
    contract/compiler boundary and the fact-family Knowledge and compact
    presentation boundaries.
-7. Add semantic compiler/projection tests and visible-catalog coverage tests
-   when the tool is or becomes visible.
-8. Register enhanced metadata near the tool implementation and keep the first
+7. Verify Knowledge through ingestion, bridge, observation-ledger, and focused
+   read-model projection tests. Do not use compact output as Knowledge fact
+   input.
+8. Verify compact behavior through compiler, fact-presentation, projection,
+   omission/lossiness, result-state or batch, and post-tool prompt tests as
+   applicable. Knowledge must remain unaffected by compact budgets.
+9. Register enhanced metadata near the tool implementation and keep the first
    capability description selector-grade.
-9. Add the tool id to `catalog_visibility.py` only after parser, supported
+10. Add the tool id to `catalog_visibility.py` only after parser, supported
    semantic fact coverage or intentional utility metadata coverage, enhanced
    metadata, security policy, runtime compatibility, and tests are complete.
-10. Update `capability_surface.py` only when the visible tool changes the
+11. Update `capability_surface.py` only when the visible tool changes the
    advertised capability families.
-11. Verify product Runner behavior and explicit local-provider behavior through
+12. Mechanically validate minimal/full schema transmission and applicable
+    success, empty, partial/timeout, and failure cases using controlled targets.
+13. Verify product Runner behavior and explicit local-provider behavior through
     the shared command preparation and lane dispatch paths; do not bypass
     `agent/tool_runtime` or runtime-provider boundaries.
 

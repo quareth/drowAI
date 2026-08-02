@@ -15,9 +15,10 @@ not broad architectural claims.
 | Runtime | `build_command`, workspace preparation, runtime-provider transport | host-side execution bypass; missing executable |
 | Result contract | parse status, metadata, artifacts, success/empty/partial/failure | false-positive success; unstructured-only output |
 | Semantics | normalized observations and bounded evidence | raw text presented as facts |
-| Compression | deterministic adapter plus shared output budget | approximate omission counts; lossy status |
+| Canonical facts | emitted observation/subject pairs are admitted by shared policy with canonical identity and masking | tool-id branch in compiler; unsupported or malformed subject identity |
+| Compression | semantic envelope compiles through shared fact projection with exact selected/omitted counts and lossiness | per-tool adapter/registry; raw-output parsing in projection; unreported omission |
 | PTR | finalized compact result reaches post-tool reasoning | result only visible in logs |
-| Knowledge | registered adapter produces useful scoped facts | cross-task data or no meaningful fact |
+| Knowledge | ingestion and the shared bridge produce useful scoped observations/read models with archive-scoped evidence | per-tool adapter; compact/raw-artifact fallback; cross-task data or no meaningful fact |
 | Tests/docs | parser, schema, security, runtime, compression, knowledge evidence | only mocked happy path |
 | Visibility | allowlist and selected-category/function-spec reachability | exposed before mechanics are ready |
 
@@ -29,8 +30,9 @@ copying one tool wholesale:
 - Tool/schema and command/runtime should match the candidate's CLI and execution
   family.
 - Result, artifact, and semantic references should match its output shape.
-- Compression/PTR and knowledge references should match the facts the tool
-  produces.
+- Canonical fact policy, Knowledge bridging, and compact projection use the
+  shared reusable authorities; producer references should match the facts the
+  tool emits.
 - Visibility must follow the active catalog and function-spec path.
 
 ### Mature Nmap example
@@ -41,28 +43,39 @@ For network-scanning tools, verify Nmap first:
   `agent/tools/information_gathering/network_discovery/nmap.py`
 - Semantics:
   `agent/tools/information_gathering/network_discovery/nmap_semantics.py`
+- Canonical fact admission:
+  `runtime_shared/semantic/pentest_facts/policy.py` and
+  `runtime_shared/semantic/pentest_facts/compiler.py`
 - Compression and PTR projection:
-  `agent/graph/compression/deterministic/network_discovery.py`
+  `agent/graph/compression/pentest_facts/projection.py`,
+  `agent/graph/compression/pentest_facts/presentation.py`, and the production
+  caller in `agent/graph/compression/compressor.py`
 - Knowledge:
-  `backend/services/knowledge/adapters/nmap_adapter.py`
+  `backend/services/knowledge/pentest_facts/bridge.py`, the direct caller in
+  `backend/services/knowledge/ingestion_service.py`, and the applicable focused
+  projectors under `backend/services/knowledge/projection/`
 - Visibility: `agent/tools/catalog_visibility.py`
 
-Nmap remains a reference only for responsibilities where its active contract
-is genuinely analogous.
+Nmap remains a producer reference only for responsibilities where its active
+contract is genuinely analogous. The compiler, Knowledge bridge, and compact
+fact projection are shared authorities rather than Nmap-specific patterns.
 
-### Amass budget exception
+### Reusable canonical consumers
 
-Amass is not the default architecture or behavior reference. Its only mandatory
-reuse is the shared budgeting authority:
-`agent/graph/compression/deterministic/budget.py::budget_rendered_items`.
-Never duplicate that accounting, and never copy Amass-specific timeout,
-inactivity, command, parsing, or semantic behavior.
+For an existing fact family, a new producer must emit supported canonical rows
+and rely on `compile_facts()`, the Knowledge bridge, and compact fact
+projection. Do not add a per-tool Knowledge adapter, compression adapter,
+registry entry, compressor import, or pentest `compact_*` override. Compact
+selection and omission accounting belong to
+`agent/graph/compression/pentest_facts/projection.py`; Knowledge consumes the
+complete independently compiled fact set and is not constrained by compact
+budgets.
 
 ## Evidence order
 
 Follow registry/visibility inventory → responsibility-specific mature
 references → expected executable → real Kali installation/version → official
 CLI contract → definition drift/correction → schema → runtime → result
-semantics → compression/PTR → knowledge → tests/docs → visibility. A tool
-hidden from the catalog may still have useful foundation code; a visible tool
-with missing mechanics is a blocker.
+semantics → canonical fact admission → compression/PTR → Knowledge →
+tests/docs → visibility. A tool hidden from the catalog may still have useful
+foundation code; a visible tool with missing mechanics is a blocker.

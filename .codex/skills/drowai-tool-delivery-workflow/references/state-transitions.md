@@ -58,8 +58,11 @@ only to the recorded `resume_status` after the condition is resolved.
 - Creating the implementation guide before current registered/visible tools
   are discovered and mature references are selected per responsibility.
 - Using Amass or any other fixed tool as a universal implementation reference.
-- Duplicating Amass budgeting instead of reusing
-  `budget_rendered_items`, or copying its unrelated tool-specific behavior.
+- Adding a per-tool Knowledge adapter, compression adapter, registry entry,
+  compressor import, or pentest `compact_*` override for an already-supported
+  canonical fact family.
+- Parsing raw tool output, artifacts, or compact output inside canonical fact,
+  Knowledge bridge, or compact projection consumers.
 - Creating the implementation guide before the real Kali installation and
   official CLI-contract gates pass.
 - Treating a host package, image manifest, or repository wrapper as proof that
