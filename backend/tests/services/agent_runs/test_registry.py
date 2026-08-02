@@ -20,6 +20,7 @@ from backend.services.agent_runs.registry import (
     ActiveAgentRunExistsError,
     AgentRunIdentityCollisionError,
     AgentRunNotFoundError,
+    HandoffClaimNotFoundError,
     ProcessLocalAgentRunRegistry,
 )
 from backend.tests.agent_run_test_support import (
@@ -114,6 +115,47 @@ async def test_register_rejects_graph_thread_identity_collision() -> None:
 
     with pytest.raises(AgentRunIdentityCollisionError):
         await registry.register(assignment, graph_thread_id="child-thread-2")
+
+
+@pytest.mark.asyncio
+async def test_registry_rejects_invalid_inputs_before_mutating_state() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+
+    with pytest.raises(ValueError, match="graph_thread_id must not be empty"):
+        await registry.register(_assignment(), graph_thread_id=" ")
+    assert await registry.state_version() == 0
+
+    with pytest.raises(ValueError, match="max_active_runs_per_task must be positive"):
+        await registry.register(
+            _assignment(),
+            graph_thread_id="child-thread-1",
+            max_active_runs_per_task=0,
+        )
+    assert await registry.state_version() == 0
+
+    await registry.register(_assignment(), graph_thread_id="child-thread-1")
+
+    with pytest.raises(ValueError, match="max_results must be positive"):
+        await registry.claim_ready_handoffs(tenant_id=7, task_id=42, max_results=0)
+    with pytest.raises(ValueError, match="result.agent_run_id must match agent_run_id"):
+        await registry.record_completed(
+            tenant_id=7,
+            task_id=42,
+            agent_run_id="run-1",
+            result=_result("run-2"),
+        )
+    with pytest.raises(ValueError, match="safe_error must not be empty"):
+        await registry.record_failed(
+            tenant_id=7,
+            task_id=42,
+            agent_run_id="run-1",
+            safe_error=" ",
+        )
+
+    entry = await registry.get(tenant_id=7, task_id=42, agent_run_id="run-1")
+    assert entry is not None
+    assert entry.status == "queued"
+    assert await registry.state_version() == 1
 
 
 @pytest.mark.asyncio
@@ -224,6 +266,72 @@ async def test_duplicate_terminal_callbacks_do_not_regress_state() -> None:
 
 
 @pytest.mark.asyncio
+async def test_transition_results_usage_counts_timestamps_and_state_deltas() -> None:
+    moments = iter(
+        [
+            datetime(2026, 7, 26, 12, 0, tzinfo=UTC),
+            datetime(2026, 7, 26, 12, 1, tzinfo=UTC),
+            datetime(2026, 7, 26, 12, 2, tzinfo=UTC),
+        ]
+    )
+    registry = ProcessLocalAgentRunRegistry(clock=lambda: next(moments))
+
+    assert await registry.state_version() == 0
+    queued = await registry.register(_assignment(), graph_thread_id="child-thread-1")
+    assert queued.created_at == datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
+    assert await registry.state_version() == 1
+
+    running = await registry.mark_running(tenant_id=7, task_id=42, agent_run_id="run-1")
+    assert running.started_at == datetime(2026, 7, 26, 12, 1, tzinfo=UTC)
+    assert running.lifecycle_version == 2
+    assert await registry.state_version() == 2
+
+    waiting = await registry.record_waiting_for_approval(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="run-1",
+        accounted_usage_record_count=-5,
+    )
+    assert waiting.changed is True
+    assert waiting.entry.status == "waiting_for_approval"
+    assert waiting.entry.lifecycle_version == 3
+    assert waiting.entry.started_at == running.started_at
+    assert waiting.entry.accounted_usage_record_count == 0
+    assert await registry.state_version() == 3
+
+    repeated_waiting = await registry.record_waiting_for_approval(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="run-1",
+        accounted_usage_record_count=99,
+    )
+    assert repeated_waiting.changed is False
+    assert repeated_waiting.entry == waiting.entry
+    assert await registry.state_version() == 3
+
+    completed = await registry.record_completed(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="run-1",
+        result=_result("run-1"),
+    )
+    assert completed.changed is True
+    assert completed.entry.completed_at == datetime(2026, 7, 26, 12, 2, tzinfo=UTC)
+    assert completed.entry.lifecycle_version == 4
+    assert await registry.state_version() == 4
+
+    duplicate = await registry.record_completed(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="run-1",
+        result=_result("run-1"),
+    )
+    assert duplicate.changed is False
+    assert duplicate.entry == completed.entry
+    assert await registry.state_version() == 4
+
+
+@pytest.mark.asyncio
 async def test_failed_and_cancelled_terminal_results_are_claimable() -> None:
     registry = ProcessLocalAgentRunRegistry()
     await registry.register(
@@ -297,6 +405,56 @@ async def test_lifecycle_transitions_and_cancellation_flag_cancel_task_handle() 
 
 
 @pytest.mark.asyncio
+async def test_cancellation_variants_preserve_current_state_rules() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    await registry.register(
+        _assignment(agent_run_id="no-handle"), graph_thread_id="child-no-handle"
+    )
+    await registry.register(
+        _assignment(agent_run_id="waiting"), graph_thread_id="child-waiting"
+    )
+    await registry.register(
+        _assignment(agent_run_id="terminal"), graph_thread_id="child-terminal"
+    )
+
+    requested = await registry.request_cancellation(
+        tenant_id=7, task_id=42, agent_run_id="no-handle"
+    )
+    version_after_first_request = await registry.state_version()
+    repeated = await registry.request_cancellation(
+        tenant_id=7, task_id=42, agent_run_id="no-handle"
+    )
+    assert requested.status == "queued"
+    assert requested.cancel_requested is True
+    assert repeated == requested
+    assert await registry.state_version() == version_after_first_request
+
+    await registry.mark_waiting_for_approval(
+        tenant_id=7, task_id=42, agent_run_id="waiting"
+    )
+    cancelled_from_wait = await registry.request_cancellation(
+        tenant_id=7, task_id=42, agent_run_id="waiting"
+    )
+    assert cancelled_from_wait.status == "cancelled"
+    assert cancelled_from_wait.cancel_requested is True
+    assert cancelled_from_wait.result is not None
+    assert cancelled_from_wait.result.outcome == "cancelled"
+
+    completed = await registry.mark_completed(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="terminal",
+        result=_result("terminal"),
+    )
+    after_completed = await registry.state_version()
+    terminal_request = await registry.request_cancellation(
+        tenant_id=7, task_id=42, agent_run_id="terminal"
+    )
+    assert terminal_request == completed
+    assert await registry.state_version() == after_completed
+
+
+@pytest.mark.asyncio
 async def test_result_consumption_is_one_shot_and_finished_cleanup_is_bounded() -> None:
     clock = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
 
@@ -324,6 +482,56 @@ async def test_result_consumption_is_one_shot_and_finished_cleanup_is_bounded() 
     clock = datetime(2026, 7, 26, 12, 0, 31, tzinfo=UTC)
     assert await registry.cleanup_finished() == 1
     assert await registry.get(tenant_id=7, task_id=42, agent_run_id="run-1") is None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_retention_boundary_protects_claimed_and_active_runs() -> None:
+    clock = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
+
+    def _clock() -> datetime:
+        return clock
+
+    registry = ProcessLocalAgentRunRegistry(
+        clock=_clock, finished_retention=timedelta(seconds=30)
+    )
+    await registry.register(
+        _assignment(agent_run_id="stale"), graph_thread_id="child-1"
+    )
+    await registry.mark_completed(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="stale",
+        result=_result("stale"),
+    )
+    await registry.register(
+        _assignment(agent_run_id="claimed"), graph_thread_id="child-2"
+    )
+    await registry.mark_completed(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="claimed",
+        result=_result("claimed"),
+    )
+    await registry.register(
+        _assignment(agent_run_id="active"), graph_thread_id="child-3"
+    )
+    await registry.mark_running(tenant_id=7, task_id=42, agent_run_id="active")
+    claim = await registry.claim_ready_handoffs(
+        tenant_id=7, task_id=42, conversation_id="conversation-1", max_results=1
+    )
+    assert claim is not None
+    assert claim.agent_run_ids == ("claimed",)
+
+    clock = datetime(2026, 7, 26, 12, 0, 30, tzinfo=UTC)
+
+    assert await registry.cleanup_finished() == 1
+    assert await registry.get(tenant_id=7, task_id=42, agent_run_id="stale") is None
+    assert (
+        await registry.get(tenant_id=7, task_id=42, agent_run_id="claimed")
+    ) is not None
+    assert (
+        await registry.get(tenant_id=7, task_id=42, agent_run_id="active")
+    ) is not None
 
 
 @pytest.mark.asyncio
@@ -452,6 +660,72 @@ async def test_claim_result_and_active_snapshot_are_task_scoped() -> None:
 
 
 @pytest.mark.asyncio
+async def test_claim_ordering_scope_limits_and_missing_claims() -> None:
+    clock = datetime(2026, 7, 26, 12, 0, tzinfo=UTC)
+
+    def _clock() -> datetime:
+        return clock
+
+    registry = ProcessLocalAgentRunRegistry(clock=_clock)
+    await registry.register(
+        _assignment(agent_run_id="late"), graph_thread_id="child-late"
+    )
+    clock = datetime(2026, 7, 26, 12, 3, tzinfo=UTC)
+    await registry.mark_completed(
+        tenant_id=7, task_id=42, agent_run_id="late", result=_result("late")
+    )
+    clock = datetime(2026, 7, 26, 12, 1, tzinfo=UTC)
+    await registry.register(
+        _assignment(agent_run_id="early"), graph_thread_id="child-early"
+    )
+    clock = datetime(2026, 7, 26, 12, 2, tzinfo=UTC)
+    await registry.mark_completed(
+        tenant_id=7, task_id=42, agent_run_id="early", result=_result("early")
+    )
+    other_conversation = _assignment(agent_run_id="other-conversation").model_copy(
+        update={"conversation_id": "conversation-2"}
+    )
+    await registry.register(other_conversation, graph_thread_id="child-other")
+    await registry.mark_completed(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="other-conversation",
+        result=build_agent_result(other_conversation),
+    )
+
+    first_claim = await registry.claim_ready_handoffs(
+        tenant_id=7,
+        task_id=42,
+        conversation_id="conversation-1",
+        max_results=1,
+    )
+    assert first_claim is not None
+    assert first_claim.claim_id == "handoff-claim:7:42:1"
+    assert first_claim.agent_run_ids == ("early",)
+
+    assert (
+        await registry.claim_ready_handoffs(
+            tenant_id=7,
+            task_id=42,
+            conversation_id="conversation-1",
+            max_results=1,
+        )
+    ).agent_run_ids == ("late",)
+    assert (
+        await registry.claim_ready_handoffs(
+            tenant_id=7,
+            task_id=42,
+            conversation_id="conversation-2",
+        )
+    ).agent_run_ids == ("other-conversation",)
+
+    with pytest.raises(HandoffClaimNotFoundError):
+        await registry.acknowledge_handoffs("missing-claim")
+    with pytest.raises(HandoffClaimNotFoundError):
+        await registry.release_handoffs("missing-claim")
+
+
+@pytest.mark.asyncio
 async def test_cancelled_processing_can_release_claimed_handoffs() -> None:
     registry = ProcessLocalAgentRunRegistry()
     await registry.register(_assignment(), graph_thread_id="child-thread-1")
@@ -481,6 +755,43 @@ async def test_cancelled_processing_can_release_claimed_handoffs() -> None:
     retried = await registry.claim_ready_handoffs(tenant_id=7, task_id=42)
     assert retried is not None
     assert retried.agent_run_ids == ("run-1",)
+
+
+@pytest.mark.asyncio
+async def test_state_version_deltas_include_multi_entry_claims_and_read_noops() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    await registry.register(
+        _assignment(agent_run_id="run-1"), graph_thread_id="child-1"
+    )
+    await registry.register(
+        _assignment(agent_run_id="run-2"), graph_thread_id="child-2"
+    )
+    await registry.mark_completed(
+        tenant_id=7, task_id=42, agent_run_id="run-1", result=_result("run-1")
+    )
+    await registry.mark_completed(
+        tenant_id=7, task_id=42, agent_run_id="run-2", result=_result("run-2")
+    )
+
+    before_reads = await registry.state_version()
+    assert await registry.get(tenant_id=7, task_id=42, agent_run_id="run-1") is not None
+    assert len(await registry.list_task_runs(tenant_id=7, task_id=42)) == 2
+    assert await registry.state_version() == before_reads
+
+    claim = await registry.claim_ready_handoffs(tenant_id=7, task_id=42)
+    assert claim is not None
+    assert claim.agent_run_ids == ("run-1", "run-2")
+    assert await registry.state_version() == before_reads + 2
+
+    await registry.release_handoffs(claim.claim_id)
+    assert await registry.state_version() == before_reads + 4
+
+    reclaimed = await registry.claim_ready_handoffs(tenant_id=7, task_id=42)
+    assert reclaimed is not None
+    assert await registry.state_version() == before_reads + 6
+
+    await registry.acknowledge_handoffs(reclaimed.claim_id)
+    assert await registry.state_version() == before_reads + 8
 
 
 @pytest.mark.asyncio
@@ -567,6 +878,102 @@ async def test_scoped_handoff_wait_exits_when_no_active_runs_remain() -> None:
             after_version=await registry.state_version(),
         )
         == "inactive"
+    )
+
+
+@pytest.mark.asyncio
+async def test_scoped_handoff_wait_returns_ready_and_inactive() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    await registry.register(_assignment(), graph_thread_id="child-thread-1")
+    await registry.mark_completed(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="run-1",
+        result=_result("run-1"),
+    )
+
+    assert (
+        await registry.wait_for_ready_handoffs_or_inactive(
+            tenant_id=7,
+            task_id=42,
+            conversation_id="conversation-1",
+            after_version=await registry.state_version(),
+        )
+        == "ready"
+    )
+
+    claim = await registry.claim_ready_handoffs(tenant_id=7, task_id=42)
+    assert claim is not None
+    assert (
+        await registry.wait_for_ready_handoffs_or_inactive(
+            tenant_id=7,
+            task_id=42,
+            conversation_id="conversation-1",
+            after_version=await registry.state_version(),
+        )
+        == "inactive"
+    )
+
+    await registry.acknowledge_handoffs(claim.claim_id)
+
+    assert (
+        await registry.wait_for_ready_handoffs_or_inactive(
+            tenant_id=7,
+            task_id=42,
+            conversation_id="conversation-1",
+            after_version=await registry.state_version(),
+        )
+        == "inactive"
+    )
+
+
+@pytest.mark.asyncio
+async def test_list_and_graph_thread_queries_are_scoped() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    await registry.register(
+        _assignment(agent_run_id="tenant-7"), graph_thread_id="shared-child"
+    )
+    await registry.mark_running(tenant_id=7, task_id=42, agent_run_id="tenant-7")
+    await registry.register(
+        _assignment(tenant_id=8, agent_run_id="tenant-8"),
+        graph_thread_id="shared-child",
+    )
+    await registry.mark_running(tenant_id=8, task_id=42, agent_run_id="tenant-8")
+    await registry.register(
+        _assignment(task_id=43, agent_run_id="task-43"), graph_thread_id="shared-child"
+    )
+    await registry.mark_running(tenant_id=7, task_id=43, agent_run_id="task-43")
+    await registry.register(
+        _assignment(agent_run_id="completed"), graph_thread_id="completed-child"
+    )
+    await registry.mark_completed(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="completed",
+        result=_result("completed"),
+    )
+
+    task_runs = await registry.list_task_runs(tenant_id=7, task_id=42)
+    assert [entry.agent_run_id for entry in task_runs] == [
+        "tenant-7",
+        "completed",
+    ]
+    assert (
+        await registry.find_active_by_graph_thread(
+            tenant_id=7, task_id=42, graph_thread_id="shared-child"
+        )
+    ).agent_run_id == "tenant-7"
+    assert (
+        await registry.find_active_by_graph_thread(
+            task_id=42, graph_thread_id="shared-child"
+        )
+        is None
+    )
+    assert (
+        await registry.find_active_by_graph_thread(
+            tenant_id=7, task_id=42, graph_thread_id="completed-child"
+        )
+        is None
     )
 
 
