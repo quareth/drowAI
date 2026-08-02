@@ -4,7 +4,7 @@ This module owns handoff candidate selection decisions and immutable replacement
 snapshots for claim, acknowledge, release, and one-shot consumption paths. It
 does not own the registry's claim map, claim id generation, claim sequence,
 run storage, mutation, metrics, logging, condition notification, or public
-registry methods; those remain in ``registry.py`` until callers are migrated.
+registry methods; the registry facade commits claim and run replacements.
 """
 
 from __future__ import annotations

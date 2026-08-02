@@ -4,7 +4,7 @@ This module owns filtering, ordering, cleanup eligibility, and wait-status
 projections for immutable process-local registry snapshots. It does not own run
 or claim storage, mutation, deletion, claim assignment, metrics, logging,
 state-version increments, condition notification, clocks, or public registry
-methods; those remain in ``registry.py`` until callers are migrated.
+methods; the registry facade commits deletions and mutations.
 """
 
 from __future__ import annotations

@@ -3,8 +3,8 @@
 This module owns immutable process-local registry snapshots, status constants,
 type aliases, and registry-specific errors. It does not own run storage,
 claim storage, lifecycle mutation, task cancellation, metrics, logging, or
-state-change signaling; those remain in ``registry.py`` until later migration
-tasks repoint callers and remove the legacy definitions.
+state-change signaling; those responsibilities are split across the registry
+facade and the focused lifecycle, query, handoff, and signaling modules.
 """
 
 from __future__ import annotations

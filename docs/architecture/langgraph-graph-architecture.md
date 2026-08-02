@@ -479,8 +479,11 @@ Important boundaries:
 
 Coordination source of truth:
 
-- `backend/services/agent_runs/registry.py` owns process-local run lifecycle,
-  ready-result claims, acknowledgement, release, and active-run snapshots.
+- `backend/services/agent_runs/registry.py` remains the process-local facade
+  and atomic mutation authority for run and claim state. Its internal contract,
+  lifecycle, query/retention, handoff, and signaling modules own the cohesive
+  immutable snapshots, pure transition/selection/projection rules, and
+  owner-lock-coupled wakeup mechanics that the facade commits in memory.
 - `backend/services/agent_runs/parent_handoff_coordinator.py` serializes one
   parent continuation per tenant/task key, including parent cycles from
   different turns of the same task. A claimed batch is

@@ -4,7 +4,7 @@ This module owns immutable next-snapshot construction and terminal fallback
 result construction for process-local registry entries. It does not own run
 storage, validation order, clocks, task cancellation, metrics, logging,
 state-version increments, condition notification, or public registry mutation;
-those remain in ``registry.py`` while extraction is proven.
+the registry facade remains the mutation authority.
 """
 
 from __future__ import annotations
