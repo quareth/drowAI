@@ -19,6 +19,7 @@ from . import registry_contracts as _registry_contracts
 from . import registry_handoffs as _registry_handoffs
 from . import registry_lifecycle as _registry_lifecycle
 from . import registry_queries as _registry_queries
+from . import registry_signaling as _registry_signaling
 from .contracts import AgentAssignment, AgentResult, AgentRunStatus
 
 
@@ -37,14 +38,13 @@ class ProcessLocalAgentRunRegistry:
         self._clock = clock or _utc_now
         self._finished_retention = finished_retention
         self._lock = asyncio.Lock()
-        self._state_changed = asyncio.Condition()
+        self._signal = _registry_signaling.RegistryStateSignal(self._lock)
         self._runs: dict[
             _registry_contracts.AgentRunKey,
             _registry_contracts.LocalAgentRun,
         ] = {}
         self._claims: dict[str, tuple[_registry_contracts.AgentRunKey, ...]] = {}
         self._claim_sequence = 0
-        self._state_version = 0
 
     async def register(
         self,
@@ -97,8 +97,8 @@ class ProcessLocalAgentRunRegistry:
                 created_at=self._clock(),
             )
             self._runs[key] = entry
-            self._mark_state_changed_locked()
-        await self._notify_state_changed()
+            self._signal.mark_changed_locked()
+        await self._signal.notify_after_commit()
         return entry
 
     async def get(
@@ -132,7 +132,7 @@ class ProcessLocalAgentRunRegistry:
             updated = self._store(
                 replace(entry, task_handle=task_handle),
             )
-        await self._notify_state_changed()
+        await self._signal.notify_after_commit()
         return updated
 
     async def mark_running(
@@ -155,7 +155,7 @@ class ProcessLocalAgentRunRegistry:
                     started_at=entry.started_at or self._clock(),
                 )
             )
-        await self._notify_state_changed()
+        await self._signal.notify_after_commit()
         return updated
 
     async def mark_waiting_for_approval(
@@ -203,7 +203,7 @@ class ProcessLocalAgentRunRegistry:
                     accounted_usage_record_count=accounted_usage_record_count,
                 )
             )
-        await self._notify_state_changed()
+        await self._signal.notify_after_commit()
         return _registry_contracts.AgentRunTransition(entry=updated, changed=True)
 
     async def request_cancellation(
@@ -240,7 +240,7 @@ class ProcessLocalAgentRunRegistry:
                 )
                 should_notify = True
         if should_notify:
-            await self._notify_state_changed()
+            await self._signal.notify_after_commit()
         return return_entry
 
     async def mark_completed(
@@ -292,7 +292,7 @@ class ProcessLocalAgentRunRegistry:
                     completed_at=self._clock(),
                 )
             )
-        await self._notify_state_changed()
+        await self._signal.notify_after_commit()
         return _registry_contracts.AgentRunTransition(entry=updated, changed=True)
 
     async def mark_failed(
@@ -340,7 +340,7 @@ class ProcessLocalAgentRunRegistry:
                     completed_at=self._clock(),
                 )
             )
-        await self._notify_state_changed()
+        await self._signal.notify_after_commit()
         return _registry_contracts.AgentRunTransition(entry=updated, changed=True)
 
     async def mark_cancelled(
@@ -387,7 +387,7 @@ class ProcessLocalAgentRunRegistry:
                     cancel_requested=True,
                 )
             )
-        await self._notify_state_changed()
+        await self._signal.notify_after_commit()
         return _registry_contracts.AgentRunTransition(entry=updated, changed=True)
 
     async def claim_ready_handoffs(
@@ -456,7 +456,7 @@ class ProcessLocalAgentRunRegistry:
                 len(batch.agent_run_ids),
                 len(batch.active_runs),
             )
-        await self._notify_state_changed()
+        await self._signal.notify_after_commit()
         return batch
 
     async def acknowledge_handoffs(self, claim_id: str) -> None:
@@ -483,7 +483,7 @@ class ProcessLocalAgentRunRegistry:
                 claim_id,
                 acknowledged,
             )
-        await self._notify_state_changed()
+        await self._signal.notify_after_commit()
 
     async def release_handoffs(self, claim_id: str) -> None:
         """Release a claimed batch so cancellation or failure can retry it."""
@@ -509,7 +509,7 @@ class ProcessLocalAgentRunRegistry:
                 claim_id,
                 released,
             )
-        await self._notify_state_changed()
+        await self._signal.notify_after_commit()
 
     async def consume_result(
         self,
@@ -529,7 +529,7 @@ class ProcessLocalAgentRunRegistry:
                 return None
             self._store(decision.replacement.entry)
             result = decision.result
-        await self._notify_state_changed()
+        await self._signal.notify_after_commit()
         return result
 
     async def cleanup_finished(self) -> int:
@@ -553,10 +553,10 @@ class ProcessLocalAgentRunRegistry:
                     for claim_id, keys in self._claims.items()
                     if keys
                 }
-                self._mark_state_changed_locked()
+                self._signal.mark_changed_locked()
             count = len(stale_keys)
         if count:
-            await self._notify_state_changed()
+            await self._signal.notify_after_commit()
         return count
 
     async def list_task_runs(
@@ -592,8 +592,7 @@ class ProcessLocalAgentRunRegistry:
 
     async def state_version(self) -> int:
         """Return the current process-local registry mutation version."""
-        async with self._lock:
-            return self._state_version
+        return await self._signal.state_version()
 
     async def wait_for_state_change(self, *, after_version: int) -> int:
         """Wait until the registry mutates after ``after_version``.
@@ -602,17 +601,7 @@ class ProcessLocalAgentRunRegistry:
         condition, so callers can wait for child lifecycle changes without
         preventing those changes from being recorded.
         """
-        while True:
-            async with self._lock:
-                current = self._state_version
-            if current != after_version:
-                return current
-            async with self._state_changed:
-                async with self._lock:
-                    current = self._state_version
-                if current != after_version:
-                    return current
-                await self._state_changed.wait()
+        return await self._signal.wait_for_state_change(after_version=after_version)
 
     async def wait_for_ready_handoffs_or_inactive(
         self,
@@ -628,32 +617,15 @@ class ProcessLocalAgentRunRegistry:
         the wait; they only advance the observed registry version before the
         caller blocks again.
         """
-        while True:
-            async with self._lock:
-                status = _registry_queries.handoff_wait_status(
-                    self._runs.values(),
-                    tenant_id=tenant_id,
-                    task_id=task_id,
-                    conversation_id=conversation_id,
-                )
-            if status is not None:
-                return status
-
-            async with self._state_changed:
-                async with self._lock:
-                    status = _registry_queries.handoff_wait_status(
-                        self._runs.values(),
-                        tenant_id=tenant_id,
-                        task_id=task_id,
-                        conversation_id=conversation_id,
-                    )
-                    current = self._state_version
-                if status is not None:
-                    return status
-                if current != after_version:
-                    after_version = current
-                    continue
-                await self._state_changed.wait()
+        return await self._signal.wait_for_predicate(
+            after_version=after_version,
+            predicate=lambda: _registry_queries.handoff_wait_status(
+                self._runs.values(),
+                tenant_id=tenant_id,
+                task_id=task_id,
+                conversation_id=conversation_id,
+            ),
+        )
 
     def _require_entry(
         self,
@@ -681,20 +653,12 @@ class ProcessLocalAgentRunRegistry:
                 agent_run_id=entry.agent_run_id,
             )
         ] = entry
-        self._mark_state_changed_locked()
+        self._signal.mark_changed_locked()
         return entry
 
     def _next_claim_id_locked(self, *, tenant_id: int, task_id: int) -> str:
         self._claim_sequence += 1
         return f"handoff-claim:{tenant_id}:{task_id}:{self._claim_sequence}"
-
-    def _mark_state_changed_locked(self) -> None:
-        self._state_version += 1
-
-    async def _notify_state_changed(self) -> None:
-        async with self._state_changed:
-            self._state_changed.notify_all()
-
 
 def _key(
     *,
