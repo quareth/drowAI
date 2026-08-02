@@ -16,6 +16,7 @@ from typing import Any
 from backend.services.metrics.utils import safe_gauge, safe_inc
 
 from . import registry_contracts as _registry_contracts
+from . import registry_lifecycle as _registry_lifecycle
 from .contracts import AgentAssignment, AgentResult, AgentRunStatus
 
 
@@ -88,22 +89,10 @@ class ProcessLocalAgentRunRegistry:
                         active_agent_run_id=active_same_agent[0].agent_run_id,
                     )
 
-            now = self._clock()
-            entry = _registry_contracts.LocalAgentRun(
-                graph_thread_id=graph_thread_id,
+            entry = _registry_lifecycle.build_queued_entry(
                 assignment=assignment,
-                status="queued",
-                lifecycle_version=1,
-                created_at=now,
-                started_at=None,
-                completed_at=None,
-                result=None,
-                safe_error=None,
-                task_handle=None,
-                cancel_requested=False,
-                result_consumed=False,
-                result_claim_id=None,
-                accounted_usage_record_count=0,
+                graph_thread_id=graph_thread_id,
+                created_at=self._clock(),
             )
             self._runs[key] = entry
             self._mark_state_changed_locked()
@@ -136,7 +125,7 @@ class ProcessLocalAgentRunRegistry:
             entry = self._require_entry(
                 tenant_id=tenant_id, task_id=task_id, agent_run_id=agent_run_id
             )
-            if _is_terminal(entry):
+            if _registry_lifecycle.is_terminal(entry):
                 return entry
             updated = self._store(
                 replace(entry, task_handle=task_handle),
@@ -156,13 +145,11 @@ class ProcessLocalAgentRunRegistry:
             entry = self._require_entry(
                 tenant_id=tenant_id, task_id=task_id, agent_run_id=agent_run_id
             )
-            if _is_terminal(entry) or entry.status == "running":
+            if _registry_lifecycle.is_terminal(entry) or entry.status == "running":
                 return entry
             updated = self._store(
-                replace(
+                _registry_lifecycle.build_running_entry(
                     entry,
-                    status="running",
-                    lifecycle_version=entry.lifecycle_version + 1,
                     started_at=entry.started_at or self._clock(),
                 )
             )
@@ -200,22 +187,18 @@ class ProcessLocalAgentRunRegistry:
             entry = self._require_entry(
                 tenant_id=tenant_id, task_id=task_id, agent_run_id=agent_run_id
             )
-            if _is_terminal(entry) or entry.status == "waiting_for_approval":
+            if (
+                _registry_lifecycle.is_terminal(entry)
+                or entry.status == "waiting_for_approval"
+            ):
                 return _registry_contracts.AgentRunTransition(
                     entry=entry,
                     changed=False,
                 )
-            accounted_count = (
-                entry.accounted_usage_record_count
-                if accounted_usage_record_count is None
-                else max(0, int(accounted_usage_record_count))
-            )
             updated = self._store(
-                replace(
+                _registry_lifecycle.build_waiting_for_approval_entry(
                     entry,
-                    status="waiting_for_approval",
-                    lifecycle_version=entry.lifecycle_version + 1,
-                    accounted_usage_record_count=accounted_count,
+                    accounted_usage_record_count=accounted_usage_record_count,
                 )
             )
         await self._notify_state_changed()
@@ -233,22 +216,26 @@ class ProcessLocalAgentRunRegistry:
             entry = self._require_entry(
                 tenant_id=tenant_id, task_id=task_id, agent_run_id=agent_run_id
             )
-            if _is_terminal(entry):
+            if _registry_lifecycle.is_terminal(entry):
                 return entry
             if entry.task_handle is not None and not entry.task_handle.done():
                 entry.task_handle.cancel()
             if entry.status == "waiting_for_approval":
-                updated = self._terminal_entry(
-                    entry,
-                    status="cancelled",
-                    cancel_requested=True,
+                updated = self._store(
+                    _registry_lifecycle.build_cancelled_entry(
+                        entry,
+                        completed_at=self._clock(),
+                        cancel_requested=True,
+                    )
                 )
                 should_notify = True
                 return_entry = updated
             elif entry.cancel_requested:
                 return entry
             else:
-                return_entry = self._store(replace(entry, cancel_requested=True))
+                return_entry = self._store(
+                    _registry_lifecycle.build_cancellation_requested_entry(entry)
+                )
                 should_notify = True
         if should_notify:
             await self._notify_state_changed()
@@ -287,7 +274,7 @@ class ProcessLocalAgentRunRegistry:
             entry = self._require_entry(
                 tenant_id=tenant_id, task_id=task_id, agent_run_id=agent_run_id
             )
-            if _is_terminal(entry):
+            if _registry_lifecycle.is_terminal(entry):
                 _record_duplicate_terminal_suppressed(
                     entry,
                     requested_status="completed",
@@ -296,7 +283,13 @@ class ProcessLocalAgentRunRegistry:
                     entry=entry,
                     changed=False,
                 )
-            updated = self._terminal_entry(entry, status="completed", result=result)
+            updated = self._store(
+                _registry_lifecycle.build_completed_entry(
+                    entry,
+                    result=result,
+                    completed_at=self._clock(),
+                )
+            )
         await self._notify_state_changed()
         return _registry_contracts.AgentRunTransition(entry=updated, changed=True)
 
@@ -332,14 +325,18 @@ class ProcessLocalAgentRunRegistry:
             entry = self._require_entry(
                 tenant_id=tenant_id, task_id=task_id, agent_run_id=agent_run_id
             )
-            if _is_terminal(entry):
+            if _registry_lifecycle.is_terminal(entry):
                 _record_duplicate_terminal_suppressed(entry, requested_status="failed")
                 return _registry_contracts.AgentRunTransition(
                     entry=entry,
                     changed=False,
                 )
-            updated = self._terminal_entry(
-                entry, status="failed", safe_error=safe_error
+            updated = self._store(
+                _registry_lifecycle.build_failed_entry(
+                    entry,
+                    safe_error=safe_error,
+                    completed_at=self._clock(),
+                )
             )
         await self._notify_state_changed()
         return _registry_contracts.AgentRunTransition(entry=updated, changed=True)
@@ -372,7 +369,7 @@ class ProcessLocalAgentRunRegistry:
             entry = self._require_entry(
                 tenant_id=tenant_id, task_id=task_id, agent_run_id=agent_run_id
             )
-            if _is_terminal(entry):
+            if _registry_lifecycle.is_terminal(entry):
                 _record_duplicate_terminal_suppressed(
                     entry,
                     requested_status="cancelled",
@@ -381,10 +378,12 @@ class ProcessLocalAgentRunRegistry:
                     entry=entry,
                     changed=False,
                 )
-            updated = self._terminal_entry(
-                entry,
-                status="cancelled",
-                cancel_requested=True,
+            updated = self._store(
+                _registry_lifecycle.build_cancelled_entry(
+                    entry,
+                    completed_at=self._clock(),
+                    cancel_requested=True,
+                )
             )
         await self._notify_state_changed()
         return _registry_contracts.AgentRunTransition(entry=updated, changed=True)
@@ -767,37 +766,6 @@ class ProcessLocalAgentRunRegistry:
         async with self._state_changed:
             self._state_changed.notify_all()
 
-    def _terminal_entry(
-        self,
-        entry: _registry_contracts.LocalAgentRun,
-        *,
-        status: AgentRunStatus,
-        result: AgentResult | None = None,
-        safe_error: str | None = None,
-        cancel_requested: bool | None = None,
-    ) -> _registry_contracts.LocalAgentRun:
-        terminal_result = result
-        if terminal_result is None and status in {"failed", "cancelled"}:
-            terminal_result = _fallback_terminal_result(
-                entry,
-                status=status,
-                safe_error=safe_error,
-            )
-        return self._store(
-            replace(
-                entry,
-                status=status,
-                lifecycle_version=entry.lifecycle_version + 1,
-                completed_at=self._clock(),
-                result=terminal_result,
-                safe_error=safe_error,
-                task_handle=None,
-                cancel_requested=entry.cancel_requested
-                if cancel_requested is None
-                else cancel_requested,
-            )
-        )
-
 
 def _key(
     *,
@@ -822,10 +790,6 @@ def _datetime_sort_key(value: datetime | None) -> str:
     return value.isoformat()
 
 
-def _is_terminal(entry: _registry_contracts.LocalAgentRun) -> bool:
-    return entry.status in _registry_contracts.TERMINAL_AGENT_RUN_STATUSES
-
-
 def _record_duplicate_terminal_suppressed(
     entry: _registry_contracts.LocalAgentRun,
     *,
@@ -842,39 +806,6 @@ def _record_duplicate_terminal_suppressed(
         entry.agent_run_id,
         entry.status,
         requested_status,
-    )
-
-
-def _fallback_terminal_result(
-    entry: _registry_contracts.LocalAgentRun,
-    *,
-    status: AgentRunStatus,
-    safe_error: str | None,
-) -> AgentResult:
-    if status == "failed":
-        summary = f"Subagent run failed: {safe_error or 'Subagent worker failed'}"
-        limitations = (safe_error or "Subagent worker failed",)
-        recommended_next_steps = (
-            "Review the failure and decide whether a new bounded assignment is needed.",
-        )
-    elif status == "cancelled":
-        summary = "Subagent run was cancelled before completing its assignment."
-        limitations = ("Subagent run was cancelled.",)
-        recommended_next_steps = (
-            "Decide whether the cancelled assignment is still required.",
-        )
-    else:
-        raise ValueError(
-            f"fallback result is only supported for terminal status: {status}"
-        )
-    return AgentResult(
-        agent_run_id=entry.agent_run_id,
-        agent_id=entry.agent_id,
-        agent_kind=entry.agent_kind,
-        outcome=status,
-        summary=summary,
-        limitations=limitations,
-        recommended_next_steps=recommended_next_steps,
     )
 
 
