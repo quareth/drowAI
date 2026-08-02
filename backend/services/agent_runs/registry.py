@@ -16,6 +16,7 @@ from typing import Any
 from backend.services.metrics.utils import safe_gauge, safe_inc
 
 from . import registry_contracts as _registry_contracts
+from . import registry_handoffs as _registry_handoffs
 from . import registry_lifecycle as _registry_lifecycle
 from . import registry_queries as _registry_queries
 from .contracts import AgentAssignment, AgentResult, AgentRunStatus
@@ -401,45 +402,19 @@ class ProcessLocalAgentRunRegistry:
         if max_results is not None and max_results < 1:
             raise ValueError("max_results must be positive")
         async with self._lock:
-            candidates: list[_registry_contracts.LocalAgentRun] = []
-            claimed_ready_count = 0
-            active_entries: list[_registry_contracts.LocalAgentRun] = []
-            for entry in self._runs.values():
-                if (
-                    entry.tenant_id != tenant_id
-                    or entry.task_id != task_id
-                    or (
-                        conversation_id is not None
-                        and entry.conversation_id != conversation_id
-                    )
-                ):
-                    continue
-                if entry.status in _registry_contracts.ACTIVE_AGENT_RUN_STATUSES:
-                    active_entries.append(entry)
-                if (
-                    entry.result is None
-                    or entry.result_consumed
-                    or entry.status
-                    not in _registry_contracts.TERMINAL_AGENT_RUN_STATUSES
-                ):
-                    continue
-                if entry.result_claim_id is None:
-                    candidates.append(entry)
-                else:
-                    claimed_ready_count += 1
-
-            candidates.sort(key=_registry_queries.run_sort_key)
-            if max_results is not None:
-                candidates = candidates[:max_results]
-            active_runs = tuple(
-                sorted(active_entries, key=_registry_queries.run_sort_key)
+            projection = _registry_handoffs.select_ready_handoffs(
+                tuple(self._runs.values()),
+                tenant_id=tenant_id,
+                task_id=task_id,
+                conversation_id=conversation_id,
+                max_results=max_results,
             )
-            if not candidates:
-                if claimed_ready_count:
+            if not projection.candidates:
+                if projection.claimed_ready_count:
                     safe_inc("agent_run_handoff_duplicate_claim_suppressed")
                     safe_gauge(
                         "agent_run_handoff_duplicate_claim_suppressed_count",
-                        claimed_ready_count,
+                        projection.claimed_ready_count,
                     )
                     logger.info(
                         "Suppressed duplicate handoff claim tenant_id=%s task_id=%s "
@@ -447,7 +422,7 @@ class ProcessLocalAgentRunRegistry:
                         tenant_id,
                         task_id,
                         conversation_id,
-                        claimed_ready_count,
+                        projection.claimed_ready_count,
                     )
                 return None
 
@@ -455,30 +430,22 @@ class ProcessLocalAgentRunRegistry:
                 tenant_id=tenant_id,
                 task_id=task_id,
             )
-            keys: list[_registry_contracts.AgentRunKey] = []
-            results: list[AgentResult] = []
-            for entry in candidates:
-                key = _key(
-                    tenant_id=entry.tenant_id,
-                    task_id=entry.task_id,
-                    agent_run_id=entry.agent_run_id,
-                )
-                keys.append(key)
-                assert entry.result is not None
-                results.append(entry.result)
-                self._store(replace(entry, result_claim_id=claim_id))
-            self._claims[claim_id] = tuple(keys)
-            batch = _registry_contracts.ClaimedHandoffBatch(
+            decision = _registry_handoffs.build_claim_decision(
+                projection,
                 claim_id=claim_id,
                 tenant_id=tenant_id,
                 task_id=task_id,
-                agent_run_ids=tuple(entry.agent_run_id for entry in candidates),
-                results=tuple(results),
-                active_runs=active_runs,
             )
+            for replacement in decision.replacements:
+                self._store(replacement.entry)
+            self._claims[claim_id] = decision.claim_keys
+            batch = decision.batch
             safe_inc("agent_run_handoff_claim_created")
             safe_gauge("agent_run_handoff_claim_batch_size", len(batch.agent_run_ids))
-            safe_gauge("agent_run_handoff_claim_active_run_count", len(active_runs))
+            safe_gauge(
+                "agent_run_handoff_claim_active_run_count",
+                len(batch.active_runs),
+            )
             logger.info(
                 "Created handoff claim tenant_id=%s task_id=%s "
                 "conversation_id=%s claim_id=%s batch_size=%s active_run_count=%s",
@@ -487,7 +454,7 @@ class ProcessLocalAgentRunRegistry:
                 conversation_id,
                 claim_id,
                 len(batch.agent_run_ids),
-                len(active_runs),
+                len(batch.active_runs),
             )
         await self._notify_state_changed()
         return batch
@@ -501,11 +468,13 @@ class ProcessLocalAgentRunRegistry:
                 safe_inc("agent_run_handoff_acknowledge_missing_claim")
                 raise _registry_contracts.HandoffClaimNotFoundError(claim_id)
             acknowledged = 0
-            for key in keys:
-                entry = self._runs.get(key)
-                if entry is None or entry.result_claim_id != claim_id:
-                    continue
-                self._store(replace(entry, result_consumed=True, result_claim_id=None))
+            decision = _registry_handoffs.build_acknowledge_replacements(
+                self._runs,
+                claim_keys=keys,
+                claim_id=claim_id,
+            )
+            for replacement in decision.replacements:
+                self._store(replacement.entry)
                 acknowledged += 1
             safe_inc("agent_run_handoff_claim_acknowledged")
             safe_gauge("agent_run_handoff_claim_acknowledged_count", acknowledged)
@@ -525,15 +494,13 @@ class ProcessLocalAgentRunRegistry:
                 safe_inc("agent_run_handoff_release_missing_claim")
                 raise _registry_contracts.HandoffClaimNotFoundError(claim_id)
             released = 0
-            for key in keys:
-                entry = self._runs.get(key)
-                if (
-                    entry is None
-                    or entry.result_claim_id != claim_id
-                    or entry.result_consumed
-                ):
-                    continue
-                self._store(replace(entry, result_claim_id=None))
+            decision = _registry_handoffs.build_release_replacements(
+                self._runs,
+                claim_keys=keys,
+                claim_id=claim_id,
+            )
+            for replacement in decision.replacements:
+                self._store(replacement.entry)
                 released += 1
             safe_inc("agent_run_handoff_claim_released")
             safe_gauge("agent_run_handoff_claim_released_count", released)
@@ -556,17 +523,12 @@ class ProcessLocalAgentRunRegistry:
             entry = self._runs.get(
                 _key(tenant_id=tenant_id, task_id=task_id, agent_run_id=agent_run_id)
             )
-            if (
-                entry is None
-                or entry.result is None
-                or entry.result_consumed
-                or entry.result_claim_id is not None
-                or entry.status not in _registry_contracts.TERMINAL_AGENT_RUN_STATUSES
-            ):
+            decision = _registry_handoffs.build_consumption_decision(entry)
+            if decision.replacement is None:
                 safe_inc("agent_run_handoff_duplicate_delivery_suppressed")
                 return None
-            self._store(replace(entry, result_consumed=True))
-            result = entry.result
+            self._store(decision.replacement.entry)
+            result = decision.result
         await self._notify_state_changed()
         return result
 
