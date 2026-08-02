@@ -42,6 +42,7 @@ from agent.reasoning.tool_selection_sentinel import (
 )
 from .common_edges import (
     build_router_action_map,
+    require_conditional_edges,
     wrap_with_context,
 )
 from .post_action_wiring import (
@@ -63,15 +64,6 @@ _PARENT_ROUTER_ACTION_MAP = {
 }
 
 
-def _metadata_from_interactive(interactive: InteractiveState) -> dict[str, Any]:
-    """Return mutable metadata from the parent graph state."""
-    metadata = interactive.facts.ensure_metadata()
-    if not isinstance(metadata, dict):
-        metadata = dict(metadata)
-        interactive.facts.metadata = metadata
-    return metadata
-
-
 def _prepare_handoff_reasoning_context(
     state: Mapping[str, Any],
     context: Any = None,
@@ -79,7 +71,7 @@ def _prepare_handoff_reasoning_context(
     """Mark the initial parent continuation outcome as a subagent handoff batch."""
     _ = context
     interactive = InteractiveState.from_mapping(state)
-    metadata = _metadata_from_interactive(interactive)
+    metadata = interactive.facts.ensure_metadata()
     metadata[POST_ACTION_OUTCOME_SOURCE_METADATA_KEY] = (
         SUBAGENT_HANDOFF_BATCH_OUTCOME_SOURCE
     )
@@ -94,7 +86,7 @@ def _prepare_direct_tool_reasoning_context(
     """Mark post-tool continuation outcomes as direct-tool PAR inputs."""
     _ = context
     interactive = InteractiveState.from_mapping(state)
-    metadata = _metadata_from_interactive(interactive)
+    metadata = interactive.facts.ensure_metadata()
     metadata[POST_ACTION_OUTCOME_SOURCE_METADATA_KEY] = DIRECT_TOOL_OUTCOME_SOURCE
     return interactive.as_graph_update()
 
@@ -136,12 +128,7 @@ def _route_after_prepare_tool_plan(interactive: InteractiveState) -> str:
 def build_parent_handoff_graph(*, build_only: bool = False) -> Any:
     """Compile the parent continuation graph for one claimed child handoff batch."""
     graph = StateGraph(dict)
-    conditional = getattr(graph, "add_conditional_edges", None)
-    if not callable(conditional):
-        raise RuntimeError(
-            "LangGraph's 'add_conditional_edges' is not available. "
-            "Please ensure LangGraph >= 0.4.8."
-        )
+    conditional = require_conditional_edges(graph)
 
     graph.add_node(
         "prepare_handoff_context",

@@ -156,48 +156,38 @@ def _resolve_outcome_source(metadata: Mapping[str, Any]) -> str:
     return source
 
 
-def _has_completed_agent_results(metadata: Mapping[str, Any]) -> bool:
-    """Return whether metadata carries bounded completed subagent results."""
-    results = metadata.get(_COMPLETED_AGENT_RESULTS_METADATA_KEY)
-    if isinstance(results, list) and results:
-        return True
-
+def _context_sequence(
+    metadata: Mapping[str, Any],
+    key: str,
+    allowed_types: type | tuple[type, ...],
+) -> list[Any] | tuple[Any, ...]:
+    """Return a typed sequence from metadata or its context bundle."""
+    value = metadata.get(key)
+    if isinstance(value, allowed_types):
+        return value
     bundle = metadata.get(_CONTEXT_BUNDLE_METADATA_KEY)
     if isinstance(bundle, Mapping):
-        bundle_results = bundle.get(_COMPLETED_AGENT_RESULTS_METADATA_KEY)
-        return isinstance(bundle_results, list) and bool(bundle_results)
-    return False
+        value = bundle.get(key)
+        if isinstance(value, allowed_types):
+            return value
+    return ()
+
+
+def _has_completed_agent_results(metadata: Mapping[str, Any]) -> bool:
+    """Return whether metadata carries bounded completed subagent results."""
+    return bool(
+        _context_sequence(metadata, _COMPLETED_AGENT_RESULTS_METADATA_KEY, list)
+    )
 
 
 def _has_active_agent_runs(metadata: Mapping[str, Any]) -> bool:
     """Return whether deterministic context carries active subagent runs."""
-    runs = metadata.get(_ACTIVE_AGENT_RUNS_METADATA_KEY)
-    if isinstance(runs, list) and runs:
-        return True
-
-    bundle = metadata.get(_CONTEXT_BUNDLE_METADATA_KEY)
-    if isinstance(bundle, Mapping):
-        bundle_runs = bundle.get(_ACTIVE_AGENT_RUNS_METADATA_KEY)
-        return isinstance(bundle_runs, list) and bool(bundle_runs)
-    return False
+    return bool(_context_sequence(metadata, _ACTIVE_AGENT_RUNS_METADATA_KEY, list))
 
 
 def _context_sequence_count(metadata: Mapping[str, Any], key: str) -> int:
     """Return bounded context item count from metadata or its context bundle."""
-    value = metadata.get(key)
-    if isinstance(value, list):
-        return len(value)
-    if isinstance(value, tuple):
-        return len(value)
-
-    bundle = metadata.get(_CONTEXT_BUNDLE_METADATA_KEY)
-    if isinstance(bundle, Mapping):
-        bundle_value = bundle.get(key)
-        if isinstance(bundle_value, list):
-            return len(bundle_value)
-        if isinstance(bundle_value, tuple):
-            return len(bundle_value)
-    return 0
+    return len(_context_sequence(metadata, key, (list, tuple)))
 
 
 def _record_par_cycle_observed_context(

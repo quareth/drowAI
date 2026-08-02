@@ -446,8 +446,15 @@ function buildAgentRunSectionEnd(
   section: OpenAgentRunSection,
   sequence?: number | null,
 ): Step {
+  const terminalTypes = {
+    reasoning: ["reasoning_section_end", "reasoning_section_end"],
+    observation: ["observation_section_end", "observation_section_end"],
+    message: ["message_section_end", "section_end"],
+  } as const satisfies Record<AgentRunPhase, readonly [string, string]>;
+  const [metadataStepType, eventType] = terminalTypes[section.phase];
   const metadata = {
     ...(section.lastItem.metadata ?? {}),
+    step_type: metadataStepType,
     streaming: false,
     is_streaming: false,
     in_progress: false,
@@ -456,30 +463,8 @@ function buildAgentRunSectionEnd(
   if (typeof sequence === "number") {
     metadata.sequence = sequence;
   }
-
-  if (section.phase === "reasoning") {
-    metadata.step_type = "reasoning_section_end";
-    return {
-      type: "reasoning_section_end",
-      content: "",
-      metadata,
-      timestamp: new Date().toISOString(),
-      isStreaming: false,
-    };
-  }
-  if (section.phase === "observation") {
-    metadata.step_type = "observation_section_end";
-    return {
-      type: "observation_section_end",
-      content: "",
-      metadata,
-      timestamp: new Date().toISOString(),
-      isStreaming: false,
-    };
-  }
-  metadata.step_type = "message_section_end";
   return {
-    type: "section_end",
+    type: eventType,
     content: "",
     metadata,
     timestamp: new Date().toISOString(),
