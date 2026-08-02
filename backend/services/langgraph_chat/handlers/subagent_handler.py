@@ -14,8 +14,10 @@ from typing import Any
 
 from agent.subagents.registry import SubagentRegistry
 from agent.graph.context.contracts import ActiveAgentRun
-from backend.services.agent_runs.dispatch_service import (
+from backend.services.agent_runs.dispatch_contracts import (
     AgentRunDispatchStop,
+)
+from backend.services.agent_runs.dispatch_service import (
     SubagentDispatchService,
 )
 from backend.services.agent_runs.dispatch_plan import (

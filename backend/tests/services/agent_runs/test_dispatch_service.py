@@ -29,8 +29,10 @@ from backend.services.agent_runs.dispatch_plan import (
     PlannedAgentInvocation,
     stable_par_assignment_identity,
 )
-from backend.services.agent_runs.dispatch_service import (
+from backend.services.agent_runs.dispatch_contracts import (
     AgentRunDispatchResult,
+)
+from backend.services.agent_runs.dispatch_service import (
     SubagentDispatchService,
 )
 from backend.services.agent_runs.launcher import (

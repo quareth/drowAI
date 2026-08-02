@@ -11,12 +11,15 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from agent.subagents.registry import SubagentRegistry, get_subagent_registry
+from backend.services.agent_runs.dispatch_contracts import AgentRunLaunchService
 from backend.services.agent_runs.dispatch_service import (
-    AgentRunLaunchService,
-    LifecyclePublisher,
     SubagentDispatchService,
 )
-from backend.services.agent_runs.launcher import AgentRunLauncher, AgentRunWorker
+from backend.services.agent_runs.launcher import (
+    AgentRunLauncher,
+    AgentRunWorker,
+    LifecyclePublisher,
+)
 from backend.services.agent_runs.parent_handoff_coordinator import (
     ParentHandoffCoordinator,
     ParentHandoffGuardPool,

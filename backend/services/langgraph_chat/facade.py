@@ -14,10 +14,8 @@ from agent.graph.context.transcript import select_full_transcript_window
 from agent.subagents.registry import SubagentRegistry
 from backend.database import SessionLocal
 from backend.services.chat.conversation_history_reader import ConversationHistoryReader
-from backend.services.agent_runs.dispatch_service import (
-    AgentRunLaunchService,
-    LifecyclePublisher,
-)
+from backend.services.agent_runs.dispatch_contracts import AgentRunLaunchService
+from backend.services.agent_runs.launcher import LifecyclePublisher
 from backend.services.agent_runs.local_runtime import (
     get_process_local_agent_run_runtime,
     publish_process_local_agent_run_event,

@@ -9,9 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
-from typing import Any, Literal, Protocol
+from collections.abc import Awaitable, Mapping
+from typing import Any
 
 from agent.subagents.registry import SubagentRegistry
 from backend.services.langgraph_chat.contracts import LangGraphRuntimeConfig
@@ -25,6 +24,14 @@ from .completion import (
     usage_envelopes_from_child_records,
 )
 from .contracts import AgentAssignment, AgentResult
+from .dispatch_contracts import (
+    AgentRunDispatchResult,
+    AgentRunDispatchStop,
+    AgentRunLaunchService,
+    DispatchBatchLaunchFailure,
+    DispatchStopStatus,
+    ReadyHandoffProcessor,
+)
 from .dispatch_plan import (
     PlannedAgentInvocation,
     build_dispatch_plan,
@@ -34,7 +41,12 @@ from .dispatch_plan import (
 )
 from .event_projection import build_agent_run_lifecycle_event
 from .execution_config import build_child_execution_config
-from .launcher import SubagentRunCancelled, SubagentRunFailed, SubagentRunPaused
+from .launcher import (
+    LifecyclePublisher,
+    SubagentRunCancelled,
+    SubagentRunFailed,
+    SubagentRunPaused,
+)
 from .ownership_policy import normalize_agent_handoff_entries, resolve_subagent_handoff
 from .parent_handoff_coordinator import (
     ParentFollowupDelegation,
@@ -48,53 +60,6 @@ from .registry_contracts import (
 from .result_projection import CompletedAgentResultHandoff
 
 logger = logging.getLogger(__name__)
-
-
-LifecyclePublisher = Callable[[int, dict[str, Any]], Awaitable[None]]
-ReadyHandoffProcessor = Callable[
-    [tuple[AgentRunCompletion, ...], bool], Awaitable[ParentHandoffOutcome | None]
-]
-DispatchStopStatus = Literal["failed", "cancelled", "waiting_for_approval"]
-
-
-class AgentRunLaunchService(Protocol):
-    """Minimal launch boundary required by the dispatch service."""
-
-    async def launch(
-        self,
-        *,
-        assignment: AgentAssignment,
-        runtime_config: LangGraphRuntimeConfig,
-        graph_thread_id: str,
-        parent_run_id: str | None = None,
-    ) -> Awaitable[AgentRunCompletion]:
-        """Launch one registered assignment and return its terminal awaitable."""
-
-
-@dataclass(frozen=True, slots=True)
-class AgentRunDispatchStop:
-    """A dispatch-level terminal state requiring adapter presentation."""
-
-    invocation: PlannedAgentInvocation
-    status: DispatchStopStatus
-    usage: tuple[Any, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class AgentRunDispatchResult:
-    """Completed dispatch plan with any parent outcome or terminal stop."""
-
-    child_completions: tuple[AgentRunCompletion, ...] = ()
-    parent_handoff_outcome: ParentHandoffOutcome | None = None
-    stop: AgentRunDispatchStop | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class _LaunchBatchFailure:
-    """Terminal launch failure plus sibling results preserved for parent PAR."""
-
-    child_completions: tuple[AgentRunCompletion, ...] = ()
-    stop: AgentRunDispatchStop | None = None
 
 
 class SubagentDispatchService:
@@ -151,7 +116,7 @@ class SubagentDispatchService:
                 batch,
                 runtime_config,
             )
-            if isinstance(launch_result, _LaunchBatchFailure):
+            if isinstance(launch_result, DispatchBatchLaunchFailure):
                 if launch_result.stop is not None:
                     return AgentRunDispatchResult(stop=launch_result.stop)
                 batch_completions = launch_result.child_completions
@@ -325,7 +290,7 @@ class SubagentDispatchService:
             list(plan),
             followup_config,
         )
-        if isinstance(launch_result, _LaunchBatchFailure):
+        if isinstance(launch_result, DispatchBatchLaunchFailure):
             if launch_result.stop is not None:
                 raise RuntimeError(
                     "PAR follow-up delegation launch failed: "
@@ -381,7 +346,10 @@ class SubagentDispatchService:
         self,
         batch: list[PlannedAgentInvocation],
         runtime_config: LangGraphRuntimeConfig,
-    ) -> tuple[tuple[PlannedAgentInvocation, Awaitable[Any]], ...] | _LaunchBatchFailure:
+    ) -> (
+        tuple[tuple[PlannedAgentInvocation, Awaitable[Any]], ...]
+        | DispatchBatchLaunchFailure
+    ):
         """Register, mark running, and launch one already-validated batch."""
         launched: list[tuple[PlannedAgentInvocation, Awaitable[Any]]] = []
         for item in batch:
@@ -457,10 +425,10 @@ class SubagentDispatchService:
                                 graph_thread_id=item.graph_thread_id,
                             ),
                         )
-                    return _LaunchBatchFailure(
+                    return DispatchBatchLaunchFailure(
                         child_completions=settled_completions
                     )
-                return _LaunchBatchFailure(
+                return DispatchBatchLaunchFailure(
                     stop=AgentRunDispatchStop(
                         invocation=item,
                         status="failed",
@@ -802,10 +770,5 @@ def _safe_launch_error(exc: Exception, *, agent_display_name: str) -> str:
 
 
 __all__ = [
-    "AgentRunDispatchResult",
-    "AgentRunDispatchStop",
-    "AgentRunLaunchService",
-    "LifecyclePublisher",
-    "ReadyHandoffProcessor",
     "SubagentDispatchService",
 ]
