@@ -38,7 +38,8 @@ from backend.services.agent_runs.launcher import (
     SubagentRunFailed,
     SubagentRunPaused,
 )
-from backend.services.agent_runs.registry import LocalAgentRun, ProcessLocalAgentRunRegistry
+from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
+from backend.services.agent_runs.registry_contracts import LocalAgentRun
 from backend.services.langgraph_chat.checkpoint.checkpointer_service import (
     CheckpointerService,
     get_shared_checkpointer_service,

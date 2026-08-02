@@ -12,12 +12,12 @@ from .result_projection import (
     attach_active_agent_runs_to_context,
     attach_completed_agent_results_to_context,
 )
-from .registry import (
+from .registry import ProcessLocalAgentRunRegistry
+from .registry_contracts import (
     ActiveAgentRunExistsError,
     AgentRunIdentityCollisionError,
     AgentRunNotFoundError,
     LocalAgentRun,
-    ProcessLocalAgentRunRegistry,
 )
 
 __all__ = [

@@ -22,10 +22,8 @@ from typing import Any, Dict, Optional
 
 from agent.subagents.registry import SubagentRegistry, get_subagent_registry
 from backend.services.agent_runs.continuation import is_subagent_graph_name
-from backend.services.agent_runs.registry import (
-    LocalAgentRun,
-    ProcessLocalAgentRunRegistry,
-)
+from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
+from backend.services.agent_runs.registry_contracts import LocalAgentRun
 from backend.services.langgraph_chat.checkpoint.checkpointer_service import (
     CheckpointerService,
 )

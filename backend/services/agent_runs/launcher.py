@@ -19,7 +19,8 @@ from agent.subagents.registry import SubagentRegistry
 from .contracts import AgentAssignment
 from .completion import AgentRunCompletion, child_usage_records_from_state
 from .event_projection import build_agent_run_lifecycle_event
-from .registry import LocalAgentRun, ProcessLocalAgentRunRegistry
+from .registry import ProcessLocalAgentRunRegistry
+from .registry_contracts import LocalAgentRun
 
 logger = logging.getLogger(__name__)
 

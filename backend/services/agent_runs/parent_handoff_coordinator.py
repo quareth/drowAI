@@ -23,7 +23,8 @@ from backend.services.metrics.utils import safe_gauge, safe_inc
 from .completion import AgentRunCompletion
 from .event_projection import build_parent_handoff_progress_events
 from .parent_control import ParentControlOutcome, parse_parent_control_outcome
-from .registry import ClaimedHandoffBatch, ProcessLocalAgentRunRegistry
+from .registry import ProcessLocalAgentRunRegistry
+from .registry_contracts import ClaimedHandoffBatch
 from .result_projection import (
     AgentRunResultProjector,
     CompletedAgentResultHandoff,

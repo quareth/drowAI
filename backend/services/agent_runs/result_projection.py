@@ -19,7 +19,8 @@ from agent.graph.context.contracts import ActiveAgentRun, CompletedAgentResult
 from agent.subagents.registry import SubagentRegistry
 
 from .contracts import AgentResultProjection
-from .registry import ACTIVE_AGENT_RUN_STATUSES, ProcessLocalAgentRunRegistry
+from .registry import ProcessLocalAgentRunRegistry
+from .registry_contracts import ACTIVE_AGENT_RUN_STATUSES
 
 
 logger = logging.getLogger(__name__)

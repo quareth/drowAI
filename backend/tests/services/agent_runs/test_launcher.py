@@ -27,9 +27,9 @@ from backend.services.agent_runs.launcher import (
     SubagentRunFailed,
     SubagentRunPaused,
 )
-from backend.services.agent_runs.registry import (
+from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
+from backend.services.agent_runs.registry_contracts import (
     LocalAgentRun,
-    ProcessLocalAgentRunRegistry,
 )
 from backend.tests.agent_run_test_support import (
     build_agent_assignment,

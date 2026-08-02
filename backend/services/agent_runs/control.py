@@ -18,11 +18,11 @@ from .contracts import (
     AgentResultProjection,
     AgentRunStatus,
 )
-from .registry import (
+from .registry import ProcessLocalAgentRunRegistry
+from .registry_contracts import (
     ACTIVE_AGENT_RUN_STATUSES,
     AgentRunNotFoundError,
     LocalAgentRun,
-    ProcessLocalAgentRunRegistry,
 )
 
 

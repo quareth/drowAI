@@ -28,10 +28,8 @@ from backend.services.agent_runs.result_projection import (
     attach_active_agent_runs_to_context,
     attach_completed_agent_results_to_context,
 )
-from backend.services.agent_runs.registry import (
-    ACTIVE_AGENT_RUN_STATUSES,
-    ProcessLocalAgentRunRegistry,
-)
+from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
+from backend.services.agent_runs.registry_contracts import ACTIVE_AGENT_RUN_STATUSES
 from backend.services.agent_runs.parent_handoff_coordinator import (
     ParentHandoffGuardPool,
 )

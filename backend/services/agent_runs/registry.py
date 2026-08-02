@@ -9,130 +9,17 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, TypeAlias
+from typing import Any
 
 from backend.services.metrics.utils import safe_gauge, safe_inc
 
-from .contracts import AgentAssignment, AgentKind, AgentResult, AgentRunStatus
+from . import registry_contracts as _registry_contracts
+from .contracts import AgentAssignment, AgentResult, AgentRunStatus
 
 
 logger = logging.getLogger(__name__)
-
-
-AgentRunKey: TypeAlias = tuple[int, int, str]
-HandoffWaitStatus: TypeAlias = Literal["ready", "inactive"]
-
-ACTIVE_AGENT_RUN_STATUSES: frozenset[AgentRunStatus] = frozenset(
-    {"queued", "running", "waiting_for_approval"}
-)
-TERMINAL_AGENT_RUN_STATUSES: frozenset[AgentRunStatus] = frozenset(
-    {"completed", "failed", "cancelled"}
-)
-DEFAULT_FINISHED_RETENTION = timedelta(minutes=15)
-
-
-@dataclass(frozen=True, slots=True)
-class LocalAgentRun:
-    """Immutable snapshot of one process-local subagent run."""
-
-    graph_thread_id: str
-    assignment: AgentAssignment
-    status: AgentRunStatus
-    lifecycle_version: int
-    created_at: datetime
-    started_at: datetime | None
-    completed_at: datetime | None
-    result: AgentResult | None
-    safe_error: str | None
-    task_handle: asyncio.Task[Any] | None
-    cancel_requested: bool
-    result_consumed: bool
-    result_claim_id: str | None
-    accounted_usage_record_count: int
-
-    @property
-    def agent_run_id(self) -> str:
-        return self.assignment.agent_run_id
-
-    @property
-    def agent_id(self) -> str:
-        return self.assignment.agent_id
-
-    @property
-    def tenant_id(self) -> int:
-        return self.assignment.tenant_id
-
-    @property
-    def task_id(self) -> int:
-        return self.assignment.task_id
-
-    @property
-    def conversation_id(self) -> str:
-        return self.assignment.conversation_id
-
-    @property
-    def parent_turn_id(self) -> str:
-        return self.assignment.parent_turn_id
-
-    @property
-    def agent_kind(self) -> AgentKind:
-        return self.assignment.agent_kind
-
-
-@dataclass(frozen=True, slots=True)
-class ClaimedHandoffBatch:
-    """Process-local claim over ready terminal results for one parent task."""
-
-    claim_id: str
-    tenant_id: int
-    task_id: int
-    agent_run_ids: tuple[str, ...]
-    results: tuple[AgentResult, ...]
-    active_runs: tuple[LocalAgentRun, ...]
-
-
-@dataclass(frozen=True, slots=True)
-class AgentRunTransition:
-    """Result of one lifecycle transition attempt against a local run."""
-
-    entry: LocalAgentRun
-    changed: bool
-
-
-class ActiveAgentRunExistsError(RuntimeError):
-    """Legacy error retained for callers that handle old singleton conflicts."""
-
-    def __init__(self, *, tenant_id: int, task_id: int, active_agent_run_id: str) -> None:
-        super().__init__(
-            "An active process-local subagent run already exists for "
-            f"tenant_id={tenant_id}, task_id={task_id}: {active_agent_run_id}"
-        )
-        self.tenant_id = tenant_id
-        self.task_id = task_id
-        self.active_agent_run_id = active_agent_run_id
-
-
-class AgentRunNotFoundError(KeyError):
-    """Raised when a process-local subagent run key is not present."""
-
-
-class AgentRunIdentityCollisionError(RuntimeError):
-    """Raised when a scoped run id is reused for different immutable identity."""
-
-    def __init__(self, *, tenant_id: int, task_id: int, agent_run_id: str) -> None:
-        super().__init__(
-            "Agent run identity collision for "
-            f"tenant_id={tenant_id}, task_id={task_id}, agent_run_id={agent_run_id}"
-        )
-        self.tenant_id = tenant_id
-        self.task_id = task_id
-        self.agent_run_id = agent_run_id
-
-
-class HandoffClaimNotFoundError(KeyError):
-    """Raised when a process-local handoff claim is not present."""
 
 
 class ProcessLocalAgentRunRegistry:
@@ -142,14 +29,17 @@ class ProcessLocalAgentRunRegistry:
         self,
         *,
         clock: Callable[[], datetime] | None = None,
-        finished_retention: timedelta = DEFAULT_FINISHED_RETENTION,
+        finished_retention: timedelta = _registry_contracts.DEFAULT_FINISHED_RETENTION,
     ) -> None:
         self._clock = clock or _utc_now
         self._finished_retention = finished_retention
         self._lock = asyncio.Lock()
         self._state_changed = asyncio.Condition()
-        self._runs: dict[AgentRunKey, LocalAgentRun] = {}
-        self._claims: dict[str, tuple[AgentRunKey, ...]] = {}
+        self._runs: dict[
+            _registry_contracts.AgentRunKey,
+            _registry_contracts.LocalAgentRun,
+        ] = {}
+        self._claims: dict[str, tuple[_registry_contracts.AgentRunKey, ...]] = {}
         self._claim_sequence = 0
         self._state_version = 0
 
@@ -159,7 +49,7 @@ class ProcessLocalAgentRunRegistry:
         *,
         graph_thread_id: str,
         max_active_runs_per_task: int | None = None,
-    ) -> LocalAgentRun:
+    ) -> _registry_contracts.LocalAgentRun:
         """Create a queued local entry for one immutable subagent run id."""
         graph_thread_id = _require_non_empty(graph_thread_id, "graph_thread_id")
         if max_active_runs_per_task is not None and max_active_runs_per_task < 1:
@@ -177,7 +67,7 @@ class ProcessLocalAgentRunRegistry:
                     and existing.graph_thread_id == graph_thread_id
                 ):
                     return existing
-                raise AgentRunIdentityCollisionError(
+                raise _registry_contracts.AgentRunIdentityCollisionError(
                     tenant_id=assignment.tenant_id,
                     task_id=assignment.task_id,
                     agent_run_id=assignment.agent_run_id,
@@ -189,17 +79,17 @@ class ProcessLocalAgentRunRegistry:
                     if entry.tenant_id == assignment.tenant_id
                     and entry.task_id == assignment.task_id
                     and entry.agent_id == assignment.agent_id
-                    and entry.status in ACTIVE_AGENT_RUN_STATUSES
+                    and entry.status in _registry_contracts.ACTIVE_AGENT_RUN_STATUSES
                 ]
                 if len(active_same_agent) >= max_active_runs_per_task:
-                    raise ActiveAgentRunExistsError(
+                    raise _registry_contracts.ActiveAgentRunExistsError(
                         tenant_id=assignment.tenant_id,
                         task_id=assignment.task_id,
                         active_agent_run_id=active_same_agent[0].agent_run_id,
                     )
 
             now = self._clock()
-            entry = LocalAgentRun(
+            entry = _registry_contracts.LocalAgentRun(
                 graph_thread_id=graph_thread_id,
                 assignment=assignment,
                 status="queued",
@@ -226,7 +116,7 @@ class ProcessLocalAgentRunRegistry:
         tenant_id: int,
         task_id: int,
         agent_run_id: str,
-    ) -> LocalAgentRun | None:
+    ) -> _registry_contracts.LocalAgentRun | None:
         """Return a local entry only when tenant, task, and run id all match."""
         async with self._lock:
             return self._runs.get(
@@ -240,7 +130,7 @@ class ProcessLocalAgentRunRegistry:
         task_id: int,
         agent_run_id: str,
         task_handle: asyncio.Task[Any],
-    ) -> LocalAgentRun:
+    ) -> _registry_contracts.LocalAgentRun:
         """Attach the non-serializable local asyncio task handle."""
         async with self._lock:
             entry = self._require_entry(
@@ -260,7 +150,7 @@ class ProcessLocalAgentRunRegistry:
         tenant_id: int,
         task_id: int,
         agent_run_id: str,
-    ) -> LocalAgentRun:
+    ) -> _registry_contracts.LocalAgentRun:
         """Transition a queued or waiting local run to running."""
         async with self._lock:
             entry = self._require_entry(
@@ -286,7 +176,7 @@ class ProcessLocalAgentRunRegistry:
         task_id: int,
         agent_run_id: str,
         accounted_usage_record_count: int | None = None,
-    ) -> LocalAgentRun:
+    ) -> _registry_contracts.LocalAgentRun:
         """Transition an active local run to the shared approval wait state."""
         return (
             await self.record_waiting_for_approval(
@@ -304,14 +194,17 @@ class ProcessLocalAgentRunRegistry:
         task_id: int,
         agent_run_id: str,
         accounted_usage_record_count: int | None = None,
-    ) -> AgentRunTransition:
+    ) -> _registry_contracts.AgentRunTransition:
         """Transition to approval wait and report whether state changed."""
         async with self._lock:
             entry = self._require_entry(
                 tenant_id=tenant_id, task_id=task_id, agent_run_id=agent_run_id
             )
             if _is_terminal(entry) or entry.status == "waiting_for_approval":
-                return AgentRunTransition(entry=entry, changed=False)
+                return _registry_contracts.AgentRunTransition(
+                    entry=entry,
+                    changed=False,
+                )
             accounted_count = (
                 entry.accounted_usage_record_count
                 if accounted_usage_record_count is None
@@ -326,7 +219,7 @@ class ProcessLocalAgentRunRegistry:
                 )
             )
         await self._notify_state_changed()
-        return AgentRunTransition(entry=updated, changed=True)
+        return _registry_contracts.AgentRunTransition(entry=updated, changed=True)
 
     async def request_cancellation(
         self,
@@ -334,7 +227,7 @@ class ProcessLocalAgentRunRegistry:
         tenant_id: int,
         task_id: int,
         agent_run_id: str,
-    ) -> LocalAgentRun:
+    ) -> _registry_contracts.LocalAgentRun:
         """Set the local cancellation flag and cancel the owned task handle."""
         async with self._lock:
             entry = self._require_entry(
@@ -368,7 +261,7 @@ class ProcessLocalAgentRunRegistry:
         task_id: int,
         agent_run_id: str,
         result: AgentResult,
-    ) -> LocalAgentRun:
+    ) -> _registry_contracts.LocalAgentRun:
         """Store the terminal result without allowing later callback regressions."""
         return (
             await self.record_completed(
@@ -386,7 +279,7 @@ class ProcessLocalAgentRunRegistry:
         task_id: int,
         agent_run_id: str,
         result: AgentResult,
-    ) -> AgentRunTransition:
+    ) -> _registry_contracts.AgentRunTransition:
         """Store the terminal result and report whether this call changed state."""
         if result.agent_run_id != agent_run_id:
             raise ValueError("result.agent_run_id must match agent_run_id")
@@ -395,11 +288,17 @@ class ProcessLocalAgentRunRegistry:
                 tenant_id=tenant_id, task_id=task_id, agent_run_id=agent_run_id
             )
             if _is_terminal(entry):
-                _record_duplicate_terminal_suppressed(entry, requested_status="completed")
-                return AgentRunTransition(entry=entry, changed=False)
+                _record_duplicate_terminal_suppressed(
+                    entry,
+                    requested_status="completed",
+                )
+                return _registry_contracts.AgentRunTransition(
+                    entry=entry,
+                    changed=False,
+                )
             updated = self._terminal_entry(entry, status="completed", result=result)
         await self._notify_state_changed()
-        return AgentRunTransition(entry=updated, changed=True)
+        return _registry_contracts.AgentRunTransition(entry=updated, changed=True)
 
     async def mark_failed(
         self,
@@ -408,7 +307,7 @@ class ProcessLocalAgentRunRegistry:
         task_id: int,
         agent_run_id: str,
         safe_error: str,
-    ) -> LocalAgentRun:
+    ) -> _registry_contracts.LocalAgentRun:
         """Store a safe terminal error for a failed local run."""
         return (
             await self.record_failed(
@@ -426,7 +325,7 @@ class ProcessLocalAgentRunRegistry:
         task_id: int,
         agent_run_id: str,
         safe_error: str,
-    ) -> AgentRunTransition:
+    ) -> _registry_contracts.AgentRunTransition:
         """Store a safe terminal error and report whether state changed."""
         safe_error = _require_non_empty(safe_error, "safe_error")
         async with self._lock:
@@ -435,12 +334,15 @@ class ProcessLocalAgentRunRegistry:
             )
             if _is_terminal(entry):
                 _record_duplicate_terminal_suppressed(entry, requested_status="failed")
-                return AgentRunTransition(entry=entry, changed=False)
+                return _registry_contracts.AgentRunTransition(
+                    entry=entry,
+                    changed=False,
+                )
             updated = self._terminal_entry(
                 entry, status="failed", safe_error=safe_error
             )
         await self._notify_state_changed()
-        return AgentRunTransition(entry=updated, changed=True)
+        return _registry_contracts.AgentRunTransition(entry=updated, changed=True)
 
     async def mark_cancelled(
         self,
@@ -448,7 +350,7 @@ class ProcessLocalAgentRunRegistry:
         tenant_id: int,
         task_id: int,
         agent_run_id: str,
-    ) -> LocalAgentRun:
+    ) -> _registry_contracts.LocalAgentRun:
         """Mark a local run cancelled after the worker observes cancellation."""
         return (
             await self.record_cancelled(
@@ -464,22 +366,28 @@ class ProcessLocalAgentRunRegistry:
         tenant_id: int,
         task_id: int,
         agent_run_id: str,
-    ) -> AgentRunTransition:
+    ) -> _registry_contracts.AgentRunTransition:
         """Mark a run cancelled and report whether this call changed state."""
         async with self._lock:
             entry = self._require_entry(
                 tenant_id=tenant_id, task_id=task_id, agent_run_id=agent_run_id
             )
             if _is_terminal(entry):
-                _record_duplicate_terminal_suppressed(entry, requested_status="cancelled")
-                return AgentRunTransition(entry=entry, changed=False)
+                _record_duplicate_terminal_suppressed(
+                    entry,
+                    requested_status="cancelled",
+                )
+                return _registry_contracts.AgentRunTransition(
+                    entry=entry,
+                    changed=False,
+                )
             updated = self._terminal_entry(
                 entry,
                 status="cancelled",
                 cancel_requested=True,
             )
         await self._notify_state_changed()
-        return AgentRunTransition(entry=updated, changed=True)
+        return _registry_contracts.AgentRunTransition(entry=updated, changed=True)
 
     async def claim_ready_handoffs(
         self,
@@ -488,14 +396,14 @@ class ProcessLocalAgentRunRegistry:
         task_id: int,
         conversation_id: str | None = None,
         max_results: int | None = None,
-    ) -> ClaimedHandoffBatch | None:
+    ) -> _registry_contracts.ClaimedHandoffBatch | None:
         """Atomically claim ready results and snapshot active runs for one task."""
         if max_results is not None and max_results < 1:
             raise ValueError("max_results must be positive")
         async with self._lock:
-            candidates: list[LocalAgentRun] = []
+            candidates: list[_registry_contracts.LocalAgentRun] = []
             claimed_ready_count = 0
-            active_entries: list[LocalAgentRun] = []
+            active_entries: list[_registry_contracts.LocalAgentRun] = []
             for entry in self._runs.values():
                 if (
                     entry.tenant_id != tenant_id
@@ -506,12 +414,13 @@ class ProcessLocalAgentRunRegistry:
                     )
                 ):
                     continue
-                if entry.status in ACTIVE_AGENT_RUN_STATUSES:
+                if entry.status in _registry_contracts.ACTIVE_AGENT_RUN_STATUSES:
                     active_entries.append(entry)
                 if (
                     entry.result is None
                     or entry.result_consumed
-                    or entry.status not in TERMINAL_AGENT_RUN_STATUSES
+                    or entry.status
+                    not in _registry_contracts.TERMINAL_AGENT_RUN_STATUSES
                 ):
                     continue
                 if entry.result_claim_id is None:
@@ -544,7 +453,7 @@ class ProcessLocalAgentRunRegistry:
                 tenant_id=tenant_id,
                 task_id=task_id,
             )
-            keys: list[AgentRunKey] = []
+            keys: list[_registry_contracts.AgentRunKey] = []
             results: list[AgentResult] = []
             for entry in candidates:
                 key = _key(
@@ -557,7 +466,7 @@ class ProcessLocalAgentRunRegistry:
                 results.append(entry.result)
                 self._store(replace(entry, result_claim_id=claim_id))
             self._claims[claim_id] = tuple(keys)
-            batch = ClaimedHandoffBatch(
+            batch = _registry_contracts.ClaimedHandoffBatch(
                 claim_id=claim_id,
                 tenant_id=tenant_id,
                 task_id=task_id,
@@ -588,7 +497,7 @@ class ProcessLocalAgentRunRegistry:
             keys = self._claims.pop(claim_id, None)
             if keys is None:
                 safe_inc("agent_run_handoff_acknowledge_missing_claim")
-                raise HandoffClaimNotFoundError(claim_id)
+                raise _registry_contracts.HandoffClaimNotFoundError(claim_id)
             acknowledged = 0
             for key in keys:
                 entry = self._runs.get(key)
@@ -612,7 +521,7 @@ class ProcessLocalAgentRunRegistry:
             keys = self._claims.pop(claim_id, None)
             if keys is None:
                 safe_inc("agent_run_handoff_release_missing_claim")
-                raise HandoffClaimNotFoundError(claim_id)
+                raise _registry_contracts.HandoffClaimNotFoundError(claim_id)
             released = 0
             for key in keys:
                 entry = self._runs.get(key)
@@ -650,7 +559,7 @@ class ProcessLocalAgentRunRegistry:
                 or entry.result is None
                 or entry.result_consumed
                 or entry.result_claim_id is not None
-                or entry.status not in TERMINAL_AGENT_RUN_STATUSES
+                or entry.status not in _registry_contracts.TERMINAL_AGENT_RUN_STATUSES
             ):
                 safe_inc("agent_run_handoff_duplicate_delivery_suppressed")
                 return None
@@ -688,7 +597,12 @@ class ProcessLocalAgentRunRegistry:
             await self._notify_state_changed()
         return count
 
-    async def list_task_runs(self, *, tenant_id: int, task_id: int) -> list[LocalAgentRun]:
+    async def list_task_runs(
+        self,
+        *,
+        tenant_id: int,
+        task_id: int,
+    ) -> list[_registry_contracts.LocalAgentRun]:
         """List process-local entries for one authorized task scope."""
         async with self._lock:
             return [
@@ -703,7 +617,7 @@ class ProcessLocalAgentRunRegistry:
         task_id: int,
         graph_thread_id: str,
         tenant_id: int | None = None,
-    ) -> LocalAgentRun | None:
+    ) -> _registry_contracts.LocalAgentRun | None:
         """Return the active local run for one task child graph thread."""
         graph_thread_id = _require_non_empty(graph_thread_id, "graph_thread_id")
         async with self._lock:
@@ -712,7 +626,7 @@ class ProcessLocalAgentRunRegistry:
                 for entry in self._runs.values()
                 if entry.task_id == task_id
                 and entry.graph_thread_id == graph_thread_id
-                and entry.status in ACTIVE_AGENT_RUN_STATUSES
+                and entry.status in _registry_contracts.ACTIVE_AGENT_RUN_STATUSES
                 and (tenant_id is None or entry.tenant_id == tenant_id)
             ]
             if len(candidates) != 1:
@@ -750,7 +664,7 @@ class ProcessLocalAgentRunRegistry:
         task_id: int,
         conversation_id: str | None = None,
         after_version: int,
-    ) -> HandoffWaitStatus:
+    ) -> _registry_contracts.HandoffWaitStatus:
         """Wait for scoped ready handoffs or for scoped active runs to end.
 
         Notifications for other tenants, tasks, or conversations do not satisfy
@@ -788,16 +702,19 @@ class ProcessLocalAgentRunRegistry:
         tenant_id: int,
         task_id: int,
         agent_run_id: str,
-    ) -> LocalAgentRun:
+    ) -> _registry_contracts.LocalAgentRun:
         key = _key(tenant_id=tenant_id, task_id=task_id, agent_run_id=agent_run_id)
         entry = self._runs.get(key)
         if entry is None:
-            raise AgentRunNotFoundError(
+            raise _registry_contracts.AgentRunNotFoundError(
                 f"Process-local subagent run not found for key={key!r}"
             )
         return entry
 
-    def _store(self, entry: LocalAgentRun) -> LocalAgentRun:
+    def _store(
+        self,
+        entry: _registry_contracts.LocalAgentRun,
+    ) -> _registry_contracts.LocalAgentRun:
         self._runs[
             _key(
                 tenant_id=entry.tenant_id,
@@ -821,7 +738,7 @@ class ProcessLocalAgentRunRegistry:
         tenant_id: int,
         task_id: int,
         conversation_id: str | None,
-    ) -> HandoffWaitStatus | None:
+    ) -> _registry_contracts.HandoffWaitStatus | None:
         has_active = False
         for entry in self._runs.values():
             if (
@@ -837,10 +754,10 @@ class ProcessLocalAgentRunRegistry:
                 entry.result is not None
                 and not entry.result_consumed
                 and entry.result_claim_id is None
-                and entry.status in TERMINAL_AGENT_RUN_STATUSES
+                and entry.status in _registry_contracts.TERMINAL_AGENT_RUN_STATUSES
             ):
                 return "ready"
-            if entry.status in ACTIVE_AGENT_RUN_STATUSES:
+            if entry.status in _registry_contracts.ACTIVE_AGENT_RUN_STATUSES:
                 has_active = True
         if has_active:
             return None
@@ -852,13 +769,13 @@ class ProcessLocalAgentRunRegistry:
 
     def _terminal_entry(
         self,
-        entry: LocalAgentRun,
+        entry: _registry_contracts.LocalAgentRun,
         *,
         status: AgentRunStatus,
         result: AgentResult | None = None,
         safe_error: str | None = None,
         cancel_requested: bool | None = None,
-    ) -> LocalAgentRun:
+    ) -> _registry_contracts.LocalAgentRun:
         terminal_result = result
         if terminal_result is None and status in {"failed", "cancelled"}:
             terminal_result = _fallback_terminal_result(
@@ -882,11 +799,16 @@ class ProcessLocalAgentRunRegistry:
         )
 
 
-def _key(*, tenant_id: int, task_id: int, agent_run_id: str) -> AgentRunKey:
+def _key(
+    *,
+    tenant_id: int,
+    task_id: int,
+    agent_run_id: str,
+) -> _registry_contracts.AgentRunKey:
     return (tenant_id, task_id, agent_run_id)
 
 
-def _run_sort_key(entry: LocalAgentRun) -> tuple[str, str, str]:
+def _run_sort_key(entry: _registry_contracts.LocalAgentRun) -> tuple[str, str, str]:
     return (
         _datetime_sort_key(entry.completed_at or entry.started_at),
         _datetime_sort_key(entry.created_at),
@@ -900,12 +822,12 @@ def _datetime_sort_key(value: datetime | None) -> str:
     return value.isoformat()
 
 
-def _is_terminal(entry: LocalAgentRun) -> bool:
-    return entry.status in TERMINAL_AGENT_RUN_STATUSES
+def _is_terminal(entry: _registry_contracts.LocalAgentRun) -> bool:
+    return entry.status in _registry_contracts.TERMINAL_AGENT_RUN_STATUSES
 
 
 def _record_duplicate_terminal_suppressed(
-    entry: LocalAgentRun,
+    entry: _registry_contracts.LocalAgentRun,
     *,
     requested_status: AgentRunStatus,
 ) -> None:
@@ -924,7 +846,7 @@ def _record_duplicate_terminal_suppressed(
 
 
 def _fallback_terminal_result(
-    entry: LocalAgentRun,
+    entry: _registry_contracts.LocalAgentRun,
     *,
     status: AgentRunStatus,
     safe_error: str | None,
@@ -942,7 +864,9 @@ def _fallback_terminal_result(
             "Decide whether the cancelled assignment is still required.",
         )
     else:
-        raise ValueError(f"fallback result is only supported for terminal status: {status}")
+        raise ValueError(
+            f"fallback result is only supported for terminal status: {status}"
+        )
     return AgentResult(
         agent_run_id=entry.agent_run_id,
         agent_id=entry.agent_id,
@@ -965,17 +889,4 @@ def _utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-__all__ = [
-    "ACTIVE_AGENT_RUN_STATUSES",
-    "DEFAULT_FINISHED_RETENTION",
-    "TERMINAL_AGENT_RUN_STATUSES",
-    "ActiveAgentRunExistsError",
-    "AgentRunKey",
-    "AgentRunIdentityCollisionError",
-    "AgentRunNotFoundError",
-    "AgentRunTransition",
-    "ClaimedHandoffBatch",
-    "HandoffClaimNotFoundError",
-    "LocalAgentRun",
-    "ProcessLocalAgentRunRegistry",
-]
+__all__ = ["ProcessLocalAgentRunRegistry"]

@@ -16,12 +16,12 @@ from backend.services.agent_runs.contracts import (
     AgentResult,
     AgentRuntimeIdentity,
 )
-from backend.services.agent_runs.registry import (
+from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
+from backend.services.agent_runs.registry_contracts import (
     ActiveAgentRunExistsError,
     AgentRunIdentityCollisionError,
     AgentRunNotFoundError,
     HandoffClaimNotFoundError,
-    ProcessLocalAgentRunRegistry,
 )
 from backend.tests.agent_run_test_support import (
     build_agent_assignment,

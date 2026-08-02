@@ -25,10 +25,10 @@ from .completion import AgentRunCompletion, child_usage_records_from_state
 from .execution_config import build_child_event_attribution
 from .event_projection import build_agent_run_lifecycle_event
 from .launcher import LifecyclePublisher
-from .registry import (
+from .registry import ProcessLocalAgentRunRegistry
+from .registry_contracts import (
     ACTIVE_AGENT_RUN_STATUSES,
     LocalAgentRun,
-    ProcessLocalAgentRunRegistry,
 )
 from .worker import mark_subagent_completed_from_state
 

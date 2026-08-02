@@ -13,7 +13,8 @@ from backend.routers import tasks as composed_task_routes
 from backend.routers.tasks import agent_runs as agent_run_routes
 from backend.services.agent_runs.contracts import AgentAssignment, AgentRuntimeIdentity
 from backend.services.agent_runs.control import AgentRunControlService
-from backend.services.agent_runs.registry import LocalAgentRun, ProcessLocalAgentRunRegistry
+from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
+from backend.services.agent_runs.registry_contracts import LocalAgentRun
 from backend.tests.agent_run_test_support import (
     build_agent_assignment,
     build_runtime_identity,

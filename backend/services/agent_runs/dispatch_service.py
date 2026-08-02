@@ -40,10 +40,10 @@ from .parent_handoff_coordinator import (
     ParentFollowupDelegation,
     ParentHandoffOutcome,
 )
-from .registry import (
+from .registry import ProcessLocalAgentRunRegistry
+from .registry_contracts import (
     ACTIVE_AGENT_RUN_STATUSES,
     LocalAgentRun,
-    ProcessLocalAgentRunRegistry,
 )
 from .result_projection import CompletedAgentResultHandoff
 

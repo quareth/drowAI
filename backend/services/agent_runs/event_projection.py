@@ -26,7 +26,7 @@ from backend.services.agent_runs.contracts import (
     AgentRunLifecycleProjection,
     AgentResultProjection,
 )
-from backend.services.agent_runs.registry import LocalAgentRun
+from backend.services.agent_runs.registry_contracts import LocalAgentRun
 from backend.services.chat.event_builders import attach_conversation_ids
 from backend.services.langgraph_chat.streaming.event_types import ensure_mutable_metadata
 
