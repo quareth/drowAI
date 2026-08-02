@@ -1,24 +1,22 @@
 """Dispatch validated subagent plans through the process-local run lifecycle.
 
-The service owns capacity-aware scheduling, registry transitions, child launch
-settlement, and follow-up replay suppression. It returns typed application
-outcomes and deliberately has no knowledge of chat response formatting.
+The service owns capacity-aware scheduling and typed application outcomes. It
+delegates one-batch launch and settlement mechanics to their canonical
+collaborators and deliberately has no knowledge of chat response formatting.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Mapping
+from collections.abc import Mapping
 from typing import Any
 
 from agent.subagents.registry import SubagentRegistry
 from backend.services.langgraph_chat.contracts import LangGraphRuntimeConfig
-from backend.services.llm_provider.runtime_services import attach_runtime_services
 
-from .assignment_builder import parent_run_id_from_metadata
 from .completion import AgentRunCompletion
-from .contracts import AgentAssignment
+from .dispatch_batch import DispatchBatchExecutor
 from .dispatch_contracts import (
     AgentRunDispatchResult,
     AgentRunDispatchStop,
@@ -34,8 +32,6 @@ from .dispatch_plan import (
     stable_par_assignment_identity,
 )
 from .dispatch_settlement import DispatchSettlement
-from .event_projection import build_agent_run_lifecycle_event
-from .execution_config import build_child_execution_config
 from .launcher import (
     LifecyclePublisher,
     SubagentRunPaused,
@@ -48,7 +44,6 @@ from .parent_handoff_coordinator import (
 from .registry import ProcessLocalAgentRunRegistry
 from .registry_contracts import (
     ACTIVE_AGENT_RUN_STATUSES,
-    LocalAgentRun,
 )
 from .result_projection import CompletedAgentResultHandoff
 
@@ -67,10 +62,15 @@ class SubagentDispatchService:
         lifecycle_publisher: LifecyclePublisher,
     ) -> None:
         self._registry = registry
-        self._launcher = launcher
         self._subagent_registry = subagent_registry
-        self._publish_lifecycle = lifecycle_publisher
         self._settlement = DispatchSettlement(registry=registry)
+        self._batch_executor = DispatchBatchExecutor(
+            registry=registry,
+            launcher=launcher,
+            subagent_registry=subagent_registry,
+            lifecycle_publisher=lifecycle_publisher,
+            settlement=self._settlement,
+        )
 
     async def dispatch(
         self,
@@ -106,7 +106,7 @@ class SubagentDispatchService:
                     )
                 )
 
-            launch_result = await self._launch_batch(
+            launch_result = await self._batch_executor.launch_batch(
                 batch,
                 runtime_config,
             )
@@ -125,7 +125,7 @@ class SubagentDispatchService:
                     parent_handoff_outcome=batch_outcome,
                 )
 
-            child_tasks = launch_result
+            child_tasks = launch_result.children
             ready_handoff_task: asyncio.Task[ParentHandoffOutcome | None] | None = None
             if len(child_tasks) > 1:
                 ready_handoff_task = asyncio.create_task(
@@ -135,16 +135,17 @@ class SubagentDispatchService:
             batch_results = await asyncio.gather(
                 *(
                     self._settlement.require_child_task_result(
-                        child_task,
-                        assignment=item.assignment,
-                        graph_thread_id=item.graph_thread_id,
+                        child.terminal,
+                        assignment=child.invocation.assignment,
+                        graph_thread_id=child.invocation.graph_thread_id,
                     )
-                    for item, child_task in child_tasks
+                    for child in child_tasks
                 )
             )
 
             paused = False
-            for item, batch_result in zip(batch, batch_results, strict=True):
+            for child, batch_result in zip(child_tasks, batch_results, strict=True):
+                item = child.invocation
                 active_counts[item.assignment.agent_id] = max(
                     0,
                     active_counts.get(item.assignment.agent_id, 0) - 1,
@@ -284,7 +285,7 @@ class SubagentDispatchService:
             parent_turn_id=parent_turn_id,
             subagent_registry=self._subagent_registry,
         )
-        launch_result = await self._launch_batch(
+        launch_result = await self._batch_executor.launch_batch(
             list(plan),
             followup_config,
         )
@@ -298,7 +299,10 @@ class SubagentDispatchService:
                 agent_run_ids=tuple(item.assignment.agent_run_id for item in plan),
                 launched_agent_run_ids=(),
             )
-        launched = {item.assignment.agent_run_id for item, _task in launch_result}
+        launched = {
+            child.invocation.assignment.agent_run_id
+            for child in launch_result.children
+        }
         return ParentFollowupDelegation(
             agent_run_ids=tuple(item.assignment.agent_run_id for item in plan),
             launched_agent_run_ids=tuple(
@@ -323,115 +327,6 @@ class SubagentDispatchService:
             task_id=task_id,
             completion_by_run_id=completion_by_run_id,
         )
-
-    async def _launch_batch(
-        self,
-        batch: list[PlannedAgentInvocation],
-        runtime_config: LangGraphRuntimeConfig,
-    ) -> (
-        tuple[tuple[PlannedAgentInvocation, Awaitable[Any]], ...]
-        | DispatchBatchLaunchFailure
-    ):
-        """Register, mark running, and launch one already-validated batch."""
-        launched: list[tuple[PlannedAgentInvocation, Awaitable[Any]]] = []
-        for item in batch:
-            assignment = item.assignment
-            queued: LocalAgentRun | None = None
-
-            try:
-                spec = self._subagent_registry.require(assignment.agent_id)
-                existing = await self._existing_replayable_followup(assignment)
-                if existing is not None:
-                    logger.info(
-                        "Skipping replayed PAR follow-up launch for %s",
-                        assignment.agent_run_id,
-                    )
-                    continue
-                queued = await self._registry.register(
-                    assignment,
-                    graph_thread_id=item.graph_thread_id,
-                    max_active_runs_per_task=spec.max_active_runs_per_task,
-                )
-                await self._publish_entry_lifecycle(queued, runtime_config)
-                child_runtime_config = await build_child_execution_config(
-                    assignment=assignment,
-                    runtime_config=runtime_config,
-                    registry=self._registry,
-                    subagent_registry=self._subagent_registry,
-                    graph_thread_id=item.graph_thread_id,
-                )
-                if runtime_config.runtime_services is not None:
-                    child_runtime_config = attach_runtime_services(
-                        child_runtime_config,
-                        runtime_config.runtime_services,
-                    )
-                running = await self._registry.mark_running(
-                    tenant_id=assignment.tenant_id,
-                    task_id=assignment.task_id,
-                    agent_run_id=assignment.agent_run_id,
-                )
-                await self._publish_entry_lifecycle(running, runtime_config)
-                child_task = await self._launcher.launch(
-                    assignment=assignment,
-                    runtime_config=child_runtime_config,
-                    graph_thread_id=item.graph_thread_id,
-                    parent_run_id=parent_run_id_from_metadata(runtime_config.metadata),
-                )
-            except Exception as exc:
-                logger.warning(
-                    "Failed to launch subagent run %s for task %s",
-                    assignment.agent_run_id,
-                    runtime_config.chat_inputs.task_id,
-                    exc_info=True,
-                )
-                settled_completions = (
-                    await self._settlement.settle_launched_batch_on_failure(launched)
-                )
-                if queued is not None:
-                    failed = await self._registry.mark_failed(
-                        tenant_id=assignment.tenant_id,
-                        task_id=assignment.task_id,
-                        agent_run_id=assignment.agent_run_id,
-                        safe_error=_safe_launch_error(
-                            exc,
-                            agent_display_name=item.display_name,
-                        ),
-                    )
-                    await self._publish_entry_lifecycle(failed, runtime_config)
-                    if failed.result is not None:
-                        settled_completions = (
-                            *settled_completions,
-                            AgentRunCompletion(
-                                result=failed.result,
-                                usage_records=(),
-                                graph_thread_id=item.graph_thread_id,
-                            ),
-                        )
-                    return DispatchBatchLaunchFailure(
-                        child_completions=settled_completions
-                    )
-                return DispatchBatchLaunchFailure(
-                    stop=AgentRunDispatchStop(
-                        invocation=item,
-                        status="failed",
-                    )
-                )
-            launched.append((item, child_task))
-        return tuple(launched)
-
-    async def _existing_replayable_followup(
-        self,
-        assignment: AgentAssignment,
-    ) -> LocalAgentRun | None:
-        """Return an existing stable PAR follow-up to suppress replay launch."""
-        if assignment.relevant_context.get("delegation_source") != "par":
-            return None
-        return await self._registry.get(
-            tenant_id=assignment.tenant_id,
-            task_id=assignment.task_id,
-            agent_run_id=assignment.agent_run_id,
-        )
-
 
     async def _active_counts_for_plan(
         self,
@@ -458,18 +353,6 @@ class SubagentDispatchService:
             if entry.status in ACTIVE_AGENT_RUN_STATUSES:
                 counts[entry.agent_id] = counts.get(entry.agent_id, 0) + 1
         return counts
-
-    async def _publish_entry_lifecycle(
-        self,
-        entry: LocalAgentRun,
-        runtime_config: LangGraphRuntimeConfig,
-    ) -> None:
-        event = build_agent_run_lifecycle_event(
-            entry,
-            display_metadata=self._subagent_registry.display_metadata(entry.agent_id),
-            parent_run_id=parent_run_id_from_metadata(runtime_config.metadata),
-        )
-        await self._publish_lifecycle(entry.task_id, event)
 
 
 async def _cancel_ready_handoff_task(
@@ -513,11 +396,6 @@ def _normalized_non_empty_strings(value: Any) -> tuple[str, ...]:
         if text and text not in normalized:
             normalized.append(text)
     return tuple(normalized)
-
-
-def _safe_launch_error(exc: Exception, *, agent_display_name: str) -> str:
-    _ = exc
-    return f"{agent_display_name} launch failed"
 
 
 __all__ = [
