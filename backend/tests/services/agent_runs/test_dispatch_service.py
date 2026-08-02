@@ -424,6 +424,13 @@ def _service(
     )
 
 
+def test_followup_dispatcher_shares_initial_dispatch_batch_executor() -> None:
+    service, _registry, _launcher = _service()
+    followup_dispatcher = service._followup_dispatcher  # noqa: SLF001
+
+    assert followup_dispatcher._batch_executor is service._batch_executor  # noqa: SLF001
+
+
 async def _wait_for_call_count(launcher: _ScriptedLauncher, expected: int) -> None:
     for _ in range(100):
         if len(launcher.calls) >= expected:
