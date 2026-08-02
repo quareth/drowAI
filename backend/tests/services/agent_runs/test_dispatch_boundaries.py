@@ -27,6 +27,7 @@ from backend.services.agent_runs.dispatch_contracts import (
 )
 from backend.services.agent_runs.dispatch_plan import PlannedAgentInvocation
 from backend.services.agent_runs.parent_handoff_coordinator import ParentHandoffOutcome
+from backend.tests.services.agent_runs.test_dispatch_service import _service
 
 
 _FORBIDDEN_SUPPORT_IMPORTS = (
@@ -237,6 +238,13 @@ def test_dispatch_facade_exports_only_the_retained_service() -> None:
 
     assert "_LaunchBatchFailure" not in defined_names
     assert exported_names == ["SubagentDispatchService"]
+
+
+def test_followup_dispatcher_shares_initial_dispatch_batch_executor() -> None:
+    service, _registry, _launcher = _service()
+    followup_dispatcher = service._followup_dispatcher  # noqa: SLF001
+
+    assert followup_dispatcher._batch_executor is service._batch_executor  # noqa: SLF001
 
 
 def test_dispatch_facade_private_helpers_are_only_admission_or_parent_ready_policy() -> None:

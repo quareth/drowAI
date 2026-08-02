@@ -63,8 +63,24 @@ Not owned by graph builders:
 - `backend/services/langgraph_chat/handlers/deep_reasoning_handler.py`
   - Compiles `compile_deep_reasoning_graph`.
 - `backend/services/langgraph_chat/handlers/subagent_handler.py`
-  - Validates classifier handoff arrays, launches generic subagent runs, and
-    hands terminal child results to the parent handoff coordinator.
+  - Builds the validated subagent dispatch plan, delegates launch/settlement to
+    the dispatch facade, and hands terminal child results to the parent handoff
+    coordinator.
+- `backend/services/agent_runs/dispatch_service.py`
+  - Retains the application facade for subagent dispatch. It owns ordered
+    admission, active-count batching, parent-ready orchestration timing,
+    indexed completion aggregation, and the final dispatch outcome.
+- `backend/services/agent_runs/dispatch_batch.py`
+  - Launches one already-admitted batch while preserving registry registration,
+    lifecycle publication, child config construction, and launcher call order.
+- `backend/services/agent_runs/dispatch_settlement.py`
+  - Owns terminal child result translation, registry-backed recovery,
+    launch-failure sibling cleanup, handoff completion lookup, and explicit
+    irrelevant-result consumption.
+- `backend/services/agent_runs/dispatch_followup.py`
+  - Owns replay-stable parent-action-reasoning follow-up validation, stable
+    identity lookup, capacity-aware plan construction, and batch launch
+    projection through the shared batch executor.
 - `backend/services/agent_runs/parent_handoff_coordinator.py`
   - Claims ready process-local child results, snapshots active runs, serializes
     parent continuation, and applies or releases claims through the registry.
@@ -137,13 +153,16 @@ Route policy:
   receives direct catalog enumeration. Tool-based agent discovery is reserved
   for a materially larger or dynamically managed registry.
 - The classifier contract represents handoffs as an ordered array. The handler
-  validates every handoff against the live registry before launching any run,
-  caps the plan through `MAX_AGENT_HANDOFFS`, runs allowed entries in
-  concurrency-limited ordered batches, and preserves one immutable run/thread
-  per invocation. Terminal child results are claimed from the process-local
-  registry and enter parent post-action reasoning before the parent can
-  finalize, delegate follow-up work, call a direct tool, think, reflect, or
-  wait for still-active child runs.
+  builds a validated dispatch plan from live registry definitions before any
+  run launches. `build_dispatch_plan` caps the plan through
+  `MAX_AGENT_HANDOFFS` and preserves one immutable run/thread per invocation.
+  `SubagentDispatchService` then admits entries in concurrency-limited ordered
+  batches and coordinates parent-ready processing while internal dispatch
+  modules own one-batch launch, settlement/recovery, and replay-stable
+  follow-up mechanics. Terminal child results are claimed from the
+  process-local registry and enter parent post-action reasoning before the
+  parent can finalize, delegate follow-up work, call a direct tool, think,
+  reflect, or wait for still-active child runs.
 
 ### Pre-classifier context compaction
 
@@ -484,6 +503,14 @@ Coordination source of truth:
   lifecycle, query/retention, handoff, and signaling modules own the cohesive
   immutable snapshots, pure transition/selection/projection rules, and
   owner-lock-coupled wakeup mechanics that the facade commits in memory.
+- `backend/services/agent_runs/dispatch_service.py` remains the only
+  end-to-end subagent dispatch facade. Its internal collaborators are the
+  canonical owners for typed dispatch facts
+  (`dispatch_contracts.py`), one admitted batch (`dispatch_batch.py`), terminal
+  settlement and recovery (`dispatch_settlement.py`), and replay-stable
+  follow-up dispatch (`dispatch_followup.py`). These helpers do not introduce a
+  scheduler, durable state, runtime-provider path, graph branch, or alternate
+  dispatch entrypoint.
 - `backend/services/agent_runs/parent_handoff_coordinator.py` serializes one
   parent continuation per tenant/task key, including parent cycles from
   different turns of the same task. A claimed batch is
