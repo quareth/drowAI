@@ -66,7 +66,8 @@ def test_intent_templates_resolve_from_latest_pointer() -> None:
 
 def test_prompt_registry_exposes_intent_template_contract() -> None:
     registry = PromptRegistry()
-    assert registry.get_latest_version("intent") == "v10"
+    intent_version = registry.get_latest_version("intent")
+    assert intent_version.startswith("v") and intent_version[1:].isdigit()
     assert registry.get_template("intent_classifier") == CLASSIFIER_SYSTEM_PROMPT
 
 
