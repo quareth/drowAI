@@ -18,24 +18,19 @@ import {
 import {
   buildAgentAssignment,
   buildAgentResultProjection,
-  buildAgentRuntimeIdentity,
 } from "../test-data";
 
 const TASK_ID = 73101;
 
 describe("agent-run test data", () => {
   it("derives linked identities and returns fresh nested values", () => {
-    const identity = buildAgentRuntimeIdentity({ task_id: TASK_ID, tenant_id: 19 });
-    const firstAssignment = buildAgentAssignment({ runtimeIdentity: identity });
-    const secondAssignment = buildAgentAssignment({ runtimeIdentity: identity });
+    const firstAssignment = buildAgentAssignment({ task_id: TASK_ID });
+    const secondAssignment = buildAgentAssignment({ task_id: TASK_ID });
     const firstResult = buildAgentResultProjection({ assignment: firstAssignment });
     const secondResult = buildAgentResultProjection({ assignment: secondAssignment });
 
-    expect(firstAssignment).toMatchObject({ task_id: TASK_ID, tenant_id: 19 });
-    expect(firstAssignment.runtime_identity).not.toBe(identity);
-    expect(firstAssignment.relevant_context).not.toBe(
-      secondAssignment.relevant_context,
-    );
+    expect(firstAssignment).toMatchObject({ task_id: TASK_ID });
+    expect(firstAssignment.targets).not.toBe(secondAssignment.targets);
     expect(firstResult).toMatchObject({
       agent_run_id: firstAssignment.agent_run_id,
       agent_id: firstAssignment.agent_id,
@@ -48,28 +43,14 @@ describe("agent-run test data", () => {
 function assignment(
   overrides: Partial<AgentAssignment> = {},
 ): AgentAssignment {
-  const { runtime_identity, task_id, tenant_id, ...assignmentOverrides } = overrides;
   return buildAgentAssignment({
-    runtimeIdentity: buildAgentRuntimeIdentity({
-      tenant_id: tenant_id ?? 9,
-      task_id: task_id ?? TASK_ID,
-      user_id: 4,
-      workspace_id: "task-73101",
-      actor_id: "4",
-      feature_flags: { subagents: true },
-      credential_ref: {
-        provider: "openai",
-        credential_id: "credential-1",
-      },
-      ...runtime_identity,
-    }),
+    task_id: TASK_ID,
     assignment_id: "assignment-1",
     objective: "Map exposed services.",
     targets: ["10.0.0.8"],
     suggested_capabilities: ["port_scan"],
     scope_summary: "Approved target only.",
-    relevant_context: { ticket: "ENG-123", priorities: [1, true, null] },
-    ...assignmentOverrides,
+    ...overrides,
   });
 }
 
@@ -136,20 +117,26 @@ function lifecycleEvent(projection: unknown): Record<string, unknown> {
 }
 
 describe("agent-run projection readers", () => {
-  it("accepts complete assignment and result payloads", () => {
-    expect(readAgentAssignment(assignment())).toEqual(assignment());
+  it("accepts only the UI-safe assignment projection", () => {
+    const safeAssignment = assignment();
+
+    expect(readAgentAssignment(safeAssignment)).toEqual(safeAssignment);
+    expect(
+      readAgentAssignment({
+        ...safeAssignment,
+        runtime_identity: {
+          workspace_path: "/host/task-73101",
+          runner_id: "runner-1",
+          credential_ref: { credential_id: "credential-1" },
+        },
+      }),
+    ).toBeNull();
     expect(readAgentResultProjection(result())).toEqual(result());
   });
 
-  it("rejects malformed objectives, result fields, arrays, and runtime identity", () => {
+  it("rejects malformed objectives, result fields, and arrays", () => {
     expect(readAgentAssignment({ ...assignment(), objective: 42 })).toBeNull();
     expect(readAgentAssignment({ ...assignment(), targets: "10.0.0.8" })).toBeNull();
-    expect(
-      readAgentAssignment({
-        ...assignment(),
-        runtime_identity: { ...assignment().runtime_identity, task_id: TASK_ID + 1 },
-      }),
-    ).toBeNull();
     expect(readAgentResultProjection({ ...result(), key_findings: "80/tcp" })).toBeNull();
     expect(
       readAgentResultProjection({

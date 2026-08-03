@@ -22,10 +22,8 @@ import {
 
 export type {
   AgentAssignment,
-  AgentCredentialReference,
   AgentEvidenceRef,
   AgentResultProjection,
-  AgentRuntimeIdentity,
   AgentRunLifecycleProjection,
   LocalAgentRunStatusProjection,
 } from "./agent-run-schema";

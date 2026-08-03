@@ -23,6 +23,7 @@ from agent.graph.emission.agent_run_attribution import resolve_agent_run_attribu
 from agent.subagents.registry import SubagentDisplayMetadata
 from backend.core.time_utils import format_iso, utc_now
 from backend.services.agent_runs.contracts import (
+    AgentAssignmentProjection,
     AgentRunLifecycleProjection,
     AgentResultProjection,
 )
@@ -64,7 +65,11 @@ def build_agent_run_lifecycle_event(
         conversation_id=entry.conversation_id,
         parent_turn_id=entry.parent_turn_id,
         parent_run_id=parent_run_id,
-        assignment=entry.assignment if entry.lifecycle_version == 1 else None,
+        assignment=(
+            AgentAssignmentProjection.from_assignment(entry.assignment)
+            if entry.lifecycle_version == 1
+            else None
+        ),
         result=result_projection,
         safe_error=entry.safe_error,
     )

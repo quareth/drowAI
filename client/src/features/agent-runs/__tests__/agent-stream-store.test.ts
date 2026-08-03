@@ -24,7 +24,6 @@ import type {
 import type { StreamEvent } from "@/types/packets";
 import {
   buildAgentAssignment,
-  buildAgentRuntimeIdentity,
 } from "../test-data";
 
 const TASK_ID = 51101;
@@ -35,23 +34,14 @@ afterEach(() => {
 });
 
 function assignment(overrides: Partial<AgentAssignment> = {}): AgentAssignment {
-  const { runtime_identity, task_id, tenant_id, ...assignmentOverrides } = overrides;
   return buildAgentAssignment({
-    runtimeIdentity: buildAgentRuntimeIdentity({
-      task_id: task_id ?? TASK_ID,
-      tenant_id: tenant_id ?? 77,
-      workspace_id: "workspace-1",
-      actor_id: "user-1",
-      ...runtime_identity,
-    }),
+    task_id: TASK_ID,
     assignment_id: "assign-1",
     conversation_id: "conv-1",
-    parent_graph_thread_id: "thread-parent",
     objective: "Map exposed services",
     suggested_capabilities: ["port_scan"],
     scope_summary: "service discovery",
-    relevant_context: {},
-    ...assignmentOverrides,
+    ...overrides,
   });
 }
 
@@ -95,11 +85,6 @@ function scopedLifecycle(
       task_id: taskId,
       conversation_id: `conv-${taskId}`,
       parent_turn_id: `turn-${taskId}`,
-      runtime_identity: {
-        ...assignment().runtime_identity,
-        task_id: taskId,
-        workspace_id: `workspace-${taskId}`,
-      },
     }),
   });
 }
@@ -211,10 +196,6 @@ describe("agent-stream-store lifecycle state", () => {
           task_id: OTHER_TASK_ID,
           conversation_id: "conv-2",
           parent_turn_id: "turn-2",
-          runtime_identity: {
-            ...assignment().runtime_identity,
-            task_id: OTHER_TASK_ID,
-          },
         }),
       }),
       2,

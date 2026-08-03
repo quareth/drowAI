@@ -339,6 +339,74 @@ class AgentAssignment(_StrictContract):
         return self
 
 
+class AgentAssignmentProjection(_StrictContract):
+    """UI-safe assignment fields for client-facing run projections."""
+
+    assignment_id: str
+    agent_run_id: str
+    agent_id: AgentId
+    agent_kind: AgentKind
+    task_id: int
+    conversation_id: str
+    parent_turn_id: str
+    objective: str
+    targets: tuple[str, ...] = Field(default_factory=tuple)
+    suggested_capabilities: tuple[AgentCapability, ...] = Field(default_factory=tuple)
+    scope_summary: str | None = None
+
+    @classmethod
+    def from_assignment(
+        cls,
+        assignment: AgentAssignment,
+    ) -> "AgentAssignmentProjection":
+        """Project presentation and correlation fields without runtime identity."""
+        return cls(
+            assignment_id=assignment.assignment_id,
+            agent_run_id=assignment.agent_run_id,
+            agent_id=assignment.agent_id,
+            agent_kind=assignment.agent_kind,
+            task_id=assignment.task_id,
+            conversation_id=assignment.conversation_id,
+            parent_turn_id=assignment.parent_turn_id,
+            objective=assignment.objective,
+            targets=assignment.targets,
+            suggested_capabilities=assignment.suggested_capabilities,
+            scope_summary=assignment.scope_summary,
+        )
+
+    @field_validator(
+        "assignment_id",
+        "agent_run_id",
+        "agent_id",
+        "conversation_id",
+        "parent_turn_id",
+        "objective",
+        "scope_summary",
+        mode="before",
+    )
+    @classmethod
+    def _strip_projection_strings(cls, value: Any, info: Any) -> Any:
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip()
+        if info.field_name == "scope_summary":
+            return normalized or None
+        return _validate_non_empty(normalized, info.field_name)
+
+    @field_validator("targets", "suggested_capabilities", mode="before")
+    @classmethod
+    def _normalize_projection_lists(cls, value: Any, info: Any) -> Any:
+        if value is None:
+            return ()
+        if not isinstance(value, list | tuple):
+            return value
+        return tuple(
+            _validate_non_empty(str(item), info.field_name) for item in value
+        )
+
+
 class AgentResult(_StrictContract):
     """Safe terminal result produced by a subagent run."""
 
@@ -433,7 +501,7 @@ class AgentRunLifecycleProjection(_StrictContract):
     conversation_id: str
     parent_turn_id: str
     parent_run_id: str | None = None
-    assignment: AgentAssignment | None = None
+    assignment: AgentAssignmentProjection | None = None
     result: "AgentResultProjection | None" = None
     safe_error: str | None = None
 
@@ -461,8 +529,20 @@ class AgentRunLifecycleProjection(_StrictContract):
 
     @model_validator(mode="after")
     def _nested_identity_matches_projection(self) -> "AgentRunLifecycleProjection":
-        if self.assignment is not None and self.assignment.agent_id != self.agent_id:
-            raise ValueError("assignment.agent_id must match lifecycle projection")
+        if self.assignment is not None:
+            assignment_fields = (
+                ("agent_run_id", self.agent_run_id),
+                ("agent_id", self.agent_id),
+                ("agent_kind", self.agent_kind),
+                ("task_id", self.task_id),
+                ("conversation_id", self.conversation_id),
+                ("parent_turn_id", self.parent_turn_id),
+            )
+            for field_name, expected in assignment_fields:
+                if getattr(self.assignment, field_name) != expected:
+                    raise ValueError(
+                        f"assignment.{field_name} must match lifecycle projection"
+                    )
         if self.result is not None and self.result.agent_run_id != self.agent_run_id:
             raise ValueError("result.agent_run_id must match lifecycle projection")
         if self.result is not None and self.result.agent_id != self.agent_id:
@@ -529,6 +609,7 @@ class AgentResultProjection(_StrictContract):
 
 __all__ = [
     "AgentAssignment",
+    "AgentAssignmentProjection",
     "AgentCapability",
     "AgentCredentialReference",
     "AgentId",

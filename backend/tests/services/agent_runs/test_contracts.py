@@ -12,6 +12,7 @@ from agent.subagents.registry import get_subagent_registry
 from backend.services.agent_runs import contracts as backend_contracts
 from backend.services.agent_runs.contracts import (
     AgentAssignment,
+    AgentAssignmentProjection,
     AgentResult,
     AgentResultProjection,
     AgentRunLifecycleProjection,
@@ -57,6 +58,10 @@ def test_agent_run_test_builders_derive_identity_and_return_fresh_values() -> No
 
 def test_backend_contracts_reexport_agent_contracts() -> None:
     assert backend_contracts.AgentAssignment is agent_contracts.AgentAssignment
+    assert (
+        backend_contracts.AgentAssignmentProjection
+        is agent_contracts.AgentAssignmentProjection
+    )
     assert (
         backend_contracts.AgentCredentialReference
         is agent_contracts.AgentCredentialReference
@@ -173,7 +178,7 @@ def test_contracts_reject_post_validation_mutation_of_safe_payloads() -> None:
         task_id=42,
         conversation_id="conversation-1",
         parent_turn_id="turn-1",
-        assignment=assignment,
+        assignment=AgentAssignmentProjection.from_assignment(assignment),
         result=result_projection,
     )
 
@@ -231,7 +236,9 @@ def test_result_and_lifecycle_projections_exclude_raw_activity() -> None:
         conversation_id="conversation-1",
         parent_turn_id="turn-1",
         parent_run_id="parent-run-1",
-        assignment=_contract_assignment(),
+        assignment=AgentAssignmentProjection.from_assignment(
+            _contract_assignment()
+        ),
         result=result_projection,
     )
 

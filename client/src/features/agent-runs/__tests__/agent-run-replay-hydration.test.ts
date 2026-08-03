@@ -23,10 +23,7 @@ import {
 } from "../state/agent-run-presentation-store";
 import { clearTaskState, getTaskStreamSnapshot } from "@/state/chat-stream-store";
 import type { AgentAssignment, AgentRunLifecycleProjection } from "../contracts/agent-run";
-import {
-  buildAgentAssignment,
-  buildAgentRuntimeIdentity,
-} from "../test-data";
+import { buildAgentAssignment } from "../test-data";
 import type { StreamEvent } from "@/types/packets";
 
 const mocked = vi.hoisted(() => ({
@@ -48,26 +45,14 @@ afterEach(() => {
 
 function assignment(): AgentAssignment {
   return buildAgentAssignment({
-    runtimeIdentity: buildAgentRuntimeIdentity({
-      task_id: TASK_ID,
-      workspace_id: "workspace-1",
-      runtime_placement_mode: "local",
-      actor_id: "user-1",
-      runner_id: null,
-      execution_site_id: null,
-      provider: null,
-      model: null,
-      reasoning_effort: null,
-    }),
+    task_id: TASK_ID,
     assignment_id: "assign-pathfinder-1",
     agent_run_id: "pathfinder-run-1",
     conversation_id: "conv-pathfinder",
     parent_turn_id: "turn-parent",
-    parent_graph_thread_id: "thread-parent",
     objective: "Enumerate exposed services",
     targets: ["10.0.0.5"],
     suggested_capabilities: ["port_scan"],
-    relevant_context: {},
   });
 }
 
@@ -223,11 +208,6 @@ describe("agent-run replay hydration", () => {
             task_id: taskId,
             conversation_id: `other-conversation-${index}`,
             parent_turn_id: `other-turn-${index}`,
-            runtime_identity: {
-              ...assignment().runtime_identity,
-              task_id: taskId,
-              workspace_id: `workspace-${taskId}`,
-            },
           },
         }),
       );

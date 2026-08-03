@@ -168,6 +168,10 @@ async def test_list_local_agent_runs_reports_only_authorized_task_scope(
     assert run["status"] == "queued"
     assert run["cancel_requested"] is False
     assert run["assignment"]["objective"] == "Map open services on the approved target."
+    assert "runtime_identity" not in run["assignment"]
+    assert "parent_graph_thread_id" not in run["assignment"]
+    assert "relevant_context" not in run["assignment"]
+    assert "tenant_id" not in run["assignment"]
     assert "task_handle" not in run
     assert "tenant_id" not in run
 

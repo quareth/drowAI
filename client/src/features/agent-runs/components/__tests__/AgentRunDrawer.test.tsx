@@ -19,7 +19,6 @@ import { AgentRunDrawer } from "../AgentRunDrawer";
 import {
   buildAgentAssignment,
   buildAgentResultProjection,
-  buildAgentRuntimeIdentity,
 } from "../../test-data";
 
 const TASK_ID = 71201;
@@ -31,28 +30,19 @@ afterEach(() => {
 });
 
 function assignment(overrides: Partial<AgentAssignment> = {}): AgentAssignment {
-  const { runtime_identity, task_id, tenant_id, ...assignmentOverrides } = overrides;
   return buildAgentAssignment({
-    runtimeIdentity: buildAgentRuntimeIdentity({
-      task_id: task_id ?? TASK_ID,
-      tenant_id: tenant_id ?? 7,
-      workspace_id: "workspace-1",
-      actor_id: "user-1",
-      ...runtime_identity,
-    }),
+    task_id: TASK_ID,
     assignment_id: "assignment-reviewer-run-1",
     agent_run_id: "reviewer-run-1",
     agent_id: "reviewer",
     agent_kind: "review",
     conversation_id: "conversation-1",
     parent_turn_id: "turn-parent",
-    parent_graph_thread_id: "thread-parent",
     objective: "Review the generated artifacts.",
     targets: [],
     suggested_capabilities: ["artifact_review"],
     scope_summary: "Generated artifact audit",
-    relevant_context: {},
-    ...assignmentOverrides,
+    ...overrides,
   });
 }
 

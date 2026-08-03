@@ -3,66 +3,26 @@
 import type {
   AgentAssignment,
   AgentResultProjection,
-  AgentRuntimeIdentity,
 } from "./contracts/agent-run";
 
-export function buildAgentRuntimeIdentity(
-  overrides: Partial<AgentRuntimeIdentity> = {},
-): AgentRuntimeIdentity {
-  const taskId = overrides.task_id ?? 42;
-  const credentialRef = overrides.credential_ref;
-  return {
-    tenant_id: 7,
-    task_id: taskId,
-    user_id: 3,
-    workspace_id: `task-${taskId}`,
-    workspace_path: "/workspace",
-    runtime_placement_mode: "runner",
-    actor_type: "user",
-    actor_id: "3",
-    runner_id: "runner-1",
-    execution_site_id: "site-1",
-    provider: "openai",
-    model: "gpt-5.2-mini",
-    reasoning_effort: "medium",
-    ...overrides,
-    feature_flags: { ...(overrides.feature_flags ?? {}) },
-    credential_ref: credentialRef ? { ...credentialRef } : credentialRef ?? null,
-  };
-}
-
-interface AgentAssignmentBuilderOptions extends Partial<
-  Omit<AgentAssignment, "runtime_identity" | "task_id" | "tenant_id">
-> {
-  runtimeIdentity?: AgentRuntimeIdentity;
-}
-
 export function buildAgentAssignment(
-  options: AgentAssignmentBuilderOptions = {},
+  overrides: Partial<AgentAssignment> = {},
 ): AgentAssignment {
-  const { runtimeIdentity, ...overrides } = options;
-  const identity = buildAgentRuntimeIdentity(runtimeIdentity);
   return {
     assignment_id: "assign-1",
     agent_run_id: "run-1",
     agent_id: "pathfinder",
     agent_kind: "recon",
+    task_id: 42,
     conversation_id: "conversation-1",
     parent_turn_id: "turn-1",
-    parent_graph_thread_id: "parent-thread-1",
     objective: "Map open services on the approved target.",
     scope_summary: "Approved internal test host only.",
     ...overrides,
-    task_id: identity.task_id,
-    tenant_id: identity.tenant_id,
     targets: [...(overrides.targets ?? ["10.0.0.10"])],
     suggested_capabilities: [
       ...(overrides.suggested_capabilities ?? ["host_discovery", "port_scan"]),
     ],
-    relevant_context: structuredClone(
-      overrides.relevant_context ?? { ticket: "ENG-123" },
-    ),
-    runtime_identity: identity,
   };
 }
 

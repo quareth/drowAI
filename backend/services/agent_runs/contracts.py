@@ -11,6 +11,7 @@ from __future__ import annotations
 from agent.subagents.contracts import (
     AgentCapability,
     AgentAssignment,
+    AgentAssignmentProjection,
     AgentCredentialReference,
     AgentId,
     AgentKind,
@@ -26,6 +27,7 @@ from agent.subagents.contracts import (
 __all__ = [
     "AgentCapability",
     "AgentAssignment",
+    "AgentAssignmentProjection",
     "AgentCredentialReference",
     "AgentId",
     "AgentKind",

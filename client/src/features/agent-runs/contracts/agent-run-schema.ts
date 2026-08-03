@@ -1,7 +1,7 @@
 /**
  * Runtime schemas for backend-owned subagent-run projections.
  *
- * This module is the frontend authority for validating assignment, runtime,
+ * This module is the frontend authority for validating UI-safe assignment,
  * result, lifecycle, and process-local status payloads before store ingestion.
  */
 import { z } from "zod";
@@ -12,52 +12,6 @@ const positiveInteger = z.number().int().positive();
 const agentKindSchema = nonEmptyString.regex(/^[a-z][a-z0-9_]*$/);
 const stringListSchema = z.array(nonEmptyString);
 
-export type AgentJsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | AgentJsonValue[]
-  | { [key: string]: AgentJsonValue };
-
-const agentJsonValueSchema: z.ZodType<AgentJsonValue> = z.lazy(() =>
-  z.union([
-    z.string(),
-    z.number().finite(),
-    z.boolean(),
-    z.null(),
-    z.array(agentJsonValueSchema),
-    z.record(agentJsonValueSchema),
-  ]),
-);
-
-export const agentCredentialReferenceSchema = z
-  .object({
-    provider: nonEmptyString,
-    credential_id: nonEmptyString,
-  })
-  .strict();
-
-export const agentRuntimeIdentitySchema = z
-  .object({
-    tenant_id: positiveInteger,
-    task_id: positiveInteger,
-    user_id: positiveInteger.nullable().optional(),
-    workspace_id: nonEmptyString,
-    workspace_path: optionalNullableString,
-    runtime_placement_mode: nonEmptyString,
-    actor_type: nonEmptyString,
-    actor_id: nonEmptyString,
-    runner_id: optionalNullableString,
-    execution_site_id: optionalNullableString,
-    provider: optionalNullableString,
-    model: optionalNullableString,
-    reasoning_effort: optionalNullableString,
-    feature_flags: z.record(z.boolean()),
-    credential_ref: agentCredentialReferenceSchema.nullable().optional(),
-  })
-  .strict();
-
 export const agentAssignmentSchema = z
   .object({
     assignment_id: nonEmptyString,
@@ -65,34 +19,14 @@ export const agentAssignmentSchema = z
     agent_id: nonEmptyString,
     agent_kind: agentKindSchema,
     task_id: positiveInteger,
-    tenant_id: positiveInteger,
     conversation_id: nonEmptyString,
     parent_turn_id: nonEmptyString,
-    parent_graph_thread_id: nonEmptyString,
     objective: nonEmptyString,
     targets: stringListSchema,
     suggested_capabilities: stringListSchema,
     scope_summary: optionalNullableString,
-    relevant_context: z.record(agentJsonValueSchema),
-    runtime_identity: agentRuntimeIdentitySchema,
   })
-  .strict()
-  .superRefine((assignment, context) => {
-    if (assignment.runtime_identity.tenant_id !== assignment.tenant_id) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["runtime_identity", "tenant_id"],
-        message: "runtime tenant must match assignment tenant",
-      });
-    }
-    if (assignment.runtime_identity.task_id !== assignment.task_id) {
-      context.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["runtime_identity", "task_id"],
-        message: "runtime task must match assignment task",
-      });
-    }
-  });
+  .strict();
 
 export const agentEvidenceRefSchema = z.record(nonEmptyString);
 
@@ -215,8 +149,6 @@ function validateLifecycleIdentity(
   }
 }
 
-export type AgentCredentialReference = z.infer<typeof agentCredentialReferenceSchema>;
-export type AgentRuntimeIdentity = z.infer<typeof agentRuntimeIdentitySchema>;
 export type AgentAssignment = z.infer<typeof agentAssignmentSchema>;
 export type AgentEvidenceRef = z.infer<typeof agentEvidenceRefSchema>;
 export type AgentResultProjection = z.infer<typeof agentResultProjectionSchema>;

@@ -14,7 +14,7 @@ from agent.subagents.registry import SubagentDisplayMetadata, SubagentRegistry
 from pydantic import BaseModel, ConfigDict
 
 from .contracts import (
-    AgentAssignment,
+    AgentAssignmentProjection,
     AgentKind,
     AgentResultProjection,
     AgentRunStatus,
@@ -77,7 +77,7 @@ class LocalAgentRunStatusProjection(BaseModel):
     task_id: int
     conversation_id: str
     parent_turn_id: str
-    assignment: AgentAssignment
+    assignment: AgentAssignmentProjection
     result: AgentResultProjection | None = None
     safe_error: str | None = None
     cancel_requested: bool
@@ -104,7 +104,7 @@ class LocalAgentRunStatusProjection(BaseModel):
             task_id=entry.task_id,
             conversation_id=entry.conversation_id,
             parent_turn_id=entry.parent_turn_id,
-            assignment=entry.assignment,
+            assignment=AgentAssignmentProjection.from_assignment(entry.assignment),
             result=(
                 None
                 if entry.result is None

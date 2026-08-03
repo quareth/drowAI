@@ -24,6 +24,7 @@ def _runtime_identity() -> AgentRuntimeIdentity:
         provider=None,
         model=None,
         reasoning_effort=None,
+        credential_ref={"provider": "openai", "credential_id": "credential-1"},
     )
 
 
@@ -61,7 +62,24 @@ async def test_lifecycle_event_carries_agent_identity_in_metadata() -> None:
     assert metadata["parent_run_id"] == "parent-run-1"
     assert metadata["internal_only"] is False
     assert metadata["lifecycle_version"] == 1
-    assert event["agent_run"]["assignment"]["agent_run_id"] == "pathfinder-run-1"
+    assignment = event["agent_run"]["assignment"]
+    assert assignment == {
+        "assignment_id": "assignment-1",
+        "agent_run_id": "pathfinder-run-1",
+        "agent_id": "pathfinder",
+        "agent_kind": "recon",
+        "task_id": 42,
+        "conversation_id": "conversation-1",
+        "parent_turn_id": "turn-1",
+        "objective": "Map open services.",
+        "targets": ["10.0.0.10"],
+        "suggested_capabilities": ["port_scan"],
+        "scope_summary": "Approved internal test host only.",
+    }
+    assert "runtime_identity" not in assignment
+    assert "parent_graph_thread_id" not in assignment
+    assert "relevant_context" not in assignment
+    assert "tenant_id" not in assignment
     assert event["agent_run"]["agent_icon_key"] == "pathfinder"
 
 
