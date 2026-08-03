@@ -1107,7 +1107,7 @@ describe("AgentRunTranscriptIntegration Pathfinder agent-run cards", () => {
     });
   });
 
-  it("updates status without parsing the result projection into the child thread", () => {
+  it("renders only the terminal handoff after streamed child activity", () => {
     applyAgentRunLifecycleUpdate(TASK_ID, lifecycle({ status: "running" }), 12);
     applyAgentRunActivityPayload(TASK_ID, {
       type: "tool_batch_start",
@@ -1205,10 +1205,19 @@ describe("AgentRunTranscriptIntegration Pathfinder agent-run cards", () => {
     );
 
     expect(screen.getByText("completed")).toBeTruthy();
-    expect(screen.getByText("Streamed Pathfinder handoff.")).toBeTruthy();
-    expect(screen.queryByText("Pathfinder found HTTPS on 443.")).toBeNull();
-    expect(screen.queryByText("Findings")).toBeNull();
-    expect(screen.queryByText("Next Steps")).toBeNull();
+    const conversation = screen.getByRole("region", {
+      name: "Pathfinder conversation",
+    });
+    const finalMessage = screen.getByRole("article", {
+      name: "Pathfinder final message",
+    });
+    expect(conversation.textContent).toContain("Streamed Pathfinder handoff.");
+    expect(finalMessage.textContent).toContain("Pathfinder found HTTPS on 443.");
+    expect(finalMessage.textContent).not.toContain("HTTPS exposed on 443");
+    expect(finalMessage.textContent).not.toContain("Single approved target only.");
+    expect(finalMessage.textContent).not.toContain(
+      "Review the HTTPS service banner.",
+    );
     expect(screen.queryByText("Streaming response…")).toBeNull();
     expect(getAgentRunPresentationSnapshot(TASK_ID)).toMatchObject({
       isOpen: true,

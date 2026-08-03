@@ -67,14 +67,42 @@ function reviewerLifecycle(): AgentRunLifecycleProjection {
       key_findings: ["No missing outputs."],
       evidence_refs: [],
       tools_used: [],
-      limitations: [],
-      recommended_next_steps: [],
+      limitations: ["Runtime smoke testing was outside the review scope."],
+      recommended_next_steps: ["Publish the reviewed artifacts."],
     }),
     safe_error: null,
   };
 }
 
 describe("AgentRunDrawer", () => {
+  it("renders only the terminal handoff as the final subagent message", () => {
+    applyAgentRunLifecycleUpdate(TASK_ID, reviewerLifecycle(), 10);
+    openAgentRunDetail(TASK_ID, "parent-run-1", "reviewer-run-1");
+
+    render(
+      <AgentRunDrawer
+        taskId={TASK_ID}
+        activityMessages={[]}
+        canStopRuns
+        onStopRun={vi.fn()}
+      />,
+    );
+
+    const finalMessage = screen.getByRole("article", {
+      name: "Reviewer final message",
+    });
+    expect(finalMessage.textContent).toContain("Artifacts passed review.");
+    expect(finalMessage.textContent).not.toContain("No missing outputs.");
+    expect(finalMessage.textContent).not.toContain(
+      "Runtime smoke testing was outside the review scope.",
+    );
+    expect(finalMessage.textContent).not.toContain(
+      "Publish the reviewed artifacts.",
+    );
+    expect(screen.queryByText("Result")).toBeNull();
+    expect(screen.queryByText("Completed")).toBeNull();
+  });
+
   it("renders list and detail identity for a synthetic second agent without Pathfinder branches", () => {
     applyAgentRunLifecycleUpdate(TASK_ID, reviewerLifecycle(), 10);
     openAgentRunList(TASK_ID, "parent-run-1");

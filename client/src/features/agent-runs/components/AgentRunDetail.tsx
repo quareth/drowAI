@@ -11,6 +11,7 @@ import { AlertTriangle, CircleStop } from "lucide-react";
 
 import type { ChatMessage } from "@/components/chat/types";
 import { Button } from "@/components/ui/button";
+import { MarkdownMessage } from "@/components/ui/markdown-message";
 
 import { isAgentRunTerminalStatus } from "../contracts/agent-run";
 import type { AgentRunRecord } from "../state/agent-stream-store";
@@ -100,6 +101,15 @@ export function AgentRunDetail({
               messages={activityMessages}
               agentDisplayName={run.agentDisplayName}
             />
+            {run.result && (
+              <article
+                className="rounded-lg bg-slate-900/50 px-3 py-2 text-slate-200"
+                aria-label={`${run.agentDisplayName} final message`}
+                data-testid="agent-run-final-message"
+              >
+                <MarkdownMessage content={run.result.summary} />
+              </article>
+            )}
           </section>
 
           {canStop && (
