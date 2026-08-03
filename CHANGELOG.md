@@ -94,6 +94,12 @@ The format is based on
   runtime loop for parent reasoning.
 - JWT signing now rejects configured HS256 secrets shorter than 32 bytes and
   automatically repairs legacy short generated secrets during bootstrap.
+- Queued prompts now remain visible and scrollable in constrained Overview
+  layouts, keep their controls reachable, and advance exactly one item after
+  each completed run.
+- Profile and Settings now share an accessible contextual back control that
+  returns to the originating in-app page and safely falls back to Outpost for
+  direct entries.
 - Amass now reuses serialized task-scoped v5 state across enumeration and
   result queries, returns stored partial results after bounded enumeration,
   and distinguishes parser status, enumeration status, completeness, and

@@ -25,6 +25,10 @@ import { Search, ChevronDown, Settings, User, LogOut, BookOpen } from "lucide-re
 import { useLocation } from "wouter";
 import { DrowLogo } from "@/components/ui/drow-logo";
 import { NotificationMenu } from "@/components/layout/notification-menu";
+import {
+  isAccountPageLocation,
+  navigateToAccountPage,
+} from "@/navigation/account-page-history";
 import { APP_ROUTE_PATHS } from "@/navigation/routes";
 import { useAppDestinationSearch } from "@/navigation/use-app-destination-search";
 import type { SearchMatch } from "@/navigation/types";
@@ -43,7 +47,7 @@ export function Navbar() {
     membershipSummaries,
     switchTenant,
   } = useTenantContext();
-  const [, setLocation] = useLocation();
+  const [location, setLocation] = useLocation();
   const searchRootRef = useRef<HTMLDivElement | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -76,11 +80,11 @@ export function Navbar() {
   };
 
   const handleSettings = () => {
-    setLocation(APP_ROUTE_PATHS.settings);
+    navigateToAccountPage(setLocation, APP_ROUTE_PATHS.settings, location);
   };
 
   const handleProfile = () => {
-    setLocation(APP_ROUTE_PATHS.profile);
+    navigateToAccountPage(setLocation, APP_ROUTE_PATHS.profile, location);
   };
 
   const handleDocs = () => {
@@ -88,7 +92,11 @@ export function Navbar() {
   };
 
   const openSearchResult = (match: SearchMatch) => {
-    setLocation(match.destination.href);
+    if (isAccountPageLocation(match.destination.href)) {
+      navigateToAccountPage(setLocation, match.destination.href, location);
+    } else {
+      setLocation(match.destination.href);
+    }
     setSearchQuery("");
     setIsSearchOpen(false);
   };

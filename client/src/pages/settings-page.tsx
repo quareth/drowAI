@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 
+import { AccountPageHeader } from "@/components/layout/account-page-header";
 import { Navbar } from "@/components/layout/navbar";
 import { Sidebar } from "@/components/layout/sidebar";
 import { ApiSettingsPanel } from "@/components/settings/api-settings-panel";
@@ -27,6 +28,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { API_SETTINGS_QUERY_KEY } from "@/hooks/use-api-settings";
 import { CVE_SETTINGS_CONFIG_QUERY_KEY, CVE_SETTINGS_STATUS_QUERY_KEY } from "@/hooks/use-cve-settings";
 import { DATA_MANAGEMENT_SETTINGS_QUERY_KEY } from "@/hooks/use-data-management-settings";
+import { replaceAccountPageLocation } from "@/navigation/account-page-history";
 import { buildSettingsSectionPath, readAllowedQueryValue, ROUTE_QUERY_KEYS } from "@/navigation/routes";
 
 const SETTINGS_SECTION_IDS = SETTINGS_SECTIONS.map((section) => section.id);
@@ -50,7 +52,7 @@ export default function SettingsPage() {
   const handleSectionChange = (sectionId: string) => {
     const nextSection = sectionId as SettingsSectionId;
     setActiveSection(nextSection);
-    setLocation(buildSettingsSectionPath(nextSection));
+    replaceAccountPageLocation(setLocation, buildSettingsSectionPath(nextSection));
   };
 
   useEffect(() => {
@@ -69,14 +71,10 @@ export default function SettingsPage() {
       <div className="flex flex-1 overflow-hidden">
         <Sidebar />
         <div className="flex-1 p-6 overflow-auto">
-          <div className="flex items-center justify-between mb-8">
-            <div className="flex items-center space-x-4">
-              <div>
-                <h1 className="text-3xl font-bold text-white mb-2">Settings</h1>
-                <p className="text-gray-400">Manage your account and application preferences</p>
-              </div>
-            </div>
-          </div>
+          <AccountPageHeader
+            title="Settings"
+            description="Manage your account and application preferences"
+          />
 
           <Tabs
             value={activeSection}
