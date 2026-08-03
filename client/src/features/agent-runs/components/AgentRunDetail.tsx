@@ -20,6 +20,7 @@ interface AgentRunDetailProps {
   taskId: number;
   run: AgentRunRecord;
   activityMessages: ChatMessage[];
+  canStopRuns: boolean;
   onStop: (run: AgentRunRecord) => Promise<void> | void;
 }
 
@@ -41,11 +42,12 @@ export function AgentRunDetail({
   taskId,
   run,
   activityMessages,
+  canStopRuns,
   onStop,
 }: AgentRunDetailProps) {
   const [isStopping, setIsStopping] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
-  const canStop = !isAgentRunTerminalStatus(run.status) && !isStopping;
+  const canStop = canStopRuns && !isAgentRunTerminalStatus(run.status) && !isStopping;
 
   const handleStop = async () => {
     if (!canStop) return;

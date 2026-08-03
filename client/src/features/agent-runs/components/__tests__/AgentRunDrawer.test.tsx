@@ -84,6 +84,7 @@ describe("AgentRunDrawer", () => {
       <AgentRunDrawer
         taskId={TASK_ID}
         activityMessages={[]}
+        canStopRuns
         onStopRun={onStopRun}
       />,
     );
@@ -101,6 +102,7 @@ describe("AgentRunDrawer", () => {
       <AgentRunDrawer
         taskId={TASK_ID}
         activityMessages={[]}
+        canStopRuns
         onStopRun={onStopRun}
       />,
     );

@@ -17,7 +17,13 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import type { MessageGroup } from "@/hooks/useMessageGrouping";
+import { useTenantContext } from "@/hooks/use-tenant-context";
 import { apiFetch } from "@/lib/api-config";
+import {
+  TENANT_ACTIONS,
+  hasTenantAction,
+  toTenantActionSet,
+} from "@/lib/tenant-permissions";
 import { cn } from "@/lib/utils";
 
 import {
@@ -193,6 +199,11 @@ export function AgentRunTranscriptIntegration({
   className,
   ...messageListProps
 }: AgentRunTranscriptIntegrationProps) {
+  const { effectivePermissions } = useTenantContext();
+  const canStopRuns = hasTenantAction(
+    toTenantActionSet(effectivePermissions),
+    TENANT_ACTIONS.taskControl,
+  );
   useAgentRunLocalStatusHydration(taskId);
   const agentRuns = useAgentRuns(taskId);
   const presentation = useAgentRunPresentation(taskId);
@@ -215,7 +226,7 @@ export function AgentRunTranscriptIntegration({
 
   const handleStopAgentRun = useCallback(
     async (run: AgentRunRecord) => {
-      if (typeof taskId !== "number") return;
+      if (typeof taskId !== "number" || !canStopRuns) return;
       const response = await apiFetch(
         `/api/tasks/${taskId}/agent-runs/${encodeURIComponent(run.agentRunId)}/cancel`,
         { method: "POST" },
@@ -224,7 +235,7 @@ export function AgentRunTranscriptIntegration({
         throw new Error("Failed to stop subagent run.");
       }
     },
-    [taskId],
+    [canStopRuns, taskId],
   );
 
   const handleCollapseAgentRun = useCallback(() => {
@@ -304,6 +315,7 @@ export function AgentRunTranscriptIntegration({
                 <AgentRunDrawer
                   taskId={taskId}
                   activityMessages={activityMessages}
+                  canStopRuns={canStopRuns}
                   onStopRun={handleStopAgentRun}
                 />
               </ResizablePanel>

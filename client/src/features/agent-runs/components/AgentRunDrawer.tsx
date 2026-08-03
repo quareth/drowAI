@@ -32,6 +32,7 @@ import { AgentRunList } from "./AgentRunList";
 interface AgentRunDrawerProps {
   taskId: number | null | undefined;
   activityMessages: ChatMessage[];
+  canStopRuns: boolean;
   onStopRun: (run: AgentRunRecord) => Promise<void> | void;
 }
 
@@ -42,6 +43,7 @@ function isValidTaskId(taskId: number | null | undefined): taskId is number {
 export function AgentRunDrawer({
   taskId,
   activityMessages,
+  canStopRuns,
   onStopRun,
 }: AgentRunDrawerProps) {
   const presentation = useAgentRunPresentation(taskId);
@@ -132,6 +134,7 @@ export function AgentRunDrawer({
           taskId={resolvedTaskId}
           run={selectedRun}
           activityMessages={selectedActivityMessages}
+          canStopRuns={canStopRuns}
           onStop={onStopRun}
         />
       ) : (

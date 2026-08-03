@@ -11,8 +11,17 @@ import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/re
 import { createElement, type ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const tenantPermissionsMock = vi.hoisted(() => ({
+  actions: ["task.control"] as string[],
+}));
+
 vi.mock("@/lib/api-config", () => ({
   apiFetch: vi.fn(),
+}));
+vi.mock("@/hooks/use-tenant-context", () => ({
+  useTenantContext: () => ({
+    effectivePermissions: { actions: tenantPermissionsMock.actions },
+  }),
 }));
 vi.mock("@/hooks/use-user-timezone", () => ({
   useUserTimezone: () => "UTC",
@@ -95,6 +104,7 @@ const TASK_ID = 61103;
 const apiFetchMock = vi.mocked(apiFetch);
 
 beforeEach(() => {
+  tenantPermissionsMock.actions = ["task.control"];
   apiFetchMock.mockResolvedValue(localRunsResponse([localStatus()]));
   vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
     callback(0);
@@ -292,6 +302,29 @@ function lifecycleReplayPacket(sequence: number): Record<string, unknown> {
 }
 
 describe("AgentRunTranscriptIntegration Pathfinder agent-run cards", () => {
+  it.each([
+    ["viewer", [], false],
+    ["operator", ["task.control"], true],
+  ])("shows Stop for %s according to task.control permission", (_role, actions, expected) => {
+    tenantPermissionsMock.actions = actions;
+    applyAgentRunLifecycleUpdate(TASK_ID, lifecycle(), 12);
+
+    render(
+      <AgentRunTranscriptIntegration
+        messages={[lifecycleMessage()]}
+        taskId={TASK_ID}
+        isLoading={false}
+        isConnected
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /open subagents/i }));
+    fireEvent.click(screen.getByTestId("agent-run-row-pathfinder-run-1"));
+
+    const stopButton = screen.queryByRole("button", { name: "Stop" });
+    expect(Boolean(stopButton)).toBe(expected);
+  });
+
   it("renders a stored Pathfinder run after reasoning inside the parent activity group", () => {
     applyAgentRunLifecycleUpdate(TASK_ID, lifecycle(), 12);
 
