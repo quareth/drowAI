@@ -247,7 +247,7 @@ def test_followup_dispatcher_shares_initial_dispatch_batch_executor() -> None:
     assert followup_dispatcher._batch_executor is service._batch_executor  # noqa: SLF001
 
 
-def test_dispatch_facade_private_helpers_are_only_admission_or_parent_ready_policy() -> None:
+def test_dispatch_facade_private_helpers_are_only_admission_policy() -> None:
     tree = ast.parse(Path("backend/services/agent_runs/dispatch_service.py").read_text())
 
     module_private_helpers = {
@@ -269,7 +269,7 @@ def test_dispatch_facade_private_helpers_are_only_admission_or_parent_ready_poli
         and node.name.startswith("_")
     }
 
-    assert module_private_helpers == {"_cancel_ready_handoff_task"}
+    assert module_private_helpers == set()
     assert service_private_helpers == {"__init__", "_active_counts_for_plan"}
 
 

@@ -589,7 +589,7 @@ async def test_agent_result_conversion_and_invalid_launcher_results_fail_closed(
 
 
 @pytest.mark.asyncio
-async def test_pause_uses_existing_parent_barrier_and_requires_resumed_outcome() -> None:
+async def test_pause_parent_barrier_receives_settled_sibling_completion() -> None:
     registry = ProcessLocalAgentRunRegistry()
     launcher = _ScriptedLauncher(
         registry,
@@ -610,7 +610,7 @@ async def test_pause_uses_existing_parent_barrier_and_requires_resumed_outcome()
                 wait_for_initial_handoff,
             )
         )
-        if wait_for_initial_handoff and not completions:
+        if wait_for_initial_handoff and completions:
             barrier_started.set()
             await barrier_release.wait()
             return _parent_outcome(
@@ -629,14 +629,17 @@ async def test_pause_uses_existing_parent_barrier_and_requires_resumed_outcome()
     )
     await asyncio.wait_for(barrier_started.wait(), timeout=1)
 
-    assert calls == [((), True)]
+    assert calls == [(("run-2",), True)]
     assert dispatching.done() is False
     barrier_release.set()
     result = await asyncio.wait_for(dispatching, timeout=1)
 
-    assert calls == [((), True)]
+    assert calls == [(("run-2",), True)]
     assert result.parent_handoff_outcome is not None
     assert result.parent_handoff_outcome.agent_run_ids == ("run-2",)
+    assert result.parent_handoff_outcome.child_completions[0].usage_records[0][
+        "agent_run_id"
+    ] == "run-2"
 
     pause_registry = ProcessLocalAgentRunRegistry()
     service, _registry, _launcher = _service(
@@ -830,6 +833,10 @@ async def test_parent_barrier_outcome_is_returned_after_parallel_batch_settles()
 
     assert result.parent_handoff_outcome is not None
     assert result.parent_handoff_outcome.agent_run_ids == ("run-1", "run-2")
+    assert [
+        completion.usage_records[0]["agent_run_id"]
+        for completion in result.parent_handoff_outcome.child_completions
+    ] == ["run-1", "run-2"]
     run_1 = await registry.get(tenant_id=TENANT_ID, task_id=TASK_ID, agent_run_id="run-1")
     run_2 = await registry.get(tenant_id=TENANT_ID, task_id=TASK_ID, agent_run_id="run-2")
     assert run_1 is not None and run_1.result_consumed is False

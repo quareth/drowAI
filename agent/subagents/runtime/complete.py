@@ -259,12 +259,7 @@ def _compact_error_limitations(compact: Mapping[str, Any]) -> list[str]:
 
 def _compact_reports_failure(metadata: Mapping[str, Any]) -> bool:
     compact = _mapping(metadata.get("last_tool_result_compact"))
-    status = _clean_string(compact.get("status")).lower()
-    if compact.get("success") is False or status in {
-        "failed",
-        "error",
-        "partial",
-    }:
+    if _compact_is_incomplete(compact):
         return True
     batch = _mapping(metadata.get("last_tool_result_compact_batch"))
     batch_status = _clean_string(batch.get("status")).lower()
@@ -276,12 +271,28 @@ def _compact_reports_failure(metadata: Mapping[str, Any]) -> bool:
         "error",
     }:
         return True
-    return any(
-        row.get("success") is False
-        or _clean_string(row.get("status")).lower()
-        in {"failed", "denied", "cancelled", "error"}
-        for row in _list_items(batch.get("results"))
-    )
+    for row in _list_items(batch.get("results")):
+        row_status = _clean_string(row.get("status")).lower()
+        if row.get("success") is False or row_status in {
+            "failed",
+            "denied",
+            "cancelled",
+            "error",
+            "partial",
+        }:
+            return True
+        if _compact_is_incomplete(_mapping(row.get("compact_tool_result"))):
+            return True
+    return False
+
+
+def _compact_is_incomplete(compact: Mapping[str, Any]) -> bool:
+    status = _clean_string(compact.get("status")).lower()
+    return compact.get("success") is False or status in {
+        "failed",
+        "error",
+        "partial",
+    }
 
 
 def _batch_error_limitations(batch: Mapping[str, Any]) -> list[str]:
@@ -301,14 +312,22 @@ def _batch_error_limitations(batch: Mapping[str, Any]) -> list[str]:
 
     for row in _list_items(batch.get("results")):
         row_status = _clean_string(row.get("status")).lower()
-        if row.get("success") is not False and row_status not in {
-            "failed",
-            "denied",
-            "cancelled",
-            "error",
-        }:
+        compact = _mapping(row.get("compact_tool_result"))
+        compact_status = _clean_string(compact.get("status")).lower()
+        compact_incomplete = _compact_is_incomplete(compact)
+        if (
+            row.get("success") is not False
+            and row_status
+            not in {"failed", "denied", "cancelled", "error", "partial"}
+            and not compact_incomplete
+        ):
             continue
-        limitations.append(_batch_row_limitation(row, row_status=row_status))
+        limitations.append(
+            _batch_row_limitation(
+                row,
+                row_status=compact_status if compact_incomplete else row_status,
+            )
+        )
     return limitations
 
 

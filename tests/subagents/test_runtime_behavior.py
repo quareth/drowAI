@@ -1512,6 +1512,54 @@ def test_runtime_completion_marks_mixed_batch_as_partial() -> None:
     )
 
 
+def test_runtime_completion_marks_nested_partial_batch_row_as_partial() -> None:
+    state = _state_after_tool_iterations(
+        [
+            _host_discovery_iteration(execution_id="exec-fping-success"),
+        ]
+    )
+    metadata = state["facts"]["metadata"]
+    partial_compact = {
+        "schema_version": "2.0",
+        "tool": NMAP_TOOL_ID,
+        "status": "partial",
+        "success": True,
+        "summary": "nmap returned incomplete service evidence.",
+        "key_findings": ["Service enumeration was incomplete."],
+        "errors": [],
+    }
+    metadata["last_tool_result_compact_batch"] = {
+        "tool_batch_id": "batch-partial-row",
+        "execution_strategy": "parallel",
+        "status": "completed",
+        "success": True,
+        "results": [
+            {
+                "tool_call_id": "tc-fping-success",
+                "tool_id": FPING_TOOL_ID,
+                "status": "success",
+                "success": True,
+                "compact_tool_result": metadata["last_tool_result_compact"],
+            },
+            {
+                "tool_call_id": "tc-nmap-partial",
+                "tool_id": NMAP_TOOL_ID,
+                "status": "success",
+                "success": True,
+                "compact_tool_result": partial_compact,
+            },
+        ],
+    }
+
+    completed = complete_subagent_result(_pathfinder_definition(), state)
+    result = completed["facts"]["metadata"][SUBAGENT_RESULT_METADATA_KEY]
+
+    assert result["outcome"] == "partial"
+    assert result["limitations"] == [
+        f"Tool call {NMAP_TOOL_ID} (tc-nmap-partial) reported partial."
+    ]
+
+
 def test_subagent_parent_handoff_baseline_is_bounded_result_projection() -> None:
     state = _state_after_tool_iterations(
         [
