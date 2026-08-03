@@ -39,6 +39,9 @@ The format is based on
 
 ### Fixed
 
+- Interrupted subagent runs now remain terminal when delayed replay or live
+  events repeat an equal lifecycle version, preventing orphaned runs from
+  reappearing as active after a backend restart.
 - Parent continuation now waits for every relevant subagent run to become
   terminal before evaluating their aggregated handoffs, preventing partial
   batches from finalizing a task while sibling agents are still running.

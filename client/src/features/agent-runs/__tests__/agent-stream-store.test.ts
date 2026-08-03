@@ -314,6 +314,45 @@ describe("agent-stream-store lifecycle state", () => {
     expect(run.safeError).toContain("current backend process no longer owns it");
   });
 
+  it("keeps interrupted runs terminal against equal-version stream updates", () => {
+    applyAgentRunLifecycleUpdate(TASK_ID, lifecycle({ status: "running" }), 10);
+    reconcileAgentRunsWithLocalStatus(TASK_ID, []);
+
+    const interrupted = getAgentRunSnapshot(TASK_ID).runsById["run-1"];
+    applyAgentRunLifecyclePayload(
+      TASK_ID,
+      lifecycleEvent(lifecycle({ status: "running" }), 11),
+    );
+
+    const run = getAgentRunSnapshot(TASK_ID).runsById["run-1"];
+    expect(run.status).toBe("interrupted");
+    expect(run.lifecycleVersion).toBe(1);
+    expect(run.safeError).toContain("current backend process no longer owns it");
+    expect(run.completedAt).toBe(interrupted.completedAt);
+  });
+
+  it("allows equal-version local status to restore an interrupted run", () => {
+    applyAgentRunLifecycleUpdate(TASK_ID, lifecycle({ status: "running" }), 10);
+    reconcileAgentRunsWithLocalStatus(TASK_ID, []);
+
+    reconcileAgentRunsWithLocalStatus(TASK_ID, [
+      {
+        ...lifecycle({ status: "running" }),
+        assignment: assignment(),
+        cancel_requested: false,
+        created_at: "2026-01-01T00:00:00Z",
+        started_at: "2026-01-01T00:00:01Z",
+        completed_at: null,
+      } satisfies LocalAgentRunStatusProjection,
+    ]);
+
+    const run = getAgentRunSnapshot(TASK_ID).runsById["run-1"];
+    expect(run.status).toBe("running");
+    expect(run.lifecycleVersion).toBe(1);
+    expect(run.safeError).toBeNull();
+    expect(run.completedAt).toBeNull();
+  });
+
   it("overlays matching local status without downgrading newer lifecycle versions", () => {
     applyAgentRunLifecycleUpdate(TASK_ID, lifecycle({ status: "running", lifecycle_version: 3 }), 10);
 

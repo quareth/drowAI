@@ -81,6 +81,8 @@ interface MutationResult {
   changed: boolean;
 }
 
+type AgentRunLifecycleSource = "stream" | "local-status";
+
 const defaultSnapshot: AgentRunsSnapshot = {
   runs: [],
   runsById: {},
@@ -175,17 +177,35 @@ export function applyAgentRunLifecycleUpdate(
   projection: AgentRunLifecycleProjection,
   sequence?: number | null,
 ): void {
+  applyAgentRunLifecycleUpdateFromSource(taskId, projection, sequence, "stream");
+}
+
+function applyAgentRunLifecycleUpdateFromSource(
+  taskId: number,
+  projection: AgentRunLifecycleProjection,
+  sequence: number | null | undefined,
+  source: AgentRunLifecycleSource,
+): void {
   if (projection.task_id !== taskId) {
     return;
   }
   const streamSequence = sequence ?? null;
   mutateTaskState(taskId, draft => {
     const existing = draft.runs.get(projection.agent_run_id);
-    if (existing && projection.lifecycle_version < existing.lifecycleVersion) {
-      return { changed: false };
+    if (existing) {
+      const olderVersion = projection.lifecycle_version < existing.lifecycleVersion;
+      const duplicateStreamAfterInterruption =
+        source === "stream" &&
+        existing.status === "interrupted" &&
+        projection.lifecycle_version === existing.lifecycleVersion;
+      if (olderVersion || duplicateStreamAfterInterruption) {
+        return { changed: false };
+      }
     }
     const now = Date.now();
     const terminal = isAgentRunTerminalStatus(projection.status);
+    const restoringInterruptedRun =
+      source === "local-status" && existing?.status === "interrupted" && !terminal;
     const next: AgentRunRecord = {
       taskId,
       agentRunId: projection.agent_run_id,
@@ -206,11 +226,17 @@ export function applyAgentRunLifecycleUpdate(
       parentRunId: projection.parent_run_id ?? existing?.parentRunId ?? null,
       assignment: projection.assignment ?? existing?.assignment ?? null,
       result: projection.result ?? existing?.result ?? null,
-      safeError: projection.safe_error ?? existing?.safeError ?? null,
+      safeError: restoringInterruptedRun
+        ? projection.safe_error ?? null
+        : projection.safe_error ?? existing?.safeError ?? null,
       firstSequence: minKnownSequence(existing?.firstSequence ?? null, streamSequence),
       lastSequence: maxKnownSequence(existing?.lastSequence ?? null, streamSequence),
       createdAt: existing?.createdAt ?? now,
-      completedAt: terminal ? existing?.completedAt ?? now : existing?.completedAt ?? null,
+      completedAt: terminal
+        ? existing?.completedAt ?? now
+        : restoringInterruptedRun
+          ? null
+          : existing?.completedAt ?? null,
       updatedAt: now,
       activity: existing?.activity ?? [],
     };
@@ -304,7 +330,7 @@ export function reconcileAgentRunsWithLocalStatus(
       continue;
     }
     localRunsById.set(run.agent_run_id, run);
-    applyAgentRunLifecycleUpdate(taskId, run);
+    applyAgentRunLifecycleUpdateFromSource(taskId, run, null, "local-status");
   }
 
   mutateTaskState(taskId, draft => {
