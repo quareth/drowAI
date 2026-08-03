@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Protocol
 
+from agent.graph.graph_names import GRAPH_NAME_SUBAGENT
 from agent.subagents.registry import SubagentDisplayMetadata, SubagentRegistry
 from pydantic import BaseModel, ConfigDict
 
@@ -37,6 +38,20 @@ class ScopedAgentRunLauncher(Protocol):
         agent_run_id: str,
     ) -> LocalAgentRun:
         """Signal cancellation for one scoped process-local run."""
+
+
+class PendingInterruptTicketService(Protocol):
+    """Durable ticket operation required by the subagent cancellation path."""
+
+    def fail_pending_for_graph_thread(
+        self,
+        *,
+        tenant_id: int,
+        task_id: int,
+        graph_name: str,
+        graph_thread_id: str,
+    ) -> object | None:
+        """Fail the pending ticket owned by one exact child graph thread."""
 
 
 class AgentRunMissingError(LookupError):
@@ -115,10 +130,12 @@ class AgentRunControlService:
         registry: ProcessLocalAgentRunRegistry,
         launcher: ScopedAgentRunLauncher,
         subagent_registry: SubagentRegistry,
+        interrupt_ticket_service: PendingInterruptTicketService,
     ) -> None:
         self._registry = registry
         self._launcher = launcher
         self._subagent_registry = subagent_registry
+        self._interrupt_ticket_service = interrupt_ticket_service
 
     async def list_local_runs(
         self,
@@ -165,7 +182,18 @@ class AgentRunControlService:
         )
         if updated.status not in ACTIVE_AGENT_RUN_STATUSES and not cancelled_by_request:
             raise AgentRunNotActiveError(agent_run_id)
+        if entry.status == "waiting_for_approval" and cancelled_by_request:
+            self._fail_waiting_approval_ticket(updated)
         return self._project_entry(updated)
+
+    def _fail_waiting_approval_ticket(self, entry: LocalAgentRun) -> None:
+        """Retire a durable approval that can no longer resume its child owner."""
+        self._interrupt_ticket_service.fail_pending_for_graph_thread(
+            tenant_id=entry.tenant_id,
+            task_id=entry.task_id,
+            graph_name=GRAPH_NAME_SUBAGENT,
+            graph_thread_id=entry.graph_thread_id,
+        )
 
     def _project_entry(self, entry: LocalAgentRun) -> LocalAgentRunStatusProjection:
         return LocalAgentRunStatusProjection.from_entry(
@@ -179,5 +207,6 @@ __all__ = [
     "AgentRunMissingError",
     "AgentRunNotActiveError",
     "LocalAgentRunStatusProjection",
+    "PendingInterruptTicketService",
     "ScopedAgentRunLauncher",
 ]

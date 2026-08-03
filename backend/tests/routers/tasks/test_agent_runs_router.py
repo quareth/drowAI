@@ -61,14 +61,33 @@ class _RecordingLauncher:
         )
 
 
+class _RecordingInterruptTickets:
+    def __init__(self) -> None:
+        self.failed_graph_threads: list[tuple[int, int, str, str]] = []
+
+    def fail_pending_for_graph_thread(
+        self,
+        *,
+        tenant_id: int,
+        task_id: int,
+        graph_name: str,
+        graph_thread_id: str,
+    ) -> None:
+        self.failed_graph_threads.append(
+            (tenant_id, task_id, graph_name, graph_thread_id)
+        )
+
+
 @pytest.fixture
 def agent_run_client(monkeypatch: pytest.MonkeyPatch):
     registry = ProcessLocalAgentRunRegistry()
     launcher = _RecordingLauncher(registry)
+    interrupt_tickets = _RecordingInterruptTickets()
     service = AgentRunControlService(
         registry=registry,
         launcher=launcher,
         subagent_registry=get_subagent_registry(),
+        interrupt_ticket_service=interrupt_tickets,
     )
     app = FastAPI()
     app.include_router(agent_run_routes.router, prefix="/api/tasks")
@@ -102,7 +121,7 @@ def agent_run_client(monkeypatch: pytest.MonkeyPatch):
 
     client = TestClient(app)
     try:
-        yield client, registry, launcher, task_lookups, app
+        yield client, registry, launcher, interrupt_tickets, task_lookups, app
     finally:
         app.dependency_overrides.clear()
         client.close()
@@ -129,7 +148,7 @@ def test_composed_tasks_router_registers_agent_run_endpoints() -> None:
 async def test_list_local_agent_runs_reports_only_authorized_task_scope(
     agent_run_client,
 ) -> None:
-    client, registry, _launcher, task_lookups, _app = agent_run_client
+    client, registry, _launcher, _interrupt_tickets, task_lookups, _app = agent_run_client
     await registry.register(_assignment(), graph_thread_id="child-thread-1")
     await registry.register(
         _assignment(tenant_id=8, task_id=42, agent_run_id="other-tenant-run"),
@@ -157,7 +176,7 @@ async def test_list_local_agent_runs_reports_only_authorized_task_scope(
 async def test_cancel_local_agent_run_uses_scoped_launcher_and_sets_flag(
     agent_run_client,
 ) -> None:
-    client, registry, launcher, _task_lookups, _app = agent_run_client
+    client, registry, launcher, interrupt_tickets, _task_lookups, _app = agent_run_client
     await registry.register(_assignment(), graph_thread_id="child-thread-1")
     await registry.mark_running(tenant_id=7, task_id=42, agent_run_id="pathfinder-run-1")
 
@@ -171,6 +190,7 @@ async def test_cancel_local_agent_run_uses_scoped_launcher_and_sets_flag(
     assert payload["agent_run"]["status"] == "running"
     assert payload["agent_run"]["cancel_requested"] is True
     assert launcher.calls == [(7, 42, "pathfinder-run-1")]
+    assert interrupt_tickets.failed_graph_threads == []
     stored = await registry.get(tenant_id=7, task_id=42, agent_run_id="pathfinder-run-1")
     assert stored is not None
     assert stored.cancel_requested is True
@@ -180,7 +200,7 @@ async def test_cancel_local_agent_run_uses_scoped_launcher_and_sets_flag(
 async def test_cancel_waiting_agent_run_returns_terminal_cancelled_projection(
     agent_run_client,
 ) -> None:
-    client, registry, launcher, _task_lookups, _app = agent_run_client
+    client, registry, launcher, interrupt_tickets, _task_lookups, _app = agent_run_client
     await registry.register(_assignment(), graph_thread_id="child-thread-1")
     await registry.mark_waiting_for_approval(
         tenant_id=7,
@@ -196,6 +216,9 @@ async def test_cancel_waiting_agent_run_returns_terminal_cancelled_projection(
     assert payload["agent_run"]["status"] == "cancelled"
     assert payload["agent_run"]["cancel_requested"] is True
     assert launcher.calls == [(7, 42, "pathfinder-run-1")]
+    assert interrupt_tickets.failed_graph_threads == [
+        (7, 42, "subagent", "child-thread-1")
+    ]
     stored = await registry.get(tenant_id=7, task_id=42, agent_run_id="pathfinder-run-1")
     assert stored is not None
     assert stored.status == "cancelled"
@@ -206,7 +229,7 @@ async def test_cancel_waiting_agent_run_returns_terminal_cancelled_projection(
 def test_cancel_missing_process_local_run_returns_explicit_pilot_404(
     agent_run_client,
 ) -> None:
-    client, _registry, launcher, _task_lookups, _app = agent_run_client
+    client, _registry, launcher, _interrupt_tickets, _task_lookups, _app = agent_run_client
 
     response = client.post("/api/tasks/42/agent-runs/missing-run/cancel")
 
@@ -219,7 +242,7 @@ def test_cancel_missing_process_local_run_returns_explicit_pilot_404(
 async def test_cancel_terminal_process_local_run_returns_not_active_conflict(
     agent_run_client,
 ) -> None:
-    client, registry, launcher, _task_lookups, _app = agent_run_client
+    client, registry, launcher, _interrupt_tickets, _task_lookups, _app = agent_run_client
     await registry.register(_assignment(), graph_thread_id="child-thread-1")
     await registry.mark_cancelled(tenant_id=7, task_id=42, agent_run_id="pathfinder-run-1")
 

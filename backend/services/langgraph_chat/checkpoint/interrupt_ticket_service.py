@@ -13,6 +13,9 @@ from sqlalchemy.orm import Session
 from backend.models.core import Task
 from backend.models.hitl import InterruptTicket, InterruptTicketState
 from backend.core.time_utils import utc_now
+from backend.services.langgraph_chat.checkpoint.thread_identity import (
+    format_graph_thread_id,
+)
 from backend.services.langgraph_chat.streaming.status_events import (
     emit_interrupt_state_event,
 )
@@ -340,6 +343,91 @@ class InterruptTicketService:
             },
             target_state=InterruptTicketState.FAILED,
         )
+
+    def fail_pending_for_graph_thread(
+        self,
+        *,
+        tenant_id: int,
+        task_id: int,
+        graph_name: str,
+        graph_thread_id: str,
+    ) -> Optional[InterruptTicket]:
+        """Fail the pending ticket owned by one exact graph execution thread."""
+        normalized_graph_name = _normalize_str(graph_name)
+        if tenant_id <= 0:
+            raise ValueError("tenant_id must be positive")
+        if task_id <= 0:
+            raise ValueError("task_id must be positive")
+        if not normalized_graph_name:
+            raise ValueError("graph_name is required")
+        thread_id = format_graph_thread_id(graph_thread_id, task_id=task_id)
+        return self._fail_pending_matching(
+            InterruptTicket.tenant_id == tenant_id,
+            InterruptTicket.task_id == task_id,
+            InterruptTicket.graph_name == normalized_graph_name,
+            InterruptTicket.thread_id == thread_id,
+        )
+
+    def fail_pending_for_turn(
+        self,
+        *,
+        tenant_id: int,
+        task_id: int,
+        turn_id: str,
+        graph_thread_id: str,
+    ) -> Optional[InterruptTicket]:
+        """Fail the pending ticket owned by one exact main execution turn."""
+        normalized_turn_id = _normalize_str(turn_id)
+        if tenant_id <= 0:
+            raise ValueError("tenant_id must be positive")
+        if task_id <= 0:
+            raise ValueError("task_id must be positive")
+        if not normalized_turn_id:
+            raise ValueError("turn_id is required")
+        thread_id = format_graph_thread_id(graph_thread_id, task_id=task_id)
+        return self._fail_pending_matching(
+            InterruptTicket.tenant_id == tenant_id,
+            InterruptTicket.task_id == task_id,
+            InterruptTicket.turn_id == normalized_turn_id,
+            InterruptTicket.thread_id == thread_id,
+        )
+
+    def _fail_pending_matching(self, *scope_filters: Any) -> Optional[InterruptTicket]:
+        """Atomically fail one pending ticket matching an authorized execution scope."""
+        row = (
+            self.db.query(InterruptTicket)
+            .filter(
+                *scope_filters,
+                InterruptTicket.state == InterruptTicketState.PENDING,
+            )
+            .order_by(InterruptTicket.updated_at.desc(), InterruptTicket.id.desc())
+            .first()
+        )
+        if row is None:
+            return None
+
+        updated_count = (
+            self.db.query(InterruptTicket)
+            .filter(
+                *scope_filters,
+                InterruptTicket.id == row.id,
+                InterruptTicket.state == InterruptTicketState.PENDING,
+            )
+            .update(
+                {
+                    InterruptTicket.state: InterruptTicketState.FAILED,
+                    InterruptTicket.updated_at: _utcnow(),
+                },
+                synchronize_session=False,
+            )
+        )
+        if updated_count != 1:
+            self.db.expire(row)
+            return None
+        self.db.commit()
+        self.db.refresh(row)
+        self._emit_interrupt_state(row)
+        return row
 
     def expire_stale(
         self, *, stale_before: datetime, task_id: Optional[int] = None

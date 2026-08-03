@@ -39,6 +39,9 @@ The format is based on
 
 ### Fixed
 
+- Cancelling a main or subagent run that is waiting for approval now retires
+  its pending approval ticket, preventing stale approvals from being resumed or
+  reused by later interrupts.
 - Interrupted subagent runs now remain terminal when delayed replay or live
   events repeat an equal lifecycle version, preventing orphaned runs from
   reappearing as active after a backend restart.

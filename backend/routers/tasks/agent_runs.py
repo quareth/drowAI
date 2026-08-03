@@ -22,6 +22,9 @@ from backend.services.agent_runs.control import (
 from backend.services.agent_runs.local_runtime import (
     get_process_local_agent_run_runtime,
 )
+from backend.services.langgraph_chat.checkpoint.interrupt_ticket_service import (
+    InterruptTicketService,
+)
 from backend.services.tenant.authorization import ACTION_TASK_CONTROL, ACTION_TASK_READ
 from backend.services.tenant.context import TenantRequestContext
 from backend.services.tenant.dependencies import get_tenant_request_context
@@ -51,13 +54,16 @@ class LocalAgentRunCancelResponse(BaseModel):
     agent_run: LocalAgentRunStatusProjection
 
 
-def get_agent_run_control_service() -> AgentRunControlService:
+def get_agent_run_control_service(
+    db: Session = Depends(get_db),
+) -> AgentRunControlService:
     """Build the process-local status/cancel service dependency."""
     runtime = get_process_local_agent_run_runtime()
     return AgentRunControlService(
         registry=runtime.registry,
         launcher=runtime.launcher,
         subagent_registry=runtime.subagent_registry,
+        interrupt_ticket_service=InterruptTicketService(db),
     )
 
 
