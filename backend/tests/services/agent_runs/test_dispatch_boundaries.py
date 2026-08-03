@@ -269,11 +269,7 @@ def test_dispatch_facade_private_helpers_are_only_admission_or_parent_ready_poli
         and node.name.startswith("_")
     }
 
-    assert module_private_helpers == {
-        "_cancel_ready_handoff_task",
-        "_irrelevant_active_run_ids_from_outcome",
-        "_normalized_non_empty_strings",
-    }
+    assert module_private_helpers == {"_cancel_ready_handoff_task"}
     assert service_private_helpers == {"__init__", "_active_counts_for_plan"}
 
 

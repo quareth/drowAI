@@ -126,10 +126,34 @@ def handoff_wait_status(
     return "inactive"
 
 
+def inactive_wait_status(
+    entries: Iterable[LocalAgentRun],
+    *,
+    tenant_id: int,
+    task_id: int,
+    conversation_id: str | None,
+) -> HandoffWaitStatus | None:
+    """Return inactive only after every scoped run leaves an active status."""
+
+    for entry in entries:
+        if (
+            entry.tenant_id == tenant_id
+            and entry.task_id == task_id
+            and (
+                conversation_id is None
+                or entry.conversation_id == conversation_id
+            )
+            and entry.status in ACTIVE_AGENT_RUN_STATUSES
+        ):
+            return None
+    return "inactive"
+
+
 __all__ = [
     "datetime_sort_key",
     "find_active_by_graph_thread",
     "handoff_wait_status",
+    "inactive_wait_status",
     "list_task_runs",
     "run_sort_key",
     "select_stale_finished_keys",

@@ -34,11 +34,14 @@ The format is based on
 - Pathfinder subagent execution now runs through the declarative generic
   subagent runtime without the old Scout-specific runtime modules.
 - Completed subagent handoffs now pass through parent post-action reasoning
-  before the parent finalizes, delegates follow-up work, calls a tool, or waits
-  for active runs.
+  after every scoped run is terminal and before the parent finalizes, delegates
+  follow-up work, or calls a tool.
 
 ### Fixed
 
+- Parent continuation now waits for every relevant subagent run to become
+  terminal before evaluating their aggregated handoffs, preventing partial
+  batches from finalizing a task while sibling agents are still running.
 - Final answers now stream provider text chunks live again instead of appearing
   only after a buffered structured response completes.
 - Process-local subagent replay now accepts the backend-owned response marker,

@@ -247,6 +247,36 @@ async def test_legacy_delegate_without_handoff_is_rejected_before_launch() -> No
 
 
 @pytest.mark.asyncio
+async def test_invalid_legacy_delegate_waits_for_active_child() -> None:
+    state = _base_state()
+    state.facts.metadata["runtime_budgets"] = {
+        "remaining_iterations": 8,
+        "remaining_tool_calls": 4,
+    }
+    state.facts.metadata["active_agent_runs"] = [
+        {
+            "agent_run_id": "run-active-1",
+            "assignment_id": "assignment-active-1",
+            "agent_id": "pathfinder",
+            "agent_kind": "pathfinder",
+            "agent_display_name": "Pathfinder",
+            "objective": "Complete delegated enumeration.",
+            "status": "running",
+        }
+    ]
+    state.facts.decision_history = ["delegate_subagent: malformed legacy route"]
+
+    result = await decision_router(state.as_graph_state())
+    outcome = result["facts"]["metadata"]["router_outcome"]
+
+    assert outcome["action"] == "wait_for_subagents"
+    assert outcome["candidate_action"] == "delegate_subagent"
+    assert outcome["reason"] == (
+        "coordination_delegate_invalid_handoff_finalize_blocked_active_runs"
+    )
+
+
+@pytest.mark.asyncio
 async def test_wait_without_active_child_fails_closed_to_parent_reasoning() -> None:
     state = _base_state()
     state.facts.metadata["runtime_budgets"] = {

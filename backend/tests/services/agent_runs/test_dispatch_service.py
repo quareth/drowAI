@@ -265,26 +265,6 @@ async def _no_parent_handoff(
     return None
 
 
-class _RecordingRegistry(ProcessLocalAgentRunRegistry):
-    def __init__(self) -> None:
-        super().__init__()
-        self.consumed: list[tuple[int, int, str]] = []
-
-    async def consume_result(
-        self,
-        *,
-        tenant_id: int,
-        task_id: int,
-        agent_run_id: str,
-    ) -> AgentResult | None:
-        self.consumed.append((tenant_id, task_id, agent_run_id))
-        return await super().consume_result(
-            tenant_id=tenant_id,
-            task_id=task_id,
-            agent_run_id=agent_run_id,
-        )
-
-
 class _ListFailureRegistry(ProcessLocalAgentRunRegistry):
     async def list_task_runs(self, *, tenant_id: int, task_id: int) -> list[Any]:
         raise RuntimeError("registry read failed")
@@ -609,14 +589,15 @@ async def test_agent_result_conversion_and_invalid_launcher_results_fail_closed(
 
 
 @pytest.mark.asyncio
-async def test_pause_cancels_ready_parent_wait_and_requires_resumed_outcome() -> None:
+async def test_pause_uses_existing_parent_barrier_and_requires_resumed_outcome() -> None:
     registry = ProcessLocalAgentRunRegistry()
     launcher = _ScriptedLauncher(
         registry,
         scripts={"run-1": "paused_exception", "run-2": "completion"},
     )
     service, _registry, _launcher = _service(registry=registry, launcher=launcher)
-    early_cancelled = asyncio.Event()
+    barrier_started = asyncio.Event()
+    barrier_release = asyncio.Event()
     calls: list[tuple[tuple[str, ...], bool]] = []
 
     async def _process(
@@ -630,30 +611,30 @@ async def test_pause_cancels_ready_parent_wait_and_requires_resumed_outcome() ->
             )
         )
         if wait_for_initial_handoff and not completions:
-            try:
-                await asyncio.Event().wait()
-            except asyncio.CancelledError:
-                early_cancelled.set()
-                raise
-        if wait_for_initial_handoff:
+            barrier_started.set()
+            await barrier_release.wait()
             return _parent_outcome(
-                agent_run_ids=tuple(
-                    completion.result.agent_run_id for completion in completions
-                ),
+                agent_run_ids=("run-2",),
                 child_completions=completions,
             )
         return None
 
-    result = await service.dispatch(
-        _plan("pathfinder", "cartographer"),
-        _runtime_config(),
-        parent_turn_sequence=5,
-        process_ready_handoffs=_process,
+    dispatching = asyncio.create_task(
+        service.dispatch(
+            _plan("pathfinder", "cartographer"),
+            _runtime_config(),
+            parent_turn_sequence=5,
+            process_ready_handoffs=_process,
+        )
     )
+    await asyncio.wait_for(barrier_started.wait(), timeout=1)
 
-    assert early_cancelled.is_set()
-    assert calls[0] == ((), True)
-    assert calls[-1] == (("run-2",), True)
+    assert calls == [((), True)]
+    assert dispatching.done() is False
+    barrier_release.set()
+    result = await asyncio.wait_for(dispatching, timeout=1)
+
+    assert calls == [((), True)]
     assert result.parent_handoff_outcome is not None
     assert result.parent_handoff_outcome.agent_run_ids == ("run-2",)
 
@@ -789,9 +770,45 @@ async def test_completion_order_uses_immutable_plan_index_not_batch_order() -> N
 
 
 @pytest.mark.asyncio
-async def test_early_parent_outcome_precedence_consumes_declared_irrelevant_runs() -> None:
-    registry = _RecordingRegistry()
-    service, _registry, _launcher = _service(registry=registry)
+async def test_capacity_deferred_batches_do_not_run_parent_between_batches() -> None:
+    service, _registry, _launcher = _service(
+        subagent_registry=_subagent_registry(
+            pathfinder_capacity=1,
+            include_cartographer=False,
+        )
+    )
+    parent_calls: list[tuple[tuple[str, ...], bool]] = []
+
+    async def _process(
+        completions: tuple[AgentRunCompletion, ...],
+        wait_for_initial_handoff: bool,
+    ) -> ParentHandoffOutcome | None:
+        parent_calls.append(
+            (
+                tuple(completion.result.agent_run_id for completion in completions),
+                wait_for_initial_handoff,
+            )
+        )
+        return None
+
+    result = await service.dispatch(
+        _plan("pathfinder", "pathfinder"),
+        _runtime_config(),
+        parent_turn_sequence=5,
+        process_ready_handoffs=_process,
+    )
+
+    assert parent_calls == []
+    assert [completion.result.agent_run_id for completion in result.child_completions] == [
+        "run-1",
+        "run-2",
+    ]
+    assert result.parent_handoff_outcome is None
+
+
+@pytest.mark.asyncio
+async def test_parent_barrier_outcome_is_returned_after_parallel_batch_settles() -> None:
+    service, registry, _launcher = _service()
 
     async def _process(
         completions: tuple[AgentRunCompletion, ...],
@@ -799,17 +816,7 @@ async def test_early_parent_outcome_precedence_consumes_declared_irrelevant_runs
     ) -> ParentHandoffOutcome | None:
         if wait_for_initial_handoff:
             return _parent_outcome(
-                agent_run_ids=("run-1",),
-                metadata={
-                    "router_outcome": {
-                        "par_irrelevant_active_agent_run_ids": [
-                            "run-2",
-                            "run-1",
-                            "",
-                            "run-2",
-                        ]
-                    }
-                },
+                agent_run_ids=("run-1", "run-2"),
                 child_completions=completions,
             )
         return None
@@ -822,12 +829,11 @@ async def test_early_parent_outcome_precedence_consumes_declared_irrelevant_runs
     )
 
     assert result.parent_handoff_outcome is not None
-    assert result.parent_handoff_outcome.agent_run_ids == ("run-1",)
-    assert registry.consumed == [(TENANT_ID, TASK_ID, "run-2")]
+    assert result.parent_handoff_outcome.agent_run_ids == ("run-1", "run-2")
     run_1 = await registry.get(tenant_id=TENANT_ID, task_id=TASK_ID, agent_run_id="run-1")
     run_2 = await registry.get(tenant_id=TENANT_ID, task_id=TASK_ID, agent_run_id="run-2")
     assert run_1 is not None and run_1.result_consumed is False
-    assert run_2 is not None and run_2.result_consumed is True
+    assert run_2 is not None and run_2.result_consumed is False
 
 
 @pytest.mark.asyncio

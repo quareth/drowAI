@@ -1,10 +1,9 @@
 """Settlement and reconciliation helpers for subagent dispatch.
 
 This module owns child terminal-result validation, registry-backed completion
-recovery, launch-failure sibling cleanup, handoff completion lookup, and
-explicit irrelevant-result consumption. It does not schedule work, publish
-lifecycle events, launch child runs, parse parent-outcome metadata, or process
-parent handoffs.
+recovery, launch-failure sibling cleanup, and handoff completion lookup. It does
+not schedule work, publish lifecycle events, launch child runs, parse
+parent-outcome metadata, or process parent handoffs.
 """
 
 from __future__ import annotations
@@ -13,8 +12,6 @@ import asyncio
 import logging
 from collections.abc import Awaitable
 from typing import Any
-
-from backend.services.langgraph_chat.contracts import LangGraphRuntimeConfig
 
 from .completion import (
     AgentRunCompletion,
@@ -321,27 +318,6 @@ class DispatchSettlement:
             completion_by_run_id[agent_run_id] = completion
             completions.append(completion)
         return tuple(completions)
-
-    async def consume_irrelevant_terminal_results(
-        self,
-        runtime_config: LangGraphRuntimeConfig,
-        *,
-        irrelevant_run_ids: tuple[str, ...],
-        already_processed_run_ids: tuple[str, ...],
-    ) -> None:
-        """Suppress later same-turn PAR cycles for declared irrelevant runs."""
-        processed = set(already_processed_run_ids)
-        tenant_id = int(runtime_config.metadata["tenant_id"])
-        task_id = runtime_config.chat_inputs.task_id
-        for agent_run_id in irrelevant_run_ids:
-            if agent_run_id in processed:
-                continue
-            await self._registry.consume_result(
-                tenant_id=tenant_id,
-                task_id=task_id,
-                agent_run_id=agent_run_id,
-            )
-
 
 __all__ = [
     "DispatchSettlement",

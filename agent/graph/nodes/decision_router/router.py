@@ -549,14 +549,16 @@ def _check_coordination_guardrails(
     ):
         logger.warning("[ROUTER] Rejecting delegate_subagent without valid handoff")
         safe_inc("router_coordination_delegate_invalid_handoff")
-        return _route_with_outcome(
+        return _route_guardrail_outcome(
             interactive,
+            metadata,
             action="finalize",
             reason="coordination_delegate_invalid_handoff",
             candidate_action=resolved_action,
             candidate_source=resolved_candidate_source,
             resolution_source="guardrail",
             append_history=True,
+            irrelevant_active_agent_run_ids=resolved_irrelevant_active_run_ids,
         )
 
     if resolved_action == "wait_for_subagents" and not has_relevant_active_agent_runs(

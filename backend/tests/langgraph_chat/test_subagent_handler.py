@@ -342,110 +342,6 @@ class _CompletingExecutor:
         )
 
 
-class _BlockingFirstParentExecutor(_CompletingExecutor):
-    def __init__(self) -> None:
-        super().__init__()
-        self.first_parent_started = asyncio.Event()
-        self.release_first_parent = asyncio.Event()
-        self.parent_calls: list[dict[str, Any]] = []
-
-    async def stream_graph(
-        self,
-        compiled: Any,
-        graph_input: Any,
-        config: dict[str, Any],
-        task_id: int,
-        **kwargs: Any,
-    ) -> GraphExecutionResult:
-        graph_name = config["configurable"]["graph_name"]
-        if graph_name != GRAPH_NAME_SUBAGENT:
-            call = {
-                "compiled": compiled,
-                "graph_input": graph_input,
-                "config": config,
-                "task_id": task_id,
-                "kwargs": kwargs,
-            }
-            self.calls.append(call)
-            self.parent_calls.append(call)
-            if len(self.parent_calls) == 1:
-                self.first_parent_started.set()
-                await self.release_first_parent.wait()
-            final_state = copy.deepcopy(graph_input)
-            if len(self.parent_calls) == 1:
-                final_state["facts"]["metadata"]["runtime_budgets"][
-                    "remaining_tool_calls"
-                ] = 9
-            final_state["trace"]["final_text"] = "Main agent finalized Pathfinder result."
-            return GraphExecutionResult(final_state=final_state)
-        return await super().stream_graph(
-            compiled,
-            graph_input,
-            config,
-            task_id,
-            **kwargs,
-        )
-
-
-class _IrrelevantFirstParentExecutor(_CompletingExecutor):
-    def __init__(self) -> None:
-        super().__init__()
-        self.parent_calls: list[dict[str, Any]] = []
-
-    async def stream_graph(
-        self,
-        compiled: Any,
-        graph_input: Any,
-        config: dict[str, Any],
-        task_id: int,
-        **kwargs: Any,
-    ) -> GraphExecutionResult:
-        graph_name = config["configurable"]["graph_name"]
-        if graph_name == GRAPH_NAME_SUBAGENT:
-            return await super().stream_graph(
-                compiled,
-                graph_input,
-                config,
-                task_id,
-                **kwargs,
-            )
-
-        call = {
-            "compiled": compiled,
-            "graph_input": graph_input,
-            "config": config,
-            "task_id": task_id,
-            "kwargs": kwargs,
-        }
-        self.calls.append(call)
-        self.parent_calls.append(call)
-        metadata = graph_input["facts"]["metadata"]
-        active_runs = metadata.get(ACTIVE_AGENT_RUNS_KEY)
-        if not isinstance(active_runs, list):
-            bundle = metadata.get(METADATA_CONTEXT_BUNDLE_KEY)
-            active_runs = (
-                bundle.get(ACTIVE_AGENT_RUNS_KEY, [])
-                if isinstance(bundle, dict)
-                else []
-            )
-        irrelevant_run_ids = [
-            run["agent_run_id"]
-            for run in active_runs
-            if isinstance(run, dict) and isinstance(run.get("agent_run_id"), str)
-        ]
-        final_state = copy.deepcopy(graph_input)
-        final_state["facts"]["metadata"]["router_outcome"] = {
-            "action": "finalize",
-            "candidate_action": "finalize",
-            "candidate_source": "ptr",
-            "resolution_source": "candidate",
-            "reason": "candidate_decision_accepted",
-            "par_irrelevant_active_agent_run_ids": irrelevant_run_ids,
-        }
-        final_state["trace"]["final_text"] = "Main agent finalized without Cartographer."
-        return GraphExecutionResult(final_state=final_state)
-
-
 class _FakeCheckpointerService:
     def get_checkpointer(self, task_id: int) -> "_FakeCheckpointerContext":
         assert task_id == 42
@@ -558,19 +454,6 @@ async def _wait_for_call_count(
 ) -> None:
     async def _poll() -> None:
         while len(launcher.calls) < expected:
-            await asyncio.sleep(0)
-
-    await asyncio.wait_for(_poll(), timeout=timeout)
-
-
-async def _wait_for_parent_call_count(
-    executor: Any,
-    expected: int,
-    *,
-    timeout: float = 0.5,
-) -> None:
-    async def _poll() -> None:
-        while len(executor.parent_calls) < expected:
             await asyncio.sleep(0)
 
     await asyncio.wait_for(_poll(), timeout=timeout)
@@ -891,11 +774,11 @@ async def test_subagent_handler_launches_independent_handoffs_concurrently(
 
 
 @pytest.mark.asyncio
-async def test_subagent_handler_processes_first_ready_handoff_with_active_snapshot(
+async def test_subagent_handler_waits_for_all_handoffs_before_parent_continuation(
 ) -> None:
     registry = ProcessLocalAgentRunRegistry()
     launcher = _ControlledLauncher(registry)
-    executor = _BlockingFirstParentExecutor()
+    executor = _CompletingExecutor()
     second_definition = _second_agent_definition()
     definition_registry = DefinitionSubagentRegistry(
         [
@@ -936,9 +819,14 @@ async def test_subagent_handler_processes_first_ready_handoff_with_active_snapsh
     await _wait_for_call_count(launcher, 2)
 
     launcher.releases[0].set()
-    await asyncio.wait_for(executor.first_parent_started.wait(), timeout=0.5)
 
-    assert len(executor.parent_calls) == 1
+    async def _wait_for_partial_progress() -> None:
+        while not runtime_config.metadata.get(COMPLETED_AGENT_RESULTS_KEY):
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(_wait_for_partial_progress(), timeout=0.5)
+
+    assert executor.calls == []
     completed_results = runtime_config.metadata[COMPLETED_AGENT_RESULTS_KEY]
     active_runs = runtime_config.metadata[ACTIVE_AGENT_RUNS_KEY]
     assert [result["agent_id"] for result in completed_results] == ["pathfinder"]
@@ -947,113 +835,34 @@ async def test_subagent_handler_processes_first_ready_handoff_with_active_snapsh
     assert not launcher.releases[1].is_set()
 
     launcher.releases[1].set()
-    executor.release_first_parent.set()
     result = await result_task
 
-    assert len(executor.parent_calls) == 2
-    first_graph_input = executor.parent_calls[0]["graph_input"]
-    assert first_graph_input["facts"]["metadata"]["runtime_budgets"] == {
+    assert len(executor.calls) == 1
+    graph_input = executor.calls[0]["graph_input"]
+    graph_metadata = graph_input["facts"]["metadata"]
+    assert graph_metadata["runtime_budgets"] == {
         "time_budget_ms": 300_000,
         "remaining_iterations": 15,
         "remaining_tool_calls": 10,
     }
-    second_graph_input = executor.parent_calls[1]["graph_input"]
-    second_metadata = second_graph_input["facts"]["metadata"]
-    assert second_metadata["runtime_budgets"] == {
-        "time_budget_ms": 300_000,
-        "remaining_iterations": 15,
-        "remaining_tool_calls": 9,
-    }
     assert runtime_config.metadata["runtime_budgets"] == {
         "time_budget_ms": 300_000,
         "remaining_iterations": 15,
-        "remaining_tool_calls": 9,
+        "remaining_tool_calls": 10,
     }
-    assert (
-        second_metadata[METADATA_CONTEXT_BUNDLE_KEY][ACTIVE_AGENT_RUNS_KEY]
-        == []
-    )
+    assert graph_metadata[METADATA_CONTEXT_BUNDLE_KEY][ACTIVE_AGENT_RUNS_KEY] == []
+    assert [
+        item["agent_id"]
+        for item in graph_metadata[METADATA_CONTEXT_BUNDLE_KEY][
+            COMPLETED_AGENT_RESULTS_KEY
+        ]
+    ] == ["pathfinder", "cartographer"]
     assert runtime_config.metadata[ACTIVE_AGENT_RUNS_KEY] == []
     assert (
         runtime_config.metadata[METADATA_CONTEXT_BUNDLE_KEY][ACTIVE_AGENT_RUNS_KEY]
         == []
     )
     assert result.metadata["status"] == "completed"
-
-
-@pytest.mark.asyncio
-async def test_subagent_handler_does_not_reprocess_irrelevant_active_finalization(
-) -> None:
-    registry = ProcessLocalAgentRunRegistry()
-    launcher = _ControlledLauncher(registry)
-    executor = _IrrelevantFirstParentExecutor()
-    second_definition = _second_agent_definition()
-    definition_registry = DefinitionSubagentRegistry(
-        [
-            get_definition_subagent_registry().require("pathfinder"),
-            second_definition,
-        ]
-    )
-    async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
-        return None
-
-    handler = build_subagent_handler(
-        object(),
-        executor,
-        object(),
-        registry=registry,
-        launcher=launcher,
-        lifecycle_publisher=_publish,
-        subagent_registry=definition_registry,
-    )
-    runtime_config = _ordered_handoff_runtime_config(
-        {
-            "agent_id": "pathfinder",
-            "agent_kind": "recon",
-            "capabilities": ["port_scanning"],
-            "targets": ["10.0.0.10"],
-            "objective": "Scan ports on 10.0.0.10.",
-        },
-        {
-            "agent_id": "cartographer",
-            "agent_kind": "recon",
-            "capabilities": ["asset_inventory"],
-            "targets": ["10.0.0.10"],
-            "objective": "Inventory approved assets.",
-        },
-    )
-
-    result_task = asyncio.create_task(handler.handle(runtime_config))
-    await _wait_for_call_count(launcher, 2)
-    launcher.releases[0].set()
-    await _wait_for_parent_call_count(executor, 1)
-    launcher.releases[1].set()
-    result = await result_task
-
-    assert result.final_text == "Main agent finalized without Cartographer."
-    assert len(executor.parent_calls) == 1
-    first_graph_input = executor.parent_calls[0]["graph_input"]
-    first_metadata = first_graph_input["facts"]["metadata"]
-    first_bundle = first_metadata[METADATA_CONTEXT_BUNDLE_KEY]
-    active_runs = first_bundle[ACTIVE_AGENT_RUNS_KEY]
-    assert [run["agent_id"] for run in active_runs] == ["cartographer"]
-    entries = sorted(
-        await registry.list_task_runs(tenant_id=7, task_id=42),
-        key=lambda entry: entry.agent_id,
-    )
-    assert [entry.agent_id for entry in entries] == ["cartographer", "pathfinder"]
-    assert [entry.status for entry in entries] == ["completed", "completed"]
-    assert [entry.result_consumed for entry in entries] == [True, True]
-    later_handoff = await AgentRunResultProjector(
-        registry=registry,
-        subagent_registry=get_definition_subagent_registry(),
-    ).collect_for_context(
-        tenant_id=7,
-        task_id=42,
-        conversation_id="conv-42",
-    )
-    assert later_handoff.results == ()
-    assert later_handoff.agent_run_ids == ()
 
 
 @pytest.mark.asyncio

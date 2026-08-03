@@ -882,6 +882,47 @@ async def test_scoped_handoff_wait_exits_when_no_active_runs_remain() -> None:
 
 
 @pytest.mark.asyncio
+async def test_inactive_handoff_wait_ignores_ready_results_until_active_runs_finish() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    await registry.register(
+        _assignment(agent_run_id="run-ready"),
+        graph_thread_id="child-ready",
+    )
+    await registry.mark_completed(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="run-ready",
+        result=_result("run-ready"),
+    )
+    await registry.register(
+        _assignment(agent_run_id="run-active"),
+        graph_thread_id="child-active",
+    )
+    await registry.mark_running(tenant_id=7, task_id=42, agent_run_id="run-active")
+
+    waiter = asyncio.create_task(
+        registry.wait_for_inactive_handoffs(
+            tenant_id=7,
+            task_id=42,
+            conversation_id="conversation-1",
+            after_version=await registry.state_version(),
+        )
+    )
+    await asyncio.sleep(0)
+
+    assert waiter.done() is False
+
+    await registry.mark_completed(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="run-active",
+        result=_result("run-active"),
+    )
+
+    assert await asyncio.wait_for(waiter, timeout=1) == "inactive"
+
+
+@pytest.mark.asyncio
 async def test_scoped_handoff_wait_returns_ready_and_inactive() -> None:
     registry = ProcessLocalAgentRunRegistry()
     await registry.register(_assignment(), graph_thread_id="child-thread-1")

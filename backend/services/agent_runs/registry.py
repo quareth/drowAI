@@ -627,6 +627,26 @@ class ProcessLocalAgentRunRegistry:
             ),
         )
 
+    async def wait_for_inactive_handoffs(
+        self,
+        *,
+        tenant_id: int,
+        task_id: int,
+        conversation_id: str | None = None,
+        after_version: int,
+    ) -> _registry_contracts.HandoffWaitStatus:
+        """Wait until every scoped subagent run leaves an active status."""
+
+        return await self._signal.wait_for_predicate(
+            after_version=after_version,
+            predicate=lambda: _registry_queries.inactive_wait_status(
+                self._runs.values(),
+                tenant_id=tenant_id,
+                task_id=task_id,
+                conversation_id=conversation_id,
+            ),
+        )
+
     def _require_entry(
         self,
         *,

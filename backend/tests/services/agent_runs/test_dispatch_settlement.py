@@ -1,8 +1,8 @@
 """Direct tests for subagent dispatch settlement.
 
 These tests lock the extracted settlement collaborator's result translation,
-registry-backed recovery, cleanup ordering, cache lookup, and explicit result
-consumption independently from the dispatch facade.
+registry-backed recovery, cleanup ordering, and cache lookup independently
+from the dispatch facade.
 """
 
 from __future__ import annotations
@@ -28,7 +28,6 @@ from backend.services.langgraph_chat.execution.graph_executor import (
 from backend.tests.services.agent_runs.test_dispatch_service import (
     TASK_ID,
     TENANT_ID,
-    _RecordingRegistry,
     _assignment,
     _completion,
     _final_state,
@@ -424,52 +423,3 @@ async def test_handoff_completions_use_cache_first_then_registry_fallback() -> N
     assert cache["run-b"].result == result_b
     assert "run-c" not in cache
     assert "missing-run" not in cache
-
-
-@pytest.mark.asyncio
-async def test_consume_irrelevant_terminal_results_skips_processed_ids_only() -> None:
-    registry = _RecordingRegistry()
-    settlement = DispatchSettlement(registry=registry)
-    first = _assignment("pathfinder", "run-1")
-    second = _assignment("cartographer", "run-2")
-    third = _assignment("pathfinder", "run-3")
-    for assignment in (first, second, third):
-        await registry.register(
-            assignment,
-            graph_thread_id=f"{assignment.agent_run_id}-thread",
-        )
-        await registry.mark_completed(
-            tenant_id=TENANT_ID,
-            task_id=TASK_ID,
-            agent_run_id=assignment.agent_run_id,
-            result=_result(assignment),
-        )
-
-    await settlement.consume_irrelevant_terminal_results(
-        _runtime_config(),
-        irrelevant_run_ids=("run-1", "run-2", "run-3", "run-2"),
-        already_processed_run_ids=("run-1", "run-3"),
-    )
-
-    assert registry.consumed == [
-        (TENANT_ID, TASK_ID, "run-2"),
-        (TENANT_ID, TASK_ID, "run-2"),
-    ]
-    run_1 = await registry.get(
-        tenant_id=TENANT_ID,
-        task_id=TASK_ID,
-        agent_run_id="run-1",
-    )
-    run_2 = await registry.get(
-        tenant_id=TENANT_ID,
-        task_id=TASK_ID,
-        agent_run_id="run-2",
-    )
-    run_3 = await registry.get(
-        tenant_id=TENANT_ID,
-        task_id=TASK_ID,
-        agent_run_id="run-3",
-    )
-    assert run_1 is not None and run_1.result_consumed is False
-    assert run_2 is not None and run_2.result_consumed is True
-    assert run_3 is not None and run_3.result_consumed is False

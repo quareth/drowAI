@@ -1,8 +1,9 @@
-"""Coordinate parent processing of completed process-local subagent handoffs.
+"""Barrier and coordinate completed process-local subagent handoffs.
 
-The coordinator owns registry claim lifecycle and serialized parent continuation
-entry for one parent task. It does not build prompts, launch child runs, or mutate
-registry internals outside the public claim API.
+The coordinator owns the all-runs-terminal barrier, registry claim lifecycle,
+and serialized parent continuation entry for one parent task. It does not build
+prompts, launch child runs, or mutate registry internals outside the public
+claim API.
 """
 
 from __future__ import annotations
@@ -114,7 +115,7 @@ class _PreparedParentHandoff:
 
 
 class ParentHandoffCoordinator:
-    """Serialize ready handoff delivery into one parent continuation cycle."""
+    """Wait for scoped runs and serialize one aggregate parent continuation."""
 
     def __init__(
         self,
@@ -147,10 +148,12 @@ class ParentHandoffCoordinator:
         wait_for_initial_handoff: bool = False,
         wait_timeout_seconds: float | None = None,
     ) -> ParentHandoffOutcome | None:
-        """Claim currently ready handoffs and run one parent continuation.
+        """Wait for scoped runs to finish, then process one aggregate claim.
 
-        The registry claim is released if the continuation raises or returns a
-        cancelled result, leaving handoffs claimable by a later retry.
+        Partial claims may emit deterministic progress but are released while
+        any scoped run remains active. The final claim is released if the
+        continuation raises or returns a cancelled result, leaving its
+        handoffs claimable by a later retry.
         """
         async with self._guard_pool.acquire(
             tenant_id=tenant_id,
@@ -195,6 +198,20 @@ class ParentHandoffCoordinator:
                     task_id=task_id,
                     claim=claim,
                 )
+
+                if prepared.active_runs:
+                    await self._registry.release_handoffs(claim.claim_id)
+                    version = await self._registry.state_version()
+                    await self._wait_for_relevant_registry_change(
+                        tenant_id=tenant_id,
+                        task_id=task_id,
+                        conversation_id=conversation_id,
+                        after_version=version,
+                        wait_timeout_seconds=wait_timeout_seconds,
+                        require_inactive=True,
+                    )
+                    wait_for_initial_handoff = True
+                    continue
 
                 claim_acknowledged = False
                 try:
@@ -305,7 +322,7 @@ class ParentHandoffCoordinator:
             claim=claim,
             handoff=handoff,
             active_runs=active_runs,
-            action="evaluating",
+            action="waiting" if active_runs else "evaluating",
         )
         return _PreparedParentHandoff(
             handoff=handoff,
@@ -439,14 +456,23 @@ class ParentHandoffCoordinator:
         conversation_id: str,
         after_version: int,
         wait_timeout_seconds: float | None,
+        require_inactive: bool = False,
     ) -> str:
         started_at = perf_counter()
-        wait_coro = self._registry.wait_for_ready_handoffs_or_inactive(
-            tenant_id=tenant_id,
-            task_id=task_id,
-            conversation_id=conversation_id,
-            after_version=after_version,
-        )
+        if require_inactive:
+            wait_coro = self._registry.wait_for_inactive_handoffs(
+                tenant_id=tenant_id,
+                task_id=task_id,
+                conversation_id=conversation_id,
+                after_version=after_version,
+            )
+        else:
+            wait_coro = self._registry.wait_for_ready_handoffs_or_inactive(
+                tenant_id=tenant_id,
+                task_id=task_id,
+                conversation_id=conversation_id,
+                after_version=after_version,
+            )
         resume_cause = "unknown"
         try:
             if wait_timeout_seconds is None:

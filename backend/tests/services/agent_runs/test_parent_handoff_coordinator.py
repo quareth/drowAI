@@ -203,11 +203,6 @@ async def test_coordinator_claims_ready_results_together_and_acknowledges() -> N
     registry = ProcessLocalAgentRunRegistry()
     await _register_completed(registry, "run-1")
     await _register_completed(registry, "run-2")
-    await registry.register(
-        _assignment(agent_run_id="run-active", objective="Keep checking headers."),
-        graph_thread_id="child-active",
-    )
-    await registry.mark_running(tenant_id=7, task_id=42, agent_run_id="run-active")
     metadata: dict[str, Any] = {}
     observed: dict[str, Any] = {}
 
@@ -230,12 +225,12 @@ async def test_coordinator_claims_ready_results_together_and_acknowledges() -> N
 
     assert outcome is not None
     assert observed["handoff_ids"] == ("run-1", "run-2")
-    assert observed["active_ids"] == ("run-active",)
+    assert observed["active_ids"] == ()
     assert [item["agent_run_id"] for item in metadata[COMPLETED_AGENT_RESULTS_KEY]] == [
         "run-1",
         "run-2",
     ]
-    assert metadata[ACTIVE_AGENT_RUNS_KEY][0]["agent_run_id"] == "run-active"
+    assert metadata[ACTIVE_AGENT_RUNS_KEY] == []
     entries = await registry.list_task_runs(tenant_id=7, task_id=42)
     consumed = {
         entry.agent_run_id: entry.result_consumed
@@ -246,14 +241,59 @@ async def test_coordinator_claims_ready_results_together_and_acknowledges() -> N
 
 
 @pytest.mark.asyncio
-async def test_coordinator_records_bounded_handoff_observability() -> None:
+async def test_coordinator_waits_for_all_active_runs_before_parent_continuation() -> None:
     registry = ProcessLocalAgentRunRegistry()
     await _register_completed(registry, "run-1")
     await registry.register(
-        _assignment(agent_run_id="run-active", objective="Keep checking headers."),
-        graph_thread_id="child-active",
+        _assignment(agent_run_id="run-2", objective="Keep checking headers."),
+        graph_thread_id="child-run-2",
     )
-    await registry.mark_running(tenant_id=7, task_id=42, agent_run_id="run-active")
+    await registry.mark_running(tenant_id=7, task_id=42, agent_run_id="run-2")
+    parent_called = asyncio.Event()
+    observed: dict[str, Any] = {}
+
+    async def _run_parent(
+        handoff: Any,
+        active_runs: tuple[dict[str, Any], ...],
+    ) -> LangGraphChatResult:
+        observed["handoff_ids"] = handoff.agent_run_ids
+        observed["active_runs"] = active_runs
+        parent_called.set()
+        return _completed_result()
+
+    processing = asyncio.create_task(
+        _coordinator(registry=registry).process_ready_handoffs(
+            tenant_id=7,
+            task_id=42,
+            conversation_id="conversation-1",
+            parent_turn_id="turn-1",
+            metadata={},
+            run_parent_continuation=_run_parent,
+            wait_for_initial_handoff=True,
+        )
+    )
+    await asyncio.sleep(0)
+
+    assert parent_called.is_set() is False
+    assert processing.done() is False
+
+    await registry.mark_completed(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="run-2",
+        result=_result("run-2"),
+    )
+    outcome = await asyncio.wait_for(processing, timeout=1)
+
+    assert outcome is not None
+    assert observed["handoff_ids"] == ("run-1", "run-2")
+    assert observed["active_runs"] == ()
+
+
+@pytest.mark.asyncio
+async def test_coordinator_records_bounded_handoff_observability() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    await _register_completed(registry, "run-1")
 
     async def _run_parent(
         _handoff: Any,
@@ -285,7 +325,7 @@ async def test_coordinator_records_bounded_handoff_observability() -> None:
     assert "post_action_reasoning_handoff_claim_observed" in recorded_counters
     assert "post_action_reasoning_parent_finalization_count" in recorded_counters
     assert recorded_gauges["post_action_reasoning_handoff_batch_size"] == 1
-    assert recorded_gauges["post_action_reasoning_active_run_count"] == 1
+    assert recorded_gauges["post_action_reasoning_active_run_count"] == 0
 
 
 @pytest.mark.asyncio
@@ -299,6 +339,7 @@ async def test_coordinator_emits_one_parent_progress_block_per_handoff_batch() -
     )
     await registry.mark_running(tenant_id=7, task_id=42, agent_run_id="run-active")
     published: list[dict[str, Any]] = []
+    waiting_progress_published = asyncio.Event()
 
     async def _publish_progress(
         task_id: int,
@@ -306,6 +347,12 @@ async def test_coordinator_emits_one_parent_progress_block_per_handoff_batch() -
     ) -> None:
         assert task_id == 42
         published.extend(events)
+        if any(
+            event.get("metadata", {}).get("parent_progress", {}).get("action")
+            == "waiting"
+            for event in events
+        ):
+            waiting_progress_published.set()
 
     async def _run_parent(
         _handoff: Any,
@@ -313,26 +360,41 @@ async def test_coordinator_emits_one_parent_progress_block_per_handoff_batch() -
     ) -> LangGraphChatResult:
         return _completed_result()
 
-    outcome = await _coordinator(
-        registry=registry,
-        parent_progress_publisher=_publish_progress,
-    ).process_ready_handoffs(
+    processing = asyncio.create_task(
+        _coordinator(
+            registry=registry,
+            parent_progress_publisher=_publish_progress,
+        ).process_ready_handoffs(
+            tenant_id=7,
+            task_id=42,
+            conversation_id="conversation-1",
+            parent_turn_id="turn-1",
+            metadata={"turn_sequence": 9},
+            run_parent_continuation=_run_parent,
+        )
+    )
+    await asyncio.wait_for(waiting_progress_published.wait(), timeout=1)
+    assert processing.done() is False
+
+    await registry.mark_completed(
         tenant_id=7,
         task_id=42,
-        conversation_id="conversation-1",
-        parent_turn_id="turn-1",
-        metadata={"turn_sequence": 9},
-        run_parent_continuation=_run_parent,
+        agent_run_id="run-active",
+        result=_result("run-active"),
     )
+    outcome = await asyncio.wait_for(processing, timeout=1)
 
     assert outcome is not None
     assert [event["type"] for event in published] == [
         "reasoning_start",
         "reasoning_delta",
         "reasoning_section_end",
+        "reasoning_start",
+        "reasoning_delta",
+        "reasoning_section_end",
     ]
     deltas = [event for event in published if event["type"] == "reasoning_delta"]
-    assert len(deltas) == 1
+    assert len(deltas) == 2
     delta = deltas[0]
     metadata = delta["metadata"]
     assert metadata["producer_type"] == "main_agent"
@@ -346,6 +408,14 @@ async def test_coordinator_emits_one_parent_progress_block_per_handoff_batch() -
     assert metadata["parent_progress"]["active_agent_run_ids"] == ["run-active"]
     assert "2 assignments returned a handoff" in delta["content"]
     assert "1 relevant assignment still active" in delta["content"]
+    final_progress = deltas[1]["metadata"]["parent_progress"]
+    assert final_progress["action"] == "evaluating"
+    assert final_progress["completed_agent_run_ids"] == [
+        "run-1",
+        "run-2",
+        "run-active",
+    ]
+    assert final_progress["active_agent_run_ids"] == []
 
 
 @pytest.mark.asyncio
@@ -884,7 +954,7 @@ async def test_parent_continuation_reflects_after_blocked_child_result() -> None
 
 
 @pytest.mark.asyncio
-async def test_wait_for_subagents_blocks_until_scoped_handoff_is_ready() -> None:
+async def test_parent_barrier_ignores_other_tasks_until_scoped_runs_are_terminal() -> None:
     registry = ProcessLocalAgentRunRegistry()
     await _register_completed(registry, "run-1")
     await registry.register(
@@ -900,18 +970,7 @@ async def test_wait_for_subagents_blocks_until_scoped_handoff_is_ready() -> None
         active_runs: tuple[dict[str, Any], ...],
     ) -> LangGraphChatResult:
         observed["parent_batches"].append(handoff.agent_run_ids)
-        if handoff.agent_run_ids == ("run-1",):
-            assert [run["agent_run_id"] for run in active_runs] == ["run-active"]
-            return LangGraphChatResult(
-                final_text="waiting",
-                conversation_id="conversation-1",
-                metadata={
-                    "router_outcome": {
-                        "action": "wait_for_subagents",
-                        "candidate_id": "par-wait-1",
-                    }
-                },
-            )
+        assert active_runs == ()
         return _completed_result()
 
     processing = asyncio.create_task(
@@ -944,7 +1003,7 @@ async def test_wait_for_subagents_blocks_until_scoped_handoff_is_ready() -> None
     )
     await asyncio.sleep(0)
 
-    assert observed["parent_batches"] == [("run-1",)]
+    assert observed["parent_batches"] == []
     assert processing.done() is False
 
     await registry.mark_completed(
@@ -957,13 +1016,8 @@ async def test_wait_for_subagents_blocks_until_scoped_handoff_is_ready() -> None
     outcome = await asyncio.wait_for(processing, timeout=1)
 
     assert outcome is not None
-    assert observed["parent_batches"] == [("run-1",), ("run-active",)]
-    assert metadata["last_parent_control_outcome"] == {
-        "action": "wait_for_subagents",
-        "decision_id": "par-wait-1",
-        "completed_agent_run_ids": ["run-1"],
-        "active_agent_run_ids": ["run-active"],
-    }
+    assert observed["parent_batches"] == [("run-1", "run-active")]
+    assert "last_parent_control_outcome" not in metadata
     entries = {
         entry.agent_run_id: entry
         for entry in await registry.list_task_runs(tenant_id=7, task_id=42)
@@ -1013,9 +1067,9 @@ async def test_cancellation_during_wait_emits_no_final_parent_result() -> None:
         )
 
     processing = asyncio.create_task(_process())
-    await parent_entered.wait()
     await asyncio.sleep(0)
 
+    assert parent_entered.is_set() is False
     assert processing.done() is False
     processing.cancel()
     with contextlib.suppress(asyncio.CancelledError):
@@ -1026,7 +1080,7 @@ async def test_cancellation_during_wait_emits_no_final_parent_result() -> None:
         entry.agent_run_id: entry
         for entry in await registry.list_task_runs(tenant_id=7, task_id=42)
     }
-    assert entries["run-1"].result_consumed is True
+    assert entries["run-1"].result_consumed is False
     assert entries["run-active"].result_consumed is False
 
 
@@ -1099,7 +1153,7 @@ async def test_wait_for_subagents_timeout_releases_no_processed_claim() -> None:
         entry.agent_run_id: entry
         for entry in await registry.list_task_runs(tenant_id=7, task_id=42)
     }
-    assert entries["run-1"].result_consumed is True
+    assert entries["run-1"].result_consumed is False
     assert entries["run-active"].result_consumed is False
 
 

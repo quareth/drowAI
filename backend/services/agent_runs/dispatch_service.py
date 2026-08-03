@@ -124,7 +124,7 @@ class SubagentDispatchService:
 
             child_tasks = launch_result.children
             ready_handoff_task: asyncio.Task[ParentHandoffOutcome | None] | None = None
-            if len(child_tasks) > 1:
+            if len(child_tasks) > 1 and not deferred:
                 ready_handoff_task = asyncio.create_task(
                     process_ready_handoffs((), True)
                 )
@@ -169,10 +169,13 @@ class SubagentDispatchService:
                 if isinstance(completions[item.index], AgentRunCompletion)
             )
             if paused:
-                await _cancel_ready_handoff_task(ready_handoff_task)
-                resumed_outcome = await process_ready_handoffs(
-                    batch_completions,
-                    True,
+                resumed_outcome = (
+                    await ready_handoff_task
+                    if ready_handoff_task is not None
+                    else await process_ready_handoffs(
+                        batch_completions,
+                        True,
+                    )
                 )
                 if resumed_outcome is None:
                     raise RuntimeError(
@@ -186,24 +189,6 @@ class SubagentDispatchService:
                 early_outcome = await ready_handoff_task
                 if early_outcome is not None:
                     parent_handoff_outcome = early_outcome
-                    irrelevant_run_ids = _irrelevant_active_run_ids_from_outcome(
-                        early_outcome
-                    )
-                    if irrelevant_run_ids:
-                        await self._settlement.consume_irrelevant_terminal_results(
-                            runtime_config,
-                            irrelevant_run_ids=irrelevant_run_ids,
-                            already_processed_run_ids=early_outcome.agent_run_ids,
-                        )
-                        return AgentRunDispatchResult(
-                            child_completions=self._settlement.completed_entries(
-                                completions
-                            ),
-                            parent_handoff_outcome=parent_handoff_outcome,
-                        )
-            batch_outcome = await process_ready_handoffs(batch_completions, False)
-            if batch_outcome is not None:
-                parent_handoff_outcome = batch_outcome
 
             pending = deferred
 
@@ -282,36 +267,6 @@ async def _cancel_ready_handoff_task(
         await task
     except asyncio.CancelledError:
         return
-
-
-def _irrelevant_active_run_ids_from_outcome(
-    outcome: ParentHandoffOutcome,
-) -> tuple[str, ...]:
-    """Return PAR-declared irrelevant active run IDs from the parent outcome."""
-    for key in ("router_outcome", "parent_control_outcome", "candidate_decision"):
-        source = outcome.result.metadata.get(key)
-        if not isinstance(source, Mapping):
-            continue
-        raw_ids = source.get("par_irrelevant_active_agent_run_ids")
-        if raw_ids is None:
-            raw_ids = source.get("irrelevant_active_agent_run_ids")
-        run_ids = _normalized_non_empty_strings(raw_ids)
-        if run_ids:
-            return run_ids
-    return ()
-
-
-def _normalized_non_empty_strings(value: Any) -> tuple[str, ...]:
-    if not isinstance(value, (list, tuple, set, frozenset)):
-        return ()
-    normalized: list[str] = []
-    for item in value:
-        if not isinstance(item, str):
-            continue
-        text = item.strip()
-        if text and text not in normalized:
-            normalized.append(text)
-    return tuple(normalized)
 
 
 __all__ = [

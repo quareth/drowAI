@@ -68,22 +68,22 @@ Not owned by graph builders:
     coordinator.
 - `backend/services/agent_runs/dispatch_service.py`
   - Retains the application facade for subagent dispatch. It owns ordered
-    admission, active-count batching, parent-ready orchestration timing,
-    indexed completion aggregation, and the final dispatch outcome.
+    admission, active-count batching, barrier startup timing, indexed
+    completion aggregation, and the final dispatch outcome.
 - `backend/services/agent_runs/dispatch_batch.py`
   - Launches one already-admitted batch while preserving registry registration,
     lifecycle publication, child config construction, and launcher call order.
 - `backend/services/agent_runs/dispatch_settlement.py`
   - Owns terminal child result translation, registry-backed recovery,
-    launch-failure sibling cleanup, handoff completion lookup, and explicit
-    irrelevant-result consumption.
+    launch-failure sibling cleanup, and handoff completion lookup.
 - `backend/services/agent_runs/dispatch_followup.py`
   - Owns replay-stable parent-action-reasoning follow-up validation, stable
     identity lookup, capacity-aware plan construction, and batch launch
     projection through the shared batch executor.
 - `backend/services/agent_runs/parent_handoff_coordinator.py`
-  - Claims ready process-local child results, snapshots active runs, serializes
-    parent continuation, and applies or releases claims through the registry.
+  - Claims ready process-local child results for progress projection, waits for
+    all scoped active runs to become terminal, then serializes one aggregated
+    parent continuation and applies or releases its final claim.
 - `agent/graph/builders/parent_handoff_builder.py`
   - Compiles the parent continuation graph that routes claimed child handoffs
     through post-action reasoning before finalization or backend-owned parent
@@ -157,12 +157,11 @@ Route policy:
   run launches. `build_dispatch_plan` caps the plan through
   `MAX_AGENT_HANDOFFS` and preserves one immutable run/thread per invocation.
   `SubagentDispatchService` then admits entries in concurrency-limited ordered
-  batches and coordinates parent-ready processing while internal dispatch
-  modules own one-batch launch, settlement/recovery, and replay-stable
-  follow-up mechanics. Terminal child results are claimed from the
-  process-local registry and enter parent post-action reasoning before the
-  parent can finalize, delegate follow-up work, call a direct tool, think,
-  reflect, or wait for still-active child runs.
+  batches and starts the parent barrier when appropriate, while internal
+  dispatch modules own one-batch launch, settlement/recovery, and replay-stable
+  follow-up mechanics. Child lifecycle and deterministic handoff progress can
+  stream independently, but terminal results enter parent post-action reasoning
+  only after every scoped child run is terminal.
 
 ### Pre-classifier context compaction
 
@@ -475,9 +474,11 @@ flowchart TD
 
 Important boundaries:
 
-- The coordinator calls this graph only after
-  `ProcessLocalAgentRunRegistry.claim_ready_handoffs` returns a claimed
-  terminal-result batch for the same tenant, task, and conversation.
+- The coordinator calls this graph only after every run scoped to the same
+  tenant, task, and conversation has left its active status. A partial ready
+  claim may produce deterministic parent progress, but it is released without
+  running the graph; the final claim aggregates all still-unconsumed terminal
+  results.
 - `prepare_handoff_context` marks the first reasoning input as
   `post_action_outcome_source="subagent_handoff_batch"` and removes direct-tool
   synthesized output from metadata before entering the existing
@@ -493,11 +494,16 @@ Important boundaries:
   or inactive state.
 - `decision_router` remains the deterministic route authority. It rejects
   malformed `delegate_subagent`, rejects `wait_for_subagents` without relevant
-  active runs, and converts finalization into an explicit wait when relevant
-  active child runs remain.
+  active runs, and defensively converts finalization into an explicit wait if
+  an active-run snapshot reaches the graph despite the backend barrier.
 
 Coordination source of truth:
 
+- LangGraph's native parallel fan-in and deferred nodes coordinate branches
+  inside one compiled graph invocation. DrowAI child agents are independent
+  graph invocations that may run in separate processes, so their cross-run
+  barrier remains in the backend registry/coordinator boundary rather than a
+  synthetic parent-graph node.
 - `backend/services/agent_runs/registry.py` remains the process-local facade
   and atomic mutation authority for run and claim state. Its internal contract,
   lifecycle, query/retention, handoff, and signaling modules own the cohesive
@@ -513,9 +519,10 @@ Coordination source of truth:
   dispatch entrypoint.
 - `backend/services/agent_runs/parent_handoff_coordinator.py` serializes one
   parent continuation per tenant/task key, including parent cycles from
-  different turns of the same task. A claimed batch is
-  acknowledged only after parent state processing succeeds; errors and
-  cancellations release the claim for retry.
+  different turns of the same task. While any scoped run remains active, ready
+  claims are announced as waiting progress and released. Once the active set is
+  empty, the aggregated claim is acknowledged only after parent state
+  processing succeeds; errors and cancellations release it for retry.
 - Runtime side effects remain in graph tool execution and runtime-provider/tool
   boundaries. Backend coordination never injects service objects, DB sessions,
   SDK clients, or decrypted secrets into graph state.

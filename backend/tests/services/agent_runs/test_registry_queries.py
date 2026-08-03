@@ -260,6 +260,24 @@ def test_handoff_wait_status_matches_scoped_ready_inactive_and_active_states() -
         )
         == "ready"
     )
+    assert (
+        registry_queries.inactive_wait_status(
+            (active, ready),
+            tenant_id=7,
+            task_id=42,
+            conversation_id="conversation-1",
+        )
+        is None
+    )
+    assert (
+        registry_queries.inactive_wait_status(
+            (ready, foreign_conversation),
+            tenant_id=7,
+            task_id=42,
+            conversation_id="conversation-1",
+        )
+        == "inactive"
+    )
 
 
 def test_registry_queries_are_pure_and_facade_delegates_to_policy() -> None:
@@ -293,6 +311,7 @@ def test_registry_queries_are_pure_and_facade_delegates_to_policy() -> None:
         "datetime_sort_key",
         "find_active_by_graph_thread",
         "handoff_wait_status",
+        "inactive_wait_status",
         "list_task_runs",
         "run_sort_key",
         "select_stale_finished_keys",

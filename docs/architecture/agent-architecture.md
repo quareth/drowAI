@@ -180,10 +180,12 @@ Tool execution boundaries:
 
 Terminal subagent results do not finalize the parent turn directly. The backend
 handler launches bounded child runs, and
-`backend/services/agent_runs/parent_handoff_coordinator.py` claims ready
+`backend/services/agent_runs/parent_handoff_coordinator.py` observes ready
 terminal results from the process-local registry for the same tenant, task, and
-conversation. Claimed results and the active-run snapshot are projected into
-the parent context, then
+conversation while lifecycle and deterministic progress events continue to
+stream. It does not invoke the parent graph until all scoped child runs are
+terminal. The coordinator then claims the aggregated unconsumed results,
+projects them into parent context, and
 `agent/graph/builders/parent_handoff_builder.py` runs the parent continuation
 graph.
 
