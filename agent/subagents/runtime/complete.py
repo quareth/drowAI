@@ -260,7 +260,11 @@ def _compact_error_limitations(compact: Mapping[str, Any]) -> list[str]:
 def _compact_reports_failure(metadata: Mapping[str, Any]) -> bool:
     compact = _mapping(metadata.get("last_tool_result_compact"))
     status = _clean_string(compact.get("status")).lower()
-    if compact.get("success") is False or status in {"failed", "error"}:
+    if compact.get("success") is False or status in {
+        "failed",
+        "error",
+        "partial",
+    }:
         return True
     batch = _mapping(metadata.get("last_tool_result_compact_batch"))
     batch_status = _clean_string(batch.get("status")).lower()

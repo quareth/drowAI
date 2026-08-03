@@ -1416,6 +1416,25 @@ def test_runtime_completion_retains_failed_partial_budget_limitations() -> None:
     _assert_projection_excludes_private_state(projection)
 
 
+def test_runtime_completion_marks_partial_compact_result_as_partial() -> None:
+    state = _state_after_tool_iterations(
+        [
+            _host_discovery_iteration(execution_id="exec-fping-partial"),
+        ]
+    )
+    compact = state["facts"]["metadata"]["last_tool_result_compact"]
+    compact["status"] = "partial"
+    compact["success"] = True
+
+    completed = complete_subagent_result(_pathfinder_definition(), state)
+    result = completed["facts"]["metadata"][SUBAGENT_RESULT_METADATA_KEY]
+
+    assert result["outcome"] == "partial"
+    assert result["limitations"] == [
+        "Latest compact tool result status was partial."
+    ]
+
+
 def test_runtime_completion_marks_mixed_batch_as_partial() -> None:
     state = _state_after_tool_iterations(
         [
