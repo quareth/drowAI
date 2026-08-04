@@ -13,9 +13,11 @@ import { isStreamPacket } from "@/types/packets";
 
 import {
   isAgentRunTerminalStatus,
+  parseAgentRunTimestamp,
   readAgentRunActivityIdentity,
   readAgentRunLifecycleProjection,
   readAgentRunStreamPayload,
+  readAgentRunStreamTimestamp,
   readStreamSequence,
   resolveAgentDisplayName,
   resolveAgentIconKey,
@@ -82,6 +84,12 @@ interface MutationResult {
 }
 
 type AgentRunLifecycleSource = "stream" | "local-status";
+
+interface AgentRunTimestampProjection {
+  createdAt?: number | null;
+  completedAt?: number | null;
+  updatedAt?: number | null;
+}
 
 const defaultSnapshot: AgentRunsSnapshot = {
   runs: [],
@@ -176,8 +184,11 @@ export function applyAgentRunLifecycleUpdate(
   taskId: number,
   projection: AgentRunLifecycleProjection,
   sequence?: number | null,
+  timestamp?: number | null,
 ): void {
-  applyAgentRunLifecycleUpdateFromSource(taskId, projection, sequence, "stream");
+  applyAgentRunLifecycleUpdateFromSource(taskId, projection, sequence, "stream", {
+    updatedAt: timestamp,
+  });
 }
 
 function applyAgentRunLifecycleUpdateFromSource(
@@ -185,6 +196,7 @@ function applyAgentRunLifecycleUpdateFromSource(
   projection: AgentRunLifecycleProjection,
   sequence: number | null | undefined,
   source: AgentRunLifecycleSource,
+  timestamps: AgentRunTimestampProjection = {},
 ): void {
   if (projection.task_id !== taskId) {
     return;
@@ -203,6 +215,11 @@ function applyAgentRunLifecycleUpdateFromSource(
       }
     }
     const now = Date.now();
+    const projectedUpdatedAt = timestamps.updatedAt ?? now;
+    const updatedAt =
+      source === "local-status" && existing
+        ? Math.max(existing.updatedAt, projectedUpdatedAt)
+        : projectedUpdatedAt;
     const terminal = isAgentRunTerminalStatus(projection.status);
     const restoringInterruptedRun =
       source === "local-status" && existing?.status === "interrupted" && !terminal;
@@ -231,13 +248,15 @@ function applyAgentRunLifecycleUpdateFromSource(
         : projection.safe_error ?? existing?.safeError ?? null,
       firstSequence: minKnownSequence(existing?.firstSequence ?? null, streamSequence),
       lastSequence: maxKnownSequence(existing?.lastSequence ?? null, streamSequence),
-      createdAt: existing?.createdAt ?? now,
+      createdAt:
+        timestamps.createdAt ??
+        (existing ? Math.min(existing.createdAt, updatedAt) : updatedAt),
       completedAt: terminal
-        ? existing?.completedAt ?? now
+        ? timestamps.completedAt ?? existing?.completedAt ?? updatedAt
         : restoringInterruptedRun
           ? null
           : existing?.completedAt ?? null,
-      updatedAt: now,
+      updatedAt,
       activity: existing?.activity ?? [],
     };
     if (existing && sameRunRecord(existing, next)) {
@@ -260,7 +279,12 @@ export function applyAgentRunLifecyclePayload(
   if (!projection) {
     return false;
   }
-  applyAgentRunLifecycleUpdate(taskId, projection, readStreamSequence(payload, sequenceHint));
+  applyAgentRunLifecycleUpdate(
+    taskId,
+    projection,
+    readStreamSequence(payload, sequenceHint),
+    readAgentRunStreamTimestamp(payload),
+  );
   return projection.task_id === taskId;
 }
 
@@ -283,13 +307,15 @@ export function applyAgentRunActivityPayload(
       taskId,
       projection,
       readStreamSequence(streamPayload, sequenceHint),
+      readAgentRunStreamTimestamp(streamPayload),
     );
     return projection.task_id === taskId;
   }
   const sequence = readStreamSequence(streamPayload, sequenceHint);
+  const occurredAt = readAgentRunStreamTimestamp(streamPayload) ?? Date.now();
   mutateTaskState(taskId, draft => {
     const existing = draft.runs.get(identity.agentRunId);
-    const nextRun = existing ?? emptyRunFromActivity(identity);
+    const nextRun = existing ?? emptyRunFromActivity(identity, occurredAt);
     const activity = upsertActivity(nextRun.activity, {
       taskId,
       agentRunId: identity.agentRunId,
@@ -311,7 +337,7 @@ export function applyAgentRunActivityPayload(
       parentRunId: identity.parentRunId ?? nextRun.parentRunId,
       firstSequence: minKnownSequence(nextRun.firstSequence, sequence),
       lastSequence: maxKnownSequence(nextRun.lastSequence, sequence),
-      updatedAt: Date.now(),
+      updatedAt: Math.max(nextRun.updatedAt, occurredAt),
       activity,
     });
     return { changed: true };
@@ -330,7 +356,16 @@ export function reconcileAgentRunsWithLocalStatus(
       continue;
     }
     localRunsById.set(run.agent_run_id, run);
-    applyAgentRunLifecycleUpdateFromSource(taskId, run, null, "local-status");
+    const createdAt = parseAgentRunTimestamp(run.created_at);
+    const completedAt = parseAgentRunTimestamp(run.completed_at);
+    applyAgentRunLifecycleUpdateFromSource(taskId, run, null, "local-status", {
+      createdAt,
+      completedAt,
+      updatedAt:
+        completedAt ??
+        parseAgentRunTimestamp(run.started_at) ??
+        createdAt,
+    });
   }
 
   mutateTaskState(taskId, draft => {
@@ -473,7 +508,10 @@ function taskEvictionPriority(state: AgentRunsTaskState): number {
   return terminalOnly ? 0 : 1;
 }
 
-function emptyRunFromActivity(identity: AgentRunActivityIdentity): AgentRunRecord {
+function emptyRunFromActivity(
+  identity: AgentRunActivityIdentity,
+  occurredAt: number,
+): AgentRunRecord {
   return {
     taskId: identity.taskId,
     agentRunId: identity.agentRunId,
@@ -494,9 +532,9 @@ function emptyRunFromActivity(identity: AgentRunActivityIdentity): AgentRunRecor
     safeError: null,
     firstSequence: null,
     lastSequence: null,
-    createdAt: Date.now(),
+    createdAt: occurredAt,
     completedAt: null,
-    updatedAt: Date.now(),
+    updatedAt: occurredAt,
     activity: [],
   };
 }
@@ -577,6 +615,9 @@ function sameRunRecord(a: AgentRunRecord, b: AgentRunRecord): boolean {
     a.safeError === b.safeError &&
     a.firstSequence === b.firstSequence &&
     a.lastSequence === b.lastSequence &&
+    a.createdAt === b.createdAt &&
+    a.completedAt === b.completedAt &&
+    a.updatedAt === b.updatedAt &&
     a.activity === b.activity
   );
 }

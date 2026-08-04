@@ -92,6 +92,7 @@ function scopedLifecycle(
 function lifecycleEvent(
   projection: AgentRunLifecycleProjection,
   sequence: number,
+  timestamp?: string,
 ): StreamEvent {
   return {
     type: "status",
@@ -113,10 +114,15 @@ function lifecycleEvent(
       sequence,
     },
     agent_run: projection,
+    timestamp,
   } as StreamEvent;
 }
 
-function activityEvent(sequence: number, agentRunId = "run-1"): StreamEvent {
+function activityEvent(
+  sequence: number,
+  agentRunId = "run-1",
+  timestamp?: string,
+): StreamEvent {
   return {
     type: "tool_start",
     content: `tool ${sequence}`,
@@ -134,6 +140,7 @@ function activityEvent(sequence: number, agentRunId = "run-1"): StreamEvent {
       tool_call_id: `tool-${sequence}`,
       sequence,
     },
+    timestamp,
   };
 }
 
@@ -255,6 +262,28 @@ describe("agent-stream-store lifecycle state", () => {
     expect(snapshot.runsById["run-1"].firstSequence).toBe(5);
   });
 
+  it("preserves lifecycle event timestamps during replay hydration", () => {
+    const createdAt = "2026-01-01T10:00:00Z";
+    const completedAt = "2026-01-01T10:05:00Z";
+    applyAgentRunLifecyclePayload(
+      TASK_ID,
+      lifecycleEvent(lifecycle(), 5, createdAt),
+    );
+    applyAgentRunLifecyclePayload(
+      TASK_ID,
+      lifecycleEvent(
+        lifecycle({ status: "completed", lifecycle_version: 2 }),
+        6,
+        completedAt,
+      ),
+    );
+
+    const run = getAgentRunSnapshot(TASK_ID).runsById["run-1"];
+    expect(run.createdAt).toBe(Date.parse(createdAt));
+    expect(run.completedAt).toBe(Date.parse(completedAt));
+    expect(run.updatedAt).toBe(Date.parse(completedAt));
+  });
+
   it("accepts any backend-attributed subagent kind without rewriting its identity", () => {
     const projection = {
       ...lifecycle({ assignment: null }),
@@ -334,6 +363,27 @@ describe("agent-stream-store lifecycle state", () => {
     expect(run.completedAt).toBeNull();
   });
 
+  it("preserves process-local timestamps during status hydration", () => {
+    const createdAt = "2026-01-01T10:00:00Z";
+    const startedAt = "2026-01-01T10:00:05Z";
+    const completedAt = "2026-01-01T10:05:00Z";
+    reconcileAgentRunsWithLocalStatus(TASK_ID, [
+      {
+        ...lifecycle({ status: "completed", lifecycle_version: 2 }),
+        assignment: assignment(),
+        cancel_requested: false,
+        created_at: createdAt,
+        started_at: startedAt,
+        completed_at: completedAt,
+      } satisfies LocalAgentRunStatusProjection,
+    ]);
+
+    const run = getAgentRunSnapshot(TASK_ID).runsById["run-1"];
+    expect(run.createdAt).toBe(Date.parse(createdAt));
+    expect(run.completedAt).toBe(Date.parse(completedAt));
+    expect(run.updatedAt).toBe(Date.parse(completedAt));
+  });
+
   it("overlays matching local status without downgrading newer lifecycle versions", () => {
     applyAgentRunLifecycleUpdate(TASK_ID, lifecycle({ status: "running", lifecycle_version: 3 }), 10);
 
@@ -355,6 +405,15 @@ describe("agent-stream-store lifecycle state", () => {
 });
 
 describe("agent-stream-store activity state", () => {
+  it("uses activity timestamps when reconstructing a run without lifecycle history", () => {
+    const occurredAt = "2026-01-01T10:02:00Z";
+    applyAgentRunActivityPayload(TASK_ID, activityEvent(1, "run-1", occurredAt));
+
+    const run = getAgentRunSnapshot(TASK_ID).runsById["run-1"];
+    expect(run.createdAt).toBe(Date.parse(occurredAt));
+    expect(run.updatedAt).toBe(Date.parse(occurredAt));
+  });
+
   it("orders and dedupes activity by task stream sequence", () => {
     applyAgentRunActivityPayload(TASK_ID, activityEvent(3));
     applyAgentRunActivityPayload(TASK_ID, activityEvent(1));

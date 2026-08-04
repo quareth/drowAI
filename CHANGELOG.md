@@ -21,8 +21,9 @@ The format is based on
 - Pathfinder recon routing and its card/drawer UI are now active by default without
   backend or frontend feature-flag configuration.
 - The Pathfinder recon-agent pilot UI now reconstructs recent cards from task stream
-  replay, rechecks process-local ownership after stream reconnection, and marks
-  replay-only active runs as interrupted when the current backend no longer owns them.
+  replay, preserves their original lifecycle timing, rechecks process-local ownership
+  after stream reconnection, and marks replay-only active runs as interrupted when the
+  current backend no longer owns them.
 - Pathfinder now uses a dedicated colored identity mark across its parent event,
   drawer list, and detail header instead of the generic robot icon.
 - The Operations task panel can now be resized within a bounded range, collapsed

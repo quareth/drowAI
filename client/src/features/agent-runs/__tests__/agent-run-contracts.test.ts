@@ -10,6 +10,7 @@ import {
   readAgentResultProjection,
   readAgentRunActivityIdentity,
   readAgentRunLifecycleProjection,
+  readAgentRunStreamTimestamp,
   readLocalAgentRuns,
   type AgentAssignment,
   type AgentResultProjection,
@@ -117,6 +118,23 @@ function lifecycleEvent(projection: unknown): Record<string, unknown> {
 }
 
 describe("agent-run projection readers", () => {
+  it("normalizes ISO and epoch-second stream timestamps to milliseconds", () => {
+    expect(
+      readAgentRunStreamTimestamp({
+        type: "status",
+        content: "agent_run_lifecycle",
+        timestamp: "2026-01-01T10:00:00Z",
+      }),
+    ).toBe(Date.parse("2026-01-01T10:00:00Z"));
+    expect(
+      readAgentRunStreamTimestamp({
+        type: "tool_start",
+        content: "nmap",
+        metadata: { timestamp: 1_767_261_600 },
+      }),
+    ).toBe(1_767_261_600_000);
+  });
+
   it("accepts only the UI-safe assignment projection", () => {
     const safeAssignment = assignment();
 

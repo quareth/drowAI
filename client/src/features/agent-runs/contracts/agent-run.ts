@@ -261,6 +261,29 @@ export function readStreamSequence(payload: unknown, fallback?: number): number 
   return null;
 }
 
+export function readAgentRunStreamTimestamp(payload: unknown): number | null {
+  const event = unwrapStreamEvent(payload);
+  if (!event) {
+    return null;
+  }
+  return (
+    parseAgentRunTimestamp(event.timestamp) ??
+    parseAgentRunTimestamp(event.metadata?.timestamp)
+  );
+}
+
+export function parseAgentRunTimestamp(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
+    const milliseconds = value < 100_000_000_000 ? value * 1000 : value;
+    return Number.isFinite(milliseconds) ? milliseconds : null;
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+  const milliseconds = Date.parse(value);
+  return Number.isFinite(milliseconds) ? milliseconds : null;
+}
+
 export function readAgentRunStreamPayload(payload: unknown): AgentRunStreamPayload | null {
   if (isStreamPacket(payload)) {
     return isStreamEvent(payload.obj) ? payload : null;
