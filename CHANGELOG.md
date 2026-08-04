@@ -40,6 +40,8 @@ The format is based on
 
 ### Fixed
 
+- Compact canonical pentest projections now retain findings and services ahead
+  of lower-priority asset facts when fact budgets are exceeded.
 - Canonical pentest facts now preserve FFUF and HTTP web surfaces, TShark
   credential-exposure findings, compact omission accounting, and linked
   Knowledge details across deterministic processing and Territory views.
