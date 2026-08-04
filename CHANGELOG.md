@@ -39,6 +39,9 @@ The format is based on
 
 ### Fixed
 
+- Parent post-handoff tool approvals now resume the same checkpointed reasoning
+  flow after an earlier subagent approval in the same turn, without losing
+  coordination state or replaying a failed approval request.
 - Cancelling a main or subagent run that is waiting for approval now retires
   its pending approval ticket, preventing stale approvals from being resumed or
   reused by later interrupts.

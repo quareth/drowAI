@@ -18,6 +18,7 @@ from backend.services.langgraph_chat.execution.graph_executor import LangGraphEx
 from backend.services.langgraph_chat.streaming.adapter import LangGraphStreamingAdapter
 
 from .launcher import AgentRunLauncher, LifecyclePublisher
+from .parent_handoff_continuation import ParentHandoffContinuationBroker
 from .parent_handoff_coordinator import ParentHandoffGuardPool
 from .registry import ProcessLocalAgentRunRegistry
 from .worker import ProcessLocalAgentRunWorker
@@ -35,6 +36,7 @@ class ProcessLocalAgentRunRuntime:
     launcher: AgentRunLauncher
     lifecycle_publisher: LifecyclePublisher
     parent_handoff_guard_pool: ParentHandoffGuardPool
+    parent_handoff_continuation_broker: ParentHandoffContinuationBroker
 
 
 _PROCESS_LOCAL_RUNTIME: ProcessLocalAgentRunRuntime | None = None
@@ -71,6 +73,7 @@ def get_process_local_agent_run_runtime() -> ProcessLocalAgentRunRuntime:
             lifecycle_publisher=publish_process_local_agent_run_event,
         )
         parent_handoff_guard_pool = ParentHandoffGuardPool()
+        parent_handoff_continuation_broker = ParentHandoffContinuationBroker()
         _PROCESS_LOCAL_RUNTIME = ProcessLocalAgentRunRuntime(
             registry=registry,
             subagent_registry=subagent_registry,
@@ -80,6 +83,7 @@ def get_process_local_agent_run_runtime() -> ProcessLocalAgentRunRuntime:
             launcher=launcher,
             lifecycle_publisher=publish_process_local_agent_run_event,
             parent_handoff_guard_pool=parent_handoff_guard_pool,
+            parent_handoff_continuation_broker=parent_handoff_continuation_broker,
         )
     return _PROCESS_LOCAL_RUNTIME
 

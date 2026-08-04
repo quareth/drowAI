@@ -24,6 +24,9 @@ from backend.services.agent_runs.parent_handoff_coordinator import (
     ParentHandoffCoordinator,
     ParentHandoffGuardPool,
 )
+from backend.services.agent_runs.parent_handoff_continuation import (
+    ParentHandoffContinuationBroker,
+)
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
 from backend.services.agent_runs.result_projection import AgentRunResultProjector
 from backend.services.agent_runs.worker import ProcessLocalAgentRunWorker
@@ -50,6 +53,7 @@ def build_subagent_handler(
     launcher: AgentRunLaunchService | None = None,
     worker: AgentRunWorker | None = None,
     lifecycle_publisher: LifecyclePublisher,
+    parent_handoff_continuation_broker: ParentHandoffContinuationBroker,
     parent_handoff_guard_pool: ParentHandoffGuardPool | None = None,
     result_projector: AgentRunResultProjector | None = None,
     subagent_registry: SubagentRegistry | None = None,
@@ -89,8 +93,10 @@ def build_subagent_handler(
         parent_progress_publisher=_parent_progress_publisher(lifecycle_publisher),
     )
     parent_finalizer = SubagentParentFinalizer(
+        checkpointer_service=checkpointer_service,
         executor=executor,
         cancellation_checker_factory=build_cancellation_checker,
+        continuation_broker=parent_handoff_continuation_broker,
     )
     return SubagentHandler(
         checkpointer_service,

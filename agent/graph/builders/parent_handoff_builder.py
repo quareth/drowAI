@@ -125,7 +125,11 @@ def _route_after_prepare_tool_plan(interactive: InteractiveState) -> str:
     return "articulation" if retry_count == 0 else "approval_gate"
 
 
-def build_parent_handoff_graph(*, build_only: bool = False) -> Any:
+def build_parent_handoff_graph(
+    *,
+    checkpointer: Any = None,
+    build_only: bool = False,
+) -> Any:
     """Compile the parent continuation graph for one claimed child handoff batch."""
     graph = StateGraph(dict)
     conditional = require_conditional_edges(graph)
@@ -185,7 +189,7 @@ def build_parent_handoff_graph(*, build_only: bool = False) -> Any:
     )
     if build_only:
         return graph
-    return graph.compile()
+    return graph.compile(checkpointer=checkpointer)
 
 
 __all__ = [

@@ -27,6 +27,10 @@ from backend.services.agent_runs.continuation import (
     resume_subagent_continuation,
 )
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
+from backend.services.agent_runs.parent_handoff_continuation import (
+    ParentHandoffContinuationBroker,
+    ParentHandoffContinuationSession,
+)
 from backend.services.agent_runs.completion import (
     AgentRunCompletion,
     usage_envelopes_from_child_records,
@@ -41,6 +45,7 @@ from backend.services.langgraph_chat.hitl_constants import (
     DEFAULT_GRAPH_NAME,
     GRAPH_NAME_DEEP_REASONING,
     GRAPH_NAME_INTERRUPT_RESUME,
+    GRAPH_NAME_PARENT_HANDOFF,
     GRAPH_NAME_SIMPLE_TOOL,
 )
 from backend.services.langgraph_chat.execution.scenario_factory import get_scenario_graph
@@ -127,6 +132,9 @@ class CheckpointContinuationService:
         agent_run_lifecycle_publisher: Optional[
             Callable[[int, dict[str, Any]], Awaitable[None]]
         ] = None,
+        parent_handoff_continuation_broker: (
+            ParentHandoffContinuationBroker | None
+        ) = None,
     ) -> None:
         """Initialize continuation service dependencies.
 
@@ -156,6 +164,10 @@ class CheckpointContinuationService:
         self._agent_run_registry = agent_run_registry
         self._subagent_registry = subagent_registry or get_subagent_registry()
         self._agent_run_lifecycle_publisher = agent_run_lifecycle_publisher
+        self._parent_handoff_continuation_broker = (
+            parent_handoff_continuation_broker
+            or ParentHandoffContinuationBroker()
+        )
 
     async def resume_from_interrupt(
         self,
@@ -251,6 +263,12 @@ class CheckpointContinuationService:
                 subagent_continuation_context=subagent_context,
             )
         except Exception as exc:
+            if graph_name == GRAPH_NAME_PARENT_HANDOFF:
+                self._parent_handoff_continuation_broker.fail(
+                    task_id=task_id,
+                    graph_thread_id=graph_thread_id,
+                    error=exc,
+                )
             msg = f"[HITL] Resume failed for task {task_id}: {exc}"
             logger.error(msg, exc_info=True)
             raise HITLError(msg) from exc
@@ -377,7 +395,17 @@ class CheckpointContinuationService:
             HITLError: If continuation cannot produce/parse final state.
         """
         from agent.graph import InteractiveState
-        state_container = ChatStateContainer(reserved_message_id=reserved_message_id)
+        parent_session: ParentHandoffContinuationSession | None = None
+        if graph_name == GRAPH_NAME_PARENT_HANDOFF:
+            parent_session = self._parent_handoff_continuation_broker.require(
+                task_id=task_id,
+                graph_thread_id=graph_thread_id,
+            )
+        state_container = (
+            parent_session.state_container
+            if parent_session is not None
+            else ChatStateContainer(reserved_message_id=reserved_message_id)
+        )
         (
             execution_result,
             llm_runtime_selection,
@@ -414,6 +442,26 @@ class CheckpointContinuationService:
                 msg = f"[HITL] Continuation did not capture final state for task {task_id}"
             logger.error(msg)
             raise HITLError(msg)
+
+        if parent_session is not None and not execution_result.interrupted:
+            self._parent_handoff_continuation_broker.deliver(
+                parent_session,
+                execution_result,
+            )
+            metadata = dict(execution_result.metadata or {})
+            metadata.update(
+                {
+                    SUBAGENT_PARENT_CONTINUATION_PENDING: True,
+                    "graph_name": GRAPH_NAME_PARENT_HANDOFF,
+                    "parent_handoff_continuation_resumed": True,
+                }
+            )
+            return LangGraphChatResult(
+                final_text=None,
+                conversation_id=None,
+                metadata=metadata,
+                persistence_handled=True,
+            )
 
         # Parse the checkpoint state once for both branches. The interrupt
         # branch needs it to hydrate ``state_container`` with cached
@@ -922,12 +970,17 @@ class CheckpointContinuationService:
             compile_deep_reasoning_graph,
         )
         from agent.graph.builders.simple_tool_builder import build_simple_tool_graph
+        from agent.graph.builders.parent_handoff_builder import (
+            build_parent_handoff_graph,
+        )
         from agent.subagents.runtime.graph import build_subagent_graph
 
         if E2E_DETERMINISTIC_MODE or graph_name == GRAPH_NAME_INTERRUPT_RESUME:
             return get_scenario_graph(GRAPH_NAME_INTERRUPT_RESUME, checkpointer)
         if graph_name == GRAPH_NAME_DEEP_REASONING:
             return compile_deep_reasoning_graph(checkpointer=checkpointer)
+        if graph_name == GRAPH_NAME_PARENT_HANDOFF:
+            return build_parent_handoff_graph(checkpointer=checkpointer)
         if is_subagent_graph_name(graph_name):
             definition_registry = self._subagent_registry
             if subagent_agent_id is None:

@@ -11,7 +11,7 @@ os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
 
 import pytest
 
-from agent.graph.graph_names import GRAPH_NAME_SUBAGENT
+from agent.graph.graph_names import GRAPH_NAME_PARENT_HANDOFF, GRAPH_NAME_SUBAGENT
 from agent.subagents.definition import SubagentDefinition
 from agent.subagents.registry import SubagentRegistry, get_subagent_registry
 from agent.subagents.runtime.model import SUBAGENT_RESULT_METADATA_KEY
@@ -26,11 +26,16 @@ from backend.services.agent_runs.continuation import (
 )
 from backend.services.agent_runs.contracts import AgentAssignment, AgentRuntimeIdentity
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
+from backend.services.agent_runs.parent_handoff_continuation import (
+    ParentHandoffContinuationBroker,
+)
 from backend.services.agent_runs.worker import mark_subagent_completed_from_state
 from backend.services.langgraph_chat.checkpoint.continuation_service import (
     CheckpointContinuationService,
 )
 from backend.services.langgraph_chat.contracts import LangGraphChatResult
+from backend.services.langgraph_chat.execution.graph_executor import GraphExecutionResult
+from backend.services.langgraph_chat.runtime.state_container import ChatStateContainer
 from backend.services.langgraph_chat.checkpoint.interrupt_state_service import (
     InterruptStateService,
 )
@@ -267,6 +272,114 @@ async def test_checkpoint_continuation_compiles_subagent_graph(
     )
 
     assert result is compiled
+
+
+@pytest.mark.asyncio
+async def test_checkpoint_continuation_compiles_parent_handoff_graph(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    compiled = object()
+    checkpointer = object()
+    received: dict[str, Any] = {}
+
+    def _build_parent_handoff_graph(*, checkpointer: Any) -> object:
+        received["checkpointer"] = checkpointer
+        return compiled
+
+    monkeypatch.setattr(
+        "agent.graph.builders.parent_handoff_builder.build_parent_handoff_graph",
+        _build_parent_handoff_graph,
+    )
+    service = CheckpointContinuationService(
+        checkpointer_service=object(),
+        executor=object(),
+        streaming_adapter=object(),
+        build_checkpoint_execution_config=lambda **_kwargs: {},
+        hydrate_container_from_checkpoint_state=lambda *_args, **_kwargs: None,
+        extract_resume_conversation_id=lambda _state: "",
+        resolve_resume_turn_number=lambda **_kwargs: 0,
+        persist_chat_message_from_container=lambda **_kwargs: None,
+        build_result=lambda **_kwargs: None,
+    )
+
+    result = await service._compile_graph_for_name(
+        task_id=42,
+        graph_name=GRAPH_NAME_PARENT_HANDOFF,
+        checkpointer=checkpointer,
+    )
+
+    assert result is compiled
+    assert received == {"checkpointer": checkpointer}
+
+
+@pytest.mark.asyncio
+async def test_parent_handoff_resume_returns_execution_to_original_finalizer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    broker = ParentHandoffContinuationBroker()
+    state_container = ChatStateContainer()
+    session = broker.open(
+        task_id=42,
+        thread_id="graph-" + ("a" * 32),
+        state_container=state_container,
+    )
+    execution_result = GraphExecutionResult(
+        final_state=_interactive_state(final_text="Parent PTR resumed."),
+        metadata={"checkpoint_resume": True},
+    )
+    persist_calls: list[dict[str, Any]] = []
+
+    class _Executor:
+        async def stream_graph(
+            self,
+            _compiled: Any,
+            _graph_input: Any,
+            _config: dict[str, Any],
+            task_id: int,
+            **kwargs: Any,
+        ) -> GraphExecutionResult:
+            assert task_id == 42
+            assert kwargs["state_container"] is state_container
+            return execution_result
+
+    service = CheckpointContinuationService(
+        checkpointer_service=_FakeCheckpointerService(),
+        executor=_Executor(),
+        streaming_adapter=object(),
+        build_checkpoint_execution_config=lambda **kwargs: {
+            "configurable": {
+                "thread_id": f"graph-{kwargs['graph_thread_id']}",
+                "graph_name": kwargs["graph_name"],
+            }
+        },
+        hydrate_container_from_checkpoint_state=lambda *_args, **_kwargs: None,
+        extract_resume_conversation_id=lambda _state: "",
+        resolve_resume_turn_number=lambda **_kwargs: 0,
+        persist_chat_message_from_container=lambda **kwargs: persist_calls.append(
+            kwargs
+        ),
+        build_result=lambda **_kwargs: None,
+        parent_handoff_continuation_broker=broker,
+    )
+    monkeypatch.setattr(service, "_compile_graph_for_name", _compile_stub)
+
+    result = await service.resume_from_interrupt(
+        task_id=42,
+        graph_thread_id="a" * 32,
+        graph_name=GRAPH_NAME_PARENT_HANDOFF,
+        response={"approved": True},
+    )
+    delivered = await broker.wait(session, should_cancel=lambda: False)
+
+    assert delivered is execution_result
+    assert result.final_text is None
+    assert result.persistence_handled is True
+    assert result.metadata["subagent_parent_continuation_pending"] is True
+    assert result.metadata["graph_name"] == GRAPH_NAME_PARENT_HANDOFF
+    assert result.metadata["checkpoint_resume"] is True
+    assert persist_calls == []
+
+    broker.close(session)
 
 
 @pytest.mark.asyncio

@@ -10,8 +10,9 @@ from typing import Any
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg2://test:test@localhost/test")
 
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
 
-from agent.graph.graph_names import GRAPH_NAME_SUBAGENT
+from agent.graph.graph_names import GRAPH_NAME_PARENT_HANDOFF, GRAPH_NAME_SUBAGENT
 from agent.graph.context.builder import (
     METADATA_CONTEXT_BUNDLE_KEY,
     build_conversation_context_bundle,
@@ -30,6 +31,9 @@ from backend.services.agent_runs.completion import (
     build_agent_run_completion,
 )
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
+from backend.services.agent_runs.parent_handoff_continuation import (
+    ParentHandoffContinuationBroker,
+)
 from backend.services.agent_runs.result_projection import (
     ACTIVE_AGENT_RUNS_KEY,
     COMPLETED_AGENT_RESULTS_KEY,
@@ -342,15 +346,50 @@ class _CompletingExecutor:
         )
 
 
+class _InterruptingParentExecutor:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.interrupted = asyncio.Event()
+
+    async def stream_graph(
+        self,
+        compiled: Any,
+        graph_input: Any,
+        config: dict[str, Any],
+        task_id: int,
+        **kwargs: Any,
+    ) -> GraphExecutionResult:
+        self.calls.append(
+            {
+                "compiled": compiled,
+                "graph_input": graph_input,
+                "config": config,
+                "task_id": task_id,
+                "kwargs": kwargs,
+            }
+        )
+        self.interrupted.set()
+        return GraphExecutionResult(
+            final_state=copy.deepcopy(graph_input),
+            interrupt={"type": "tool_approval", "interrupt_id": "parent-approval-1"},
+        )
+
+
 class _FakeCheckpointerService:
+    def __init__(self) -> None:
+        self.checkpointer = InMemorySaver()
+
     def get_checkpointer(self, task_id: int) -> "_FakeCheckpointerContext":
         assert task_id == 42
-        return _FakeCheckpointerContext()
+        return _FakeCheckpointerContext(self.checkpointer)
 
 
 class _FakeCheckpointerContext:
-    async def __aenter__(self) -> object:
-        return object()
+    def __init__(self, checkpointer: InMemorySaver) -> None:
+        self._checkpointer = checkpointer
+
+    async def __aenter__(self) -> InMemorySaver:
+        return self._checkpointer
 
     async def __aexit__(self, *_args: Any) -> None:
         return None
@@ -527,12 +566,13 @@ async def test_subagent_handler_uses_registered_agent_identity_for_launch_failur
         events.append(event)
 
     handler = build_subagent_handler(
-        object(),
+        _FakeCheckpointerService(),
         _CompletingExecutor(),
         object(),
         registry=registry,
         launcher=_FailingLauncher(),
         lifecycle_publisher=_publish,
+        parent_handoff_continuation_broker=ParentHandoffContinuationBroker(),
         subagent_registry=definition_registry,
     )
 
@@ -568,12 +608,13 @@ async def test_subagent_handler_waits_for_pathfinder_and_runs_parent_finalizer()
         events.append((task_id, event))
 
     handler = build_subagent_handler(
-        object(),
+        _FakeCheckpointerService(),
         executor,
         object(),
         registry=registry,
         launcher=launcher,
         lifecycle_publisher=_publish,
+        parent_handoff_continuation_broker=ParentHandoffContinuationBroker(),
     )
 
     runtime_config = _runtime_config()
@@ -675,12 +716,13 @@ async def test_subagent_handler_fails_closed_before_launching_invalid_plan() -> 
         return None
 
     handler = build_subagent_handler(
-        object(),
+        _FakeCheckpointerService(),
         _CompletingExecutor(),
         object(),
         registry=registry,
         launcher=launcher,
         lifecycle_publisher=_publish,
+        parent_handoff_continuation_broker=ParentHandoffContinuationBroker(),
     )
     runtime_config = _ordered_handoff_runtime_config(
         {
@@ -723,12 +765,13 @@ async def test_subagent_handler_launches_independent_handoffs_concurrently(
         return None
 
     handler = build_subagent_handler(
-        object(),
+        _FakeCheckpointerService(),
         executor,
         object(),
         registry=registry,
         launcher=launcher,
         lifecycle_publisher=_publish,
+        parent_handoff_continuation_broker=ParentHandoffContinuationBroker(),
         subagent_registry=definition_registry,
     )
     runtime_config = _ordered_handoff_runtime_config(
@@ -790,12 +833,13 @@ async def test_subagent_handler_waits_for_all_handoffs_before_parent_continuatio
         return None
 
     handler = build_subagent_handler(
-        object(),
+        _FakeCheckpointerService(),
         executor,
         object(),
         registry=registry,
         launcher=launcher,
         lifecycle_publisher=_publish,
+        parent_handoff_continuation_broker=ParentHandoffContinuationBroker(),
         subagent_registry=definition_registry,
     )
     runtime_config = _ordered_handoff_runtime_config(
@@ -874,12 +918,13 @@ async def test_subagent_handler_serializes_repeated_agent_handoffs_by_limit() ->
         return None
 
     handler = build_subagent_handler(
-        object(),
+        _FakeCheckpointerService(),
         _CompletingExecutor(),
         object(),
         registry=registry,
         launcher=launcher,
         lifecycle_publisher=_publish,
+        parent_handoff_continuation_broker=ParentHandoffContinuationBroker(),
     )
     runtime_config = _ordered_handoff_runtime_config(
         {
@@ -927,12 +972,13 @@ async def test_subagent_handler_fails_closed_for_concurrent_same_agent_parent_tu
         return None
 
     handler = build_subagent_handler(
-        object(),
+        _FakeCheckpointerService(),
         _CompletingExecutor(),
         object(),
         registry=registry,
         launcher=launcher,
         lifecycle_publisher=_publish,
+        parent_handoff_continuation_broker=ParentHandoffContinuationBroker(),
     )
 
     first = asyncio.create_task(handler.handle(_runtime_config()))
@@ -965,12 +1011,13 @@ async def test_subagent_handler_attaches_live_runtime_services_only_at_launch() 
         return None
 
     handler = build_subagent_handler(
-        object(),
+        _FakeCheckpointerService(),
         _CompletingExecutor(),
         object(),
         registry=registry,
         launcher=launcher,
         lifecycle_publisher=_publish,
+        parent_handoff_continuation_broker=ParentHandoffContinuationBroker(),
     )
 
     await handler.handle(runtime_config)
@@ -989,12 +1036,13 @@ async def test_subagent_handler_emits_failed_lifecycle_when_launch_fails() -> No
         events.append(event)
 
     handler = build_subagent_handler(
-        object(),
+        _FakeCheckpointerService(),
         executor,
         object(),
         registry=registry,
         launcher=_FailingLauncher(),
         lifecycle_publisher=_publish,
+        parent_handoff_continuation_broker=ParentHandoffContinuationBroker(),
     )
 
     runtime_config = _runtime_config()
@@ -1041,12 +1089,13 @@ async def test_subagent_handler_settles_prior_batch_child_when_later_launch_fail
         return None
 
     handler = build_subagent_handler(
-        object(),
+        _FakeCheckpointerService(),
         executor,
         object(),
         registry=registry,
         launcher=launcher,
         lifecycle_publisher=_publish,
+        parent_handoff_continuation_broker=ParentHandoffContinuationBroker(),
         subagent_registry=definition_registry,
     )
     runtime_config = _ordered_handoff_runtime_config(
@@ -1116,12 +1165,13 @@ async def test_subagent_handler_child_cancellation_returns_partial_child_usage()
         return None
 
     handler = build_subagent_handler(
-        object(),
+        _FakeCheckpointerService(),
         executor,
         object(),
         registry=registry,
         launcher=_CancellingLauncher(registry),
         lifecycle_publisher=_publish,
+        parent_handoff_continuation_broker=ParentHandoffContinuationBroker(),
     )
 
     result = await handler.handle(_runtime_config())
@@ -1151,12 +1201,13 @@ async def test_subagent_handler_hitl_pause_keeps_parent_open_until_child_resumes
         return None
 
     handler = build_subagent_handler(
-        object(),
+        _FakeCheckpointerService(),
         executor,
         object(),
         registry=registry,
         launcher=launcher,
         lifecycle_publisher=_publish,
+        parent_handoff_continuation_broker=ParentHandoffContinuationBroker(),
     )
 
     parent_task = asyncio.create_task(handler.handle(_runtime_config()))
@@ -1181,12 +1232,13 @@ async def test_subagent_handler_child_failure_returns_partial_child_usage() -> N
         return None
 
     handler = build_subagent_handler(
-        object(),
+        _FakeCheckpointerService(),
         executor,
         object(),
         registry=registry,
         launcher=_FailingAfterUsageLauncher(registry),
         lifecycle_publisher=_publish,
+        parent_handoff_continuation_broker=ParentHandoffContinuationBroker(),
     )
 
     result = await handler.handle(_runtime_config())
@@ -1286,6 +1338,7 @@ async def test_subagent_handler_default_launcher_runs_real_worker_to_completion(
         object(),
         registry=registry,
         lifecycle_publisher=_publish,
+        parent_handoff_continuation_broker=ParentHandoffContinuationBroker(),
     )
 
     result = await handler.handle(_runtime_config())
@@ -1322,6 +1375,55 @@ async def test_subagent_handler_default_launcher_runs_real_worker_to_completion(
         "subagent_parent_finalizer"
     ]
     assert [record.usage.total_tokens for record in result.usage] == [15, 29]
+
+
+@pytest.mark.asyncio
+async def test_parent_finalizer_waits_for_resumed_parent_handoff_result() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    launcher = _RecordingLauncher(registry)
+    executor = _InterruptingParentExecutor()
+    broker = ParentHandoffContinuationBroker()
+
+    async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
+        return None
+
+    handler = build_subagent_handler(
+        _FakeCheckpointerService(),
+        executor,
+        object(),
+        registry=registry,
+        launcher=launcher,
+        lifecycle_publisher=_publish,
+        parent_handoff_continuation_broker=broker,
+    )
+
+    parent_task = asyncio.create_task(handler.handle(_runtime_config()))
+    await asyncio.wait_for(executor.interrupted.wait(), timeout=1)
+
+    [call] = executor.calls
+    configurable = call["config"]["configurable"]
+    assert configurable["graph_name"] == GRAPH_NAME_PARENT_HANDOFF
+    session = broker.require(
+        task_id=42,
+        graph_thread_id=configurable["thread_id"],
+    )
+    assert session.state_container is call["kwargs"]["state_container"]
+
+    resumed_state = copy.deepcopy(call["graph_input"])
+    resumed_state["trace"]["final_text"] = "Parent PTR continued after approval."
+    broker.deliver(
+        session,
+        GraphExecutionResult(
+            final_state=resumed_state,
+            metadata={"resume_verified": True},
+        ),
+    )
+
+    result = await asyncio.wait_for(parent_task, timeout=1)
+
+    assert result.final_text == "Parent PTR continued after approval."
+    assert result.metadata["graph_name"] == GRAPH_NAME_PARENT_HANDOFF
+    assert result.metadata["resume_verified"] is True
 
 
 @pytest.mark.asyncio

@@ -30,6 +30,7 @@ from backend.services.langgraph_chat.checkpoint.checkpointer_service import (
 from backend.services.langgraph_chat.hitl_constants import (
     DEFAULT_GRAPH_NAME,
     GRAPH_NAME_DEEP_REASONING,
+    GRAPH_NAME_PARENT_HANDOFF,
     GRAPH_NAME_SUBAGENT,
 )
 from backend.services.langgraph_chat.checkpoint.thread_identity import (
@@ -105,6 +106,7 @@ class InterruptStateService:
         for gname in [
             DEFAULT_GRAPH_NAME,
             GRAPH_NAME_DEEP_REASONING,
+            GRAPH_NAME_PARENT_HANDOFF,
             GRAPH_NAME_SUBAGENT,
         ]:
             result = await self._check_graph_for_interrupt(
@@ -145,6 +147,9 @@ class InterruptStateService:
         from agent.graph.builders.deep_reasoning_builder import (
             compile_deep_reasoning_graph,
         )
+        from agent.graph.builders.parent_handoff_builder import (
+            build_parent_handoff_graph,
+        )
         from agent.subagents.runtime.graph import build_subagent_graph
 
         resolved_thread_id = (
@@ -159,6 +164,8 @@ class InterruptStateService:
                 # Build graph with checkpointer to enable state query
                 if graph_name == GRAPH_NAME_DEEP_REASONING:
                     compiled = compile_deep_reasoning_graph(checkpointer=checkpointer)
+                elif graph_name == GRAPH_NAME_PARENT_HANDOFF:
+                    compiled = build_parent_handoff_graph(checkpointer=checkpointer)
                 elif is_subagent_graph_name(graph_name):
                     agent_run_entry = await self._resolve_subagent_run_for_thread(
                         task_id=task_id,

@@ -735,6 +735,153 @@ def test_simple_tool_sequential_interrupt_approval_no_stale_replay(monkeypatch) 
     engine.dispose()
 
 
+def test_parent_handoff_approval_reuses_resumed_child_workflow_same_turn(
+    monkeypatch,
+) -> None:
+    """A parent PTR approval can follow a child approval in the same turn."""
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    SessionFactory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+    db = SessionFactory()
+    try:
+        user, task, thread_id = _create_task_fixture(
+            db,
+            username="parent_after_child_owner",
+            email="parent-after-child@example.com",
+            tenant_slug="parent-after-child",
+            task_name="parent-after-child",
+        )
+        turn_id = f"task-{task.id}-turn-1"
+        child_interrupt_id = "intr-child-completed"
+        parent_interrupt_id = "intr-parent-pending"
+        db.add_all(
+            [
+                TurnWorkflow(
+                    task_id=task.id,
+                    tenant_id=task.tenant_id,
+                    conversation_id="conv-parent-after-child",
+                    turn_id=turn_id,
+                    turn_sequence=1,
+                    state="RESUMED",
+                    graph_name="subagent",
+                    checkpoint_id="cp-child",
+                    interrupt_type="tool_approval",
+                    reserved_message_id=101,
+                    resume_key="cp-child",
+                    workflow_metadata={"interrupt_id": child_interrupt_id},
+                ),
+                InterruptTicket(
+                    interrupt_id=child_interrupt_id,
+                    task_id=task.id,
+                    tenant_id=task.tenant_id,
+                    graph_name="subagent",
+                    interrupt_type="tool_approval",
+                    checkpoint_id="cp-child",
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    turn_sequence=1,
+                    state=InterruptTicketState.COMPLETED,
+                    payload_snapshot={"turn_id": turn_id, "turn_sequence": 1},
+                ),
+                InterruptTicket(
+                    interrupt_id=parent_interrupt_id,
+                    task_id=task.id,
+                    tenant_id=task.tenant_id,
+                    graph_name="parent_handoff",
+                    interrupt_type="tool_approval",
+                    checkpoint_id="cp-parent",
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    turn_sequence=1,
+                    state=InterruptTicketState.PENDING,
+                    payload_snapshot={
+                        "turn_id": turn_id,
+                        "turn_sequence": 1,
+                        "conversation_id": "conv-parent-after-child",
+                        "reserved_message_id": 101,
+                    },
+                ),
+            ]
+        )
+        db.commit()
+        user_id = int(user.id)
+        username = str(user.username)
+        task_id = int(task.id)
+    finally:
+        db.close()
+
+    captured: dict[str, Any] = {}
+
+    def _capture_resume_generation(**kwargs):
+        captured["resume_kwargs"] = dict(kwargs)
+
+        async def _noop():
+            return None
+
+        return _noop()
+
+    app = FastAPI()
+    app.include_router(interrupts_routes.router, prefix="/api/tasks")
+    app.dependency_overrides[interrupts_routes.get_current_user] = (
+        lambda: SimpleNamespace(id=user_id, username=username, is_active=True)
+    )
+
+    def _db_override():
+        req_db: Session = SessionFactory()
+        try:
+            yield req_db
+        finally:
+            req_db.close()
+
+    app.dependency_overrides[interrupts_routes.get_db] = _db_override
+    monkeypatch.setattr(
+        interrupts_routes,
+        "get_interrupt_state_service",
+        lambda: _StubInterruptStateService({"task_id": -1}),
+    )
+    monkeypatch.setattr(
+        "backend.services.langgraph_chat.execution.turn_service.run_resume_generation",
+        _capture_resume_generation,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/tasks/{task_id}/graph/resume",
+            json={
+                "interrupt_id": parent_interrupt_id,
+                "interrupt_type": "tool_approval",
+                "graph_name": "parent_handoff",
+                "response": {"action": "approve"},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert captured["resume_kwargs"]["graph_name"] == "parent_handoff"
+
+    verify = SessionFactory()
+    try:
+        [workflow] = verify.query(TurnWorkflow).filter(
+            TurnWorkflow.task_id == task_id
+        ).all()
+        parent_ticket = verify.query(InterruptTicket).filter(
+            InterruptTicket.interrupt_id == parent_interrupt_id
+        ).one()
+        assert workflow.state == "RESUMED"
+        assert workflow.graph_name == "parent_handoff"
+        assert workflow.checkpoint_id == "cp-parent"
+        assert workflow.resume_key == "cp-parent"
+        assert workflow.workflow_metadata["interrupt_id"] == parent_interrupt_id
+        assert parent_ticket.state == InterruptTicketState.RESUMING
+    finally:
+        verify.close()
+        engine.dispose()
+
+
 def test_simple_tool_duplicate_409_does_not_block_next_distinct_interrupt(monkeypatch) -> None:
     """Duplicate resume returns 409; next distinct interrupt still appears."""
     engine = create_engine(

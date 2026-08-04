@@ -31,6 +31,9 @@ from backend.services.agent_runs.registry_contracts import ACTIVE_AGENT_RUN_STAT
 from backend.services.agent_runs.parent_handoff_coordinator import (
     ParentHandoffGuardPool,
 )
+from backend.services.agent_runs.parent_handoff_continuation import (
+    ParentHandoffContinuationBroker,
+)
 
 from backend.config import (
     ENABLE_LANGGRAPH_DEEP_REASONING,
@@ -133,6 +136,9 @@ class LangGraphChatFacade:
         agent_run_launcher: AgentRunLaunchService | None = None,
         agent_run_lifecycle_publisher: LifecyclePublisher | None = None,
         agent_run_handoff_guard_pool: ParentHandoffGuardPool | None = None,
+        parent_handoff_continuation_broker: (
+            ParentHandoffContinuationBroker | None
+        ) = None,
         agent_run_result_projector: Optional[AgentRunResultProjector] = None,
         session_factory: Optional[Callable[[], Any]] = None,
         conversation_history_reader_factory: Optional[
@@ -149,6 +155,10 @@ class LangGraphChatFacade:
             streaming_adapter=self._streaming_adapter
         )
         process_local_runtime = get_process_local_agent_run_runtime()
+        resolved_parent_handoff_continuation_broker = (
+            parent_handoff_continuation_broker
+            or process_local_runtime.parent_handoff_continuation_broker
+        )
         self._intent_phase_streamer = IntentPhaseStreamer(self._streaming_adapter)
         self._context_builder = context_builder or LangGraphContextBuilder()
         using_shared_subagent_registry = subagent_registry is None
@@ -223,6 +233,9 @@ class LangGraphChatFacade:
                 registry=self._agent_run_registry,
                 launcher=resolved_agent_run_launcher,
                 lifecycle_publisher=resolved_agent_run_lifecycle_publisher,
+                parent_handoff_continuation_broker=(
+                    resolved_parent_handoff_continuation_broker
+                ),
                 parent_handoff_guard_pool=(
                     resolved_agent_run_handoff_guard_pool
                 ),
@@ -246,6 +259,9 @@ class LangGraphChatFacade:
             agent_run_registry=self._agent_run_registry,
             subagent_registry=self._subagent_registry,
             agent_run_lifecycle_publisher=resolved_agent_run_lifecycle_publisher,
+            parent_handoff_continuation_broker=(
+                resolved_parent_handoff_continuation_broker
+            ),
         )
 
     async def handle_turn(

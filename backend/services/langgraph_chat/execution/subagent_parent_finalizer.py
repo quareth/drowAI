@@ -13,14 +13,20 @@ from typing import Any
 from agent.graph import InteractiveState
 from agent.graph.builders.common_edges import ensure_metadata_runtime_budgets
 from agent.graph.builders.parent_handoff_builder import build_parent_handoff_graph
-from agent.graph.graph_names import GRAPH_NAME_SIMPLE_TOOL
+from agent.graph.graph_names import GRAPH_NAME_PARENT_HANDOFF
 from agent.graph.streaming import build_agent_turn_metadata
 from agent.graph.utils.event_identity import POST_ACTION_STREAM_SEQUENCE_METADATA_KEY
 from backend.services.agent_runs.completion import (
     AgentRunCompletion,
     usage_envelopes_from_child_records,
 )
+from backend.services.agent_runs.parent_handoff_continuation import (
+    ParentHandoffContinuationBroker,
+)
 from backend.services.chat.event_builders import attach_conversation_ids
+from backend.services.langgraph_chat.checkpoint.checkpointer_service import (
+    CheckpointerService,
+)
 from backend.services.langgraph_chat.contracts import (
     ExecutionMode,
     LangGraphChatResult,
@@ -57,11 +63,15 @@ class SubagentParentFinalizer:
     def __init__(
         self,
         *,
+        checkpointer_service: CheckpointerService,
         executor: LangGraphExecutor,
         cancellation_checker_factory: CancellationCheckerFactory,
+        continuation_broker: ParentHandoffContinuationBroker,
     ) -> None:
+        self._checkpointer = checkpointer_service
         self._executor = executor
         self._build_cancellation_checker = cancellation_checker_factory
+        self._continuation_broker = continuation_broker
 
     async def finalize(
         self,
@@ -87,7 +97,7 @@ class SubagentParentFinalizer:
         thread_id = apply_agent_thread_config(
             config,
             task_id=task_id,
-            graph_name=GRAPH_NAME_SIMPLE_TOOL,
+            graph_name=GRAPH_NAME_PARENT_HANDOFF,
             turn=turn,
             conversation_id=chat_inputs.conversation_id,
         )
@@ -103,21 +113,33 @@ class SubagentParentFinalizer:
             task_id,
             str(turn.turn_id),
         )
+        continuation_session = self._continuation_broker.open(
+            task_id=task_id,
+            thread_id=thread_id,
+            state_container=state_container,
+        )
 
         async def execute_graph(
             emitter: StreamEmitter,
             callback_result_holder: dict[str, Any],
         ) -> str:
             _ = (emitter, callback_result_holder)
-            execution_result = await self._executor.stream_graph(
-                build_parent_handoff_graph(),
-                graph_input,
-                config,
-                task_id,
-                state_container=state_container,
-                should_cancel=cancellation_checker,
-            )
+            async with self._checkpointer.get_checkpointer(task_id) as checkpointer:
+                execution_result = await self._executor.stream_graph(
+                    build_parent_handoff_graph(checkpointer=checkpointer),
+                    graph_input,
+                    config,
+                    task_id,
+                    state_container=state_container,
+                    should_cancel=cancellation_checker,
+                )
             record_execution_metadata(captured_state, execution_result.metadata)
+            if execution_result.interrupted:
+                execution_result = await self._continuation_broker.wait(
+                    continuation_session,
+                    should_cancel=cancellation_checker,
+                )
+                record_execution_metadata(captured_state, execution_result.metadata)
             interactive_state = parse_interactive_state_from_final(
                 final_state=execution_result.final_state,
                 starting_state=starting_state,
@@ -132,24 +154,27 @@ class SubagentParentFinalizer:
             captured_state["interactive_state"] = interactive_state
             return interactive_state.trace.final_text or interactive_state.facts.message
 
-        await drain_completion_callback(
-            callback_runner=run_turn_with_completion_callback,
-            turn=turn,
-            task_id=task_id,
-            conversation_id=chat_inputs.conversation_id or "",
-            llm_func=execute_graph,
-            should_cancel=cancellation_checker,
-            state_container=state_container,
-            reserved_message_id=reserved_message_id,
-            result_holder=result_holder,
-            prefill_reasoning_tokens=prefill_reasoning_tokens_from(turn.metadata),
-        )
+        try:
+            await drain_completion_callback(
+                callback_runner=run_turn_with_completion_callback,
+                turn=turn,
+                task_id=task_id,
+                conversation_id=chat_inputs.conversation_id or "",
+                llm_func=execute_graph,
+                should_cancel=cancellation_checker,
+                state_container=state_container,
+                reserved_message_id=reserved_message_id,
+                result_holder=result_holder,
+                prefill_reasoning_tokens=prefill_reasoning_tokens_from(turn.metadata),
+            )
+        finally:
+            self._continuation_broker.close(continuation_session)
 
         if result_holder.get("cancelled") is True:
             return build_cancelled_result(
                 chat_inputs=chat_inputs,
                 thread_id=thread_id,
-                graph_name=GRAPH_NAME_SIMPLE_TOOL,
+                graph_name=GRAPH_NAME_PARENT_HANDOFF,
                 captured_state=captured_state,
             )
 
@@ -183,6 +208,7 @@ class SubagentParentFinalizer:
                 "streaming": False,
                 "mode": ExecutionMode.SIMPLE_TOOL.value,
                 "branch": "subagent",
+                "graph_name": GRAPH_NAME_PARENT_HANDOFF,
                 "status": "completed",
                 "handoff_agent_run_id": child_completions[0].result.agent_run_id,
                 "handoff_agent_id": child_completions[0].result.agent_id,

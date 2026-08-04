@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END
 
 import agent.graph.builders.parent_handoff_builder as parent_handoff_builder
@@ -50,6 +51,15 @@ def test_parent_handoff_graph_enters_par_before_finalization() -> None:
     assert ("format_results", "finalize") in edges
     assert ("finalize", END) in edges
     assert ("prepare_handoff_context", "format_results") not in edges
+
+
+def test_parent_handoff_graph_compiles_with_supplied_checkpointer() -> None:
+    """Approval interrupts can resume against the parent graph checkpoint."""
+    checkpointer = InMemorySaver()
+
+    compiled = build_parent_handoff_graph(checkpointer=checkpointer)
+
+    assert compiled.checkpointer is checkpointer
 
 
 def test_parent_handoff_router_controls_end_at_graph_boundary() -> None:

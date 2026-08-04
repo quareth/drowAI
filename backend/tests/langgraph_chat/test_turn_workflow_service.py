@@ -258,6 +258,54 @@ def test_ensure_waiting_workflow_does_not_downgrade_resumed_state() -> None:
         engine.dispose()
 
 
+def test_ensure_waiting_workflow_reopens_resumed_turn_for_distinct_interrupt() -> None:
+    """A later checkpoint in the same turn owns a new approval lifecycle."""
+    engine, db = _build_session()
+    try:
+        service = TurnWorkflowService(db)
+        first = service.ensure_waiting_workflow(
+            task_id=5,
+            conversation_id="conv-5",
+            turn_id="task-5-turn-1",
+            turn_sequence=1,
+            graph_name="subagent",
+            checkpoint_id="cp-child",
+            interrupt_type="tool_approval",
+            reserved_message_id=55,
+            resume_key="cp-child",
+        )
+        resumed = service.try_begin_resume(
+            task_id=5,
+            resume_key="cp-child",
+            checkpoint_id="cp-child",
+            graph_name="subagent",
+            reserved_message_id=55,
+        )
+        assert resumed is not None
+        assert resumed.state == TurnWorkflowState.RESUMED.value
+
+        reopened = service.ensure_waiting_workflow(
+            task_id=5,
+            conversation_id="conv-5",
+            turn_id="task-5-turn-1",
+            turn_sequence=1,
+            graph_name="parent_handoff",
+            checkpoint_id="cp-parent",
+            interrupt_type="tool_approval",
+            reserved_message_id=55,
+            resume_key="cp-parent",
+        )
+
+        assert reopened.id == first.id
+        assert reopened.state == TurnWorkflowState.WAITING_FOR_HUMAN.value
+        assert reopened.graph_name == "parent_handoff"
+        assert reopened.checkpoint_id == "cp-parent"
+        assert reopened.resume_key == "cp-parent"
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_try_begin_resume_survives_service_reinstantiation() -> None:
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
