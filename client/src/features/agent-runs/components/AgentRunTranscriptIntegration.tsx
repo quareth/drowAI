@@ -204,7 +204,7 @@ export function AgentRunTranscriptIntegration({
     toTenantActionSet(effectivePermissions),
     TENANT_ACTIONS.taskControl,
   );
-  useAgentRunLocalStatusHydration(taskId);
+  useAgentRunLocalStatusHydration(taskId, isConnected);
   const agentRuns = useAgentRuns(taskId);
   const presentation = useAgentRunPresentation(taskId);
   const parentTranscriptMessages = useMemo(

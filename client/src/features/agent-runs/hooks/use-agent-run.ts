@@ -72,6 +72,7 @@ export function useAgentRunPresentation(
 
 export function useAgentRunLocalStatusHydration(
   taskId: number | null | undefined,
+  isConnected: boolean,
 ): void {
   const snapshot = useAgentRunStoreSnapshot(taskId);
   const activeRunKey = useMemo(() => {
@@ -86,7 +87,7 @@ export function useAgentRunLocalStatusHydration(
   }, [snapshot.runs, taskId]);
 
   useEffect(() => {
-    if (!isValidTaskId(taskId) || !activeRunKey) {
+    if (!isValidTaskId(taskId) || !activeRunKey || !isConnected) {
       return;
     }
 
@@ -114,7 +115,7 @@ export function useAgentRunLocalStatusHydration(
       cancelled = true;
       controller.abort();
     };
-  }, [activeRunKey, taskId]);
+  }, [activeRunKey, isConnected, taskId]);
 }
 
 function isValidTaskId(taskId: number | null | undefined): taskId is number {

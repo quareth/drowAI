@@ -1305,4 +1305,47 @@ describe("AgentRunTranscriptIntegration Pathfinder agent-run cards", () => {
       expect.objectContaining({ method: "GET" }),
     );
   });
+
+  it("rechecks active Pathfinder runs after the task stream reconnects", async () => {
+    apiFetchMock
+      .mockResolvedValueOnce(localRunsResponse([localStatus()]))
+      .mockResolvedValueOnce(localRunsResponse([]));
+    applyAgentRunLifecycleUpdate(TASK_ID, lifecycle({ status: "running" }), 12);
+
+    const { rerender } = render(
+      <AgentRunTranscriptIntegration
+        messages={[lifecycleMessage()]}
+        taskId={TASK_ID}
+        isLoading={false}
+        isConnected
+      />,
+    );
+
+    await waitFor(() => {
+      expect(apiFetchMock).toHaveBeenCalledTimes(1);
+    });
+    expect(getAgentRunSnapshot(TASK_ID).runsById["pathfinder-run-1"].status).toBe("running");
+
+    rerender(
+      <AgentRunTranscriptIntegration
+        messages={[lifecycleMessage()]}
+        taskId={TASK_ID}
+        isLoading={false}
+        isConnected={false}
+      />,
+    );
+    rerender(
+      <AgentRunTranscriptIntegration
+        messages={[lifecycleMessage()]}
+        taskId={TASK_ID}
+        isLoading={false}
+        isConnected
+      />,
+    );
+
+    await waitFor(() => {
+      expect(apiFetchMock).toHaveBeenCalledTimes(2);
+      expect(getAgentRunSnapshot(TASK_ID).runsById["pathfinder-run-1"].status).toBe("interrupted");
+    });
+  });
 });
