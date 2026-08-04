@@ -40,6 +40,8 @@ The format is based on
 
 ### Fixed
 
+- Knowledge service projection now preserves canonical open, closed, and
+  filtered network-service states in durable inventory and topology views.
 - HTTP and FFUF semantic facts now strip URL userinfo before durable
   persistence and preserve bracketed IPv6 literals in canonical web identity.
 - Compact canonical pentest projections now retain result summaries and

@@ -1337,6 +1337,99 @@ def test_projection_service_preserves_service_contradictions_across_batches() ->
         engine.dispose()
 
 
+def test_projection_service_exposes_normalized_service_statuses_in_graph() -> None:
+    engine, db = _build_session()
+    try:
+        engagement = _seed_engagement(db)
+        service = KnowledgeProjectionService(db)
+        now = datetime.now(timezone.utc)
+        observations = [
+            ObservationCreate(
+                engagement_id=engagement.id,
+                task_id=None,
+                source_execution_id="exec-nmap-statuses",
+                ingestion_run_id="run-nmap-statuses",
+                observation_type="network.host_discovered",
+                subject_type="host.ip",
+                subject_key="host.ip:10.10.10.40",
+                assertion_level="observed",
+                payload={"source": "nmap"},
+                observed_at=now,
+            ),
+            ObservationCreate(
+                engagement_id=engagement.id,
+                task_id=None,
+                source_execution_id="exec-nmap-statuses",
+                ingestion_run_id="run-nmap-statuses",
+                observation_type="network.open_port",
+                subject_type="service.socket",
+                subject_key="service.socket:10.10.10.40/tcp/80",
+                assertion_level="observed",
+                payload={"source": "nmap"},
+                observed_at=now + timedelta(seconds=1),
+            ),
+            ObservationCreate(
+                engagement_id=engagement.id,
+                task_id=None,
+                source_execution_id="exec-nmap-statuses",
+                ingestion_run_id="run-nmap-statuses",
+                observation_type="network.service_observed",
+                subject_type="service.socket",
+                subject_key="service.socket:10.10.10.40/tcp/443",
+                assertion_level="observed",
+                payload={"source": "nmap", "state": "closed"},
+                observed_at=now + timedelta(seconds=2),
+            ),
+            ObservationCreate(
+                engagement_id=engagement.id,
+                task_id=None,
+                source_execution_id="exec-nmap-statuses",
+                ingestion_run_id="run-nmap-statuses",
+                observation_type="network.service_observed",
+                subject_type="service.socket",
+                subject_key="service.socket:10.10.10.40/tcp/8080",
+                assertion_level="observed",
+                payload={"source": "nmap", "state": "filtered"},
+                observed_at=now + timedelta(seconds=3),
+            ),
+        ]
+
+        service.project_observations(
+            engagement_id=engagement.id,
+            observations=observations,
+        )
+
+        projected = {
+            row.service_key: row
+            for row in db.query(KnowledgeService)
+            .filter(KnowledgeService.engagement_id == engagement.id)
+            .all()
+        }
+        expected_statuses = {
+            "service.socket:10.10.10.40/tcp/80": "open",
+            "service.socket:10.10.10.40/tcp/443": "closed",
+            "service.socket:10.10.10.40/tcp/8080": "filtered",
+        }
+        assert {
+            service_key: row.status for service_key, row in projected.items()
+        } == expected_statuses
+
+        graph = KnowledgeQueryService(db).get_graph_snapshot(
+            user_id=engagement.user_id,
+            tenant_id=engagement.tenant_id,
+            engagement_id=engagement.id,
+        )
+        graph_statuses = {
+            node["id"]: dict(node["metadata"].get("state") or {}).get("status")
+            for node in graph["nodes"]
+            if node["node_type"] == "service"
+        }
+        assert graph_statuses == expected_statuses
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_projection_service_merges_nuclei_rich_details_across_batches() -> None:
     engine, db = _build_session()
     try:
