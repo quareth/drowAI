@@ -8,6 +8,11 @@ The format is based on
 
 ## [Unreleased]
 
+### Security
+
+- Updated cryptography, Undici, and PostCSS to patched releases that address
+  dependency security advisories.
+
 ## [0.3.0] - 2026-08-04
 
 ### Added
