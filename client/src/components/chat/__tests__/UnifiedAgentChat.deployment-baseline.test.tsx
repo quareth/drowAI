@@ -161,8 +161,8 @@ vi.mock("../TaskModelSelectors", () => ({
   ),
 }));
 
-vi.mock("../MessageList", () => ({
-  default: () => <div data-testid="message-list" />,
+vi.mock("@/features/agent-runs/components/AgentRunTranscriptIntegration", () => ({
+  AgentRunTranscriptIntegration: () => <div data-testid="message-list" />,
 }));
 
 vi.mock("../ChatInput", () => ({

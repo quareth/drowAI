@@ -1,10 +1,10 @@
 # finalizer prompt family — v1
 
-Versioned assets for the unified finalizer (`core/prompts/builders/finalize_results.py`).
+Versioned assets for the unified finalizer (`core/prompts/builders/finalize.py`).
 
 Files:
 
-- `system_base.txt` — operator voice and four-part output skeleton (`## Action`, `## Findings`, `## Impact`, `## Recommended Next Action`). Loaded for every finalizer call.
+- `system_base.txt` — main-agent operator voice and four-part output skeleton (`## Action`, `## Findings`, `## Impact`, `## Recommended Next Action`).
 - `addendum_retry.txt` — appended to the system prompt when more than one tool attempt happened for the turn.
 - `addendum_dr.txt` — appended to the system prompt when capability is `deep_reasoning`.
 - `addendum_analyst.txt` — appended to the system prompt when analyst-derived (PTR candidate) observations are available.

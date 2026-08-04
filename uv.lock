@@ -440,7 +440,7 @@ wheels = [
 
 [[package]]
 name = "drowai"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "alembic" },
@@ -451,6 +451,7 @@ dependencies = [
     { name = "docker" },
     { name = "fastapi" },
     { name = "greenlet" },
+    { name = "httpx" },
     { name = "jsonschema" },
     { name = "langgraph" },
     { name = "langgraph-checkpoint" },
@@ -488,6 +489,7 @@ requires-dist = [
     { name = "docker", specifier = "==7.1.0" },
     { name = "fastapi", specifier = "==0.139.0" },
     { name = "greenlet", specifier = "==3.2.3" },
+    { name = "httpx", specifier = "==0.28.1" },
     { name = "jsonschema", specifier = "==4.25.0" },
     { name = "langgraph", specifier = "==1.2.9" },
     { name = "langgraph-checkpoint", specifier = "==4.1.1" },

@@ -38,6 +38,7 @@ Derive from `docs/runbooks/refactor-runbook.md` and the program's local `safety-
 4. **No compatibility shims** — no feature flags, env aliases, dual-read paths, or deprecated re-exports unless the user explicitly requests compat (must be documented).
 5. **Mandatory Review & Cleanup** — every phase ends with: zero stale symbols, no duplicate definitions, no commented-out legacy, grep gate pass (if applicable), baseline tests green.
 6. **Match the repo** — align with `AGENTS.md`, wired entrypoints, and existing architecture.
+7. **Repository-first ownership** — apply Rule 5 from `docs/runbooks/refactor-runbook.md`: map the source file by architectural responsibility before target design; search wired modules for each existing canonical owner; migrate into that owner when it exists; and permit a new module only when no owner fits and the concern is a coherent architectural concept with a stable boundary and independent reason to change. Never solve monoliths by mechanically moving small functions into convenience files.
 
 ## Structural refactor pattern
 
@@ -46,6 +47,10 @@ When moving or splitting code without renaming contracts:
 - Zero behavior change — move bodies verbatim; only imports and reference repointing.
 - **Extract → migrate → remove**: create new structure alongside legacy, repoint all callers, delete legacy only after green.
 - **Symbol inventory** per phase: what moves where.
+- **Responsibility-owner inventory** before target-file design: responsibilities
+  currently mixed in the source, wired candidates inspected for each one,
+  selected canonical owners, and justification for every genuinely new module.
+  File size and groups of small functions are not architectural boundaries.
 - **Dependency / no-cycle check** before each phase.
 - Single-responsibility target modules; every new file gets a purpose docstring in the guide.
 - Phase guides may borrow section order from `docs/runbooks/PLAN_TEMPLATE.md` where helpful, but must open with **Purpose / Scope / Boundaries**.
@@ -107,6 +112,9 @@ When the refactor spans multiple phases, provide a program index:
 - **Verification suites**: minimal `pytest` / `npm run check` per phase, tied to touched subsystems.
 - **Exemptions explicit**: list what is out of scope and why.
 - **Reuse repo patterns**: reference existing modules; say "reuse" or "do not duplicate."
+- **One owner per responsibility**: do not propose parallel services, helpers,
+  managers, utilities, wrappers, registries, or policy modules. If ownership is
+  ambiguous, stop and resolve it before writing extraction tasks.
 - **Dense and scannable**: tables, checklists, grep commands over long prose.
 - **Do not implement code** or run tests; output is documentation only.
 

@@ -31,6 +31,7 @@ import {
   getFirstCatalogDefaultSelection,
   sameDeploymentRef,
 } from "@/features/llm-provider/catalog";
+import { AgentRunTranscriptIntegration } from "@/features/agent-runs/components/AgentRunTranscriptIntegration";
 import {
   getDefaultVisibleReasoningEffort,
   getSupportedReasoningEffortForPayload,
@@ -48,7 +49,6 @@ import { useChatStop } from "@/hooks/useChatStop";
 import { useInterruptState } from "@/hooks/useInterruptState";
 import QueueIndicator from "./QueueIndicator";
 
-import MessageList from "./MessageList";
 import ChatInput from "./ChatInput";
 import TaskModelSelectors from "./TaskModelSelectors";
 import type { ReasoningEffort } from "./TaskModelSelectors";
@@ -113,6 +113,7 @@ interface UnifiedAgentChatProps {
   onChatModeChange?: (mode: ChatExperienceMode) => void;
   onTaskChange?: (taskId: number) => void;
   headerSlot?: ReactNode;
+  leadingHeaderSlot?: ReactNode;
 }
 
 export function UnifiedAgentChat({
@@ -121,6 +122,7 @@ export function UnifiedAgentChat({
   onChatModeChange,
   onTaskChange,
   headerSlot,
+  leadingHeaderSlot,
 }: UnifiedAgentChatProps) {
   const { toast } = useToast();
   const queryClient = useQueryClient();
@@ -987,13 +989,14 @@ export function UnifiedAgentChat({
       runStates={runStates}
       onDownloadTranscript={handleDownloadTranscript}
       isTranscriptDownloadPending={isTranscriptExporting}
+      leadingSlot={leadingHeaderSlot}
     />
   );
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-slate-950">
       {header}
-      <MessageList
+      <AgentRunTranscriptIntegration
         messages={chatProvider.messages}
         taskId={activeTaskId}
         isLoading={chatProvider.isLoading || chatBootstrap.isPending}

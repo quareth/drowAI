@@ -202,6 +202,16 @@ class TestParseNmapXmlIntegration:
         by_port = {p["port"]: p for p in metadata["open_ports"]}
         assert "service_profile" in by_port[80]
 
+    def test_all_explicit_port_states_remain_available_for_semantic_emission(self):
+        metadata = parse_nmap_xml(RICH_XML)
+        scanned_ports = {
+            (port["port"], port["status"])
+            for port in metadata["hosts"][0]["scanned_ports"]
+        }
+
+        assert (80, "open") in scanned_ports
+        assert (8080, "closed") in scanned_ports
+
 
 class TestLegacyFieldPreservation:
     """Verify that existing metadata keys are unchanged after rich parsing."""
@@ -728,6 +738,28 @@ class TestNmapToolSemanticEmission:
         assert "network.open_port" in types
         assert "network.service_detected" in types
 
+    def test_non_open_port_states_are_emitted_as_canonical_service_facts(self):
+        observations = self._emit()
+        closed_port = next(
+            observation
+            for observation in observations
+            if observation["subject_key"] == "service.socket:10.0.0.5/tcp/8080"
+        )
+
+        assert closed_port == {
+            "observation_type": "network.service_observed",
+            "subject_type": "service.socket",
+            "subject_key": "service.socket:10.0.0.5/tcp/8080",
+            "payload": {
+                "ip": "10.0.0.5",
+                "protocol": "tcp",
+                "port": 8080,
+                "source": "nmap",
+                "state": "closed",
+                "service_name": "http-proxy",
+            },
+        }
+
     def test_new_profiled_observations_emitted(self):
         observations = self._emit()
         types = {o["observation_type"] for o in observations}
@@ -863,20 +895,20 @@ def test_nmap_prompt_baseline_frozen_v4_with_evidence():
     )
 
     assert llm.last_prompt is not None
-    # Refreshed 2026-07-26 to the current v4 prompt text while preserving the
-    # production renderer and semantic payload.
-    assert len(llm.last_prompt) == 19142
+    # Rebaselined after explicit non-open port states joined the canonical
+    # semantic payload instead of remaining in the retired legacy adapter.
+    assert len(llm.last_prompt) == 19389
     assert (
         hashlib.sha256(llm.last_prompt.encode("utf-8")).hexdigest()
-        == "d10ea4ee1cf872be031420ceab6f9e6a3b78233fd8b91f16341ceddf6189147f"
+        == "d5a72891214c7439da7cc2915fe905073412907088c2ef686e433e38810ffdc5"
     )
     assert "network.host_profiled" in llm.last_prompt
     assert '"result_summary":[' in llm.last_prompt
 
-    assert result.summary == "prompt-sha256:d10ea4ee1cf872be031420ceab6f9e6a3b78233fd8b91f16341ceddf6189147f"
-    assert result.key_findings == ["prompt-len:19142"]
+    assert result.summary == "prompt-sha256:d5a72891214c7439da7cc2915fe905073412907088c2ef686e433e38810ffdc5"
+    assert result.key_findings == ["prompt-len:19389"]
     assert result.structured_signals == []
-    assert result.decision_evidence == ["d10ea4ee1cf872be"]
+    assert result.decision_evidence == ["d5a72891214c7439"]
     assert result.lossiness_risk == "low"
 
 
@@ -942,4 +974,4 @@ def test_nmap_no_observation_regressions():
         json.dumps(observations, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
 
-    assert digest == "7e6d94b7b010faecbcd6cfa24a316c728ba1bef4636ab2310fadfcfd1f26a7c4"
+    assert digest == "f3d29b6088701853c30b8727be37ca6246c597a622e48556812b5daf47a27a0e"

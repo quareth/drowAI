@@ -7,6 +7,11 @@ import { type ChatBootstrapState, useChatBootstrap } from "@/hooks/useChatBootst
 
 const mocked = vi.hoisted(() => ({
   apiFetch: vi.fn(),
+  hydrateAgentRunsFromRecentReplay: vi.fn(async () => ({
+    replayedPackets: 0,
+    localStatusReconciled: false,
+    lastSequence: null,
+  })),
   setConversationId: vi.fn(),
   setChatReadyState: vi.fn(),
   setTaskHistory: vi.fn(),
@@ -62,6 +67,10 @@ sessionSnapshot = {
 
 vi.mock("@/lib/api-config", () => ({
   apiFetch: mocked.apiFetch,
+}));
+
+vi.mock("@/features/agent-runs/services/agent-run-replay-hydration", () => ({
+  hydrateAgentRunsFromRecentReplay: mocked.hydrateAgentRunsFromRecentReplay,
 }));
 
 vi.mock("@/state/chat-session-store", () => ({
@@ -195,6 +204,10 @@ describe("useChatBootstrap single-startup flow", () => {
       501,
       true,
       expect.objectContaining({ conversation_id: "conv-501" }),
+    );
+    expect(mocked.hydrateAgentRunsFromRecentReplay).toHaveBeenCalledWith(
+      501,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
     expect(mocked.setConversationId).toHaveBeenCalledWith(501, "conv-501");
     expect(mocked.setTaskHistory).toHaveBeenCalledTimes(1);

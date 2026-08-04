@@ -12,6 +12,9 @@ from dataclasses import dataclass
 
 from backend.config import AGENT_REASONING_MOCK_MODE
 from backend.database import SessionLocal
+from backend.services.agent_runs.local_runtime import (
+    get_process_local_agent_run_registry,
+)
 from backend.services.cve_indexing.runtime import cve_sync_scheduler
 from backend.services.metrics import metrics
 from backend.services.retention import cleanup_agent_logs
@@ -122,16 +125,23 @@ async def _retention_loop() -> None:
     while True:
         try:
             await asyncio.sleep(3600)
-            db = SessionLocal()
-            try:
-                deleted = cleanup_agent_logs(db)
-                if deleted:
-                    logger.info(
-                        "[retention] finalized %s expired retention items", deleted
-                    )
-            finally:
-                db.close()
+            await _run_retention_cycle()
         except asyncio.CancelledError:
             break
         except Exception:
             logger.error("retention loop error", exc_info=True)
+
+
+async def _run_retention_cycle() -> None:
+    """Apply durable-log and process-local run retention once."""
+    db = SessionLocal()
+    try:
+        deleted = cleanup_agent_logs(db)
+        if deleted:
+            logger.info("[retention] finalized %s expired retention items", deleted)
+    finally:
+        db.close()
+
+    deleted_runs = await get_process_local_agent_run_registry().cleanup_finished()
+    if deleted_runs:
+        logger.info("[retention] removed %s finished subagent runs", deleted_runs)

@@ -6,8 +6,13 @@ from typing import Any, Dict, List
 
 import pytest
 from jsonschema import ValidationError, validate
+from pydantic import ValidationError as PydanticValidationError
 
 from agent.providers.llm.contracts.structured_output import validate_openai_strict_schema
+from agent.graph.nodes.post_tool_reasoning.models import (
+    PostToolReasoningDecisionOutput,
+)
+from backend.services.agent_runs.ownership_policy import MAX_AGENT_HANDOFFS
 from core.llm.structured_schemas import (
     DECISION_ROUTER_STRUCTURED_OUTPUT,
     ENGAGEMENT_REPORT_SECTION_STRUCTURED_OUTPUT,
@@ -23,6 +28,8 @@ from core.llm.structured_schemas import (
     TOOL_CATEGORY_SELECTOR_STRUCTURED_OUTPUT,
     TOOL_SELECTOR_STRUCTURED_OUTPUT,
     TOOL_OUTPUT_COMPRESSOR_STRUCTURED_OUTPUT,
+    build_intent_classifier_structured_output,
+    build_post_tool_decision_structured_output,
 )
 
 
@@ -57,6 +64,80 @@ def _collect_required_coverage_errors(schema: Dict[str, Any], path: str = "$") -
                         )
 
     return errors
+
+
+def _intent_classifier_payload(
+    *,
+    agent_handoffs: List[Dict[str, Any]] | None = None,
+) -> Dict[str, Any]:
+    """Return a minimal valid intent-classifier structured payload."""
+    return {
+        "label": "plan_executor",
+        "confidence": 0.95,
+        "suggested_capabilities": ["network_scan"],
+        "agent_handoffs": list(agent_handoffs or []),
+        "requested_output_format": None,
+        "question_type": "multi_step",
+        "answer_style": "normal",
+        "terminal_when": "all_steps_done",
+        "risk_flags": [],
+        "target_status": "resolved",
+        "resolved_target": "10.0.0.5",
+        "target_source": "explicit_current_message",
+        "target_confidence": 0.9,
+        "target_evidence": "User supplied 10.0.0.5.",
+        "prior_target_reuse": "disallow",
+        "prior_target_reuse_evidence": None,
+        "turn_interpretation": {
+            "resolved_user_intent": "Scan 10.0.0.5 for open services.",
+            "original_goal": "Scan 10.0.0.5 for open services.",
+            "task_seed": ["Scan 10.0.0.5 for open services."],
+            "overall_goal": None,
+            "continuation_mode": "new_request",
+            "step_reference_text": None,
+            "step_reference_status": "none",
+            "resolved_step_title": None,
+            "resolved_step_detail": None,
+            "next_operational_goal": "Run a port scan against 10.0.0.5.",
+            "execution_readiness": "ready",
+            "blocking_reason": None,
+            "success_condition": "Open services are identified.",
+            "explicit_constraints": [],
+            "relevant_memory_fragments": [],
+            "suggested_category_focus": ["network_scan"],
+            "retrieval_hints": [],
+        },
+        "prior_turn_reference": {
+            "required": False,
+            "operation": "none",
+            "status": "none",
+            "confidence": None,
+            "hints": [],
+        },
+        "reasoning": "The request is grounded and actionable.",
+    }
+
+
+def _post_tool_decision_payload(
+    *,
+    next_action: str = "finalize",
+    agent_handoff: Dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Return a minimal valid PAR decision structured payload."""
+    return {
+        "next_action": next_action,
+        "action_reasoning": "The available evidence is sufficient to answer.",
+        "tool_intent": None,
+        "user_goal_achieved": next_action == "finalize",
+        "todo_progress": [],
+        "effective_next_goal": None,
+        "failure_detected": False,
+        "failure_category": None,
+        "retry_suggested": False,
+        "candidate_observations": None,
+        "agent_handoff": agent_handoff,
+        "par_irrelevant_active_agent_run_ids": [],
+    }
 
 
 def test_structured_schemas_have_required_for_all_properties() -> None:
@@ -97,11 +178,11 @@ def test_intent_classifier_turn_interpretation_requires_goal_and_task_seed() -> 
         "maxItems": 3,
     }
     assert "task_seed" in turn_interpretation["required"]
-
     base_payload = {
         "label": "direct_executor",
         "confidence": 0.95,
         "suggested_capabilities": ["network_scan"],
+        "agent_handoffs": [],
         "requested_output_format": None,
         "question_type": "multi_step",
         "answer_style": "normal",
@@ -161,6 +242,170 @@ def test_intent_classifier_turn_interpretation_requires_goal_and_task_seed() -> 
     ]
     with pytest.raises(ValidationError):
         validate(base_payload, schema)
+
+
+def test_intent_classifier_subagent_enum_is_registry_scoped() -> None:
+    spec = build_intent_classifier_structured_output(
+        ("pathfinder", "analyst"),
+        max_handoffs=MAX_AGENT_HANDOFFS,
+    )
+    subagent_schema = spec.schema["properties"]["agent_handoffs"]["items"][
+        "properties"
+    ]["subagent"]
+
+    assert subagent_schema == {
+        "type": "string",
+        "minLength": 1,
+        "enum": ["pathfinder", "analyst"],
+    }
+    assert spec.schema["properties"]["agent_handoffs"]["maxItems"] == 3
+    validate_openai_strict_schema(spec)
+
+
+def test_classifier_and_par_share_delegation_entry_shape() -> None:
+    classifier_spec = build_intent_classifier_structured_output(
+        ("PathFinder", "analyst", "pathfinder"),
+        max_handoffs=MAX_AGENT_HANDOFFS,
+    )
+    par_spec = build_post_tool_decision_structured_output(
+        ("PathFinder", "analyst", "pathfinder")
+    )
+
+    classifier_entry = classifier_spec.schema["properties"]["agent_handoffs"]["items"]
+    par_entry = par_spec.schema["properties"]["agent_handoff"]
+
+    assert classifier_entry["properties"] == par_entry["properties"]
+    assert classifier_entry["required"] == par_entry["required"] == [
+        "agent_handoff",
+        "subagent",
+        "objective",
+    ]
+    assert classifier_entry["additionalProperties"] is False
+    assert par_entry["additionalProperties"] is False
+    assert classifier_entry["properties"]["subagent"]["enum"] == [
+        "pathfinder",
+        "analyst",
+    ]
+    assert par_entry["properties"]["subagent"]["enum"] == [
+        "pathfinder",
+        "analyst",
+    ]
+    validate_openai_strict_schema(par_spec)
+
+
+def test_delegation_entry_schema_rejects_empty_objective_and_invalid_subagent() -> None:
+    classifier_schema = build_intent_classifier_structured_output(
+        ("pathfinder", "analyst"),
+        max_handoffs=MAX_AGENT_HANDOFFS,
+    ).schema
+    par_schema = build_post_tool_decision_structured_output(
+        ("pathfinder", "analyst")
+    ).schema
+
+    classifier_payload = _intent_classifier_payload(
+        agent_handoffs=[
+            {
+                "agent_handoff": "required",
+                "subagent": "pathfinder",
+                "objective": "Map exposed services on the approved target.",
+            }
+        ]
+    )
+    par_payload = _post_tool_decision_payload(
+        next_action="delegate_subagent",
+        agent_handoff={
+            "agent_handoff": "required",
+            "subagent": "pathfinder",
+            "objective": "Map exposed services on the approved target.",
+        }
+    )
+
+    validate(classifier_payload, classifier_schema)
+    validate(par_payload, par_schema)
+
+    classifier_payload["agent_handoffs"][0]["objective"] = ""
+    with pytest.raises(ValidationError):
+        validate(classifier_payload, classifier_schema)
+
+    classifier_payload["agent_handoffs"][0]["objective"] = "Map services."
+    classifier_payload["agent_handoffs"][0]["subagent"] = "unknown"
+    with pytest.raises(ValidationError):
+        validate(classifier_payload, classifier_schema)
+
+    par_payload["agent_handoff"]["objective"] = ""
+    with pytest.raises(ValidationError):
+        validate(par_payload, par_schema)
+
+    par_payload["agent_handoff"]["objective"] = "Map services."
+    par_payload["agent_handoff"]["subagent"] = "unknown"
+    with pytest.raises(ValidationError):
+        validate(par_payload, par_schema)
+
+
+def test_post_tool_decision_uses_portable_schema_and_runtime_pairing_validation() -> None:
+    schema = build_post_tool_decision_structured_output(("pathfinder",)).schema
+    valid_handoff = {
+        "agent_handoff": "required",
+        "subagent": "pathfinder",
+        "objective": "Enumerate services on the approved target.",
+    }
+
+    assert "allOf" not in schema
+    validate_openai_strict_schema(
+        build_post_tool_decision_structured_output(("pathfinder",))
+    )
+
+    validate(
+        _post_tool_decision_payload(
+            next_action="delegate_subagent",
+            agent_handoff=valid_handoff,
+        ),
+        schema,
+    )
+    validate(
+        _post_tool_decision_payload(next_action="wait_for_subagents"),
+        schema,
+    )
+
+    with pytest.raises(PydanticValidationError):
+        PostToolReasoningDecisionOutput.model_validate(
+            _post_tool_decision_payload(next_action="delegate_subagent"),
+        )
+    with pytest.raises(PydanticValidationError):
+        PostToolReasoningDecisionOutput.model_validate(
+            _post_tool_decision_payload(
+                next_action="wait_for_subagents",
+                agent_handoff=valid_handoff,
+            ),
+        )
+    with pytest.raises(PydanticValidationError):
+        PostToolReasoningDecisionOutput.model_validate(
+            _post_tool_decision_payload(agent_handoff=valid_handoff),
+        )
+
+
+def test_post_tool_decision_schema_exposes_irrelevant_active_run_ids() -> None:
+    schema = POST_TOOL_DECISION_STRUCTURED_OUTPUT.schema
+    assert "par_irrelevant_active_agent_run_ids" in schema["properties"]
+    assert "par_irrelevant_active_agent_run_ids" in schema["required"]
+
+    payload = _post_tool_decision_payload(next_action="finalize")
+    payload["par_irrelevant_active_agent_run_ids"] = ["run-irrelevant"]
+    validate(payload, schema)
+
+    payload["par_irrelevant_active_agent_run_ids"] = [""]
+    with pytest.raises(ValidationError):
+        validate(payload, schema)
+
+
+def test_intent_classifier_disallows_handoffs_when_registry_is_empty() -> None:
+    spec = build_intent_classifier_structured_output(
+        (),
+        max_handoffs=MAX_AGENT_HANDOFFS,
+    )
+
+    assert spec.schema["properties"]["agent_handoffs"]["maxItems"] == 0
+    validate_openai_strict_schema(spec)
 
 
 def test_tool_selector_schema_requires_candidate_tools_strategy_and_reasoning() -> None:
@@ -472,6 +717,8 @@ def test_post_tool_decision_candidate_refs_allow_source_artifact_id() -> None:
                 "vulnerability_confidence": 0.9,
             }
         ],
+        "agent_handoff": None,
+        "par_irrelevant_active_agent_run_ids": [],
     }
 
     validate(payload, POST_TOOL_DECISION_STRUCTURED_OUTPUT.schema)

@@ -30,6 +30,20 @@ def _state_with_approval_pre_set(capability: str = "simple_tool_execution") -> d
         "selected_tools": ["shell.exec"],
         "tool_parameters": {"shell.exec": {"command": "echo ok"}},
         "execution_strategy": "sequential",
+        "tool_batch": {
+            "tool_batch_id": "tb-shell-exec",
+            "requested_execution_strategy": "sequential",
+            "tool_calls": [
+                {
+                    "tool_call_id": "tc-shell-exec",
+                    "tool_id": "shell.exec",
+                    "parameters": {"command": "echo ok"},
+                    "intent": "Run the prepared shell command.",
+                }
+            ],
+            "deferred_followups": [],
+            "selection_rationale": "Selected shell.exec for the echo command.",
+        },
     }
     facts = FactsState(
         task_id=1,
@@ -40,6 +54,15 @@ def _state_with_approval_pre_set(capability: str = "simple_tool_execution") -> d
         metadata={
             "agent_mode": "agent",
             "planner_plan": planner_plan,
+            "graph_runtime_context": {
+                "task_id": 1,
+                "tenant_id": 1,
+                "runtime_placement_mode": "local",
+                "workspace_id": "task-1",
+                "actor_type": "system",
+                "actor_id": "langgraph",
+                "workspace_path": "/tmp",
+            },
             "tool_plan_prepared": True,
             "tool_approval_gate_completed": True,
             "tool_approval_response": {"action": "approve"},
@@ -109,6 +132,7 @@ def _fake_outcome() -> SimpleNamespace:
     return SimpleNamespace(
         tool_id="shell.exec",
         parameters={"command": "echo ok"},
+        duration=1.0,
         result={
             "success": True,
             "status": "success",

@@ -2890,6 +2890,88 @@ async def test_interrupt_service_resume_rejects_claim_conflict(
 
 
 @pytest.mark.asyncio
+async def test_interrupt_service_workflow_conflict_requeues_claimed_ticket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = TaskInterruptService(db=SimpleNamespace())
+    captured: dict[str, object] = {}
+
+    class FakeWorkflowService:
+        def __init__(self, _db):
+            pass
+
+        def try_begin_resume(self, **_kwargs):
+            return None
+
+        def ensure_waiting_workflow(self, **kwargs):
+            captured["ensure"] = kwargs
+
+    class FakeTicketService:
+        def __init__(self, _db):
+            pass
+
+        def claim_for_resume(self, **kwargs):
+            return SimpleNamespace(
+                interrupt_id=kwargs["interrupt_id"],
+                graph_name="parent_handoff",
+                checkpoint_id="cp-parent",
+                interrupt_type="tool_approval",
+                thread_id="graph-" + ("a" * 32),
+                payload_snapshot={
+                    "turn_id": "task-77-turn-1",
+                    "turn_sequence": 1,
+                    "conversation_id": "conv-77",
+                    "reserved_message_id": 770,
+                },
+            )
+
+        def mark_pending(self, **kwargs):
+            captured["mark_pending"] = kwargs
+
+    class _SnapshotService:
+        async def get_pending_interrupt(self, **_kwargs):
+            return None
+
+    monkeypatch.setattr(
+        "backend.services.task.interrupt_service.get_owned_task_or_404",
+        lambda db, task_id, user_id, tenant_id: _owned_task(
+            task_id=task_id,
+            user_id=user_id,
+        ),
+    )
+    monkeypatch.setattr(
+        "backend.services.task.interrupt_service.TurnWorkflowService",
+        FakeWorkflowService,
+    )
+    monkeypatch.setattr(
+        "backend.services.task.interrupt_service.InterruptTicketService",
+        FakeTicketService,
+    )
+    monkeypatch.setattr(
+        "backend.services.langgraph_chat.checkpoint.interrupt_state_service.get_interrupt_state_service",
+        lambda: _SnapshotService(),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await service.resume_graph_execution(
+            task_id=77,
+            user_id=8,
+            interrupt_id="intr-parent",
+            graph_name="parent_handoff",
+            response_payload={"action": "approve"},
+            create_task_fn=lambda coro: coro.close(),
+            run_resume_generation=lambda **_kwargs: asyncio.sleep(0),
+            tenant_id=1,
+        )
+
+    assert exc.value.status_code == 409
+    assert captured["mark_pending"] == {
+        "interrupt_id": "intr-parent",
+        "task_id": 77,
+    }
+
+
+@pytest.mark.asyncio
 async def test_interrupt_service_resume_enqueue_failure_reverts_ticket_to_pending(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

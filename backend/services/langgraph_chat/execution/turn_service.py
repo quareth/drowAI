@@ -253,20 +253,13 @@ class TurnExecutionService:
             except Exception:
                 pass
 
-        usage_runtime_selection = runtime_selection
-        if not isinstance(usage_runtime_selection, Mapping):
-            metadata_selection = result_metadata.get("llm_runtime_selection")
-            usage_runtime_selection = (
-                metadata_selection if isinstance(metadata_selection, Mapping) else None
-            )
-        record_usage_list_best_effort(
+        self._record_result_usage(
             task_id=task_id,
             user_id=user_id,
-            usage_list=result.usage,
-            source="langgraph",
+            result=result,
             conversation_id=resolved_conversation_id,
             model=model,
-            runtime_selection=usage_runtime_selection,
+            runtime_selection=runtime_selection,
         )
         workflow_completed_fn = mark_turn_workflow_completed or mark_turn_workflow_completed_best_effort
         completed_metadata: Dict[str, Any] = {"completion_source": completion_source}
@@ -282,6 +275,34 @@ class TurnExecutionService:
         workflow_completed_fn(
             workflow_id=workflow_id,
             metadata=completed_metadata,
+        )
+
+    def _record_result_usage(
+        self,
+        *,
+        task_id: int,
+        user_id: int,
+        result: Any,
+        conversation_id: str,
+        model: Optional[str],
+        runtime_selection: Optional[Mapping[str, Any]],
+    ) -> None:
+        """Record result usage without publishing or completing a parent turn."""
+        result_metadata = result.metadata if isinstance(result.metadata, dict) else {}
+        usage_runtime_selection = runtime_selection
+        if not isinstance(usage_runtime_selection, Mapping):
+            metadata_selection = result_metadata.get("llm_runtime_selection")
+            usage_runtime_selection = (
+                metadata_selection if isinstance(metadata_selection, Mapping) else None
+            )
+        record_usage_list_best_effort(
+            task_id=task_id,
+            user_id=user_id,
+            usage_list=result.usage,
+            source="langgraph",
+            conversation_id=conversation_id,
+            model=model,
+            runtime_selection=usage_runtime_selection,
         )
 
     async def start_turn_generation(

@@ -1,5 +1,6 @@
-import { Eye, Loader2 } from "lucide-react";
+import { Eye } from "lucide-react";
 
+import { ActivityStatusIcon } from "@/components/chat/ActivityStatusIcon";
 import { useCardToggleState } from "@/hooks/useCardToggleState";
 
 interface ObservingCardProps {
@@ -40,11 +41,11 @@ export function ObservingCard({
         disabled={!hasContent}
         className="w-full flex items-center gap-2 px-3 py-1.5 text-left hover:bg-emerald-900/60 transition-colors"
       >
-        {isInProgress ? (
-          <Loader2 className="w-3 h-3 text-emerald-400 animate-spin flex-shrink-0" />
-        ) : (
-          <Eye className="w-3 h-3 text-emerald-400 flex-shrink-0" />
-        )}
+        <ActivityStatusIcon
+          isInProgress={isInProgress}
+          icon={Eye}
+          className="h-3 w-3 shrink-0 text-emerald-400"
+        />
         <span
           className={`inline-block text-xs font-medium ${
             isInProgress ? "llm-shimmer-text-emerald" : "text-emerald-200/80"
@@ -64,5 +65,4 @@ export function ObservingCard({
     </div>
   );
 }
-
 

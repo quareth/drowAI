@@ -8,6 +8,9 @@ from sqlalchemy.orm import Session
 from ...auth import get_current_user
 from ...database import get_db
 from ...models.core import User
+from ...services.langgraph_chat.checkpoint.interrupt_ticket_service import (
+    InterruptTicketService,
+)
 from ...services.langgraph_chat.runtime.tool_cancel_service import ChatToolCancelProjectionService
 from ...services.langgraph_chat.runtime.tool_cancel_stream_projection import (
     ChatToolCancelStreamProjectionService,
@@ -39,7 +42,11 @@ async def cancel_chat_run(
     if payload is None:
         payload = ChatCancelRequest()
     enforce_tenant_action(tenant_context=tenant_context, action=ACTION_CHAT_CANCEL)
-    get_tenant_task_or_404(db=db, task_id=task_id, tenant_context=tenant_context)
+    task = get_tenant_task_or_404(
+        db=db,
+        task_id=task_id,
+        tenant_context=tenant_context,
+    )
     lifecycle = _compat().get_run_lifecycle_service()
     result = lifecycle.request_cancel(
         task_id=task_id,
@@ -67,6 +74,12 @@ async def cancel_chat_run(
             turn_id=resolved_turn_id,
             status="cancelled",
             db_session=db,
+        )
+        InterruptTicketService(db).fail_pending_for_turn(
+            tenant_id=tenant_context.tenant_id,
+            task_id=task_id,
+            turn_id=resolved_turn_id,
+            graph_thread_id=task.graph_thread_id,
         )
         await ChatToolCancelStreamProjectionService(db).publish_cancelled_turn(
             tenant_id=tenant_context.tenant_id,

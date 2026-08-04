@@ -311,6 +311,21 @@ def extract_usage_from_state(
     """Extract per-call usage with canonical metadata from trace records."""
 
     usage_records = getattr(interactive_state.trace, "usage_records", None)
+    return extract_usage_records(
+        usage_records,
+        execution_branch=execution_branch,
+        turn_index=turn_index,
+    )
+
+
+def extract_usage_records(
+    usage_records: Any,
+    *,
+    execution_branch: str = "unknown",
+    turn_index: Optional[int] = None,
+) -> Optional[List["UsageRecordWithMetadata"]]:
+    """Extract per-call usage from raw trace usage record dictionaries."""
+
     if not usage_records:
         return None
 
@@ -381,6 +396,7 @@ __all__ = [
     "build_or_reuse_state_container",
     "drain_completion_callback",
     "ensure_turn_identity",
+    "extract_usage_records",
     "extract_usage_from_state",
     "merge_execution_metadata",
     "new_captured_state",

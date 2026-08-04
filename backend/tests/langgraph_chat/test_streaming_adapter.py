@@ -9,6 +9,9 @@ from unittest.mock import patch
 # Set mock DATABASE_URL before any imports
 os.environ.setdefault("DATABASE_URL", "postgresql+psycopg2://test:test@localhost/test")
 
+from agent.graph.emission.factory import EventEmitterFactory
+from agent.graph.infrastructure.state_models import FactsState
+from agent.graph.state import InteractiveState, TraceState
 from backend.services.langgraph_chat.streaming.adapter import LangGraphStreamingAdapter
 
 
@@ -52,6 +55,95 @@ def test_process_message_delta():
         
         # Should increment metrics
         mock_inc.assert_called_with("langgraph_stream_deltas_processed")
+
+
+def test_process_message_delta_preserves_agent_attribution_metadata():
+    """Subagent identity metadata should survive event-family processing."""
+    adapter = LangGraphStreamingAdapter()
+
+    event = {
+        "type": "message_delta",
+        "content": "Pathfinder is checking the target",
+        "conversation_id": "conv1",
+        "turn_id": "turn1",
+        "metadata": {
+            "producer_type": "subagent",
+            "agent_run_id": "pathfinder-run-1",
+            "agent_kind": "recon",
+            "agent_display_name": "Pathfinder",
+            "parent_turn_id": "parent-turn-1",
+            "parent_run_id": "parent-run-1",
+            "internal_only": False,
+            "lifecycle_version": 3,
+            "raw_tool_output": "must not be forwarded",
+            "chain_of_thought": "must not be forwarded",
+        },
+    }
+
+    processed = adapter.process_streaming_event(event)
+
+    assert processed is not None
+    metadata = processed["metadata"]
+    assert metadata["producer_type"] == "subagent"
+    assert metadata["agent_run_id"] == "pathfinder-run-1"
+    assert metadata["agent_kind"] == "recon"
+    assert metadata["agent_display_name"] == "Pathfinder"
+    assert metadata["parent_turn_id"] == "parent-turn-1"
+    assert metadata["parent_run_id"] == "parent-run-1"
+    assert metadata["internal_only"] is False
+    assert metadata["lifecycle_version"] == 3
+    assert "raw_tool_output" not in metadata
+    assert "chain_of_thought" not in metadata
+
+
+def test_subagent_emitter_stamps_agent_attribution_before_adapter_projection():
+    """Subagent graph context should stamp emitted events before adapter processing."""
+    adapter = LangGraphStreamingAdapter()
+    raw_events = []
+    state = InteractiveState(
+        facts=FactsState(
+            task_id=42,
+            message="Scan the approved target",
+            conversation_id="conv1",
+            capability="simple_tool_execution",
+            metadata={
+                "producer_type": "subagent",
+                "agent_run_id": "pathfinder-run-1",
+                "agent_id": "pathfinder",
+                "agent_kind": "recon",
+                "parent_turn_id": "parent-turn-1",
+                "internal_only": False,
+            },
+        ),
+        trace=TraceState(),
+    )
+    config = {
+        "configurable": {
+            "canonical_conversation_id": "conv1",
+            "canonical_turn_id": "parent-turn-1",
+            "parent_run_id": "parent-run-1",
+            "lifecycle_version": 2,
+        }
+    }
+    emitter = EventEmitterFactory.create(raw_events.append, state, config, None)
+
+    emitter.emit_message_delta("Pathfinder is checking the target")
+
+    raw_event = raw_events[0]
+    assert raw_event["type"] == "message_delta"
+    assert raw_event["producer_type"] == "subagent"
+    processed = adapter.process_streaming_event(raw_event)
+    assert processed is not None
+    metadata = processed["metadata"]
+    assert metadata["producer_type"] == "subagent"
+    assert metadata["agent_run_id"] == "pathfinder-run-1"
+    assert metadata["agent_id"] == "pathfinder"
+    assert metadata["agent_kind"] == "recon"
+    assert metadata["agent_display_name"] == "Pathfinder"
+    assert metadata["parent_turn_id"] == "parent-turn-1"
+    assert metadata["parent_run_id"] == "parent-run-1"
+    assert metadata["internal_only"] is False
+    assert metadata["lifecycle_version"] == 2
 
 
 def test_process_message_delta_missing_content():
@@ -162,4 +254,3 @@ def test_event_enrichment_timestamp():
         processed = adapter.process_streaming_event(event)
         if processed:
             assert "timestamp" in processed.get("metadata", {})
-

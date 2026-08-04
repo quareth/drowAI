@@ -18,6 +18,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from agent.graph.context.builder import METADATA_CONTEXT_BUNDLE_KEY
+from agent.graph.context.serialization import render_completed_agent_results_section
 from agent.graph.memory.findings import format_findings_for_finalizer
 from agent.graph.utils import iteration_memory as _iteration_memory
 from core.prompts.builders._text import strip_referenced_prior_turns_label
@@ -260,6 +262,20 @@ def _build_phase_memory_section(
         dict(metadata),
         turn_sequence=turn_sequence,
     )
+
+
+def _build_completed_agent_results_section(
+    metadata: Optional[Mapping[str, Any]],
+) -> str:
+    """Render bounded child results for the parent finalizer."""
+    if not isinstance(metadata, Mapping):
+        return ""
+    bundle = metadata.get(METADATA_CONTEXT_BUNDLE_KEY)
+    source = bundle if isinstance(bundle, Mapping) else metadata
+    rendered = render_completed_agent_results_section(source)
+    if not rendered:
+        return ""
+    return f"## {rendered}"
 
 
 def _build_effective_goal_section(current_goal: Optional[str]) -> str:
@@ -583,6 +599,7 @@ def build_finalize_prompts(
         sections.append(
             _build_phase_memory_section(metadata, turn_sequence=turn_sequence)
         )
+        sections.append(_build_completed_agent_results_section(metadata))
         sections.append(_build_ptr_observation_section(synthesized_map))
         sections.append(_build_tool_summary_section(synthesized_map))
         sections.extend(

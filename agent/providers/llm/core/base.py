@@ -7,6 +7,7 @@ Clients may be used as async context managers for deterministic resource cleanup
 Response Types:
     - LLMResponse: Container for content + usage from non-streaming calls
     - LLMStreamingResponse: Container for streaming iterator + final usage accessor
+    - LLMToolStreamingResponse: Text stream plus completed tool-call accessors
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import math
-from typing import Any, AsyncIterator, Callable, Dict, List, Mapping, Optional, TYPE_CHECKING
+from typing import Any, AsyncIterator, Callable, Dict, List, Literal, Mapping, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from backend.services.usage_tracking.models import UsageData
@@ -48,6 +49,14 @@ class ToolCall:
     arguments: str  # JSON string
 
 
+@dataclass(frozen=True, slots=True)
+class LLMResponseOutcome:
+    """Provider-neutral terminal state for one model response."""
+
+    status: Literal["completed", "incomplete", "unknown"]
+    reason: Optional[str] = None
+
+
 @dataclass
 class ToolCallResult:
     """Standardized result from chat_with_tools().
@@ -60,11 +69,13 @@ class ToolCallResult:
         tool_calls: Optional list of tool calls requested by the model
         raw: Original provider response for debugging/logging
         usage: Optional token usage data (only set when using chat_with_tools_with_usage)
+        outcome: Provider-neutral completion or truncation state when available
     """
     content: Optional[str]
     tool_calls: Optional[List[ToolCall]]
     raw: Any  # Original response for debugging
     usage: Optional["UsageData"] = None
+    outcome: Optional[LLMResponseOutcome] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -201,6 +212,22 @@ class LLMStreamingResponse:
     """
     content_iterator: AsyncIterator[str]
     get_final_usage: Callable[[], Optional["UsageData"]]
+
+
+@dataclass(slots=True)
+class LLMToolStreamingResponse:
+    """Stream assistant text while buffering provider tool calls until complete.
+
+    Provider adapters must never expose partial tool-call arguments through the
+    content iterator. Callers consume ordinary assistant text as it arrives,
+    then read normalized tool calls and the terminal response outcome only
+    after the iterator is exhausted.
+    """
+
+    content_iterator: AsyncIterator[str]
+    get_final_tool_calls: Callable[[], Optional[List[ToolCall]]]
+    get_final_usage: Callable[[], Optional["UsageData"]]
+    get_final_outcome: Callable[[], Optional[LLMResponseOutcome]] = lambda: None
 
 
 class LLMClient(ABC):
@@ -454,13 +481,49 @@ class LLMClient(ABC):
         """
         raise NotImplementedError
 
+    async def stream_chat_with_tools_with_usage(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        tools: List[ToolSpecInput],
+        tool_choice: ToolChoiceInput = "auto",
+        **kwargs: Any,
+    ) -> LLMToolStreamingResponse:
+        """Stream assistant text and expose only completed normalized tool calls.
+
+        The default implementation preserves compatibility for providers that
+        support tool calling but not native tool streaming. Native adapters
+        should override this method to yield text deltas in real time.
+        """
+        result = await self.chat_with_tools_with_usage(
+            system_prompt,
+            user_prompt,
+            tools,
+            tool_choice=tool_choice,
+            **kwargs,
+        )
+
+        async def content_generator() -> AsyncIterator[str]:
+            if result.content:
+                yield result.content
+
+        return LLMToolStreamingResponse(
+            content_iterator=content_generator(),
+            get_final_tool_calls=lambda: result.tool_calls,
+            get_final_usage=lambda: result.usage,
+            get_final_outcome=lambda: result.outcome
+            or LLMResponseOutcome(status="completed"),
+        )
+
 
 __all__ = [
     "ChatMessage",
     "LLMCallOptions",
     "LLMClient",
     "LLMResponse",
+    "LLMResponseOutcome",
     "LLMStreamingResponse",
+    "LLMToolStreamingResponse",
     "StructuredOutputSpec",
     "ToolChoiceInput",
     "ToolCall",

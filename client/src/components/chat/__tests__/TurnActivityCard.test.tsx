@@ -62,6 +62,7 @@ function makeBlock(turnKey: string): TurnActivityBlock {
     type: "activity",
     key: `activity-${turnKey}`,
     turnKey,
+    isComplete: true,
     groups: [
       makeGroup(`${turnKey}-reasoning`, "reasoning"),
       makeGroup(`${turnKey}-tool`, "tool"),
@@ -70,6 +71,7 @@ function makeBlock(turnKey: string): TurnActivityBlock {
     summary: {
       toolCount: 3,
       thoughtCount: 1,
+      agentCount: 1,
       observationCount: 1,
     },
   };
@@ -79,7 +81,9 @@ describe("TurnActivityCard", () => {
   it("renders collapsed summary by default", () => {
     render(<TurnActivityCard block={makeBlock("summary")} taskId={42} />);
 
-    expect(screen.getByText("3 tools, 1 thought, 1 observation")).toBeTruthy();
+    expect(
+      screen.getByText("3 tools, 1 thought, 1 agent, 1 observation"),
+    ).toBeTruthy();
     expect(screen.queryByTestId("turn-activity-details-summary")).toBeNull();
     expect(mocked.rendererMock).not.toHaveBeenCalled();
   });
@@ -93,7 +97,33 @@ describe("TurnActivityCard", () => {
     expect(screen.getByTestId("expanded-reasoning")).toBeTruthy();
     expect(screen.getByTestId("expanded-tool")).toBeTruthy();
     expect(screen.getByTestId("expanded-observation")).toBeTruthy();
+    expect(screen.getByTestId("turn-activity-details-expand").dataset.activityChain).toBe("true");
+    expect(screen.getByTestId("turn-activity-details-expand-node-0")).toBeTruthy();
+    expect(screen.getByTestId("turn-activity-details-expand-connector-0")).toBeTruthy();
     expect(mocked.rendererMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("marks streaming groups as active in the shared activity chain", () => {
+    const block = makeBlock("active");
+    block.groups[1] = {
+      ...block.groups[1],
+      messages: [
+        {
+          ...block.groups[1].messages[0],
+          isStreaming: true,
+          metadata: {
+            ...block.groups[1].messages[0].metadata,
+            streaming: true,
+          },
+        },
+      ],
+    };
+
+    render(<TurnActivityCard block={block} taskId={42} />);
+    fireEvent.click(screen.getByRole("button", { name: /3 tools/ }));
+
+    expect(screen.getByTestId("turn-activity-details-active-item-1").dataset.chainActive).toBe("true");
+    expect(screen.getByTestId("turn-activity-details-active-item-0").dataset.chainActive).toBe("false");
   });
 
   it("splits multi-call batch groups into individual transcript tool groups on expand", () => {

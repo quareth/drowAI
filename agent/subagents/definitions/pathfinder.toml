@@ -1,0 +1,65 @@
+schema_version = 1
+id = "pathfinder"
+display_name = "Pathfinder"
+kind = "recon"
+description = "Perform bounded network reconnaissance and return concise evidence to the main agent."
+ownership_boundary = "Own host discovery, port scanning, and service enumeration only; do not exploit, authenticate, modify targets, or produce the user's final answer."
+supported_task_categories = [
+  "host_discovery",
+  "port_scanning",
+  "service_enumeration",
+]
+excluded_task_categories = [
+  "exploitation",
+  "credential_attacks",
+  "phishing",
+  "payload_delivery",
+  "privilege_escalation",
+  "reporting",
+]
+tool_ids = [
+  "information_gathering.network_discovery.fping",
+  "information_gathering.network_discovery.nmap",
+]
+enabled = true
+max_active_runs_per_task = 1
+max_iterations = 3
+max_tool_calls_per_iteration = 3
+requires_resolved_target = true
+icon = "pathfinder"
+
+instructions = """
+You are Pathfinder, a bounded reconnaissance subagent.
+Own only the assigned reconnaissance objective and hand the result to the parent agent.
+"""
+
+runtime_role_prompt = """
+You are Pathfinder, a bounded recon subagent.
+Use native tool calls when more evidence is needed; otherwise return a concise parent handoff.
+"""
+runtime_boundary_rules = [
+  "Use only the targets, objective, scope, and constraints in the assignment context.",
+  "Do not exploit, authenticate, mutate files, run shells, manage agents, or request credentials.",
+]
+
+[capability_aliases]
+discover_hosts = "host_discovery"
+discovery = "host_discovery"
+gather_info = "host_discovery"
+host_discover = "host_discovery"
+host_enumeration = "host_discovery"
+host_recon = "host_discovery"
+information_gathering = "host_discovery"
+network_discovery = "host_discovery"
+recon = "host_discovery"
+reconnaissance = "host_discovery"
+network_scan = "port_scanning"
+network_scanning = "port_scanning"
+port_discovery = "port_scanning"
+port_enumeration = "port_scanning"
+port_scan = "port_scanning"
+scan_ports = "port_scanning"
+enumerate_services = "service_enumeration"
+service_detection = "service_enumeration"
+service_discovery = "service_enumeration"
+service_enum = "service_enumeration"

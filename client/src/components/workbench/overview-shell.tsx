@@ -1,7 +1,11 @@
 /**
  * Purpose: Compose the Overview workbench with a global terminal dock.
  */
+import { useCallback, useLayoutEffect, useRef, useState } from "react";
+import type { ImperativePanelHandle } from "react-resizable-panels";
+
 import { TaskPanel } from "@/components/panels/task-panel";
+import { TaskPanelVisibilityButton } from "@/components/panels/task-panel-visibility-button";
 import { TerminalPanel } from "@/components/panels/terminal-panel";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import { UnifiedAgentChat } from "@/components/chat/UnifiedAgentChat";
@@ -17,6 +21,9 @@ interface OverviewShellProps {
 
 export function OverviewShell({ chatMode, onChatModeChange }: OverviewShellProps) {
   const { isTerminalCollapsed } = useWorkbenchStateSnapshot();
+  const taskPanelRef = useRef<ImperativePanelHandle>(null);
+  const previousTerminalCollapsedRef = useRef(isTerminalCollapsed);
+  const [isTaskPanelCollapsed, setIsTaskPanelCollapsed] = useState(false);
   const { effectivePermissions } = useTenantContext();
   const canControlTask = hasTenantAction(
     toTenantActionSet(effectivePermissions),
@@ -26,24 +33,78 @@ export function OverviewShell({ chatMode, onChatModeChange }: OverviewShellProps
   const toggleTerminalCollapse = () => {
     toggleTerminalCollapsed();
   };
+
+  const toggleTaskPanelVisibility = useCallback(() => {
+    const panel = taskPanelRef.current;
+    if (!panel) {
+      return;
+    }
+    if (panel.isCollapsed()) {
+      panel.expand();
+      return;
+    }
+    panel.collapse();
+  }, []);
+
+  useLayoutEffect(() => {
+    const terminalLayoutChanged =
+      previousTerminalCollapsedRef.current !== isTerminalCollapsed;
+    previousTerminalCollapsedRef.current = isTerminalCollapsed;
+    const panel = taskPanelRef.current;
+    if (
+      terminalLayoutChanged
+      && isTaskPanelCollapsed
+      && panel
+      && !panel.isCollapsed()
+    ) {
+      panel.collapse();
+    }
+  }, [isTaskPanelCollapsed, isTerminalCollapsed]);
+
   const mainOverviewContent = (
     <ResizablePanelGroup direction="horizontal" className="h-full">
       <ResizablePanel
+        ref={taskPanelRef}
+        id="task-panel"
         defaultSize={40}
         minSize={30}
+        maxSize={40}
+        collapsible
+        collapsedSize={0}
+        onCollapse={() => setIsTaskPanelCollapsed(true)}
+        onExpand={() => setIsTaskPanelCollapsed(false)}
         order={1}
+        className="min-w-0 overflow-hidden"
       >
-        <TaskPanel />
+        {isTaskPanelCollapsed ? null : (
+          <TaskPanel onToggleVisibility={toggleTaskPanelVisibility} />
+        )}
       </ResizablePanel>
       <ResizableHandle
-        className="w-0.5 bg-slate-800/30 hover:bg-emerald-500/30 transition-colors"
+        aria-label="Resize task panel"
+        className={`w-0.5 bg-slate-800/30 transition-colors hover:bg-emerald-500/30 ${
+          isTaskPanelCollapsed ? "hidden" : ""
+        }`}
       />
       <ResizablePanel
+        id="conversation-panel"
         defaultSize={60}
-        minSize={40}
+        minSize={60}
         order={2}
       >
-        <UnifiedAgentChat taskId={null} chatMode={chatMode} onChatModeChange={onChatModeChange} />
+        <UnifiedAgentChat
+          taskId={null}
+          chatMode={chatMode}
+          onChatModeChange={onChatModeChange}
+          leadingHeaderSlot={
+            isTaskPanelCollapsed ? (
+              <TaskPanelVisibilityButton
+                isCollapsed
+                onToggle={toggleTaskPanelVisibility}
+              />
+            ) : undefined
+          }
+        />
       </ResizablePanel>
     </ResizablePanelGroup>
   );

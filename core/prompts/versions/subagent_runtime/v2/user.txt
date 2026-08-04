@@ -1,0 +1,21 @@
+Current Turn Input:
+
+Turn Execution Brief:
+- Overall goal: {objective}
+- Next operational goal: {objective}
+- Success condition: {objective}
+- Targets: {targets_json}
+- Explicit constraints: {explicit_constraints_json}
+
+Candidate Tools (complete {display_name} runtime profile; no separate selection step):
+{tool_ids_json}
+{tool_runbooks_section}
+Remaining Limits:
+{remaining_limits_json}
+
+Bounded Prior Observations:
+- Previous tool executed: {previous_tool_summary_json}
+- Working memory snapshot: {working_memory_json}
+
+Assignment:
+{assignment_json}

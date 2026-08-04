@@ -57,27 +57,38 @@ class BaseLangGraphHandler(ABC):
         """
         pass
 
-    def _build_cancellation_checker(self, task_id: int, turn_id: str) -> Callable[[], bool]:
+    def _build_cancellation_checker(
+        self,
+        task_id: int,
+        turn_id: str,
+    ) -> Callable[[], bool]:
         """Build explicit lifecycle cancellation checker for completion callbacks."""
-        from backend.services.langgraph_chat.runtime.run_lifecycle import get_run_lifecycle_service
-
-        lifecycle = get_run_lifecycle_service()
-        last_checked_at = 0.0
-        cached_cancel = False
-        poll_interval_seconds = 0.25
-
-        def should_cancel() -> bool:
-            nonlocal last_checked_at, cached_cancel
-            if cached_cancel:
-                return True
-            now = time.monotonic()
-            if now - last_checked_at < poll_interval_seconds:
-                return False
-            last_checked_at = now
-            cached_cancel = lifecycle.is_cancel_requested(task_id=task_id, turn_id=turn_id)
-            return cached_cancel
-
-        return should_cancel
+        return build_cancellation_checker(task_id, turn_id)
 
 
-__all__ = ["BaseLangGraphHandler"]
+def build_cancellation_checker(task_id: int, turn_id: str) -> Callable[[], bool]:
+    """Build a throttled lifecycle cancellation checker for one task turn."""
+    from backend.services.langgraph_chat.runtime.run_lifecycle import (
+        get_run_lifecycle_service,
+    )
+
+    lifecycle = get_run_lifecycle_service()
+    last_checked_at = 0.0
+    cached_cancel = False
+    poll_interval_seconds = 0.25
+
+    def should_cancel() -> bool:
+        nonlocal last_checked_at, cached_cancel
+        if cached_cancel:
+            return True
+        now = time.monotonic()
+        if now - last_checked_at < poll_interval_seconds:
+            return False
+        last_checked_at = now
+        cached_cancel = lifecycle.is_cancel_requested(task_id=task_id, turn_id=turn_id)
+        return cached_cancel
+
+    return should_cancel
+
+
+__all__ = ["BaseLangGraphHandler", "build_cancellation_checker"]

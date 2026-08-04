@@ -82,6 +82,10 @@ export interface ChatMessageMetadata {
   sequence_authority?: string;
   /** Canonical display order of a card within a turn. */
   phase_sequence?: number;
+  /** Caller-defined activity kind handled through the transcript render slot. */
+  transcript_activity_kind?: string;
+  /** Stable caller-defined identity used to group one transcript activity. */
+  transcript_activity_id?: string;
   /** Stable identity shared by start/delta/end events for one thinking card. */
   reasoning_section_id?: string;
   /**

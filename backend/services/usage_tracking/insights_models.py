@@ -5,7 +5,8 @@ Purpose:
     persisted `LLMUsageRecord.request_metadata` row carries. This is the
     backend-of-record for per-call descriptive context (role, node_name,
     execution_branch, provider, api_surface, request_mode, cache_reporting,
-    optional turn_index) used by the Usage Insights query layer.
+    optional turn_index) plus optional subagent run identity used by the
+    Usage Insights query layer.
 
 Responsibility:
     - Declare the canonical metadata fields with stable string defaults so
@@ -13,7 +14,8 @@ Responsibility:
       `"unknown"` bucket rather than `None` / missing keys.
     - Provide a JSON-safe serializer helper that converts the dataclass into
       the dict shape stored in `LLMUsageRecord.request_metadata` without
-      losing or renaming any field.
+      losing or renaming required fields. Optional subagent identity fields
+      are included only when present.
     - Provide the typed envelope (`UsageRecordWithMetadata`) that keeps
       `UsageData` and `UsageRecordMetadata` paired through
       `LangGraphChatResult.usage` and `record_usage_list_best_effort()` so
@@ -48,6 +50,14 @@ if TYPE_CHECKING:
 # code can rely on a single literal when bucketing missing metadata.
 UNKNOWN: str = "unknown"
 _KNOWN_REQUEST_MODES: frozenset[str] = frozenset({"streaming", "non_streaming"})
+_OPTIONAL_SUBAGENT_IDENTITY_KEYS: tuple[str, ...] = (
+    "agent_id",
+    "agent_kind",
+    "agent_run_id",
+    "graph_thread_id",
+    "parent_turn_id",
+    "parent_run_id",
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -87,6 +97,12 @@ class UsageRecordMetadata:
             that produced this call. Optional because not every call site
             knows its turn index (e.g. one-shot helpers); insights treat
             ``None`` as "not applicable".
+        agent_id: Optional declarative subagent id for child calls.
+        agent_kind: Optional legacy/category kind for the subagent run.
+        agent_run_id: Optional immutable run id for this child invocation.
+        graph_thread_id: Optional child graph checkpoint thread id.
+        parent_turn_id: Optional parent turn that launched the child run.
+        parent_run_id: Optional parent runtime run id, when available.
     """
 
     role: str = UNKNOWN
@@ -97,6 +113,12 @@ class UsageRecordMetadata:
     request_mode: str = UNKNOWN
     cache_reporting: str = UNKNOWN
     turn_index: int | None = None
+    agent_id: str | None = None
+    agent_kind: str | None = None
+    agent_run_id: str | None = None
+    graph_thread_id: str | None = None
+    parent_turn_id: str | None = None
+    parent_run_id: str | None = None
 
 
 def serialize_usage_metadata(metadata: UsageRecordMetadata) -> Dict[str, Any]:
@@ -104,8 +126,10 @@ def serialize_usage_metadata(metadata: UsageRecordMetadata) -> Dict[str, Any]:
 
     This is the canonical conversion used before persisting metadata into
     ``LLMUsageRecord.request_metadata`` (a SQLAlchemy ``JSON`` column). The
-    output preserves every field name 1:1 with the dataclass so the read
-    path can rebuild the contract without any mapping table.
+    output preserves every required field name 1:1 with the dataclass so the
+    read path can rebuild the contract without any mapping table. Optional
+    subagent identity fields are omitted when unknown to avoid widening every
+    legacy/main-agent row with null-only keys.
 
     All string fields default to ``"unknown"`` (never ``None``); only
     ``turn_index`` may be ``None`` and is preserved as JSON ``null`` so
@@ -150,7 +174,11 @@ def serialize_usage_metadata(metadata: UsageRecordMetadata) -> Dict[str, Any]:
         )
     # asdict() is safe here: the dataclass only contains primitive fields
     # (str / int / None), so the result is already JSON-serializable.
-    return asdict(metadata)
+    payload = asdict(metadata)
+    for key in _OPTIONAL_SUBAGENT_IDENTITY_KEYS:
+        if payload.get(key) is None:
+            payload.pop(key, None)
+    return payload
 
 
 # ---------------------------------------------------------------------------
@@ -222,6 +250,8 @@ _SOURCE_ROLE_MAP: Dict[str, tuple[str, str]] = {
     "post_tool_reasoning": ("planner", "post_tool_reasoning"),
     "post_tool_reasoning_simple": ("planner", "post_tool_reasoning_simple"),
     "post_tool_reasoning_dr": ("planner", "post_tool_reasoning_dr"),
+    # Generic declarative subagent child loop
+    "subagent_runtime_model": ("subagent", "subagent_runtime_model"),
 }
 
 
@@ -244,6 +274,14 @@ def role_and_node_from_source(source: Optional[str]) -> tuple[str, str]:
     if not isinstance(source, str) or not source:
         return UNKNOWN, UNKNOWN
     return _SOURCE_ROLE_MAP.get(source, (UNKNOWN, UNKNOWN))
+
+
+def _optional_metadata_string(record: Mapping[str, Any], key: str) -> str | None:
+    value = record.get(key)
+    if value is None:
+        return None
+    normalized = str(value).strip()
+    return normalized or None
 
 
 def build_usage_metadata_from_trace_record(
@@ -344,6 +382,12 @@ def build_usage_metadata_from_trace_record(
         request_mode=resolved_request_mode,
         cache_reporting=resolved_cache_reporting,
         turn_index=turn_index,
+        agent_id=_optional_metadata_string(record, "agent_id"),
+        agent_kind=_optional_metadata_string(record, "agent_kind"),
+        agent_run_id=_optional_metadata_string(record, "agent_run_id"),
+        graph_thread_id=_optional_metadata_string(record, "graph_thread_id"),
+        parent_turn_id=_optional_metadata_string(record, "parent_turn_id"),
+        parent_run_id=_optional_metadata_string(record, "parent_run_id"),
     )
 
 

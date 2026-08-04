@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import importlib
+import json
 from datetime import datetime
 from types import SimpleNamespace
 from typing import Any, Dict, List
@@ -17,6 +18,7 @@ from agent.graph.persistence import get_default_checkpointer
 from agent.graph.state import FactsState, TraceState, InteractiveInput, InteractiveState
 from agent.graph.nodes.simple_chat import run_simple_chat
 from agent.graph.nodes.post_tool_reasoning.models import RetryablePostToolReasoningError
+from agent.providers.llm.core.base import ToolCall as LLMToolCall
 from agent.providers.llm.core.exceptions import LLMRefusalError, LLMRefusalOutcome
 from backend.services.langgraph_chat.streaming.adapter import LangGraphStreamingAdapter
 from backend.services.usage_tracking.models import UsageData
@@ -54,6 +56,7 @@ from backend.services.langgraph_chat.execution.turn_service import (
 )
 from backend.services.streaming.in_memory_hub import InMemoryStreamHub, QueuedMessage
 from agent.tool_runtime import ToolExecutionOutcome, ToolCatalogEntry
+from agent.tool_runtime.batch.types import ToolBatch, ToolCall
 from agent.models import ActionPlan, ActionType, ExecutionStrategy
 from tests.tool_execution_module_helper import patch_tool_execution_attr
 
@@ -78,6 +81,28 @@ def _decision_with_prompt_budget(
         trigger_tokens=102_399,
         reserved_output_tokens=1,
         override_active=False,
+    )
+
+
+def _structured_finalizer_response(*, model: str) -> SimpleNamespace:
+    """Return the canonical structured final-answer response used by graph tests."""
+    payload = {
+        "action": "Completed the deterministic test action.",
+        "findings": "- The test result was captured.",
+        "impact": "The workflow reached finalization.",
+        "recommended_next_action": "Continue with the next workflow step.",
+    }
+    return SimpleNamespace(
+        content=json.dumps(payload),
+        usage=UsageData(
+            prompt_tokens=10,
+            completion_tokens=4,
+            total_tokens=14,
+            model=model,
+            provider="openai",
+            api_surface="responses",
+        ),
+        structured_output=payload,
     )
 
 
@@ -232,6 +257,13 @@ def _stub_llm_runtime_config_service(monkeypatch: pytest.MonkeyPatch) -> None:
                 },
             )
 
+        async def chat_messages_with_usage(
+            self,
+            _messages: Any,
+            **_kwargs: Any,
+        ) -> Any:
+            return _structured_finalizer_response(model="gpt-5.2")
+
         async def stream_chat_messages(self, *_args: Any, **_kwargs: Any) -> Any:
             yield "Safe completion response."
 
@@ -286,6 +318,11 @@ def _stub_llm_runtime_config_service(monkeypatch: pytest.MonkeyPatch) -> None:
         def build_runtime_selection(self, *_args: Any, **_kwargs: Any) -> Any:
             return _StubRuntimeSelection()
 
+        def build_conversation_runtime_selection(
+            self, *_args: Any, **_kwargs: Any
+        ) -> Any:
+            return _StubRuntimeSelection()
+
         def build_continuation_selection(self, *_args: Any, **_kwargs: Any) -> Any:
             return _StubRuntimeSelection()
 
@@ -323,21 +360,31 @@ def _stub_tool_execution(monkeypatch: pytest.MonkeyPatch) -> None:
 
         async def build_action_plan(self, action, _context):  # noqa: ANN001
             target = action.target or "127.0.0.1"
+            tool_id = "information_gathering.network_discovery.nmap"
+            parameters = {"target": target, "ports": "1-1024"}
             return ActionPlan(
                 type=ActionType.GATHER_INFO,
                 target=target,
-                selected_tools=["information_gathering.network_discovery.nmap"],
-                tool_parameters={
-                    "information_gathering.network_discovery.nmap": {
-                        "target": target,
-                        "ports": "1-1024",
-                    }
-                },
+                selected_tools=[tool_id],
+                tool_parameters={tool_id: parameters},
                 llm_tool_parameters={},
                 execution_strategy=ExecutionStrategy.SEQUENTIAL,
                 reasoning="Deterministic test plan",
                 expected_outcome="Discover open ports on target",
                 usage_records=[],
+                tool_batch=ToolBatch(
+                    tool_batch_id="intent-workflow-test-batch",
+                    tool_calls=(
+                        ToolCall(
+                            tool_call_id="intent-workflow-test-call",
+                            tool_id=tool_id,
+                            parameters=parameters,
+                            intent="Discover open ports on target",
+                        ),
+                    ),
+                    requested_execution_strategy=ExecutionStrategy.SEQUENTIAL,
+                    selection_rationale="Deterministic test plan",
+                ),
             )
 
     class _StubCoordinator:
@@ -387,6 +434,9 @@ def _stub_finalize_results_llm(monkeypatch: pytest.MonkeyPatch) -> None:
     class _StubFinalizeClient:
         _reasoning_effort = "minimal"
 
+        async def chat_messages_with_usage(self, _messages, **_kwargs):  # noqa: ANN001
+            return _structured_finalizer_response(model="gpt-5-mini")
+
         async def stream_chat_messages(self, _messages, **_kwargs):  # noqa: ANN001
             yield "Safe completion response."
 
@@ -400,6 +450,37 @@ def _stub_finalize_results_llm(monkeypatch: pytest.MonkeyPatch) -> None:
                     prompt_tokens=10,
                     completion_tokens=1,
                     total_tokens=11,
+                    model="gpt-5-mini",
+                    provider="openai",
+                    api_surface="responses",
+                ),
+            )
+
+        async def stream_chat_with_tools_with_usage(
+            self, *_args: Any, **_kwargs: Any
+        ) -> Any:
+            async def _chunks():
+                yield "The requested check completed with sufficient evidence."
+
+            return SimpleNamespace(
+                content_iterator=_chunks(),
+                get_final_tool_calls=lambda: [
+                    LLMToolCall(
+                        id="ptr-commit-test",
+                        name="ptr_commit",
+                        arguments=json.dumps(
+                            {
+                                "next_action": "finalize",
+                                "action_reasoning": "Sufficient evidence collected.",
+                                "user_goal_achieved": True,
+                            }
+                        ),
+                    )
+                ],
+                get_final_usage=lambda: UsageData(
+                    prompt_tokens=10,
+                    completion_tokens=4,
+                    total_tokens=14,
                     model="gpt-5-mini",
                     provider="openai",
                     api_surface="responses",
@@ -2819,6 +2900,9 @@ async def test_queued_dispatch_uses_start_turn_generation_context_tracking_path(
             assert kwargs["provider"] == "openai"
             assert kwargs["model"] == "gpt-5.2"
             return _ServiceResolvedRuntimeSelection()
+
+        def build_conversation_runtime_selection(self, **kwargs: Any) -> Any:
+            return self.build_runtime_selection(**kwargs)
 
     monkeypatch.setattr("backend.database.SessionLocal", lambda: _FakeDbSession())
     monkeypatch.setattr(

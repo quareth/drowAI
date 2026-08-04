@@ -22,6 +22,7 @@ from backend.services.langgraph_chat.checkpoint.checkpointer_service import (
 )
 from backend.services.langgraph_chat.hitl_constants import (
     GRAPH_NAME_DEEP_REASONING,
+    GRAPH_NAME_PARENT_HANDOFF,
     GRAPH_NAME_SIMPLE_TOOL,
 )
 from backend.services.langgraph_chat.runtime.tool_catalog import build_tool_catalog
@@ -178,7 +179,11 @@ class RuntimeWarmupService:
         if graph_name is None:
             return False
         normalized = graph_name.strip().lower()
-        return normalized in {GRAPH_NAME_SIMPLE_TOOL, GRAPH_NAME_DEEP_REASONING}
+        return normalized in {
+            GRAPH_NAME_SIMPLE_TOOL,
+            GRAPH_NAME_DEEP_REASONING,
+            GRAPH_NAME_PARENT_HANDOFF,
+        }
 
 
 _SHARED_RUNTIME_WARMUP_SERVICE: Optional[RuntimeWarmupService] = None

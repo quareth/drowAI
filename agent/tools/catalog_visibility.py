@@ -31,7 +31,6 @@ _VISIBLE_TOOL_IDS: frozenset[str] = frozenset(
         "filesystem.stat_path",
         "filesystem.write_file",
         "exploitation_tools.metasploit.inspect_module",
-        "exploitation_tools.metasploit.run_exploit",
         "exploitation_tools.metasploit.search_modules",
         "information_gathering.dns.amass",
         "information_gathering.network_discovery.fping",

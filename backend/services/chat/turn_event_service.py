@@ -21,6 +21,20 @@ ToolCallInfo = Dict[str, Any]
 ObservationInfo = Dict[str, Any]
 ReasoningInfo = Dict[str, Any]
 TurnEventInfo = Dict[str, Any]
+EVENT_ATTRIBUTION_KEYS = (
+    "producer_type",
+    "agent_run_id",
+    "agent_id",
+    "agent_kind",
+    "agent_display_name",
+    "agent_icon_key",
+    "parent_turn_id",
+    "parent_run_id",
+    "parent_graph_thread_id",
+    "graph_thread_id",
+    "internal_only",
+    "lifecycle_version",
+)
 
 
 class ChatTurnEventService:
@@ -255,7 +269,7 @@ class ChatTurnEventService:
             return None
         phase_sequence = tool_call.get("phase_sequence")
         tool_call_id = tool_call.get("tool_call_id")
-        metadata: Dict[str, Any] = {}
+        metadata = _event_attribution(tool_call)
         for key in (
             "tool_name",
             "tool_id",
@@ -302,7 +316,7 @@ class ChatTurnEventService:
             "sub_turn_index": _coerce_optional_int(observation.get("sub_turn_index")),
             "tool_call_id": None,
             "content": _to_text(observation.get("content")),
-            "event_metadata": _stable_metadata({}),
+            "event_metadata": _stable_metadata(_event_attribution(observation)),
         }
 
     def _event_from_reasoning(
@@ -323,7 +337,7 @@ class ChatTurnEventService:
                 "event_metadata": None,
             }
 
-        metadata: Dict[str, Any] = {}
+        metadata = _event_attribution(reasoning)
         for key in ("section_name", "reasoning_section_id", "source", "started_at", "ended_at"):
             value = reasoning.get(key)
             if value is not None:
@@ -378,3 +392,12 @@ def _stable_metadata(metadata: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return json.loads(json.dumps(metadata, sort_keys=True, default=str))
     except Exception:
         return metadata
+
+
+def _event_attribution(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Copy only stable agent-run ownership fields into canonical metadata."""
+    return {
+        key: event[key]
+        for key in EVENT_ATTRIBUTION_KEYS
+        if event.get(key) is not None
+    }

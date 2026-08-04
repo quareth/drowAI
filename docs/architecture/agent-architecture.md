@@ -60,6 +60,9 @@ Not owned by the agent layer:
 - `agent/graph/*`
   - Graph state, builders, nodes, context, memory, streaming, and tool execution
     subgraphs.
+- `agent/subagents/*`
+  - Declarative subagent definitions, definition-backed registries, and the
+    generic child runtime graph used by process-local subagent runs.
 - `agent/tool_runtime/*`
   - Runtime tool coordination, transport routing, timeout policy, batch
     execution, lane policy, and result enrichment.
@@ -80,7 +83,19 @@ Not owned by the agent layer:
 - `agent/graph`
   - Owns LangGraph runtime structure: state models, builders, nodes, context
     bundle projections, memory updates, streaming event helpers, and shared
-    tool execution subgraph.
+    tool execution subgraph. The parent handoff continuation graph reuses the
+    existing post-action reasoning node, decision router, direct-tool path,
+    thinking/reflection nodes, and finalizer; it does not introduce a separate
+    handoff reasoner.
+- `agent/subagents`
+  - Owns static TOML definition loading, registry projections, generic
+    assignment/result contracts, and the definition-configured child graph.
+    The child graph runs one bounded model/tool session using the versioned
+    `subagent_runtime` prompt family, shared approval/dispatch/synthesis nodes,
+    canonical child working/phase memory, and a bounded `AgentResultProjection`
+    parent handoff. It does not carry Pathfinder/Scout-specific Python
+    orchestration, child PTR/router reasoning, or an extra child-only LLM
+    completion stage.
 - `agent/tool_runtime`
   - Owns tool execution policy after a tool plan exists: lane classification,
     timeout planning, transport routing, batch execution, PTY/file-comm/direct
@@ -205,6 +220,33 @@ observations independently. The agent compact consumer never passes its
 - Context compression policy is coordinated by backend LangGraph services, while
   agent token counters and projections support fit checks and prompt shaping.
 
+## Parent Handoff And PAR Boundary
+
+Terminal subagent results do not finalize the parent turn directly. The backend
+handler launches bounded child runs, and
+`backend/services/agent_runs/parent_handoff_coordinator.py` observes ready
+terminal results from the process-local registry for the same tenant, task, and
+conversation while lifecycle and deterministic progress events continue to
+stream. It does not invoke the parent graph until all scoped child runs are
+terminal. The coordinator then claims the aggregated unconsumed results,
+projects them into parent context, and
+`agent/graph/builders/parent_handoff_builder.py` runs the parent continuation
+graph.
+
+That graph marks the initial input as
+`post_action_outcome_source="subagent_handoff_batch"` and routes through the
+existing `post_tool_reasoning` node under its expanded post-action reasoning
+role. PAR may route to the existing direct-tool path, think, reflect,
+synthesize/finalize, or return the backend-owned `delegate_subagent` and
+`wait_for_subagents` coordination outcomes. Follow-up delegation still uses the
+classifier-compatible handoff entry and the shared backend ownership policy and
+assignment builder.
+
+The child graph remains a bounded local loop: model, approval, dispatch,
+synthesis, observation, and terminal `AgentResult` projection. It does not run
+parent PAR, mutate global todos, decide final user responses, or own the
+parent's wait/delegate/finalize policy.
+
 ## Security And Isolation Notes
 
 - Agent runtime code must treat tenant/task/runtime identity from backend
@@ -217,6 +259,10 @@ observations independently. The agent compact consumer never passes its
   request metadata.
 - Provider adapters receive plaintext credentials only through backend-owned
   runtime services immediately before provider calls.
+- Parent handoff coordination preserves tenant, task, conversation, parent-turn,
+  and run identity through registry claims and graph metadata. Graph state stays
+  serializable and carries projected result/run summaries, not backend service
+  objects or decrypted credentials.
 
 ## Operational Notes
 

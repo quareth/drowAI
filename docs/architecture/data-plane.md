@@ -148,6 +148,10 @@ Not owned by the data plane:
   `workspace/<task_id>/checkpoints.db`) when PostgreSQL cannot be acquired, and
   process-local in-memory state only as the final fallback.
 - **Streaming replay:** normalized stream packets and reasoning/system logs.
+  Generic subagent runs reuse this recent task replay for cards and drawer
+  activity by client-side `agent_run_id` filtering; there is no durable indexed
+  agent-run history API, and process-local status is used only to mark replayed
+  nonterminal runs interrupted after backend restart/loss.
 - **Runtime control:** execution sites, runners, enrollment/install tokens,
   credentials, runtime jobs, runner connections, control messages.
 - **CVE indexing:** global CVE settings, sync-run history, operational

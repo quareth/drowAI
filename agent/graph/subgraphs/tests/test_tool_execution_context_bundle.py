@@ -35,9 +35,11 @@ from agent.graph.context.builder import (
     build_conversation_context_bundle,
 )
 from agent.graph.context.projections import (
-    SECTION_RECENT_TRANSCRIPT,
     project_for_intent_classifier,
     project_for_planner,
+)
+from agent.graph.context.serialization import (
+    SECTION_RECENT_TRANSCRIPT,
     serialize_projection_to_prompt_sections,
 )
 from agent.graph.subgraphs.tool_execution_runtime.request_context import (

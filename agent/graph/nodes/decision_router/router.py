@@ -10,6 +10,7 @@ from agent.config import AgentConfig
 from ...infrastructure.state_models import GraphRuntimeContext
 from ...state import InteractiveState
 from ...utils.event_identity import resolve_turn_sequence
+from ..working_memory import apply_post_tool_active_decision
 
 # Import from submodules
 from .guardrails import (
@@ -34,6 +35,8 @@ from .helpers import (
     consume_post_reflect_hint,
     extract_action_label,
     get_current_todo,
+    has_relevant_active_agent_runs,
+    is_valid_agent_handoff_entry,
     resolve_router_phase_sequence,
     update_router_observability,
     write_router_outcome,
@@ -55,6 +58,8 @@ def _build_resolution(
     candidate_source: str,
     resolution_source: str,
     append_history: bool,
+    agent_handoff: Optional[Mapping[str, Any]] = None,
+    irrelevant_active_agent_run_ids: Any = None,
 ) -> dict[str, Any]:
     """Return a normalized in-memory resolution payload."""
     return {
@@ -64,6 +69,8 @@ def _build_resolution(
         "candidate_source": candidate_source,
         "resolution_source": resolution_source,
         "append_history": append_history,
+        "agent_handoff": dict(agent_handoff) if agent_handoff is not None else None,
+        "irrelevant_active_agent_run_ids": irrelevant_active_agent_run_ids,
     }
 
 
@@ -127,9 +134,16 @@ def _route_with_outcome(
     candidate_source: str,
     resolution_source: str,
     append_history: bool,
+    agent_handoff: Optional[Mapping[str, Any]] = None,
+    irrelevant_active_agent_run_ids: Any = None,
 ) -> dict:
     """Write router contracts, record decision, and return graph update."""
     facts = interactive.facts
+    _supersede_overridden_active_decision(
+        interactive,
+        action=action,
+        reason=reason,
+    )
     outcome = write_router_outcome(
         facts,
         action=action,
@@ -137,11 +151,40 @@ def _route_with_outcome(
         candidate_source=candidate_source,
         resolution_source=resolution_source,
         reason=reason,
+        agent_handoff=agent_handoff,
         profile=str(facts.capability or ""),
+        irrelevant_active_agent_run_ids=irrelevant_active_agent_run_ids,
     )
     record_decision(interactive, action, reason, append_history=append_history)
     update_router_observability(facts, outcome)
     return interactive.as_graph_update()
+
+
+def _supersede_overridden_active_decision(
+    interactive: InteractiveState,
+    *,
+    action: str,
+    reason: str,
+) -> None:
+    """Supersede an active proposal when authoritative routing replaces it."""
+    working_memory = interactive.facts.safe_metadata.get("working_memory")
+    if not isinstance(working_memory, Mapping):
+        return
+    active_decision = working_memory.get("active_decision")
+    if not isinstance(active_decision, Mapping):
+        return
+    if str(active_decision.get("status") or "").strip().lower() != "active":
+        return
+
+    proposed_action = str(active_decision.get("next_action") or "").strip().lower()
+    routed_action = str(action or "").strip().lower()
+    if not proposed_action or proposed_action == routed_action:
+        return
+
+    superseded = dict(active_decision)
+    superseded["status"] = "superseded"
+    superseded["status_reason"] = f"router_override:{reason}"[:256]
+    apply_post_tool_active_decision(interactive, superseded)
 
 
 # =============================================================================
@@ -167,6 +210,14 @@ async def decision_router(
     # PRIORITY 1: User goal achieved (set by post_tool_reasoning)
     is_complete, reason = check_goal_completion(facts, metadata)
     if is_complete:
+        active_block = _block_finalization_for_active_handoffs(
+            interactive,
+            resolved_candidate_source="terminal_state",
+            reason_prefix="terminal_state",
+            candidate_irrelevant_run_ids=_candidate_irrelevant_active_run_ids(facts),
+        )
+        if active_block is not None:
+            return active_block
         logger.info(f"[ROUTER] Finalizing: {reason}")
         safe_inc("router_finalize_goal_achieved")
         metadata.pop("user_goal_achieved", None)
@@ -182,6 +233,14 @@ async def decision_router(
     
     # PRIORITY 2: All todos complete
     if check_all_todos_complete(facts):
+        active_block = _block_finalization_for_active_handoffs(
+            interactive,
+            resolved_candidate_source="terminal_state",
+            reason_prefix="all_todos_complete",
+            candidate_irrelevant_run_ids=_candidate_irrelevant_active_run_ids(facts),
+        )
+        if active_block is not None:
+            return active_block
         logger.info("[ROUTER] Finalizing: all todos marked complete")
         safe_inc("router_finalize_todos_complete")
         return _route_with_outcome(
@@ -213,11 +272,35 @@ async def decision_router(
         metadata,
         resolved_action=str(resolved["action"]),
         resolved_candidate_source=str(resolved["candidate_source"]),
+        resolved_agent_handoff=(
+            resolved.get("agent_handoff")
+            if isinstance(resolved.get("agent_handoff"), Mapping)
+            else None
+        ),
+        resolved_irrelevant_active_run_ids=resolved.get(
+            "irrelevant_active_agent_run_ids"
+        ),
     )
     if guardrail_result is not None:
         return guardrail_result
 
     resolved = _normalize_profile_resolution(facts, resolved)
+    coordination_result = _check_coordination_guardrails(
+        interactive,
+        metadata,
+        resolved_action=str(resolved["action"]),
+        resolved_candidate_source=str(resolved["candidate_source"]),
+        resolved_agent_handoff=(
+            resolved.get("agent_handoff")
+            if isinstance(resolved.get("agent_handoff"), Mapping)
+            else None
+        ),
+        resolved_irrelevant_active_run_ids=resolved.get(
+            "irrelevant_active_agent_run_ids"
+        ),
+    )
+    if coordination_result is not None:
+        return coordination_result
 
     # Optional HITL pause remains a late-stage override.
     pause_result = await _handle_pause_logic(interactive, facts, context)
@@ -232,6 +315,14 @@ async def decision_router(
         candidate_source=str(resolved["candidate_source"]),
         resolution_source=str(resolved["resolution_source"]),
         append_history=bool(resolved["append_history"]),
+        agent_handoff=(
+            resolved.get("agent_handoff")
+            if isinstance(resolved.get("agent_handoff"), Mapping)
+            else None
+        ),
+        irrelevant_active_agent_run_ids=resolved.get(
+            "irrelevant_active_agent_run_ids"
+        ),
     )
 
 
@@ -242,8 +333,21 @@ def _check_guardrails(
     *,
     resolved_action: str,
     resolved_candidate_source: str,
+    resolved_agent_handoff: Optional[Mapping[str, Any]],
+    resolved_irrelevant_active_run_ids: Any,
 ) -> Optional[dict]:
     """Check all guardrail conditions and return early if violated."""
+
+    coordination_result = _check_coordination_guardrails(
+        interactive,
+        metadata,
+        resolved_action=resolved_action,
+        resolved_candidate_source=resolved_candidate_source,
+        resolved_agent_handoff=resolved_agent_handoff,
+        resolved_irrelevant_active_run_ids=resolved_irrelevant_active_run_ids,
+    )
+    if coordination_result is not None:
+        return coordination_result
     
     # Guardrail 1: Budget exhausted
     budget_exhausted, budget_reason = check_budget_exhaustion(
@@ -253,14 +357,16 @@ def _check_guardrails(
     if budget_exhausted:
         logger.info(f"[ROUTER] Forcing finalize: {budget_reason}")
         safe_inc("router_finalize_budget_exhausted")
-        return _route_with_outcome(
+        return _route_guardrail_outcome(
             interactive,
+            metadata,
             action="finalize",
             reason=budget_reason or "budget_exhausted",
             candidate_action=resolved_action,
             candidate_source=resolved_candidate_source,
             resolution_source="guardrail",
             append_history=True,
+            irrelevant_active_agent_run_ids=resolved_irrelevant_active_run_ids,
         )
     
     # Guardrail 2: Legacy scope goals (fallback when no todos)
@@ -268,14 +374,16 @@ def _check_guardrails(
     if not current_todo and are_scope_goals_achieved(interactive):
         logger.info("[ROUTER] Forcing finalize: all scope goals achieved (legacy)")
         safe_inc("router_finalize_goals_achieved")
-        return _route_with_outcome(
+        return _route_guardrail_outcome(
             interactive,
+            metadata,
             action="finalize",
             reason="legacy_scope_goals_achieved",
             candidate_action=resolved_action,
             candidate_source=resolved_candidate_source,
             resolution_source="guardrail",
             append_history=True,
+            irrelevant_active_agent_run_ids=resolved_irrelevant_active_run_ids,
         )
 
     # Guardrail 3: Deep-reasoning reflection loop recovery
@@ -312,28 +420,32 @@ def _check_guardrails(
             logger.info("[ROUTER] Forcing reflect: loop + insufficient findings")
             action = "reflect"
             reason = "action_loop_requires_reflect"
-        return _route_with_outcome(
+        return _route_guardrail_outcome(
             interactive,
+            metadata,
             action=action,
             reason=reason,
             candidate_action=resolved_action,
             candidate_source=resolved_candidate_source,
             resolution_source="guardrail",
             append_history=True,
+            irrelevant_active_agent_run_ids=resolved_irrelevant_active_run_ids,
         )
     
     # Guardrail 5: No progress (observation-based)
     if is_stuck_without_progress(interactive):
         logger.info("[ROUTER] Forcing finalize: no new findings for 2+ iterations")
         safe_inc("router_finalize_no_progress")
-        return _route_with_outcome(
+        return _route_guardrail_outcome(
             interactive,
+            metadata,
             action="finalize",
             reason="no_progress_guardrail",
             candidate_action=resolved_action,
             candidate_source=resolved_candidate_source,
             resolution_source="guardrail",
             append_history=True,
+            irrelevant_active_agent_run_ids=resolved_irrelevant_active_run_ids,
         )
     
     # Guardrail 6: No progress count
@@ -341,14 +453,16 @@ def _check_guardrails(
     if no_progress:
         logger.info(f"[ROUTER] Forcing finalize: {no_progress_reason}")
         safe_inc("router_finalize_no_progress")
-        return _route_with_outcome(
+        return _route_guardrail_outcome(
             interactive,
+            metadata,
             action="finalize",
             reason="no_progress_count_guardrail",
             candidate_action=resolved_action,
             candidate_source=resolved_candidate_source,
             resolution_source="guardrail",
             append_history=True,
+            irrelevant_active_agent_run_ids=resolved_irrelevant_active_run_ids,
         )
     
     # Guardrail 7: Redundant execution warning
@@ -362,14 +476,16 @@ def _check_guardrails(
             action = "reflect"
             reason = "redundant_execution_requires_reflect"
         facts.metadata.pop("redundant_execution_warning", None)
-        return _route_with_outcome(
+        return _route_guardrail_outcome(
             interactive,
+            metadata,
             action=action,
             reason=reason,
             candidate_action=resolved_action,
             candidate_source=resolved_candidate_source,
             resolution_source="guardrail",
             append_history=True,
+            irrelevant_active_agent_run_ids=resolved_irrelevant_active_run_ids,
         )
     
     # Budget warnings (log but don't force action)
@@ -377,6 +493,145 @@ def _check_guardrails(
     log_progress_milestone(interactive)
     
     return None
+
+
+def _route_guardrail_outcome(
+    interactive: InteractiveState,
+    metadata: Mapping[str, Any],
+    *,
+    action: str,
+    reason: str,
+    candidate_action: Optional[str],
+    candidate_source: str,
+    resolution_source: str,
+    append_history: bool,
+    irrelevant_active_agent_run_ids: Any = None,
+) -> dict:
+    """Route a guardrail outcome without finalizing over relevant active runs."""
+    if action == "finalize" and has_relevant_active_agent_runs(
+        metadata,
+        candidate_irrelevant_run_ids=irrelevant_active_agent_run_ids,
+    ):
+        safe_inc("router_coordination_guardrail_finalize_blocked_active_runs")
+        return _route_with_outcome(
+            interactive,
+            action="wait_for_subagents",
+            reason=f"{reason}_finalize_blocked_active_runs",
+            candidate_action=candidate_action,
+            candidate_source=candidate_source,
+            resolution_source=resolution_source,
+            append_history=append_history,
+        )
+    return _route_with_outcome(
+        interactive,
+        action=action,
+        reason=reason,
+        candidate_action=candidate_action,
+        candidate_source=candidate_source,
+        resolution_source=resolution_source,
+        append_history=append_history,
+        irrelevant_active_agent_run_ids=irrelevant_active_agent_run_ids,
+    )
+
+
+def _check_coordination_guardrails(
+    interactive: InteractiveState,
+    metadata: Mapping[str, Any],
+    *,
+    resolved_action: str,
+    resolved_candidate_source: str,
+    resolved_agent_handoff: Optional[Mapping[str, Any]],
+    resolved_irrelevant_active_run_ids: Any,
+) -> Optional[dict]:
+    """Reject malformed parent-coordination routes before graph handoff."""
+    if resolved_action == "delegate_subagent" and not is_valid_agent_handoff_entry(
+        resolved_agent_handoff
+    ):
+        logger.warning("[ROUTER] Rejecting delegate_subagent without valid handoff")
+        safe_inc("router_coordination_delegate_invalid_handoff")
+        return _route_guardrail_outcome(
+            interactive,
+            metadata,
+            action="finalize",
+            reason="coordination_delegate_invalid_handoff",
+            candidate_action=resolved_action,
+            candidate_source=resolved_candidate_source,
+            resolution_source="guardrail",
+            append_history=True,
+            irrelevant_active_agent_run_ids=resolved_irrelevant_active_run_ids,
+        )
+
+    if resolved_action == "wait_for_subagents" and not has_relevant_active_agent_runs(
+        metadata,
+        candidate_irrelevant_run_ids=resolved_irrelevant_active_run_ids,
+    ):
+        logger.warning("[ROUTER] Rejecting wait_for_subagents without active runs")
+        safe_inc("router_coordination_wait_without_active_run")
+        return _route_with_outcome(
+            interactive,
+            action="think_more",
+            reason="coordination_wait_without_active_run",
+            candidate_action=resolved_action,
+            candidate_source=resolved_candidate_source,
+            resolution_source="guardrail",
+            append_history=True,
+        )
+
+    if resolved_action == "finalize" and has_relevant_active_agent_runs(
+        metadata,
+        candidate_irrelevant_run_ids=resolved_irrelevant_active_run_ids,
+    ):
+        logger.info("[ROUTER] Blocking finalize while active subagent runs remain")
+        safe_inc("router_coordination_finalize_blocked_active_runs")
+        return _route_with_outcome(
+            interactive,
+            action="wait_for_subagents",
+            reason="coordination_finalize_blocked_active_runs",
+            candidate_action=resolved_action,
+            candidate_source=resolved_candidate_source,
+            resolution_source="guardrail",
+            append_history=True,
+        )
+
+    return None
+
+
+def _block_finalization_for_active_handoffs(
+    interactive: InteractiveState,
+    *,
+    resolved_candidate_source: str,
+    reason_prefix: str,
+    candidate_irrelevant_run_ids: Any = None,
+) -> Optional[dict]:
+    """Convert terminal finalization into an explicit wait when children remain."""
+    metadata = interactive.facts.safe_metadata
+    if not has_relevant_active_agent_runs(
+        metadata,
+        candidate_irrelevant_run_ids=candidate_irrelevant_run_ids,
+    ):
+        return None
+    logger.info(
+        "[ROUTER] Blocking %s finalization while active subagent runs remain",
+        reason_prefix,
+    )
+    safe_inc("router_coordination_terminal_finalize_blocked_active_runs")
+    return _route_with_outcome(
+        interactive,
+        action="wait_for_subagents",
+        reason=f"{reason_prefix}_finalize_blocked_active_runs",
+        candidate_action="finalize",
+        candidate_source=resolved_candidate_source,
+        resolution_source="guardrail",
+        append_history=True,
+    )
+
+
+def _candidate_irrelevant_active_run_ids(facts: Any) -> Any:
+    """Return current PTR candidate irrelevant active run IDs without consuming it."""
+    candidate = facts.get_candidate_decision()
+    if not isinstance(candidate, Mapping):
+        return None
+    return candidate.get("par_irrelevant_active_agent_run_ids")
 
 
 def _resolve_reflect_recovery_action(
@@ -450,6 +705,14 @@ def _resolve_candidate_action(
             candidate_source=str(candidate.get("decision_source") or "ptr"),
             resolution_source="candidate",
             append_history=False,
+            agent_handoff=(
+                candidate.get("agent_handoff")
+                if isinstance(candidate.get("agent_handoff"), Mapping)
+                else None
+            ),
+            irrelevant_active_agent_run_ids=candidate.get(
+                "par_irrelevant_active_agent_run_ids"
+            ),
         )
 
     if facts.safe_decision_history:

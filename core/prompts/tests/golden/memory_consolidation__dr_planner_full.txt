@@ -42,6 +42,15 @@ Use this classifier-derived brief to decide what to plan.- nmap
 - If a target-selection step is required, keep it at the objective level rather than describing the randomization or selection mechanics.
 - Keep the plan objective-level rather than command-level.
 - Do not include exact commands, flags, file names, shell pipelines, variable assignments, or parsing instructions in `plan` or `todo_list`.
+- Do NOT add administrative/compliance preconditions (authorization paperwork, legal disclaimers) unless explicitly requested.
+- Return `mode: "clarify_required"` only for hard blockers that prevent correct execution.
+- A hard blocker must be mandatory, non-inferable from context, and unresolved.
+- Ask at most 1-2 blocker questions.
+- Ask a blocker question only if its answer will directly contribute to task progress.
+- Never ask optional preference questions.
+- Clarify blockers must be multiple-choice only: use `input_type: "select"` and provide 1-4 concrete options.
+- Do not use freeform text blockers.
+- If blockers are inferable/resolved, return `mode: "plan_ready"` and provide a plan.
 
 **Good step style**:
 - "Discover live hosts on the current Docker network."

@@ -1,6 +1,7 @@
 import type { StreamEvent, StreamEventMetadata } from "../types/reasoning-events";
 import type { StreamPacket } from "@/types/packets";
 import { isStreamPacket } from "@/types/packets";
+import { isSubagentRunMetadata } from "@/features/agent-runs/contracts/agent-run";
 
 export type StepMetadata = StreamEventMetadata | undefined;
 
@@ -109,12 +110,13 @@ function resolveCanonicalSubTurnIndex(meta: Record<string, unknown>, stepType: s
 
 export function deriveStepKey(step: Step): string {
   const meta = (step.metadata as Record<string, unknown>) || {};
+  const attributionPrefix = deriveAttributionKeyPrefix(meta);
   const rawStepType = typeof meta.step_type === "string" ? (meta.step_type as string) : step.type;
   const stepType = normalizeStepTypeForKey(rawStepType);
   const canonicalSubTurnIndex = resolveCanonicalSubTurnIndex(meta, stepType);
   const metadataKey = deriveKeyFromMetadata(step.metadata, stepType);
   if (metadataKey) {
-    return metadataKey;
+    return `${attributionPrefix}${metadataKey}`;
   }
 
   const conversationId = (meta.conversation_id as string) ?? (meta.conversationId as string) ?? "";
@@ -124,32 +126,43 @@ export function deriveStepKey(step: Step): string {
   const subTurnIndex = canonicalSubTurnIndex;
   if (turnId && typeof ind === "number") {
     const subSuffix = typeof subTurnIndex === "number" ? `-sub-${subTurnIndex}` : "";
-    return `turn-${turnId}-ind-${ind}${subSuffix}-${stepType}`;
+    return `${attributionPrefix}turn-${turnId}-ind-${ind}${subSuffix}-${stepType}`;
   }
 
   if (turnId) {
-    return `turn-${turnId}-${stepType}`;
+    return `${attributionPrefix}turn-${turnId}-${stepType}`;
   }
 
   if (conversationId && typeof ind === "number" && typeof turnSequence === "number") {
     const subSuffix = typeof subTurnIndex === "number" ? `-sub-${subTurnIndex}` : "";
-    return `conv-${conversationId}-seq-${turnSequence}-ind-${ind}${subSuffix}-${stepType}`;
+    return `${attributionPrefix}conv-${conversationId}-seq-${turnSequence}-ind-${ind}${subSuffix}-${stepType}`;
   }
 
   // Use `ind` for grouping if available (groups related events like reasoning, tool, message)
   const baseSequence = typeof turnSequence === "number" ? turnSequence : step.sequence;
   if (typeof ind === "number" && typeof baseSequence === "number") {
     const subSuffix = typeof subTurnIndex === "number" ? `-sub-${subTurnIndex}` : "";
-    return `seq-${baseSequence}-ind-${ind}${subSuffix}-${stepType}`;
+    return `${attributionPrefix}seq-${baseSequence}-ind-${ind}${subSuffix}-${stepType}`;
   }
   
   // Fallback: include event type in key to prevent different event types from overwriting each other
   if (typeof step.sequence === "number") {
-    return `seq-${step.sequence}-${step.type}`;
+    return `${attributionPrefix}seq-${step.sequence}-${step.type}`;
   }
   const timestampKey = (step.timestamp || ((step.metadata as any)?.timestamp ?? "")).toString();
   const contentSnippet = (step.content || "").slice(0, 24);
-  return `fallback-${step.type}-${timestampKey}-${contentSnippet}`;
+  return `${attributionPrefix}fallback-${step.type}-${timestampKey}-${contentSnippet}`;
+}
+
+function deriveAttributionKeyPrefix(meta: Record<string, unknown>): string {
+  if (
+    !isSubagentRunMetadata(meta) ||
+    typeof meta.agent_run_id !== "string"
+  ) {
+    return "";
+  }
+  const agentRunId = meta.agent_run_id.trim();
+  return agentRunId ? `agent-run-${agentRunId}::` : "";
 }
 
 function packetToStep(packet: StreamPacket): Step {

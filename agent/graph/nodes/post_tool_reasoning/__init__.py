@@ -22,9 +22,15 @@ External code should import from this package:
 
 # Re-export models
 from .models import (
+    AgentHandoffEntry,
+    DIRECT_TOOL_OUTCOME_SOURCE,
+    POST_ACTION_OUTCOME_SOURCE_METADATA_KEY,
+    PostActionOutcomeSource,
     PostToolReasoningError,
     PostToolReasoningDecisionOutput,
     PostToolReasoningOutput,
+    SUBAGENT_HANDOFF_BATCH_OUTCOME_SOURCE,
+    VALID_POST_ACTION_OUTCOME_SOURCES,
     map_decision_output_to_post_tool_reasoning_output,
     TodoProgress,
     ToolIntent,
@@ -56,7 +62,6 @@ from .progress import (
 
 # Re-export streaming constants
 from .streaming.base import MAX_REASONING_TOKENS, STREAMING_STEP_NAME
-from .streaming_compat import non_streaming_call, stream_and_parse_response
 
 # Re-export moved helpers/constants
 from ...utils.event_identity import derive_dr_stream_identifiers
@@ -86,8 +91,6 @@ _truncate_content = truncate_content
 _build_conversation_history = build_conversation_history
 _apply_progress_updates = apply_progress_updates
 _build_progress_summary = build_progress_summary
-_stream_and_parse_response = stream_and_parse_response
-_non_streaming_call = non_streaming_call
 _format_tool_intent_for_hint = format_tool_intent_for_hint
 _record_decision = record_decision
 _record_observation = record_observation
@@ -98,15 +101,21 @@ __all__ = [
     # Models
     "PostToolReasoningOutput",
     "PostToolReasoningDecisionOutput",
+    "AgentHandoffEntry",
+    "PostActionOutcomeSource",
     "TodoProgress",
     "ToolIntent",
     # Constants
+    "DIRECT_TOOL_OUTCOME_SOURCE",
     "MAX_HISTORY_CONTENT_CHARS",
     "MAX_HISTORY_ENTRIES",
     "MAX_OBSERVATION_TOKENS",
     "MAX_REASONING_TOKENS",
     "MAX_TODOS_IN_PROMPT",
+    "POST_ACTION_OUTCOME_SOURCE_METADATA_KEY",
     "STREAMING_STEP_NAME",
+    "SUBAGENT_HANDOFF_BATCH_OUTCOME_SOURCE",
+    "VALID_POST_ACTION_OUTCOME_SOURCES",
     "VALID_POST_TOOL_ACTIONS",
     "VALID_TODO_STATUSES",
     # Public functions
@@ -117,13 +126,11 @@ __all__ = [
     "map_decision_output_to_post_tool_reasoning_output",
     "extract_json_from_text",
     "format_tool_intent_for_hint",
-    "non_streaming_call",
     "parse_reasoning_response",
     "post_tool_reasoning",
     "record_decision",
     "record_observation",
     "split_observation_and_decision",
-    "stream_and_parse_response",
     "truncate_content",
     "derive_dr_stream_identifiers",
     # Internal functions exposed for testing (backward compatibility)
@@ -132,11 +139,9 @@ __all__ = [
     "_build_progress_summary",
     "_extract_json_from_text",
     "_format_tool_intent_for_hint",
-    "_non_streaming_call",
     "_parse_reasoning_response",
     "_record_decision",
     "_record_observation",
     "_split_observation_and_decision",
-    "_stream_and_parse_response",
     "_truncate_content",
 ]

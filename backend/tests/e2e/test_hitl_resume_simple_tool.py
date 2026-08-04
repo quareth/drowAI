@@ -17,6 +17,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from agent.graph.graph_names import GRAPH_NAME_SUBAGENT
 from backend.database import Base
 from backend.models.core import Task, User
 from backend.models.hitl import InterruptTicket, InterruptTicketState, TurnWorkflow
@@ -268,6 +269,174 @@ def test_simple_tool_router_refresh_then_resume_with_edit(monkeypatch) -> None:
         assert captured["resume_kwargs"]["response"]["edited_parameters"] == {
             "command": "echo edited"
         }
+    finally:
+        verify.close()
+        engine.dispose()
+
+
+def test_subagent_router_resume_uses_canonical_child_ticket(monkeypatch) -> None:
+    """Subagent graph resumes use the shared HITL route with child ticket identity."""
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    SessionFactory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+    db = SessionFactory()
+    user_id: int
+    task_id: int
+    username: str
+    child_thread_id = "a" * 32
+    try:
+        user, task, _parent_thread = _create_task_fixture(
+            db,
+            username="pathfinder_owner",
+            email="pathfinder@example.com",
+            tenant_slug="pathfinder-hitl",
+            task_name="pathfinder-hitl",
+        )
+
+        interrupt_id = "subagent:checkpoint:cp-pathfinder-1"
+        ticket = InterruptTicket(
+            interrupt_id=interrupt_id,
+            task_id=task.id,
+            tenant_id=task.tenant_id,
+            graph_name=GRAPH_NAME_SUBAGENT,
+            interrupt_type="tool_approval",
+            checkpoint_id="cp-pathfinder-1",
+            thread_id=format_graph_thread_id(child_thread_id, task_id=task.id),
+            turn_id=f"task-{task.id}-turn-pathfinder-1",
+            turn_sequence=1,
+            state=InterruptTicketState.PENDING,
+            payload_snapshot={
+                "type": "tool_approval",
+                "turn_id": f"task-{task.id}-turn-pathfinder-1",
+                "turn_sequence": 1,
+                "reserved_message_id": 991,
+                "conversation_id": "conv-pathfinder",
+                "tool_id": "information_gathering.network_discovery.nmap",
+                "tool_name": "nmap",
+                "parameters": {"target": "10.0.0.10"},
+            },
+        )
+        db.add(ticket)
+        db.commit()
+        user_id = int(user.id)
+        task_id = int(task.id)
+        username = str(user.username)
+    finally:
+        db.close()
+
+    captured: Dict[str, Any] = {}
+    interrupt_calls: list[Dict[str, Any]] = []
+
+    class _SubagentInterruptStateService:
+        async def get_pending_interrupt(
+            self,
+            task_id: int,
+            graph_name: str | None = None,
+            **kwargs: Any,
+        ):
+            interrupt_calls.append(
+                {
+                    "task_id": task_id,
+                    "graph_name": graph_name,
+                    **kwargs,
+                }
+            )
+            return {
+                "has_interrupt": True,
+                "task_id": task_id,
+                "thread_id": format_graph_thread_id(child_thread_id, task_id=task_id),
+                "graph_name": GRAPH_NAME_SUBAGENT,
+                "interrupt_id": interrupt_id,
+                "checkpoint_id": "cp-pathfinder-1",
+                "interrupt_type": "tool_approval",
+                "payload": {
+                    "type": "tool_approval",
+                    "tool_id": "information_gathering.network_discovery.nmap",
+                    "parameters": {"target": "10.0.0.10"},
+                },
+                "resumable": True,
+            }
+
+    def _capture_resume_generation(**kwargs):
+        captured["resume_kwargs"] = dict(kwargs)
+
+        async def _noop():
+            return None
+
+        return _noop()
+
+    app = FastAPI()
+    app.include_router(interrupts_routes.router, prefix="/api/tasks")
+    app.dependency_overrides[interrupts_routes.get_current_user] = (
+        lambda: SimpleNamespace(id=user_id, username=username, is_active=True)
+    )
+
+    def _db_override():
+        req_db: Session = SessionFactory()
+        try:
+            yield req_db
+        finally:
+            req_db.close()
+
+    app.dependency_overrides[interrupts_routes.get_db] = _db_override
+
+    monkeypatch.setattr(
+        "backend.services.langgraph_chat.checkpoint.interrupt_state_service.get_interrupt_state_service",
+        lambda: _SubagentInterruptStateService(),
+    )
+    monkeypatch.setattr(
+        "backend.services.langgraph_chat.execution.turn_service.run_resume_generation",
+        _capture_resume_generation,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/tasks/{task_id}/graph/resume",
+            json={
+                "interrupt_id": interrupt_id,
+                "interrupt_type": "tool_approval",
+                "graph_name": GRAPH_NAME_SUBAGENT,
+                "response": {"action": "approve"},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {
+        "status": "resumed",
+        "task_id": task_id,
+        "interrupt_id": interrupt_id,
+    }
+    assert interrupt_calls[0]["graph_name"] == GRAPH_NAME_SUBAGENT
+    assert interrupt_calls[0]["thread_id"] == format_graph_thread_id(
+        child_thread_id,
+        task_id=task_id,
+    )
+    assert captured["resume_kwargs"]["graph_name"] == GRAPH_NAME_SUBAGENT
+    assert captured["resume_kwargs"]["checkpoint_id"] == "cp-pathfinder-1"
+    assert captured["resume_kwargs"]["interrupt_id"] == interrupt_id
+
+    verify = SessionFactory()
+    try:
+        persisted_ticket = (
+            verify.query(InterruptTicket)
+            .filter(
+                InterruptTicket.task_id == task_id,
+                InterruptTicket.interrupt_id == interrupt_id,
+            )
+            .one()
+        )
+        assert persisted_ticket.state == InterruptTicketState.RESUMING
+        workflow = (
+            verify.query(TurnWorkflow).filter(TurnWorkflow.task_id == task_id).one()
+        )
+        assert workflow.state == "RESUMED"
+        assert workflow.graph_name == GRAPH_NAME_SUBAGENT
+        assert workflow.resume_key == "cp-pathfinder-1"
     finally:
         verify.close()
         engine.dispose()
@@ -564,6 +733,153 @@ def test_simple_tool_sequential_interrupt_approval_no_stale_replay(monkeypatch) 
 
     assert captured["resume_kwargs"]["interrupt_id"] == interrupt_id_1
     engine.dispose()
+
+
+def test_parent_handoff_approval_reuses_resumed_child_workflow_same_turn(
+    monkeypatch,
+) -> None:
+    """A parent PTR approval can follow a child approval in the same turn."""
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    SessionFactory = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+    db = SessionFactory()
+    try:
+        user, task, thread_id = _create_task_fixture(
+            db,
+            username="parent_after_child_owner",
+            email="parent-after-child@example.com",
+            tenant_slug="parent-after-child",
+            task_name="parent-after-child",
+        )
+        turn_id = f"task-{task.id}-turn-1"
+        child_interrupt_id = "intr-child-completed"
+        parent_interrupt_id = "intr-parent-pending"
+        db.add_all(
+            [
+                TurnWorkflow(
+                    task_id=task.id,
+                    tenant_id=task.tenant_id,
+                    conversation_id="conv-parent-after-child",
+                    turn_id=turn_id,
+                    turn_sequence=1,
+                    state="RESUMED",
+                    graph_name="subagent",
+                    checkpoint_id="cp-child",
+                    interrupt_type="tool_approval",
+                    reserved_message_id=101,
+                    resume_key="cp-child",
+                    workflow_metadata={"interrupt_id": child_interrupt_id},
+                ),
+                InterruptTicket(
+                    interrupt_id=child_interrupt_id,
+                    task_id=task.id,
+                    tenant_id=task.tenant_id,
+                    graph_name="subagent",
+                    interrupt_type="tool_approval",
+                    checkpoint_id="cp-child",
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    turn_sequence=1,
+                    state=InterruptTicketState.COMPLETED,
+                    payload_snapshot={"turn_id": turn_id, "turn_sequence": 1},
+                ),
+                InterruptTicket(
+                    interrupt_id=parent_interrupt_id,
+                    task_id=task.id,
+                    tenant_id=task.tenant_id,
+                    graph_name="parent_handoff",
+                    interrupt_type="tool_approval",
+                    checkpoint_id="cp-parent",
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    turn_sequence=1,
+                    state=InterruptTicketState.PENDING,
+                    payload_snapshot={
+                        "turn_id": turn_id,
+                        "turn_sequence": 1,
+                        "conversation_id": "conv-parent-after-child",
+                        "reserved_message_id": 101,
+                    },
+                ),
+            ]
+        )
+        db.commit()
+        user_id = int(user.id)
+        username = str(user.username)
+        task_id = int(task.id)
+    finally:
+        db.close()
+
+    captured: dict[str, Any] = {}
+
+    def _capture_resume_generation(**kwargs):
+        captured["resume_kwargs"] = dict(kwargs)
+
+        async def _noop():
+            return None
+
+        return _noop()
+
+    app = FastAPI()
+    app.include_router(interrupts_routes.router, prefix="/api/tasks")
+    app.dependency_overrides[interrupts_routes.get_current_user] = (
+        lambda: SimpleNamespace(id=user_id, username=username, is_active=True)
+    )
+
+    def _db_override():
+        req_db: Session = SessionFactory()
+        try:
+            yield req_db
+        finally:
+            req_db.close()
+
+    app.dependency_overrides[interrupts_routes.get_db] = _db_override
+    monkeypatch.setattr(
+        interrupts_routes,
+        "get_interrupt_state_service",
+        lambda: _StubInterruptStateService({"task_id": -1}),
+    )
+    monkeypatch.setattr(
+        "backend.services.langgraph_chat.execution.turn_service.run_resume_generation",
+        _capture_resume_generation,
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            f"/api/tasks/{task_id}/graph/resume",
+            json={
+                "interrupt_id": parent_interrupt_id,
+                "interrupt_type": "tool_approval",
+                "graph_name": "parent_handoff",
+                "response": {"action": "approve"},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert captured["resume_kwargs"]["graph_name"] == "parent_handoff"
+
+    verify = SessionFactory()
+    try:
+        [workflow] = verify.query(TurnWorkflow).filter(
+            TurnWorkflow.task_id == task_id
+        ).all()
+        parent_ticket = verify.query(InterruptTicket).filter(
+            InterruptTicket.interrupt_id == parent_interrupt_id
+        ).one()
+        assert workflow.state == "RESUMED"
+        assert workflow.graph_name == "parent_handoff"
+        assert workflow.checkpoint_id == "cp-parent"
+        assert workflow.resume_key == "cp-parent"
+        assert workflow.workflow_metadata["interrupt_id"] == parent_interrupt_id
+        assert parent_ticket.state == InterruptTicketState.RESUMING
+    finally:
+        verify.close()
+        engine.dispose()
 
 
 def test_simple_tool_duplicate_409_does_not_block_next_distinct_interrupt(monkeypatch) -> None:

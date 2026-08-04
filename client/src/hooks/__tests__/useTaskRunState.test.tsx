@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { useTaskRunState } from "@/hooks/useTaskRunState";
+import { applyStreamMessage, clearTaskState } from "@/state/chat-stream-store";
 
 const mocked = vi.hoisted(() => ({
   apiFetchMock: vi.fn(),
@@ -34,6 +35,7 @@ function createStableWrapper() {
 
 afterEach(() => {
   mocked.apiFetchMock.mockReset();
+  clearTaskState(32);
 });
 
 describe("useTaskRunState", () => {
@@ -246,6 +248,47 @@ describe("useTaskRunState", () => {
     await waitFor(() => {
       expect(result.current[31]?.state).toBe("completed");
       expect(result.current[31]?.turnId).toBe("task-31-turn-1");
+    });
+  });
+
+  it("clears a running turn when its parent final snapshot is ingested", async () => {
+    mocked.apiFetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        tasks: [
+          {
+            task_id: 32,
+            is_streaming: true,
+            run: {
+              state: "running",
+              turn_id: "task-32-turn-1",
+              cancel_requested: false,
+            },
+          },
+        ],
+      }),
+    } as Response);
+
+    const { result } = renderHook(() => useTaskRunState([32]), { wrapper });
+    await waitFor(() => {
+      expect(result.current[32]?.isActiveGeneration).toBe(true);
+    });
+
+    applyStreamMessage(32, {
+      type: "message_delta",
+      content: "finished",
+      metadata: {
+        id: "task-32-turn-1",
+        step_type: "message_delta",
+        final_snapshot: true,
+        streaming: false,
+      },
+    });
+
+    await waitFor(() => {
+      expect(result.current[32]?.state).toBe("completed");
+      expect(result.current[32]?.isActiveGeneration).toBe(false);
+      expect(result.current[32]?.canStop).toBe(false);
     });
   });
 });

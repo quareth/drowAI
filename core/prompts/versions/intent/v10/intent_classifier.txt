@@ -6,6 +6,7 @@ Read the provided conversation in chronological order, oldest to newest. Treat t
 
 Your responsibilities are:
 - choose the routing label for this turn
+- identify explicit required subagent handoffs for immediately delegable work
 - determine whether a concrete execution target is clearly resolved
 - decide whether prior active target reuse should be allowed
 - detect whether the latest turn depends on one or more prior conversation turns and emit resolver hints
@@ -30,7 +31,8 @@ Before producing the JSON, reason carefully in this order:
 4) Determine whether a concrete execution target is resolved from the current turn, prior turns, or environment.
 5) Determine whether prior active target reuse should be allowed for this turn.
 6) Determine whether the request is executable now as a bounded direct-executor task, requires plan-executor decomposition, or should remain simple_chat.
-7) Derive the turn interpretation needed by downstream execution: resolved intent, overall goal, current step, next operational goal, success condition, constraints, memory fragments, and readiness.
+7) Determine whether any immediately executable work must be handed to a registered subagent.
+8) Derive the turn interpretation needed by downstream execution: resolved intent, overall goal, current step, next operational goal, success condition, constraints, memory fragments, and readiness.
 
 Be conservative. Do not guess. If the target, continuity, or execution readiness is unclear, prefer unresolved, ambiguous, blocked, or simple_chat rather than inventing certainty.
 
@@ -102,6 +104,13 @@ Return JSON:
   "label": "<simple_chat|direct_executor|plan_executor>",
   "confidence": <float 0-1>,
   "suggested_capabilities": ["optional", "broad", "execution", "hints"],
+  "agent_handoffs": [
+    {
+      "agent_handoff": "required",
+      "subagent": "<registered subagent name>",
+      "objective": "<one bounded user-grounded objective for this subagent>"
+    }
+  ],
   "requested_output_format": "<json|csv|markdown|null>",
   "question_type": "<binary_check|multi_step|open_ended|null>",
   "answer_style": "<short|normal|null>",
@@ -165,9 +174,29 @@ Formatting notes:
 Suggested capabilities policy:
 - `suggested_capabilities` are broad capability hints only.
 - They are not routing labels.
+- They do not decide whether a subagent is called.
 - They are not concrete tool names.
 - Use them only when they are clearly grounded by the user's request.
 - If no grounded capability hint is clear, return an empty array.
+
+Agent handoff policy:
+- `agent_handoffs` is the explicit routing contract for subagent delegation.
+- Return an empty array when no available registered subagent owns the work.
+- Every entry represents one required, independently executable handoff.
+- Preserve requested execution order in the array.
+- More than one entry is allowed when the user request contains multiple
+  independent objectives that should be delegated.
+- `objective` must be bounded and grounded in the latest user turn; do not
+  invent work or widen scope.
+- Select a subagent only when its injected catalog purpose, ownership boundary,
+  supported categories, and target requirements fit the objective.
+- The backend enforces live availability and concurrency after classification;
+  do not infer active-run state that is not present in the conversation.
+- Never route excluded work to a subagent merely because it owns an adjacent
+  capability.
+- Do not name an unavailable or unregistered subagent. The schema is an ordered
+  array so new registered subagents can be added without changing the handoff
+  shape.
 
 Request contract policy:
 - `question_type`:

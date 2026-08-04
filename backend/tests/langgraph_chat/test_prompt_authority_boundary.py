@@ -352,17 +352,15 @@ def test_section_recent_transcript_is_only_referenced_by_full_history_seams() ->
     production consumers of ``SECTION_RECENT_TRANSCRIPT``.
 
     ``SECTION_RECENT_TRANSCRIPT`` is DEFINED in
-    ``agent/graph/context/serialization.py`` and re-exported by
-    ``agent/graph/context/projections.py``. The only runtime CONSUMERS
+    ``agent/graph/context/serialization.py``. The only runtime CONSUMERS
     are the intent classifier and the deep-reasoning finalizer. Any
     other production-code file referencing this symbol under the
     runner control boundary indicates a narrowed node has reacquired the
     transcript section key.
     """
     expected = {
-        # Defining / re-exporting modules (symbol originates here).
+        # Defining module (symbol originates here).
         "agent/graph/context/serialization.py",
-        "agent/graph/context/projections.py",
         # The two explicit full-history seams. Phase 6 unified the
         # finalizer; the legacy ``deep_reasoning_finalizer`` shim has
         # been removed.
@@ -376,7 +374,7 @@ def test_section_recent_transcript_is_only_referenced_by_full_history_seams() ->
     missing = expected - actual
     assert not unexpected and not missing, (
         "SECTION_RECENT_TRANSCRIPT may only be referenced by the "
-        "defining serialization/projections modules and the two "
+        "defining serialization module and the two "
         f"full-history seams. unexpected: {sorted(unexpected)} "
         f"missing: {sorted(missing)}"
     )

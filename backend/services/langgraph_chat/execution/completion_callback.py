@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, AsyncGenerator, Callable, Dict, Optional, TYPE_CHECKING
+from typing import Any, AsyncGenerator, Callable, Dict, Mapping, Optional, TYPE_CHECKING
 import json
 
 if TYPE_CHECKING:
@@ -51,7 +51,10 @@ if TYPE_CHECKING:
 from backend.database import SessionLocal
 from backend.services.chat.message_service import ChatMessageService
 from backend.services.chat.observation_sections import parse_observation_sections
-from backend.services.chat.turn_event_service import ChatTurnEventService
+from backend.services.chat.turn_event_service import (
+    EVENT_ATTRIBUTION_KEYS,
+    ChatTurnEventService,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -193,6 +196,7 @@ def persist_chat_message_from_container(
     turn_number: int,
     prefill_reasoning_tokens: Optional[str] = None,
     replace_turn_events: bool = False,
+    event_attribution: Optional[Mapping[str, Any]] = None,
 ) -> None:
     if reserved_message_id is None:
         logger.warning(
@@ -232,6 +236,11 @@ def persist_chat_message_from_container(
         final_message,
         prefill_reasoning_tokens=prefill_reasoning_tokens,
     )
+    tool_calls = _attach_event_attribution(tool_calls, event_attribution)
+    observation_tokens = _attach_event_attribution(
+        observation_tokens,
+        event_attribution,
+    )
     observation_sections = parse_observation_sections(
         observation_tokens,
         non_list_strategy="empty",
@@ -241,7 +250,10 @@ def persist_chat_message_from_container(
     # The compatibility blob (reasoning_tokens) is already written via
     # ChatMessageService.update_message; canonical reasoning rows go
     # through ChatTurnEventService alongside tool/observation rows.
-    reasoning_sections = state_container.get_reasoning_sections() if state_container else []
+    reasoning_sections = _attach_event_attribution(
+        state_container.get_reasoning_sections() if state_container else [],
+        event_attribution,
+    )
 
     tool_call_count = len(tool_calls) if tool_calls else 0
     reasoning_section_count = len(reasoning_sections) if reasoning_sections else 0
@@ -349,6 +361,26 @@ def persist_chat_message_from_container(
             reserved_message_id,
             reason,
         )
+
+
+def _attach_event_attribution(
+    events: Any,
+    attribution: Optional[Mapping[str, Any]],
+) -> Any:
+    """Copy stable child ownership onto container payloads before persistence."""
+    if not isinstance(events, list) or not isinstance(attribution, Mapping):
+        return events
+    normalized = {
+        key: attribution[key]
+        for key in EVENT_ATTRIBUTION_KEYS
+        if attribution.get(key) is not None
+    }
+    if not normalized:
+        return events
+    return [
+        {**event, **normalized} if isinstance(event, dict) else event
+        for event in events
+    ]
 
 
 async def run_turn_with_completion_callback(

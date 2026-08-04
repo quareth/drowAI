@@ -98,6 +98,16 @@ async def test_finalize_deep_reasoning_streams_final_answer(monkeypatch):
     assert "message_start" in step_types
     assert "message_delta" in step_types
     assert "message_section_end" in step_types
+    deltas = [
+        event["content"]
+        for event in dummy_writer.events
+        if event.get("step_type") == "message_delta"
+    ]
+    assert deltas == [
+        "Findings: PostgreSQL detected on port 5432.\n",
+        "Impact: Database exposure could lead to data breaches.\n",
+        "Recommendation: Restrict network access and update PostgreSQL.\n",
+    ]
 
 
 @pytest.mark.asyncio

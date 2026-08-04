@@ -11,6 +11,7 @@ Tests cover:
 
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -668,6 +669,125 @@ class TestOpenAIChatClientStructuredUsage:
 
 class TestOpenAIChatClientStreaming:
     """Tests for the stream_chat_messages() method."""
+
+    @pytest.mark.asyncio
+    async def test_stream_tool_call_buffers_arguments_until_complete(
+        self, client_with_mock
+    ) -> None:
+        """Text streams normally while tool-argument deltas stay internal."""
+        client, mock = client_with_mock
+
+        def chunk(*, content=None, tool_calls=None, usage=None):
+            delta = SimpleNamespace(
+                content=content,
+                tool_calls=tool_calls or [],
+                refusal=None,
+            )
+            return SimpleNamespace(
+                id="chatcmpl_route",
+                choices=[SimpleNamespace(delta=delta, finish_reason=None)]
+                if usage is None
+                else [],
+                usage=usage,
+            )
+
+        function_start = SimpleNamespace(
+            index=0,
+            id="call_route",
+            function=SimpleNamespace(
+                name="ptr_commit",
+                arguments='{"action_reasoning":',
+            ),
+        )
+        function_end = SimpleNamespace(
+            index=0,
+            id=None,
+            function=SimpleNamespace(
+                name=None,
+                arguments='"The request is resolved."}',
+            ),
+        )
+        usage = SimpleNamespace(
+            prompt_tokens=10,
+            completion_tokens=4,
+            total_tokens=14,
+            prompt_tokens_details=None,
+        )
+
+        async def mock_stream():
+            yield chunk(content="The scan is complete. ")
+            yield chunk(tool_calls=[function_start])
+            yield chunk(tool_calls=[function_end])
+            yield chunk(usage=usage)
+
+        mock.chat.completions.create.return_value = mock_stream()
+        tool = FunctionToolSpec(
+            tool_id="ptr_commit",
+            name="ptr_commit",
+            description="Finish",
+            parameters_schema={"type": "object", "properties": {}},
+        )
+
+        response = await client.stream_chat_with_tools_with_usage(
+            "system",
+            "user",
+            [tool],
+            tool_choice=ToolChoice(mode="required"),
+        )
+        chunks = [value async for value in response.content_iterator]
+
+        assert chunks == ["The scan is complete. "]
+        assert response.get_final_tool_calls()[0].name == "ptr_commit"
+        assert response.get_final_tool_calls()[0].arguments == (
+            '{"action_reasoning":"The request is resolved."}'
+        )
+        assert response.get_final_usage().total_tokens == 14
+
+    @pytest.mark.asyncio
+    async def test_stream_tool_call_reports_output_limit_as_incomplete(
+        self, client_with_mock
+    ) -> None:
+        """A length finish must not be misreported as zero completed calls."""
+        client, mock = client_with_mock
+
+        async def mock_stream():
+            delta = SimpleNamespace(content="Partial observation", tool_calls=[])
+            yield SimpleNamespace(
+                id="chatcmpl_truncated",
+                choices=[SimpleNamespace(delta=delta, finish_reason=None)],
+                usage=None,
+            )
+            yield SimpleNamespace(
+                id="chatcmpl_truncated",
+                choices=[
+                    SimpleNamespace(
+                        delta=SimpleNamespace(content=None, tool_calls=[]),
+                        finish_reason="length",
+                    )
+                ],
+                usage=None,
+            )
+
+        mock.chat.completions.create.return_value = mock_stream()
+        tool = FunctionToolSpec(
+            tool_id="ptr_commit",
+            name="ptr_commit",
+            description="Finish",
+            parameters_schema={"type": "object", "properties": {}},
+        )
+
+        response = await client.stream_chat_with_tools_with_usage(
+            "system",
+            "user",
+            [tool],
+            tool_choice=ToolChoice(mode="required"),
+        )
+        assert [chunk async for chunk in response.content_iterator] == [
+            "Partial observation"
+        ]
+        assert response.get_final_tool_calls() is None
+        assert response.get_final_outcome().status == "incomplete"
+        assert response.get_final_outcome().reason == "output_limit"
     
     @pytest.mark.asyncio
     async def test_stream_yields_chunks(self, client_with_mock) -> None:

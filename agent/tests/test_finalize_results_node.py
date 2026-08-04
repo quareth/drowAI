@@ -51,7 +51,6 @@ class CapturingClient(DummyClient):
     def __init__(self, api_key: str, model: str) -> None:
         super().__init__(api_key=api_key, model=model)
         self.calls: List[List[dict[str, Any]]] = []
-
     async def stream_chat_messages(self, messages, **kwargs):
         self.calls.append(messages)
         yield "Final answer body.\n"
@@ -73,6 +72,21 @@ class MissingUsageClient(DummyClient):
                 return None
 
         return _StreamWithoutUsage()
+
+
+class FailingUsageStreamClient(DummyClient):
+    async def stream_chat_messages_with_usage(self, messages, **kwargs):
+        async def _failing_iterator():
+            yield "partial final text"
+            raise RuntimeError("stream failed")
+
+        class _FailingStream:
+            content_iterator = _failing_iterator()
+
+            def get_final_usage(self):
+                return None
+
+        return _FailingStream()
 
 
 def _minimal_state() -> dict[str, Any]:
@@ -134,6 +148,15 @@ async def test_finalize_tool_results_streams_final_answer(monkeypatch):
     assert "message_start" in step_types
     assert "message_delta" in step_types
     assert "message_section_end" in step_types
+    deltas = [
+        event["content"]
+        for event in dummy_writer.events
+        if event.get("step_type") == "message_delta"
+    ]
+    assert deltas == [
+        "Findings: host exposes PostgreSQL.\n",
+        "Recommendation: restrict access.\n",
+    ]
 
 
 @pytest.mark.asyncio
@@ -218,13 +241,16 @@ async def test_finalize_tool_results_includes_ptr_context_sections(monkeypatch):
         turn_sequence=12,
         source="tool",
         payload={
-            "kind": "http_request",
-            "target": "http://10.0.0.5/",
-            "action": "GET /",
-            "status": "success",
-            "result": "positive",
-            "summary": "Homepage discovered linked routes.",
-            "terminal_for_hypothesis": False,
+            "sections": [
+                {
+                    "heading": "Tool Output Summary",
+                    "body": "Homepage discovered linked routes.",
+                },
+                {
+                    "heading": "Key Findings",
+                    "body": "HTTP 200 from http://10.0.0.5/.",
+                },
+            ],
         },
     )
 
@@ -256,6 +282,94 @@ async def test_finalize_tool_results_includes_ptr_context_sections(monkeypatch):
     assert "## PTR Analyst Observation" in user_prompt
     assert "## Active Decision (advisory)" in user_prompt
     assert "### Key Findings (analyst-derived)" in user_prompt
+
+
+@pytest.mark.asyncio
+async def test_finalize_results_keeps_main_prompt_for_subagent_metadata(monkeypatch):
+    """Subagent attribution no longer selects a child-only finalizer mode."""
+    interactive = InteractiveState(
+        facts=FactsState(
+            task_id=42,
+            message="Scan localhost for PostgreSQL.",
+            conversation_id="conv-xyz",
+            metadata={
+                "producer_type": "subagent",
+                "agent_run_id": "pathfinder-run-1",
+                "agent_kind": "recon",
+                "synthesized_output": {
+                    "tool": "nmap",
+                    "summary": "5432/tcp is closed.",
+                    "key_findings": ["5432/tcp closed"],
+                },
+            },
+        ),
+        trace=TraceState(),
+    )
+
+    client = CapturingClient("test-key", "gpt-5.2")
+    monkeypatch.setattr(finalize_module, "resolve_llm_client", lambda *_args, **_kwargs: client)
+    monkeypatch.setattr(finalize_module, "get_stream_writer", lambda: None)
+
+    result = await finalize_module.finalize_results(
+        interactive.model_dump(),
+        context=None,
+        config={"configurable": {"thread_id": "lg-42"}},
+    )
+
+    assert client.calls
+    system_prompt = client.calls[-1][0]["content"]
+    user_prompt = client.calls[-1][1]["content"]
+    assert "exactly the four `##` headings" in system_prompt.lower()
+    assert "## Recommended Next Action" in user_prompt
+    assert any(
+        "(simple_tool_execution)" in entry
+        for entry in result["trace"]["reasoning"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_finalize_results_closes_subagent_message_section_on_stream_failure(monkeypatch):
+    """An opened child final-answer stream must emit a terminal section on failure."""
+    interactive = InteractiveState(
+        facts=FactsState(
+            task_id=42,
+            message="Scan localhost for PostgreSQL.",
+            conversation_id="conv-xyz",
+            metadata={
+                "producer_type": "subagent",
+                "agent_run_id": "pathfinder-run-1",
+                "agent_kind": "recon",
+                "synthesized_output": {
+                    "tool": "nmap",
+                    "summary": "5432/tcp is closed.",
+                    "key_findings": ["5432/tcp closed"],
+                },
+            },
+        ),
+        trace=TraceState(),
+    )
+    dummy_writer = DummyWriter()
+    monkeypatch.setattr(
+        finalize_module,
+        "resolve_llm_client",
+        lambda *_args, **_kwargs: FailingUsageStreamClient("test-key", "gpt-5.2"),
+    )
+    monkeypatch.setattr(finalize_module, "get_stream_writer", lambda: dummy_writer)
+
+    with pytest.raises(RuntimeError, match="stream failed"):
+        await finalize_module.finalize_results(
+            interactive.model_dump(),
+            context=None,
+            config={"configurable": {"thread_id": "lg-42"}},
+        )
+
+    step_types = [event.get("step_type") for event in dummy_writer.events]
+    assert step_types.count("message_start") == 1
+    assert "stream_error" in step_types
+    assert "message_section_end" in step_types
+    terminal_event = dummy_writer.events[-1]
+    assert terminal_event["step_type"] == "message_section_end"
+    assert terminal_event["agent_run_id"] == "pathfinder-run-1"
 
 
 @pytest.mark.asyncio

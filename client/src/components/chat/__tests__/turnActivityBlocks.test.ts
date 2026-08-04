@@ -77,10 +77,12 @@ describe("buildMessageRenderBlocks", () => {
     ]);
 
     expect(blocks).toHaveLength(1);
-    expect(blocks[0].type).toBe("group");
-    if (blocks[0].type !== "group") throw new Error("Expected a message group");
-    expect(blocks[0].group.primaryType).toBe("reasoning");
-    expect(blocks[0].group.messages.map((message) => message.id)).toEqual([
+    expect(blocks[0].type).toBe("activity");
+    if (blocks[0].type !== "activity") throw new Error("Expected live activity");
+    expect(blocks[0].isComplete).toBe(false);
+    expect(blocks[0].groups).toHaveLength(1);
+    expect(blocks[0].groups[0].primaryType).toBe("reasoning");
+    expect(blocks[0].groups[0].messages.map((message) => message.id)).toEqual([
       "reasoning-1-start",
       "reasoning-1-delta",
       "reasoning-1-end",
@@ -110,11 +112,14 @@ describe("buildMessageRenderBlocks", () => {
       }),
     ]);
 
-    expect(
-      blocks.map((block) =>
-        block.type === "group" ? block.group.primaryType : block.type,
-      ),
-    ).toEqual(["reasoning", "tool", "reasoning"]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].type).toBe("activity");
+    if (blocks[0].type !== "activity") throw new Error("Expected live activity");
+    expect(blocks[0].groups.map((group) => group.primaryType)).toEqual([
+      "reasoning",
+      "tool",
+      "reasoning",
+    ]);
   });
 
   it("coalesces reflection, think-more, and future reasoning in completed details", () => {
@@ -158,7 +163,7 @@ describe("buildMessageRenderBlocks", () => {
     ).toEqual(["reflection", "reasoning_loop", "future_phase"]);
   });
 
-  it("keeps live incomplete turn groups separate", () => {
+  it("groups live incomplete turn activity into the shared chain block", () => {
     const blocks = buildBlocks([
       makeMessage("reasoning", "reasoning_delta", { ind: 0, streaming: true }),
       makeMessage("tool", "tool_start", {
@@ -169,8 +174,13 @@ describe("buildMessageRenderBlocks", () => {
       }),
     ]);
 
-    expect(blocks.map((block) => block.type)).toEqual(["group", "group"]);
-    expect(blocks.some((block) => block.type === "activity")).toBe(false);
+    expect(blocks.map((block) => block.type)).toEqual(["activity"]);
+    const activity = activityBlock(blocks);
+    expect(activity.isComplete).toBe(false);
+    expect(activity.groups.map((group) => group.primaryType)).toEqual([
+      "reasoning",
+      "tool",
+    ]);
   });
 
   it("collapses completed turn activity before the final answer", () => {
@@ -209,12 +219,152 @@ describe("buildMessageRenderBlocks", () => {
     ]);
 
     expect(blocks.map((block) => block.type)).toEqual(["activity", "group"]);
+    expect(activityBlock(blocks).isComplete).toBe(true);
     expect(activityBlock(blocks).summary).toEqual({
       thoughtCount: 1,
       toolCount: 1,
+      agentCount: 0,
       observationCount: 1,
     });
     expect(blocks[1].type === "group" ? blocks[1].group.primaryType : "").toBe("message");
+  });
+
+  it("keeps an agent-run handoff inside the ordered completed-turn activity", () => {
+    const blocks = buildBlocks([
+      makeMessage("reasoning", "reasoning_delta", {
+        ind: 0,
+        sequence: 10,
+      }),
+      makeMessage("reasoning-end", "reasoning_section_end", {
+        ind: 0,
+        sequence: 11,
+      }),
+      makeMessage("pathfinder", "tool_start", {
+        ind: 1,
+        sequence: 12,
+        subtype: "agent_run_lifecycle",
+        agent_run_id: "pathfinder-run-1",
+        transcript_activity_kind: "agent-run",
+        transcript_activity_id: "pathfinder-run-1",
+      }),
+      makeMessage("final", "message_delta", {
+        ind: 2,
+        sequence: 20,
+        final_snapshot: true,
+      }),
+    ]);
+
+    expect(blocks.map((block) => block.type)).toEqual(["activity", "group"]);
+    const activity = activityBlock(blocks);
+    expect(activity.groups.map((group) => group.messages[0]?.id)).toEqual([
+      "reasoning",
+      "pathfinder",
+    ]);
+    expect(activity.summary).toEqual({
+      thoughtCount: 1,
+      toolCount: 0,
+      agentCount: 1,
+      observationCount: 0,
+    });
+  });
+
+  it("preserves distinct subagent events between the reasoning steps that launched them", () => {
+    const blocks = buildBlocks([
+      makeMessage("reasoning-1", "reasoning_delta", {
+        ind: 0,
+        sequence: 10,
+        sub_turn_index: 0,
+      }),
+      makeMessage("reasoning-1-end", "reasoning_section_end", {
+        ind: 0,
+        sequence: 11,
+        sub_turn_index: 0,
+      }),
+      makeMessage("researcher", "tool_start", {
+        ind: 1,
+        sequence: 12,
+        subtype: "agent_run_lifecycle",
+        agent_run_id: "research-run-1",
+        transcript_activity_kind: "agent-run",
+        transcript_activity_id: "research-run-1",
+        agent_id: "pathfinder",
+        agent_kind: "research",
+        agent_display_name: "Researcher",
+      }),
+      makeMessage("reasoning-2", "reasoning_delta", {
+        ind: 0,
+        sequence: 13,
+        sub_turn_index: 1,
+      }),
+      makeMessage("reasoning-2-end", "reasoning_section_end", {
+        ind: 0,
+        sequence: 14,
+        sub_turn_index: 1,
+      }),
+      makeMessage("reviewer", "tool_start", {
+        ind: 1,
+        sequence: 15,
+        subtype: "agent_run_lifecycle",
+        agent_run_id: "review-run-1",
+        transcript_activity_kind: "agent-run",
+        transcript_activity_id: "review-run-1",
+        agent_id: "pathfinder",
+        agent_kind: "review",
+        agent_display_name: "Reviewer",
+      }),
+      makeMessage("observation", "observation_delta", {
+        ind: 1,
+        sequence: 16,
+        id: "observation-1",
+      }),
+      makeMessage("final", "message_delta", {
+        ind: 2,
+        sequence: 20,
+        final_snapshot: true,
+      }),
+    ]);
+
+    expect(blocks.map((block) => block.type)).toEqual(["activity", "group"]);
+    expect(
+      activityBlock(blocks).groups.map((group) => group.messages[0]?.id),
+    ).toEqual([
+      "reasoning-1",
+      "researcher",
+      "reasoning-2",
+      "reviewer",
+      "observation",
+    ]);
+    expect(activityBlock(blocks).summary.agentCount).toBe(2);
+  });
+
+  it("counts each distinct generic subagent run in the completed-turn summary", () => {
+    const agentKinds = ["research", "review", "explore", "execute", "verify"];
+    const blocks = buildBlocks([
+      makeMessage("reasoning", "reasoning_delta", {
+        ind: 0,
+        sequence: 10,
+      }),
+      ...agentKinds.map((agentKind, index) =>
+        makeMessage(`agent-${index + 1}`, "tool_start", {
+          ind: 1,
+          sequence: 11 + index,
+          subtype: "agent_run_lifecycle",
+          agent_run_id: `${agentKind}-run-${index + 1}`,
+          transcript_activity_kind: "agent-run",
+          transcript_activity_id: `${agentKind}-run-${index + 1}`,
+          agent_id: "pathfinder",
+          agent_kind: agentKind,
+          agent_display_name: `Agent ${index + 1}`,
+        }),
+      ),
+      makeMessage("final", "message_delta", {
+        ind: 2,
+        sequence: 20,
+        final_snapshot: true,
+      }),
+    ]);
+
+    expect(activityBlock(blocks).summary.agentCount).toBe(5);
   });
 
   it("collapses history-replayed assistant turns", () => {
@@ -281,6 +431,8 @@ describe("buildMessageRenderBlocks", () => {
       }),
     ]);
 
-    expect(blocks.map((block) => block.type)).toEqual(["group", "group"]);
+    expect(blocks.map((block) => block.type)).toEqual(["activity", "group"]);
+    if (blocks[0].type !== "activity") throw new Error("Expected live activity");
+    expect(blocks[0].isComplete).toBe(false);
   });
 });

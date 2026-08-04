@@ -38,17 +38,17 @@ from agent.graph.context.projections import (
     ROLE_CATEGORY_SELECTOR,
     ROLE_INTENT_CLASSIFIER,
     ROLE_PLANNER,
-    SECTION_EVIDENCE_REFS,
-    SECTION_REFERENCED_PRIOR_TURNS,
-    SECTION_RECENT_TRANSCRIPT,
-    SECTION_RUNTIME_STATE,
     project_for_articulation,
     project_for_category_selector,
     project_for_intent_classifier,
     project_for_planner,
-    serialize_projection_to_prompt_sections,
 )
 from agent.graph.context.serialization import (
+    SECTION_EVIDENCE_REFS,
+    SECTION_REFERENCED_PRIOR_TURNS,
+    SECTION_RECENT_TRANSCRIPT,
+    SECTION_RUNTIME_STATE,
+    serialize_projection_to_prompt_sections,
     serialize_projection_to_section_map,
 )
 

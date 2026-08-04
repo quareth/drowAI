@@ -26,6 +26,7 @@ from .llm_analysis import (
     analyze_tool_result,
     analyze_tool_result_with_retry,
     build_analysis_context,
+    sanitize_post_tool_decision_payload,
 )
 from .observation import (
     MAX_OBSERVATION_TOKENS,
@@ -55,6 +56,7 @@ __all__ = [
     "analyze_tool_result",
     "analyze_tool_result_with_retry",
     "build_analysis_context",
+    "sanitize_post_tool_decision_payload",
     # Observation generation
     "MAX_OBSERVATION_TOKENS",
     "_make_fallback_observation",

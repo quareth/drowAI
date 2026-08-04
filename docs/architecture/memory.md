@@ -365,6 +365,30 @@ Properties:
 This ledger lives in working memory rather than `TraceState.observations`, so
 existing prose-observation consumers remain unchanged.
 
+## Subagent Child Memory And Parent Handoff
+
+Declarative subagent child graphs reuse the same canonical memory surfaces
+rather than storing a child-specific transcript. Child initialization seeds
+`facts.metadata["working_memory"]` through `MemoryManager.reduce_turn_start`
+with task, conversation, parent-turn, child `graph_thread_id`, `agent_run_id`,
+assignment objective, targets, scope constraints, and subagent routing state.
+Tool iterations then update the child-private `tool_runs`,
+`available_findings`, artifact collections, and `current_turn_phases` ledger
+through the shared tool-result reducers and phase-memory helpers.
+
+The child prompt receives the existing bounded
+`context_bundle.runtime_state` projection plus the latest compact tool result
+and rendered current-turn phase memory. The prompt intentionally omits raw
+phase-ledger internals and duplicate tool-run history; prior tool context
+appears once through the rendered phase-memory section and latest compact
+envelope.
+
+Parent turns do not receive child working memory, phase records, raw tool
+output, checkpoint state, or full child graph state. Completion derives a safe
+`AgentResult`, then the parent context bundle receives only the bounded
+`completed_agent_results` projection with summary, findings, evidence refs,
+tools, limitations, recommended next steps, and optional final checkpoint id.
+
 ## Checkpoint And Resume Memory
 
 LangGraph performs checkpoint writes while executing graphs compiled with the

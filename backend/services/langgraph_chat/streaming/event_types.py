@@ -85,6 +85,15 @@ class StreamEventMetadata(TypedDict, total=False):
     failure_category: str
     alternative_tool: str
     reasoning: str
+    # Subagent attribution fields
+    producer_type: str
+    agent_run_id: str
+    agent_kind: str
+    agent_display_name: str
+    parent_turn_id: str
+    parent_run_id: str
+    internal_only: bool
+    lifecycle_version: int
 
 
 class StreamEvent(TypedDict, total=False):

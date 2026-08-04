@@ -15,6 +15,9 @@ from agent.execution_strategy import ExecutionStrategy
 from agent.graph.subgraphs.tool_execution_runtime.batch_runner import (
     write_compact_batch_metadata,
 )
+from agent.graph.subgraphs.tool_execution_runtime.batch_result_application import (
+    _enqueue_completed_execution_ingestions,
+)
 from agent.graph.subgraphs.tool_execution_runtime.approval_and_idempotency import (
     apply_cached_dispatch_result,
     store_dispatch_cache_result,
@@ -48,6 +51,57 @@ class _Facts:
 class _Outcome:
     result: Mapping[str, Any]
     duration: float
+
+
+def test_completed_batch_enqueues_each_persisted_execution_and_isolates_failures() -> None:
+    """Every persisted call should enqueue independently from sibling failures."""
+    facts = _Facts(metadata={}, task_id=42)
+    batch = ToolBatch(
+        tool_batch_id="tb-ingestion",
+        tool_calls=(
+            ToolCall("tc-1", "nmap", {"target": "127.0.0.1"}),
+            ToolCall("tc-2", "curl", {"url": "https://example.test"}),
+            ToolCall("tc-3", "shell.exec", {"command": "true"}),
+        ),
+        requested_execution_strategy=ExecutionStrategy.SEQUENTIAL,
+    )
+    attempts: list[dict[str, Any]] = []
+    metrics: list[str] = []
+
+    def _enqueue(**kwargs: Any) -> None:
+        attempts.append(kwargs)
+        if kwargs["execution_id"] == "execution-1":
+            raise RuntimeError("first enqueue failed")
+
+    _enqueue_completed_execution_ingestions(
+        facts=facts,
+        batch=batch,
+        execution_id_by_call_id={
+            "tc-1": "execution-1",
+            "tc-2": "execution-2",
+            "tc-3": None,
+        },
+        compact_by_call_id={
+            "tc-1": {"summary": "fallback"},
+            "tc-2": {"summary": "curl complete"},
+        },
+        deterministic_compact_by_call_id={
+            "tc-1": {"summary": "nmap complete"},
+        },
+        deps={
+            "_enqueue_execution_ingestion": _enqueue,
+            "logger": SimpleNamespace(warning=lambda *_args, **_kwargs: None),
+            "safe_inc": metrics.append,
+        },
+    )
+
+    assert [attempt["execution_id"] for attempt in attempts] == [
+        "execution-1",
+        "execution-2",
+    ]
+    assert attempts[0]["compact_output"]["summary"] == "nmap complete"
+    assert attempts[1]["compact_output"]["summary"] == "curl complete"
+    assert metrics == ["knowledge_ingestion_enqueue_failures"]
 
 
 def test_append_tool_execution_record_persists_route_and_runtime_identity_fields() -> None:

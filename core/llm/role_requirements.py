@@ -75,11 +75,11 @@ ROLE_REQUIREMENTS: dict[str, RoleRequirements] = {
     ROLE_POST_TOOL_OBSERVATION: RoleRequirements(
         required_capabilities=(
             "chat",
+            "tools",
             "streaming",
             "streaming_usage_reporting",
             "usage_reporting",
-        ),
-        structured_output_required=True,
+        )
     ),
     ROLE_INTENT_CLASSIFIER: RoleRequirements(
         required_capabilities=("chat", "usage_reporting"),

@@ -3,8 +3,12 @@
  */
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 
+import {
+  type AppNavigate,
+  navigateToAccountPage,
+} from "@/navigation/account-page-history";
 import ProfilePage from "@/pages/profile-page";
 
 vi.mock("@/components/layout/navbar", () => ({
@@ -65,9 +69,17 @@ vi.mock("@/hooks/use-user-timezone", () => ({
   useUserTimezone: () => "UTC",
 }));
 
+const browserNavigate: AppNavigate = (target, options) => {
+  window.history[options?.replace ? "replaceState" : "pushState"](
+    options?.state ?? null,
+    "",
+    target,
+  );
+};
+
 describe("ProfilePage", () => {
   beforeEach(() => {
-    window.history.pushState({}, "", "/profile");
+    window.history.replaceState(null, "", "/profile");
   });
 
   afterEach(() => {
@@ -96,5 +108,31 @@ describe("ProfilePage", () => {
     expect(screen.getByRole("tab", { name: /access/i }).getAttribute("data-state")).toBe("active");
     expect(window.location.pathname).toBe("/profile");
     expect(window.location.search).toBe("?tab=access");
+  });
+
+  it("returns to the exact in-app origin after switching Profile tabs", async () => {
+    window.history.replaceState(null, "", "/reports?tab=library&engagement_id=7");
+    navigateToAccountPage(browserNavigate, "/profile", "/reports");
+    render(<ProfilePage />);
+
+    fireEvent.mouseDown(screen.getByRole("tab", { name: /access/i }));
+    expect(window.location.pathname).toBe("/profile");
+    expect(window.location.search).toBe("?tab=access");
+
+    fireEvent.click(screen.getByRole("button", { name: "Go back" }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe("/reports");
+      expect(window.location.search).toBe("?tab=library&engagement_id=7");
+    });
+  });
+
+  it("uses the app dashboard fallback for direct Profile entry", () => {
+    render(<ProfilePage />);
+
+    fireEvent.click(screen.getByRole("button", { name: "Go back" }));
+
+    expect(window.location.pathname).toBe("/");
+    expect(window.location.search).toBe("");
   });
 });

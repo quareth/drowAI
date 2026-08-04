@@ -25,6 +25,16 @@ class StructuredOutputSchemaError(ValueError):
         self.reason = reason
 
 
+_UNSUPPORTED_STRICT_SCHEMA_KEYWORDS = frozenset(
+    {
+        "allOf",
+        "if",
+        "then",
+        "else",
+    }
+)
+
+
 def build_responses_text_format(spec: StructuredOutputSpec) -> Dict[str, Any]:
     """Build Responses API ``text.format`` payload for json_schema mode."""
     return {
@@ -134,9 +144,39 @@ def _collect_required_coverage_errors(schema: Dict[str, Any], path: str = "$") -
     return errors
 
 
+def _collect_unsupported_keyword_errors(
+    value: Any,
+    path: str = "$",
+) -> list[str]:
+    """Return OpenAI strict-mode keywords unsupported by native schemas."""
+    errors: list[str] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = f"{path}.{key}"
+            if key in _UNSUPPORTED_STRICT_SCHEMA_KEYWORDS:
+                errors.append(f"{child_path}: unsupported schema keyword '{key}'")
+            errors.extend(_collect_unsupported_keyword_errors(child, child_path))
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            errors.extend(
+                _collect_unsupported_keyword_errors(child, f"{path}[{index}]")
+            )
+    return errors
+
+
 def validate_openai_strict_schema(spec: StructuredOutputSpec) -> None:
     """Validate schema compatibility for OpenAI strict JSON schema mode."""
     schema = spec.schema if isinstance(spec.schema, dict) else {}
+    unsupported_errors = _collect_unsupported_keyword_errors(
+        schema,
+        path=spec.name,
+    )
+    if unsupported_errors:
+        preview = "; ".join(unsupported_errors[:3])
+        raise StructuredOutputSchemaError(
+            f"Invalid strict schema for '{spec.name}': {preview}",
+            reason="unsupported_schema_keyword",
+        )
     errors = _collect_required_coverage_errors(schema, path=spec.name)
     if errors:
         preview = "; ".join(errors[:3])

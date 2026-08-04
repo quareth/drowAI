@@ -6,8 +6,10 @@ import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Navbar } from "@/components/layout/navbar";
+import { hasInAppAccountPageOrigin } from "@/navigation/account-page-history";
 
 const mocked = vi.hoisted(() => ({
+  location: "/profile",
   setLocation: vi.fn(),
   logout: vi.fn(),
   tenantContext: {
@@ -24,7 +26,7 @@ const mocked = vi.hoisted(() => ({
 }));
 
 vi.mock("wouter", () => ({
-  useLocation: () => ["/profile", mocked.setLocation],
+  useLocation: () => [mocked.location, mocked.setLocation],
 }));
 
 vi.mock("@/hooks/use-auth", () => ({
@@ -55,6 +57,7 @@ describe("<Navbar />", () => {
     cleanup();
     mocked.setLocation.mockReset();
     mocked.logout.mockReset();
+    mocked.location = "/profile";
     mocked.tenantContext.activeTenant = null;
     mocked.tenantContext.isMultiTenant = false;
     mocked.tenantContext.isSwitchingTenant = false;
@@ -62,13 +65,46 @@ describe("<Navbar />", () => {
     mocked.tenantContext.switchTenant.mockReset();
   });
 
-  it("keeps Settings accessible from the account menu", () => {
+  it.each([
+    "/?workspace=files",
+    "/knowledge?tab=assets",
+    "/reports?tab=library&engagement_id=7",
+    "/usage",
+    "/profile?tab=security",
+  ])("marks Settings navigation from %s as having an in-app origin", (origin) => {
+    mocked.location = origin;
     render(<Navbar />);
 
     fireEvent.pointerDown(screen.getByRole("button", { name: /alice/i }));
     fireEvent.click(screen.getByRole("menuitem", { name: /settings/i }));
 
-    expect(mocked.setLocation).toHaveBeenCalledWith("/settings");
+    expect(mocked.setLocation).toHaveBeenCalledWith(
+      "/settings",
+      expect.objectContaining({ replace: false }),
+    );
+    const options = mocked.setLocation.mock.calls[0]?.[1] as { state?: unknown };
+    expect(hasInAppAccountPageOrigin(options.state)).toBe(true);
+  });
+
+  it.each([
+    "/?workspace=files",
+    "/knowledge?tab=assets",
+    "/reports?tab=library&engagement_id=7",
+    "/usage",
+    "/settings?section=display",
+  ])("marks Profile navigation from %s as having an in-app origin", (origin) => {
+    mocked.location = origin;
+    render(<Navbar />);
+
+    fireEvent.pointerDown(screen.getByRole("button", { name: /alice/i }));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^profile$/i }));
+
+    expect(mocked.setLocation).toHaveBeenCalledWith(
+      "/profile",
+      expect.objectContaining({ replace: false }),
+    );
+    const options = mocked.setLocation.mock.calls[0]?.[1] as { state?: unknown };
+    expect(hasInAppAccountPageOrigin(options.state)).toBe(true);
   });
 
   it("gives the tenant selector an accessible name", () => {

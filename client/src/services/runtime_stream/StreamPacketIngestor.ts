@@ -10,6 +10,10 @@
 import type { StreamEvent } from "@/types/packets";
 import { isStreamPacket, type StreamPacket } from "@/types/packets";
 import { advanceStreamSequence, applyStreamMessage } from "@/state/chat-stream-store";
+import { applyAgentRunActivityPayload } from "@/features/agent-runs/state/agent-stream-store";
+import {
+  readAgentRunActivityIdentity,
+} from "@/features/agent-runs/contracts/agent-run";
 
 import type { RuntimeAgentReasoningEnvelope } from "./types";
 
@@ -97,6 +101,10 @@ export class StreamPacketIngestor {
     const normalized = normalizeEnvelopePayload(taskId, sequence, envelope.packet);
     if (!normalized) {
       return false;
+    }
+    const isChildAgentRunPacket = readAgentRunActivityIdentity(taskId, normalized) !== null;
+    if (isChildAgentRunPacket) {
+      applyAgentRunActivityPayload(taskId, normalized, sequence ?? undefined);
     }
     if (!isTranscriptEligible(normalized)) {
       return true;

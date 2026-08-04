@@ -63,6 +63,15 @@ def build_tool_execution_metadata(
 
     selected = list(selected_tools or [])
     parameters = dict(tool_parameters or {})
+    tool_calls = [
+        {
+            "tool_call_id": f"test-turn-{turn_sequence}-call-{index}",
+            "tool_id": tool_id,
+            "parameters": dict(parameters.get(tool_id) or {}),
+            "intent": "",
+        }
+        for index, tool_id in enumerate(selected, start=1)
+    ]
     metadata = {
         "api_key": api_key,
         "model": model,
@@ -78,6 +87,13 @@ def build_tool_execution_metadata(
             "execution_strategy": "single",
             "reasoning": "",
             "expected_outcome": "",
+            "tool_batch": {
+                "tool_batch_id": f"test-turn-{turn_sequence}-batch",
+                "tool_calls": tool_calls,
+                "requested_execution_strategy": "sequential",
+                "deferred_followups": [],
+                "selection_rationale": "",
+            },
         },
     }
     if extra:

@@ -28,7 +28,7 @@ A walkthrough of the DrowAI web interface for end users: how to get into the app
 Open the app — any URL other than the login route redirects to `/login` until you authenticate.
 
 1. Enter your username and password.
-   - **Default credentials:** username `bot`, password `bot123456`. Change them after the first login from **Profile → Password Change**.
+   - **Default credentials:** username `admin`, password `Qwer!234`. Change them after the first login from **Profile → Password Change**.
 2. Click **Login**.
 3. After a successful login, the **Outpost** (home) page loads.
 

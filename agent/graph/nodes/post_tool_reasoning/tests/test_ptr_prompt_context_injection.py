@@ -30,6 +30,7 @@ inclusion/omission is covered by
 
 from __future__ import annotations
 
+import json
 from typing import Any, Dict
 
 import pytest
@@ -52,6 +53,7 @@ from agent.graph.utils.iteration_memory import (
     get_current_turn_scope,
     get_ledger,
 )
+from agent.providers.llm.core.base import ToolCall, ToolCallResult
 
 
 # ---------------------------------------------------------------------------
@@ -358,22 +360,43 @@ class TestPromptReceivesContext:
 
         captured: Dict[str, str] = {}
 
-        async def fake_analyze_tool_result(**kwargs: Any) -> PostToolReasoningDecisionOutput:
-            captured["decision_prompt"] = kwargs["user_prompt"]
-            return PostToolReasoningDecisionOutput(
-                next_action="finalize",
-                action_reasoning="The current tool output is enough to answer.",
-                user_goal_achieved=True,
-            )
+        class _PromptCaptureLLM:
+            async def chat_with_tools_with_usage(
+                self,
+                _system_prompt: str,
+                user_prompt: str,
+                *_args: Any,
+                **_kwargs: Any,
+            ) -> Any:
+                captured["decision_prompt"] = user_prompt
+                decision = PostToolReasoningDecisionOutput(
+                    next_action="finalize",
+                    action_reasoning="The current tool output is enough to answer.",
+                    user_goal_achieved=True,
+                )
+                return ToolCallResult(
+                    content="Observed enough evidence to finalize.",
+                    tool_calls=[
+                        ToolCall(
+                            id="ptr-commit-1",
+                            name="ptr_commit",
+                            arguments=json.dumps(
+                                decision.model_dump(mode="json", exclude_none=True)
+                            ),
+                        )
+                    ],
+                    raw={},
+                    usage=None,
+                    outcome=None,
+                )
 
-        async def fake_generate_observation_text(*_args: Any, **_kwargs: Any) -> str:
-            return "Observed enough evidence to finalize."
-
-        monkeypatch.setattr(node, "resolve_llm_client", lambda *_args, **_kwargs: object())
+        monkeypatch.setattr(
+            node,
+            "resolve_llm_client",
+            lambda *_args, **_kwargs: _PromptCaptureLLM(),
+        )
         monkeypatch.setattr(node, "resolve_llm_call_settings", lambda *_args, **_kwargs: {})
         monkeypatch.setattr(node, "get_llm_reasoning_effort", lambda *_args, **_kwargs: None)
-        monkeypatch.setattr(node, "analyze_tool_result", fake_analyze_tool_result)
-        monkeypatch.setattr(node, "_generate_observation_text", fake_generate_observation_text)
 
         await node.post_tool_reasoning(state, context=None, config=None, writer=None)
 

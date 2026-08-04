@@ -127,7 +127,16 @@ MAX_REASONING_TOKENS = 800
 # Validation
 # -----------------------------------------------------------------------------
 
-VALID_POST_TOOL_ACTIONS = frozenset({"call_tool", "think_more", "reflect", "finalize"})
+VALID_POST_TOOL_ACTIONS = frozenset(
+    {
+        "call_tool",
+        "think_more",
+        "reflect",
+        "finalize",
+        "delegate_subagent",
+        "wait_for_subagents",
+    }
+)
 VALID_TODO_STATUSES = frozenset({"pending", "in_progress", "completed", "skipped"})
 
 

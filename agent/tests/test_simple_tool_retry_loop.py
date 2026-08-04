@@ -131,11 +131,11 @@ def test_simple_tool_graph_has_no_retry_nodes():
 def test_simple_tool_graph_registers_expected_nodes():
     """Simple-tool graph must register all nodes in the post-refactor flow.
 
-    Reflects the architecture established by ``e0a42b04`` (2026-04-26):
+    Reflects the post-action-routing architecture:
     classification -> update_working_memory -> memory_retrieval ->
     select_tool_categories -> prepare_tool_plan -> articulation? ->
     approval_gate -> dispatch_tool -> tool_synthesizer ->
-    post_tool_reasoning -> format_results -> finalize.
+    post_tool_reasoning -> decision_router -> shared continuation nodes.
     """
     nodes = _build_uncompiled_graph_nodes()
     expected = {
@@ -149,6 +149,10 @@ def test_simple_tool_graph_registers_expected_nodes():
         "dispatch_tool",
         "tool_synthesizer",
         "post_tool_reasoning",
+        "decision_router",
+        "think_more",
+        "reflect",
+        "synthesis",
         "format_results",
         "finalize",
     }

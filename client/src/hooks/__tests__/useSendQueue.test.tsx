@@ -1,3 +1,6 @@
+/**
+ * Verifies queued prompts advance once per completed stream lifecycle.
+ */
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +19,26 @@ vi.mock("@/lib/api-config", () => ({
 vi.mock("@/hooks/useStreamingState", () => ({
   useStreamingState: () => mocked.streamingState,
 }));
+
+function emitStreamingState(taskId: number, isStreaming: boolean) {
+  act(() => {
+    window.dispatchEvent(
+      new CustomEvent("llm-streaming", {
+        detail: { taskId, isStreaming },
+      }),
+    );
+  });
+}
+
+function emitCompletedRun(taskId: number) {
+  act(() => {
+    window.dispatchEvent(
+      new CustomEvent("task-run-state", {
+        detail: { taskId, state: "completed" },
+      }),
+    );
+  });
+}
 
 describe("useSendQueue stream-status behavior", () => {
   beforeEach(() => {
@@ -52,16 +75,7 @@ describe("useSendQueue stream-status behavior", () => {
     mocked.streamingState.isStreaming = true;
     rerender();
 
-    act(() => {
-      window.dispatchEvent(
-        new CustomEvent("llm-streaming", {
-          detail: {
-            taskId: 91,
-            isStreaming: true,
-          },
-        }),
-      );
-    });
+    emitStreamingState(91, true);
     await act(async () => {
       await Promise.resolve();
     });
@@ -93,16 +107,7 @@ describe("useSendQueue stream-status behavior", () => {
     mocked.streamingState.isStreaming = true;
     rerender();
 
-    act(() => {
-      window.dispatchEvent(
-        new CustomEvent("llm-streaming", {
-          detail: {
-            taskId: 92,
-            isStreaming: true,
-          },
-        }),
-      );
-    });
+    emitStreamingState(92, true);
 
     await act(async () => {
       await result.current.onUserSend("queued via run state");
@@ -110,22 +115,121 @@ describe("useSendQueue stream-status behavior", () => {
     expect(result.current.count).toBe(1);
     mocked.streamingState.isStreaming = false;
     rerender();
-
-    act(() => {
-      window.dispatchEvent(
-        new CustomEvent("task-run-state", {
-          detail: {
-            taskId: 92,
-            state: "completed",
-          },
-        }),
-      );
-    });
+    emitCompletedRun(92);
 
     await act(async () => {
       await vi.advanceTimersByTimeAsync(2500);
     });
     expect(sendQueued).toHaveBeenCalledTimes(1);
   });
-});
 
+  it("releases only one item when a completed run emits both lifecycle signals", async () => {
+    const sendImmediate = vi.fn(async () => {});
+    const sendQueued = vi.fn(async () => {});
+
+    const { result, rerender } = renderHook(() =>
+      useSendQueue({
+        taskId: 93,
+        conversationId: "conv-3",
+        messages: [],
+        sendImmediate,
+        sendQueued,
+      }),
+    );
+    mocked.streamingState.isStreaming = true;
+    rerender();
+
+    emitStreamingState(93, true);
+
+    await act(async () => {
+      await result.current.onUserSend("first queued message");
+      await result.current.onUserSend("second queued message");
+      await result.current.onUserSend("third queued message");
+    });
+    expect(result.current.count).toBe(3);
+
+    mocked.streamingState.isStreaming = false;
+    rerender();
+    emitCompletedRun(93);
+    emitStreamingState(93, false);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(550);
+    });
+    expect(sendQueued).toHaveBeenCalledTimes(1);
+
+    mocked.streamingState.isStreaming = true;
+    rerender();
+    emitStreamingState(93, true);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(250);
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(550);
+    });
+    expect(sendQueued).toHaveBeenCalledTimes(1);
+    expect(result.current.count).toBe(2);
+
+    mocked.streamingState.isStreaming = false;
+    rerender();
+    emitCompletedRun(93);
+    emitStreamingState(93, false);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(550);
+    });
+    expect(sendQueued).toHaveBeenCalledTimes(2);
+    expect(sendQueued).toHaveBeenNthCalledWith(2, "second queued message");
+    expect(result.current.count).toBe(1);
+  });
+
+  it("keeps an item queued when streaming resumes during the dispatch delay", async () => {
+    const sendImmediate = vi.fn(async () => {});
+    const sendQueued = vi.fn(async () => {});
+
+    const { result, rerender } = renderHook(() =>
+      useSendQueue({
+        taskId: 94,
+        conversationId: "conv-4",
+        messages: [],
+        sendImmediate,
+        sendQueued,
+      }),
+    );
+    mocked.streamingState.isStreaming = true;
+    rerender();
+
+    emitStreamingState(94, true);
+    await act(async () => {
+      await result.current.onUserSend("wait for the active run");
+    });
+
+    mocked.streamingState.isStreaming = false;
+    rerender();
+    emitCompletedRun(94);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(250);
+    });
+
+    mocked.streamingState.isStreaming = true;
+    rerender();
+    emitStreamingState(94, true);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(500);
+    });
+
+    expect(sendQueued).not.toHaveBeenCalled();
+    expect(result.current.count).toBe(1);
+
+    mocked.streamingState.isStreaming = false;
+    rerender();
+    emitCompletedRun(94);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(550);
+    });
+
+    expect(sendQueued).toHaveBeenCalledOnce();
+    expect(result.current.count).toBe(0);
+  });
+});

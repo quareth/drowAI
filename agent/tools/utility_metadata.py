@@ -21,7 +21,7 @@ from .enhanced_metadata_registry import (
 # ---------------------------------------------------------------------------
 for tool_id, display_name, capability_name, capability_desc in [
     ("filesystem.read_file", "Kali Runtime Read File", "read_file",
-     "Read a file inside the active Kali runtime without modifying it; relative paths resolve from /workspace and absolute paths are allowed."),
+     "Read a workspace file without modifying it; supports bounded full, head, tail, range, grep, byte, and line-numbered modes."),
     ("filesystem.write_file", "Kali Runtime Write File", "write_file",
      "Create or replace an entire file inside the active Kali runtime; relative paths resolve from /workspace and absolute paths are allowed."),
     ("filesystem.append_file", "Kali Runtime Append File", "append_file",

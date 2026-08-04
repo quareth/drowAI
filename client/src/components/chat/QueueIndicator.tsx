@@ -1,6 +1,10 @@
+/**
+ * Queued-message indicator and viewport-aware controls for pending chat sends.
+ */
 import { useCallback, useMemo, useState } from "react";
 import { ListTodo, Pencil, Trash2, X } from "lucide-react";
 
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
 import type { SendQueueApi } from "@/hooks/useSendQueue";
 
@@ -58,27 +62,32 @@ export function QueueIndicator({ queue, className, maxPreviewChars = 80 }: Queue
   if (count === 0) return null;
 
   return (
-    <div className={cn("relative", className)}>
-      <button
-        type="button"
-        className={cn(
-          "inline-flex items-center gap-2 rounded-full border border-indigo-400/60 bg-indigo-500/20 px-3 py-1 text-xs font-medium text-indigo-100",
-          "shadow-sm backdrop-blur hover:border-indigo-300 hover:bg-indigo-500/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-        )}
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-      >
-        <ListTodo className="h-4 w-4" aria-hidden="true" />
-        {headerLabel}
-      </button>
+    <div className={className}>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            className={cn(
+              "inline-flex items-center gap-2 rounded-full border border-indigo-400/60 bg-indigo-500/20 px-3 py-1 text-xs font-medium text-indigo-100",
+              "shadow-sm backdrop-blur hover:border-indigo-300 hover:bg-indigo-500/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+            )}
+          >
+            <ListTodo className="h-4 w-4" aria-hidden="true" />
+            {headerLabel}
+          </button>
+        </PopoverTrigger>
 
-      {open && (
-        <div
+        <PopoverContent
           role="dialog"
           aria-label="Queued"
+          side="top"
+          align="end"
+          sideOffset={8}
+          collisionPadding={8}
+          avoidCollisions
           className={cn(
-            "absolute right-0 z-20 mt-2 w-80 max-w-[85vw] rounded-lg border border-slate-800 bg-slate-900/95 p-2 text-slate-200 shadow-xl",
+            "flex max-h-[--radix-popover-content-available-height] w-80 max-w-[calc(100vw-1rem)] flex-col overflow-hidden",
+            "rounded-lg border-slate-800 bg-slate-900/95 p-2 text-slate-200 shadow-xl",
           )}
         >
           <div className="flex items-center justify-between px-2 py-1">
@@ -95,7 +104,10 @@ export function QueueIndicator({ queue, className, maxPreviewChars = 80 }: Queue
             </div>
           </div>
 
-          <ul className="max-h-72 space-y-2 overflow-y-auto p-1">
+          <ul
+            aria-label="Queued messages"
+            className="min-h-0 max-h-72 flex-1 space-y-2 overflow-y-auto overscroll-contain p-1"
+          >
             {items.map((item) => {
               const isEditing = editingId === item.id;
               return (
@@ -155,11 +167,10 @@ export function QueueIndicator({ queue, className, maxPreviewChars = 80 }: Queue
               );
             })}
           </ul>
-        </div>
-      )}
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }
 
 export default QueueIndicator;
-

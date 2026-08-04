@@ -30,6 +30,9 @@ from agent.graph.infrastructure.state_models import (
     GraphRuntimeContext,
     checkpoint_safe_llm_runtime_selection,
 )
+from agent.graph.utils.event_identity import (
+    POST_ACTION_STREAM_SEQUENCE_METADATA_KEY,
+)
 from backend.services.metrics.utils import safe_inc
 from backend.services.langgraph_chat.checkpoint.thread_identity import format_graph_thread_id
 
@@ -185,6 +188,7 @@ def build_metadata(
         "agent_mode",  # HITL: Pass agent mode to graph for approval checks
         "plan_mode",
         "plan_review_required",
+        POST_ACTION_STREAM_SEQUENCE_METADATA_KEY,
     ):
         if key in runtime_config.metadata:
             metadata[key] = runtime_config.metadata[key]

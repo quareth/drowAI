@@ -457,6 +457,7 @@ async def finalize_results(
         capability=capability,
     )
 
+    message_section_open = False
     try:
         llm_client = resolve_llm_client(
             metadata,
@@ -472,6 +473,7 @@ async def finalize_results(
 
         if writer and emitter:
             emitter.emit_message_start()
+            message_section_open = True
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -494,8 +496,21 @@ async def finalize_results(
 
         if writer and emitter:
             emitter.emit_section_end("final_answer")
+            message_section_open = False
 
     except Exception as exc:
+        if writer and emitter and message_section_open:
+            try:
+                emitter.emit_stream_error(
+                    "Final response stream failed.",
+                    recoverable=False,
+                )
+                emitter.emit_section_end("final_answer")
+            except Exception:
+                logger.debug(
+                    "Failed to close finalizer message section after error",
+                    exc_info=True,
+                )
         logger.error(
             "Unified finalizer (%s) failed: %s", capability, exc, exc_info=True
         )

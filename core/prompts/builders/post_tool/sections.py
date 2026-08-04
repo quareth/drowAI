@@ -9,6 +9,10 @@ from __future__ import annotations
 
 from typing import Any, List, Mapping, Optional, Sequence
 
+from agent.graph.context.serialization import (
+    render_active_agent_runs_section,
+    render_completed_agent_results_section,
+)
 from core.prompts.constants import POST_TOOL_MAX_DECISION_RATIONALE_CHARS
 
 from ._formatting import as_mapping, as_sequence, truncate
@@ -161,6 +165,58 @@ def format_environment_context(environment_context: str) -> str:
     return environment_context.strip()
 
 
+def format_handoff_batch_context(metadata: Mapping[str, Any]) -> str:
+    """Render bounded completed subagent results using the context serializer."""
+    return render_completed_agent_results_section(
+        {
+            "completed_agent_results": _context_sequence(
+                metadata,
+                "completed_agent_results",
+            )
+        }
+    )
+
+
+def format_active_handoff_runs_context(metadata: Mapping[str, Any]) -> str:
+    """Render bounded active subagent runs using the context serializer."""
+    return render_active_agent_runs_section(
+        {
+            "active_agent_runs": _context_sequence(
+                metadata,
+                "active_agent_runs",
+            )
+        }
+    )
+
+
+def _context_sequence(metadata: Mapping[str, Any], key: str) -> Any:
+    """Read handoff context from top-level metadata or its canonical bundle."""
+    direct = metadata.get(key)
+    if isinstance(direct, list):
+        return direct
+
+    bundle = metadata.get("context_bundle")
+    if isinstance(bundle, Mapping):
+        bundled = bundle.get(key)
+        if isinstance(bundled, list):
+            return bundled
+    return None
+
+
+def format_handoff_coordination_contract() -> str:
+    """Return PAR instructions that apply only to subagent handoff batches."""
+    return "\n".join(
+        [
+            "Evaluate the completed subagent handoff batch against the global user goal, current plan, and todos.",
+            "Do not merely summarize the child result. Decide whether it advances, blocks, contradicts, or leaves gaps in the parent-owned goal.",
+            "Relevant active assignments may still be running; choose `wait_for_subagents` when they should finish before new work or finalization.",
+            "If visible active assignments are no longer relevant to the parent goal, record their exact active `agent_run_id` values in `par_irrelevant_active_agent_run_ids`; otherwise use [].",
+            "Choose `delegate_subagent` only for a new bounded assignment and include the shared delegation entry: `agent_handoff: \"required\"`, `subagent`, and `objective`.",
+            "The `objective` must be a self-contained natural-language assignment brief; do not copy hidden reasoning, full child transcripts, or the parent todo list into it.",
+        ]
+    )
+
+
 def is_tool_visible(metadata: Mapping[str, Any], tool_id: str) -> bool:
     """Return true when tool catalog metadata advertises a tool id."""
     expected = str(tool_id or "").strip()
@@ -187,6 +243,9 @@ __all__ = [
     "format_active_decision_hint",
     "format_current_execution_context",
     "format_environment_context",
+    "format_active_handoff_runs_context",
+    "format_handoff_batch_context",
+    "format_handoff_coordination_contract",
     "format_intent_contract",
     "format_request_contract",
     "is_tool_visible",
