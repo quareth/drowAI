@@ -15,12 +15,15 @@ from agent.graph.infrastructure.state_models import checkpoint_safe_llm_runtime_
 from agent.subagents.registry import SubagentRegistry, get_subagent_registry
 from backend.config import E2E_DETERMINISTIC_MODE
 from backend.database import SessionLocal
+from backend.services.agent_runs.cancellation import AsyncCancellationProbe
 from backend.services.agent_runs.continuation import (
     SUBAGENT_PARENT_CONTINUATION_PENDING,
     SubagentContinuationContext,
     SubagentContinuationError,
     build_subagent_continuation_attribution,
+    cancel_subagent_continuation,
     complete_subagent_continuation,
+    is_subagent_continuation_cancel_requested,
     is_subagent_graph_name,
     pause_subagent_continuation,
     prepare_subagent_resume,
@@ -49,6 +52,10 @@ from backend.services.langgraph_chat.hitl_constants import (
     GRAPH_NAME_SIMPLE_TOOL,
 )
 from backend.services.langgraph_chat.execution.scenario_factory import get_scenario_graph
+from backend.services.langgraph_chat.execution.graph_executor import (
+    GraphExecutionCancelled,
+    GraphExecutionResult,
+)
 from backend.services.langgraph_chat.runtime.state_container import ChatStateContainer
 from backend.services.llm_provider.runtime_config_service import LLMRuntimeConfigService
 from backend.services.llm_provider.types import (
@@ -212,6 +219,7 @@ class CheckpointContinuationService:
             LangGraphChatResult from continued execution.
 
         Raises:
+            GraphExecutionCancelled: If the parent turn is cancelled.
             HITLError: If resume fails.
         """
         from langgraph.types import Command
@@ -262,6 +270,8 @@ class CheckpointContinuationService:
                 runtime_services=runtime_services,
                 subagent_continuation_context=subagent_context,
             )
+        except GraphExecutionCancelled:
+            raise
         except Exception as exc:
             if graph_name == GRAPH_NAME_PARENT_HANDOFF:
                 self._parent_handoff_continuation_broker.fail(
@@ -392,6 +402,7 @@ class CheckpointContinuationService:
             LangGraphChatResult from continued execution.
 
         Raises:
+            GraphExecutionCancelled: If the parent turn is cancelled.
             HITLError: If continuation cannot produce/parse final state.
         """
         from agent.graph import InteractiveState
@@ -406,34 +417,56 @@ class CheckpointContinuationService:
             if parent_session is not None
             else ChatStateContainer(reserved_message_id=reserved_message_id)
         )
-        (
-            execution_result,
-            llm_runtime_selection,
-            subagent_event_attribution,
-        ) = await self._execute_continuation(
-            task_id=task_id,
-            user_id=user_id,
-            graph_thread_id=graph_thread_id,
+        try:
+            (
+                execution_result,
+                llm_runtime_selection,
+                subagent_event_attribution,
+            ) = await self._execute_continuation(
+                task_id=task_id,
+                user_id=user_id,
+                graph_thread_id=graph_thread_id,
+                graph_name=graph_name,
+                graph_input=graph_input,
+                tenant_id=tenant_id,
+                runtime_placement_mode=runtime_placement_mode,
+                workspace_id=workspace_id,
+                actor_type=actor_type,
+                actor_id=actor_id,
+                runner_id=runner_id,
+                execution_site_id=execution_site_id,
+                checkpoint_id=checkpoint_id,
+                approval_received_at=approval_received_at,
+                resume_worker_start_at=resume_worker_start_at,
+                interrupt_id=interrupt_id,
+                should_cancel=should_cancel,
+                retry_context=retry_context,
+                llm_runtime_selection=llm_runtime_selection,
+                runtime_services=runtime_services,
+                state_container=state_container,
+                subagent_continuation_context=subagent_continuation_context,
+            )
+        except GraphExecutionCancelled as cancellation:
+            cancelled_result = await self._resolve_continuation_cancellation(
+                graph_name=graph_name,
+                execution_result=cancellation.execution_result,
+                subagent_context=subagent_continuation_context,
+                should_cancel=should_cancel,
+                reserved_message_id=reserved_message_id,
+                cancellation=cancellation,
+            )
+            assert cancelled_result is not None
+            return cancelled_result
+
+        cancelled_result = await self._resolve_continuation_cancellation(
             graph_name=graph_name,
-            graph_input=graph_input,
-            tenant_id=tenant_id,
-            runtime_placement_mode=runtime_placement_mode,
-            workspace_id=workspace_id,
-            actor_type=actor_type,
-            actor_id=actor_id,
-            runner_id=runner_id,
-            execution_site_id=execution_site_id,
-            checkpoint_id=checkpoint_id,
-            approval_received_at=approval_received_at,
-            resume_worker_start_at=resume_worker_start_at,
-            interrupt_id=interrupt_id,
+            execution_result=execution_result,
+            subagent_context=subagent_continuation_context,
             should_cancel=should_cancel,
-            retry_context=retry_context,
-            llm_runtime_selection=llm_runtime_selection,
-            runtime_services=runtime_services,
-            state_container=state_container,
-            subagent_continuation_context=subagent_continuation_context,
+            reserved_message_id=reserved_message_id,
         )
+        if cancelled_result is not None:
+            return cancelled_result
 
         if not execution_result.final_state:
             if execution_result.interrupted:
@@ -538,6 +571,88 @@ class CheckpointContinuationService:
             llm_runtime_selection=llm_runtime_selection,
             event_attribution=subagent_event_attribution,
             subagent_context=subagent_continuation_context,
+        )
+
+    async def _resolve_continuation_cancellation(
+        self,
+        *,
+        graph_name: str,
+        execution_result: GraphExecutionResult,
+        subagent_context: SubagentContinuationContext | None,
+        should_cancel: Optional[Callable[[], bool]],
+        reserved_message_id: Optional[int],
+        cancellation: GraphExecutionCancelled | None = None,
+    ) -> LangGraphChatResult | None:
+        """Settle child cancellation and preserve parent cancellation precedence."""
+        child_cancelled = (
+            await is_subagent_continuation_cancel_requested(
+                registry=self._require_agent_run_registry(),
+                context=subagent_context,
+            )
+            if subagent_context is not None
+            else False
+        )
+        parent_cancelled = bool(should_cancel and should_cancel())
+
+        if not child_cancelled and not parent_cancelled:
+            if cancellation is not None:
+                raise cancellation
+            return None
+
+        cancelled_result: LangGraphChatResult | None = None
+        if child_cancelled and subagent_context is not None:
+            completion = await cancel_subagent_continuation(
+                registry=self._require_agent_run_registry(),
+                subagent_registry=self._subagent_registry,
+                context=subagent_context,
+                final_state=execution_result.final_state,
+                lifecycle_publisher=self._require_agent_run_lifecycle_publisher(),
+            )
+            cancelled_result = self._build_cancelled_subagent_result(
+                graph_name=graph_name,
+                execution_result=execution_result,
+                subagent_context=subagent_context,
+                completion=completion,
+                reserved_message_id=reserved_message_id,
+            )
+
+        if parent_cancelled:
+            raise cancellation or GraphExecutionCancelled(execution_result)
+        return cancelled_result
+
+    def _build_cancelled_subagent_result(
+        self,
+        *,
+        graph_name: str,
+        execution_result: GraphExecutionResult,
+        subagent_context: SubagentContinuationContext,
+        completion: AgentRunCompletion,
+        reserved_message_id: Optional[int],
+    ) -> LangGraphChatResult:
+        """Return a cancelled-child handoff without finalizing the parent turn."""
+        turn_number = self._resolve_resume_turn_number(
+            reserved_message_id=reserved_message_id
+        )
+        turn_index = turn_number if isinstance(turn_number, int) else None
+        usage = usage_envelopes_from_child_records(
+            completion.usage_records,
+            execution_branch="subagent_child",
+            turn_index=turn_index,
+        )
+        metadata = {
+            SUBAGENT_PARENT_CONTINUATION_PENDING: True,
+            "graph_name": graph_name,
+            "status": "cancelled",
+            "cancel_requested": True,
+        }
+        if isinstance(execution_result.metadata, dict):
+            metadata.update(execution_result.metadata)
+        return LangGraphChatResult(
+            final_text=None,
+            conversation_id=subagent_context.entry.conversation_id,
+            metadata=metadata,
+            persistence_handled=True,
+            usage=usage or None,
         )
 
     async def _build_interrupted_continuation_result(
@@ -757,6 +872,19 @@ class CheckpointContinuationService:
         subagent_continuation_context: SubagentContinuationContext | None,
     ) -> tuple[Any, Optional[Mapping[str, Any]], dict[str, Any] | None]:
         """Compile and execute one checkpoint continuation with live dependencies."""
+        executor_should_cancel = should_cancel
+        if subagent_continuation_context is not None:
+            child_cancel_probe = AsyncCancellationProbe(
+                lambda: is_subagent_continuation_cancel_requested(
+                    registry=self._require_agent_run_registry(),
+                    context=subagent_continuation_context,
+                )
+            )
+
+            def combined_should_cancel() -> bool:
+                return bool(should_cancel and should_cancel()) or child_cancel_probe()
+
+            executor_should_cancel = combined_should_cancel
         attribution = build_subagent_continuation_attribution(
             subagent_continuation_context,
             subagent_registry=self._subagent_registry,
@@ -826,7 +954,7 @@ class CheckpointContinuationService:
                     config,
                     task_id,
                     state_container=state_container,
-                    should_cancel=should_cancel,
+                    should_cancel=executor_should_cancel,
                 )
                 return execution_result, llm_runtime_selection, attribution
             finally:

@@ -64,6 +64,14 @@ class GraphExecutionResult:
         return self.interrupt is not None
 
 
+class GraphExecutionCancelled(RuntimeError):
+    """Signal semantic graph cancellation with the latest captured execution state."""
+
+    def __init__(self, execution_result: GraphExecutionResult) -> None:
+        self.execution_result = execution_result
+        super().__init__("run_cancelled")
+
+
 class LangGraphExecutor:
     """Executes LangGraph graphs with streaming and batch support."""
 
@@ -105,6 +113,7 @@ class LangGraphExecutor:
             GraphExecutionResult with the final state and optional interrupt payload.
             
         Raises:
+            GraphExecutionCancelled: If the cancellation callback requests stop.
             Exception: If streaming fails (caller should handle fallback)
         """
         logger.info(f"[STREAMING] Starting stream for task {task_id}")
@@ -160,6 +169,8 @@ class LangGraphExecutor:
 
             last_state = None  # Track the latest complete state from values events
             detected_interrupt = None  # Track interrupt data if detected
+            if should_cancel and should_cancel():
+                raise GraphExecutionCancelled(GraphExecutionResult(final_state=None))
             
             # ⚠️ CRITICAL: With multiple stream_mode, events come as (mode, data) tuples!
             async for mode, chunk in compiled_graph.astream(
@@ -169,7 +180,19 @@ class LangGraphExecutor:
             ):
                 if should_cancel and should_cancel():
                     logger.info("[EXECUTOR] Cancellation requested for task %s", task_id)
-                    raise RuntimeError("run_cancelled")
+                    cancellation_state = (
+                        chunk
+                        if mode == "values" and isinstance(chunk, dict)
+                        else last_state
+                    )
+                    raise GraphExecutionCancelled(
+                        GraphExecutionResult(
+                            final_state=cancellation_state,
+                            metadata=self._build_context_window_metadata_payload(
+                                checkpoint_context_window_metadata
+                            ),
+                        )
+                    )
                 logger.info(f"[EXECUTOR] Stream event: mode={mode}, chunk_type={type(chunk).__name__}")
                 event_count += 1
                 
@@ -263,6 +286,9 @@ class LangGraphExecutor:
                 ),
             )
 
+        except GraphExecutionCancelled:
+            safe_inc("langgraph_streaming_sessions_cancelled")
+            raise
         except Exception as exc:
             logger.error(f"[STREAMING] Stream error for task {task_id}: {exc}", exc_info=True)
             safe_inc("langgraph_streaming_sessions_failed")

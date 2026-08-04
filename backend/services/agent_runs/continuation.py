@@ -21,7 +21,11 @@ from backend.services.langgraph_chat.checkpoint.thread_identity import (
     normalize_graph_thread_id,
 )
 
-from .completion import AgentRunCompletion, child_usage_records_from_state
+from .completion import (
+    AgentRunCompletion,
+    build_agent_run_completion,
+    child_usage_records_from_state,
+)
 from .execution_config import build_child_event_attribution
 from .event_projection import build_agent_run_lifecycle_event
 from .launcher import LifecyclePublisher
@@ -263,6 +267,69 @@ async def complete_subagent_continuation(
     )
 
 
+async def is_subagent_continuation_cancel_requested(
+    *,
+    registry: ProcessLocalAgentRunRegistry,
+    context: SubagentContinuationContext | None,
+) -> bool:
+    """Return the current run-scoped cancellation flag for a resumed child."""
+    if context is None:
+        return False
+    entry = await registry.get(
+        tenant_id=context.entry.tenant_id,
+        task_id=context.entry.task_id,
+        agent_run_id=context.entry.agent_run_id,
+    )
+    return bool(entry and entry.cancel_requested)
+
+
+async def cancel_subagent_continuation(
+    *,
+    registry: ProcessLocalAgentRunRegistry,
+    subagent_registry: SubagentRegistry,
+    context: SubagentContinuationContext,
+    final_state: Mapping[str, Any] | None,
+    lifecycle_publisher: LifecyclePublisher,
+) -> AgentRunCompletion:
+    """Settle a resumed child as cancelled and publish its lifecycle best-effort."""
+    transition = await registry.record_cancelled(
+        tenant_id=context.entry.tenant_id,
+        task_id=context.entry.task_id,
+        agent_run_id=context.entry.agent_run_id,
+    )
+    cancelled = transition.entry
+    if cancelled.status != "cancelled" or cancelled.result is None:
+        raise SubagentContinuationError(
+            "Subagent cancellation settlement did not produce a cancelled result"
+        )
+    if transition.changed:
+        parent_run_id = _optional_string(
+            cancelled.assignment.relevant_context.get("parent_run_id")
+        )
+        event = build_agent_run_lifecycle_event(
+            cancelled,
+            display_metadata=subagent_registry.display_metadata(cancelled.agent_id),
+            parent_run_id=parent_run_id,
+        )
+        try:
+            await lifecycle_publisher(cancelled.task_id, event)
+        except Exception:
+            logger.debug(
+                "Subagent lifecycle publish failed during approval cancellation "
+                "for task_id=%s agent_run_id=%s",
+                cancelled.task_id,
+                cancelled.agent_run_id,
+                exc_info=True,
+            )
+    return build_agent_run_completion(
+        result=cancelled.result,
+        assignment=cancelled.assignment,
+        graph_thread_id=cancelled.graph_thread_id,
+        final_state=final_state,
+        skip_usage_records=context.entry.accounted_usage_record_count,
+    )
+
+
 def _load_subagent_resume_ticket(
     *,
     session_factory: Callable[[], Any],
@@ -340,7 +407,9 @@ __all__ = [
     "SubagentInterruptedUsage",
     "SubagentInterruptTicketSnapshot",
     "build_subagent_continuation_attribution",
+    "cancel_subagent_continuation",
     "complete_subagent_continuation",
+    "is_subagent_continuation_cancel_requested",
     "is_subagent_graph_name",
     "mark_subagent_running",
     "mark_subagent_waiting_for_approval",

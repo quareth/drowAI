@@ -10,7 +10,10 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend.services.langgraph_chat.execution.graph_executor import LangGraphExecutor
+from backend.services.langgraph_chat.execution.graph_executor import (
+    GraphExecutionCancelled,
+    LangGraphExecutor,
+)
 from backend.services.langgraph_chat.checkpoint.thread_identity import format_graph_thread_id
 from backend.services.langgraph_chat.compression.window_models import (
     ContextWindowDecision,
@@ -70,23 +73,34 @@ class TestGraphExecutorStreaming:
 
     @pytest.mark.asyncio
     async def test_graph_executor_honors_cancel_checker(self):
-        """Cancellation checker aborts streaming before processing the next graph chunk."""
+        """Cancellation preserves the latest state captured before the next chunk."""
         executor = LangGraphExecutor()
         mock_graph = AsyncMock()
+        partial_state = {"facts": {"message": "partial"}, "trace": {}}
+        latest_state = {"facts": {"message": "latest"}, "trace": {}}
+        cancel_checks = 0
 
         async def mock_astream(input_state, config, stream_mode):
-            yield ("values", {"facts": {}, "trace": {}})
+            yield ("values", partial_state)
+            yield ("values", latest_state)
+
+        def should_cancel() -> bool:
+            nonlocal cancel_checks
+            cancel_checks += 1
+            return cancel_checks > 2
 
         mock_graph.astream = mock_astream
 
-        with pytest.raises(RuntimeError, match="run_cancelled"):
+        with pytest.raises(GraphExecutionCancelled) as raised:
             await executor.stream_graph(
                 compiled_graph=mock_graph,
                 graph_input={},
                 config={"configurable": {"thread_id": "test"}},
                 task_id=1,
-                should_cancel=lambda: True,
+                should_cancel=should_cancel,
             )
+
+        assert raised.value.execution_result.final_state == latest_state
     
     @pytest.mark.asyncio
     async def test_graph_executor_streaming_captures_final_state(self):

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import replace
 from types import SimpleNamespace
@@ -34,7 +35,10 @@ from backend.services.langgraph_chat.checkpoint.continuation_service import (
     CheckpointContinuationService,
 )
 from backend.services.langgraph_chat.contracts import LangGraphChatResult
-from backend.services.langgraph_chat.execution.graph_executor import GraphExecutionResult
+from backend.services.langgraph_chat.execution.graph_executor import (
+    GraphExecutionCancelled,
+    GraphExecutionResult,
+)
 from backend.services.langgraph_chat.runtime.state_container import ChatStateContainer
 from backend.services.langgraph_chat.checkpoint.interrupt_state_service import (
     InterruptStateService,
@@ -643,6 +647,214 @@ async def test_resume_from_interrupt_marks_subagent_completed_on_success(
 
 
 @pytest.mark.asyncio
+async def test_resume_from_interrupt_settles_child_stop_as_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lifecycle_events: list[dict[str, Any]] = []
+    partial_state = _interactive_state(
+        usage_records=[
+            {
+                "source": "subagent_runtime_model",
+                "prompt_tokens": 8,
+                "completion_tokens": 2,
+                "total_tokens": 10,
+            }
+        ]
+    )
+    registry, service = await _resumable_service(
+        monkeypatch,
+        final_state=partial_state,
+        lifecycle_events=lifecycle_events,
+    )
+
+    class _CancellingExecutor:
+        async def stream_graph(self, *_args: Any, should_cancel: Any, **_kwargs: Any) -> Any:
+            await registry.request_cancellation(
+                tenant_id=7,
+                task_id=42,
+                agent_run_id="pathfinder-run-1",
+            )
+            assert should_cancel() is False
+            await asyncio.sleep(0)
+            assert should_cancel() is True
+            raise GraphExecutionCancelled(
+                GraphExecutionResult(final_state=partial_state)
+            )
+
+    service._executor = _CancellingExecutor()
+
+    result = await service.resume_from_interrupt(
+        task_id=42,
+        tenant_id=7,
+        graph_name=GRAPH_NAME_SUBAGENT,
+        interrupt_id="interrupt-1",
+        response={"approved": True},
+        should_cancel=lambda: False,
+    )
+
+    entry = await registry.get(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="pathfinder-run-1",
+    )
+    assert entry is not None
+    assert entry.status == "cancelled"
+    assert result.metadata["subagent_parent_continuation_pending"] is True
+    assert result.metadata["status"] == "cancelled"
+    assert result.usage is not None
+    assert result.usage[0].usage.total_tokens == 10
+    assert [event["agent_run"]["status"] for event in lifecycle_events] == [
+        "running",
+        "cancelled",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("child_cancelled", "expected_child_status"),
+    ((False, "running"), (True, "cancelled")),
+    ids=("parent-only", "parent-and-child"),
+)
+@pytest.mark.asyncio
+async def test_resume_from_interrupt_preserves_parent_cancellation_precedence(
+    monkeypatch: pytest.MonkeyPatch,
+    child_cancelled: bool,
+    expected_child_status: str,
+) -> None:
+    partial_result = GraphExecutionResult(final_state=_interactive_state())
+    registry, service = await _resumable_service(
+        monkeypatch,
+        final_state=partial_result.final_state or {},
+    )
+
+    class _CancelledExecutor:
+        async def stream_graph(self, *_args: Any, **_kwargs: Any) -> Any:
+            if child_cancelled:
+                await registry.request_cancellation(
+                    tenant_id=7,
+                    task_id=42,
+                    agent_run_id="pathfinder-run-1",
+                )
+            raise GraphExecutionCancelled(partial_result)
+
+    service._executor = _CancelledExecutor()
+
+    with pytest.raises(GraphExecutionCancelled) as raised:
+        await service.resume_from_interrupt(
+            task_id=42,
+            tenant_id=7,
+            graph_name=GRAPH_NAME_SUBAGENT,
+            interrupt_id="interrupt-1",
+            response={"approved": True},
+            should_cancel=lambda: True,
+        )
+
+    assert raised.value.execution_result is partial_result
+    entry = await registry.get(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="pathfinder-run-1",
+    )
+    assert entry is not None
+    assert entry.status == expected_child_status
+
+
+@pytest.mark.asyncio
+async def test_resume_from_interrupt_honors_child_stop_after_last_executor_poll(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    final_state = _interactive_state(
+        metadata={
+            SUBAGENT_RESULT_METADATA_KEY: {
+                "agent_run_id": "pathfinder-run-1",
+                "agent_id": "pathfinder",
+                "agent_kind": "recon",
+                "outcome": "completed",
+                "summary": "This completion must lose the cancellation race.",
+            }
+        },
+        final_text="done",
+    )
+    registry, service = await _resumable_service(
+        monkeypatch,
+        final_state=final_state,
+    )
+
+    class _LastPollExecutor:
+        async def stream_graph(self, *_args: Any, **_kwargs: Any) -> Any:
+            await registry.request_cancellation(
+                tenant_id=7,
+                task_id=42,
+                agent_run_id="pathfinder-run-1",
+            )
+            return GraphExecutionResult(final_state=final_state)
+
+    service._executor = _LastPollExecutor()
+
+    result = await service.resume_from_interrupt(
+        task_id=42,
+        tenant_id=7,
+        graph_name=GRAPH_NAME_SUBAGENT,
+        interrupt_id="interrupt-1",
+        response={"approved": True},
+        should_cancel=lambda: False,
+    )
+
+    entry = await registry.get(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="pathfinder-run-1",
+    )
+    assert entry is not None
+    assert entry.status == "cancelled"
+    assert result.metadata["status"] == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_resume_completion_ignores_lifecycle_publication_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    final_state = _interactive_state(
+        metadata={
+            SUBAGENT_RESULT_METADATA_KEY: {
+                "agent_run_id": "pathfinder-run-1",
+                "agent_id": "pathfinder",
+                "agent_kind": "recon",
+                "outcome": "completed",
+                "summary": "done",
+            }
+        },
+        final_text="done",
+    )
+    registry, service = await _resumable_service(
+        monkeypatch,
+        final_state=final_state,
+    )
+
+    async def _failing_publisher(_task_id: int, event: dict[str, Any]) -> None:
+        if event["agent_run"]["status"] == "completed":
+            raise RuntimeError("stream persistence unavailable")
+
+    service._agent_run_lifecycle_publisher = _failing_publisher
+
+    result = await service.resume_from_interrupt(
+        task_id=42,
+        tenant_id=7,
+        graph_name=GRAPH_NAME_SUBAGENT,
+        interrupt_id="interrupt-1",
+        response={"approved": True},
+    )
+
+    assert result.metadata["subagent_parent_continuation_pending"] is True
+    entry = await registry.get(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="pathfinder-run-1",
+    )
+    assert entry is not None
+    assert entry.status == "completed"
+
+
+@pytest.mark.asyncio
 async def test_mark_subagent_completed_from_state_returns_usage_identity_envelope() -> None:
     registry = ProcessLocalAgentRunRegistry()
     child_thread = "a" * 32
@@ -820,6 +1032,47 @@ class _FakeSnapshot:
 
 async def _compile_stub(**_kwargs: Any) -> object:
     return object()
+
+
+async def _waiting_registry() -> ProcessLocalAgentRunRegistry:
+    registry = ProcessLocalAgentRunRegistry()
+    await registry.register(_assignment(), graph_thread_id="a" * 32)
+    await registry.mark_waiting_for_approval(
+        tenant_id=7,
+        task_id=42,
+        agent_run_id="pathfinder-run-1",
+    )
+    return registry
+
+
+def _stub_subagent_ticket(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        continuation,
+        "_load_subagent_resume_ticket",
+        lambda **_kwargs: SubagentInterruptTicketSnapshot(
+            graph_name=GRAPH_NAME_SUBAGENT,
+            thread_id="graph-" + ("a" * 32),
+            checkpoint_id="cp-ticket",
+        ),
+    )
+
+
+async def _resumable_service(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    final_state: dict[str, Any],
+    lifecycle_events: list[dict[str, Any]] | None = None,
+) -> tuple[ProcessLocalAgentRunRegistry, CheckpointContinuationService]:
+    registry = await _waiting_registry()
+    _stub_subagent_ticket(monkeypatch)
+    service = _build_subagent_resume_service(
+        registry=registry,
+        final_state=final_state,
+        interrupted=False,
+        lifecycle_events=lifecycle_events,
+    )
+    monkeypatch.setattr(service, "_compile_graph_for_name", _compile_stub)
+    return registry, service
 
 
 def _interactive_state(

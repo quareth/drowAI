@@ -16,7 +16,6 @@ and generic execution stacks.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
@@ -47,6 +46,8 @@ from backend.services.langgraph_chat.checkpoint.checkpointer_service import (
 from backend.services.langgraph_chat.execution.graph_executor import LangGraphExecutor
 from backend.services.langgraph_chat.hitl_constants import GRAPH_RECURSION_LIMIT
 from backend.services.langgraph_chat.streaming.adapter import LangGraphStreamingAdapter
+
+from .cancellation import AsyncCancellationProbe
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +100,7 @@ class ProcessLocalAgentRunWorker:
             assignment=assignment,
             graph_thread_id=graph_thread_id,
         )
-        cancellation_probe = _AsyncCancellationProbe(is_cancel_requested)
+        cancellation_probe = AsyncCancellationProbe(is_cancel_requested)
 
         async with self._checkpointer_service.get_checkpointer(
             assignment.task_id
@@ -190,7 +191,17 @@ async def mark_subagent_completed_from_state(
         display_metadata=definition_registry.display_metadata(completed.agent_id),
         parent_run_id=parent_run_id,
     )
-    await lifecycle_publisher(completed.task_id, event)
+    try:
+        await lifecycle_publisher(completed.task_id, event)
+    except Exception:
+        logger.debug(
+            "Subagent lifecycle publish failed after approval continuation "
+            "for tenant_id=%s task_id=%s agent_run_id=%s",
+            completed.tenant_id,
+            completed.task_id,
+            completed.agent_run_id,
+            exc_info=True,
+        )
     return completion
 
 
@@ -289,29 +300,6 @@ def _graph_runtime_context_from_projection(
         context["turn_sequence"] = turn_sequence
     context.pop("credential_ref", None)
     return context
-
-
-class _AsyncCancellationProbe:
-    """Expose an async cancellation check through the executor's sync callback."""
-
-    def __init__(self, check: Callable[[], Awaitable[bool]]) -> None:
-        self._check = check
-        self._cancelled = False
-        self._pending: asyncio.Task[bool] | None = None
-
-    def __call__(self) -> bool:
-        if self._cancelled:
-            return True
-        if self._pending is not None and self._pending.done():
-            try:
-                self._cancelled = bool(self._pending.result())
-            except Exception:
-                logger.debug("Subagent cancellation probe failed", exc_info=True)
-            finally:
-                self._pending = None
-        if self._pending is None:
-            self._pending = asyncio.create_task(self._check())
-        return self._cancelled
 
 
 __all__ = [

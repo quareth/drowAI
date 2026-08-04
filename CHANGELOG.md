@@ -39,6 +39,10 @@ The format is based on
 
 ### Fixed
 
+- Stopping a subagent during approval continuation now cancels the resumed
+  child without allowing it to complete, while parent-turn cancellation still
+  stops the parent flow and lifecycle publication failures no longer strand a
+  completed child result.
 - Parent post-handoff tool approvals now resume the same checkpointed reasoning
   flow after an earlier subagent approval in the same turn, without losing
   coordination state or replaying a failed approval request.
