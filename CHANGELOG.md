@@ -40,6 +40,9 @@ The format is based on
 
 ### Fixed
 
+- Compact canonical pentest projections now retain result summaries and
+  matcher/filter context ahead of routine execution parameters when evidence
+  budgets are exceeded.
 - Compact canonical pentest projections now retain findings and services ahead
   of lower-priority asset facts when fact budgets are exceeded.
 - Canonical pentest facts now preserve FFUF and HTTP web surfaces, TShark
