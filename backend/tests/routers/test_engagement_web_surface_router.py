@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.routers import engagement_knowledge as engagement_routes
+from backend.services.knowledge.query_service import WebSurfaceScopeError
 
 
 class _FakeQueryService:
@@ -207,6 +208,44 @@ def test_web_surface_endpoints_require_service_or_asset_scope() -> None:
 
     assert origins_response.status_code == 422
     assert paths_response.status_code == 422
+
+
+def test_web_surface_endpoints_reject_inconsistent_combined_scope(monkeypatch) -> None:
+    app, fake_service = _build_client()
+    monkeypatch.setattr(engagement_routes, "_query_service", lambda _db: fake_service)
+    monkeypatch.setattr(
+        engagement_routes,
+        "get_owned_engagement_or_404",
+        lambda *, db, engagement_id, user_id, tenant_id: SimpleNamespace(
+            id=engagement_id,
+            tenant_id=tenant_id,
+        ),
+    )
+
+    def reject_scope(**_kwargs):
+        raise WebSurfaceScopeError("service_key and asset_key must refer to the same asset")
+
+    monkeypatch.setattr(fake_service, "list_web_surface_origins", reject_scope)
+    monkeypatch.setattr(fake_service, "list_web_surface_paths", reject_scope)
+    query = "?service_key=service.socket:10.0.0.10/tcp/443&asset_key=host.ip:10.0.0.20"
+
+    client = TestClient(app)
+    try:
+        origins_response = client.get(
+            f"/api/engagements/42/web-surface{query}",
+            headers={"Authorization": "Bearer owner-token"},
+        )
+        paths_response = client.get(
+            f"/api/engagements/42/web-surface/paths{query}",
+            headers={"Authorization": "Bearer owner-token"},
+        )
+    finally:
+        client.close()
+
+    assert origins_response.status_code == 422
+    assert origins_response.json()["detail"] == "service_key and asset_key must refer to the same asset"
+    assert paths_response.status_code == 422
+    assert paths_response.json()["detail"] == "service_key and asset_key must refer to the same asset"
 
 
 def test_web_surface_paths_endpoint_uses_service_key_and_origin_query(monkeypatch) -> None:

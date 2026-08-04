@@ -29,6 +29,7 @@ from backend.services.knowledge.query_service import (
     FindingsFilters,
     KnowledgeQueryService,
     WebSurfacePathsFilters,
+    WebSurfaceScopeError,
     normalize_optional_bool,
 )
 from backend.services.tenant.authorization import ACTION_KNOWLEDGE_READ
@@ -357,14 +358,20 @@ def list_web_surface_origins(
         user_id=int(current_user.id),
         tenant_id=int(tenant_context.tenant_id),
     )
-    result = _query_service(db).list_web_surface_origins(
-        user_id=int(current_user.id),
-        tenant_id=int(engagement.tenant_id),
-        engagement_id=engagement_id,
-        service_key=service_key,
-        asset_key=asset_key,
-        include_noisy=normalize_optional_bool(include_noisy) is True,
-    )
+    try:
+        result = _query_service(db).list_web_surface_origins(
+            user_id=int(current_user.id),
+            tenant_id=int(engagement.tenant_id),
+            engagement_id=engagement_id,
+            service_key=service_key,
+            asset_key=asset_key,
+            include_noisy=normalize_optional_bool(include_noisy) is True,
+        )
+    except WebSurfaceScopeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
     return _sanitize_payload(result)
 
 
@@ -389,19 +396,25 @@ def list_web_surface_paths(
         user_id=int(current_user.id),
         tenant_id=int(tenant_context.tenant_id),
     )
-    result = _query_service(db).list_web_surface_paths(
-        user_id=int(current_user.id),
-        tenant_id=int(engagement.tenant_id),
-        engagement_id=engagement_id,
-        filters=WebSurfacePathsFilters(
-            service_key=service_key,
-            asset_key=asset_key,
-            origin_key=origin_key,
-            include_noisy=include_noisy,
-            limit=limit,
-            offset=offset,
-        ),
-    )
+    try:
+        result = _query_service(db).list_web_surface_paths(
+            user_id=int(current_user.id),
+            tenant_id=int(engagement.tenant_id),
+            engagement_id=engagement_id,
+            filters=WebSurfacePathsFilters(
+                service_key=service_key,
+                asset_key=asset_key,
+                origin_key=origin_key,
+                include_noisy=include_noisy,
+                limit=limit,
+                offset=offset,
+            ),
+        )
+    except WebSurfaceScopeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
     return _sanitize_payload(result)
 
 

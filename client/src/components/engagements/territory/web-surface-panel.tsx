@@ -66,7 +66,7 @@ export function WebSurfacePanel({ engagementId, selectedNode, assetKey = null }:
 
   const serviceKey = selectedNode && isWebSurfaceGraphNode(selectedNode) ? selectedNode.id : null;
   const eligible = Boolean(engagementId && (serviceKey || assetKey));
-  const assetScope = assetKey ? { asset_key: assetKey } : {};
+  const assetScope = assetKey && !serviceKey ? { asset_key: assetKey } : {};
 
   useEffect(() => {
     setExpandedOriginKey(null);

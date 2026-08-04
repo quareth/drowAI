@@ -130,8 +130,19 @@ describe("web-surface-panel", () => {
       },
     });
 
-    render(<WebSurfacePanel engagementId="7" selectedNode={httpServiceNode} />);
+    render(
+      <WebSurfacePanel
+        engagementId="7"
+        selectedNode={httpServiceNode}
+        assetKey="host.ip:10.0.0.10"
+      />,
+    );
 
+    expect(mockedHooks.useEngagementWebSurfaceOrigins).toHaveBeenCalledWith(
+      "7",
+      "service.socket:10.0.0.10/tcp/443",
+      { include_noisy: false },
+    );
     expect(screen.getByTestId("web-surface-summary")).toBeTruthy();
     expect(screen.getByText("Origins: 1")).toBeTruthy();
     expect(screen.getByText("Visible paths: 4")).toBeTruthy();

@@ -10,7 +10,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ....models import KnowledgeEvidenceArchive
+from ....models import KnowledgeAsset, KnowledgeEvidenceArchive, KnowledgeService
 from ..evidence_refs import normalize_canonical_evidence_refs
 from .contracts import (
     AssetsFilters,
@@ -21,6 +21,7 @@ from .contracts import (
     PaginatedResult,
     PaginationParams,
     WebSurfacePathsFilters,
+    WebSurfaceScopeError,
     WEB_SURFACE_NOISY_HIDE_THRESHOLD,
 )
 from .mappers import (
@@ -668,6 +669,57 @@ class KnowledgeQueryEngine:
             offset=int(normalized.offset),
         ).to_dict()
 
+    def _resolve_web_surface_scope(
+        self,
+        *,
+        user_id: int,
+        tenant_id: int,
+        engagement_id: int,
+        service_key: str | None,
+        asset_key: str | None,
+    ) -> tuple[KnowledgeService | None, KnowledgeAsset | None, str | None]:
+        """Resolve one coherent service/asset scope for web-surface reads."""
+        service_row = (
+            self.selectors.resolve_service_for_engagement(
+                user_id=int(user_id),
+                tenant_id=int(tenant_id),
+                engagement_id=int(engagement_id),
+                service_key=str(service_key),
+            )
+            if service_key
+            else None
+        )
+        asset_row = (
+            self.selectors.resolve_asset_for_engagement(
+                user_id=int(user_id),
+                tenant_id=int(tenant_id),
+                engagement_id=int(engagement_id),
+                asset_key=str(asset_key),
+            )
+            if asset_key
+            else None
+        )
+        if service_key and asset_key:
+            if service_row is None or asset_row is None:
+                raise WebSurfaceScopeError(
+                    "service_key and asset_key must both resolve within the engagement"
+                )
+            if (
+                service_row.asset_id is None
+                or str(service_row.asset_id) != str(asset_row.id)
+            ):
+                raise WebSurfaceScopeError(
+                    "service_key and asset_key must refer to the same asset"
+                )
+
+        if service_row is not None:
+            fallback_asset_id = (
+                str(service_row.asset_id) if service_row.asset_id is not None else None
+            )
+        else:
+            fallback_asset_id = str(asset_row.id) if asset_row is not None else None
+        return service_row, asset_row, fallback_asset_id
+
     def list_web_surface_origins(
         self,
         *,
@@ -686,25 +738,12 @@ class KnowledgeQueryEngine:
                 "asset_key": normalized_asset_key,
                 "items": [],
             }
-        service_row = (
-            self.selectors.resolve_service_for_engagement(
-                user_id=int(user_id),
-                tenant_id=int(tenant_id),
-                engagement_id=int(engagement_id),
-                service_key=normalized_service_key,
-            )
-            if normalized_service_key
-            else None
-        )
-        asset_row = (
-            self.selectors.resolve_asset_for_engagement(
-                user_id=int(user_id),
-                tenant_id=int(tenant_id),
-                engagement_id=int(engagement_id),
-                asset_key=normalized_asset_key,
-            )
-            if normalized_asset_key
-            else None
+        service_row, asset_row, fallback_asset_id = self._resolve_web_surface_scope(
+            user_id=int(user_id),
+            tenant_id=int(tenant_id),
+            engagement_id=int(engagement_id),
+            service_key=normalized_service_key,
+            asset_key=normalized_asset_key,
         )
         if service_row is None and asset_row is None:
             return {
@@ -718,7 +757,7 @@ class KnowledgeQueryEngine:
             tenant_id=int(tenant_id),
             engagement_id=int(engagement_id),
             service_id=str(service_row.id) if service_row is not None else None,
-            asset_id=str(asset_row.id) if asset_row is not None else None,
+            asset_id=fallback_asset_id,
         )
         grouped: dict[str, list] = {}
         for row in web_path_rows:
@@ -807,25 +846,12 @@ class KnowledgeQueryEngine:
                 "hidden_noisy": 0,
             }
 
-        service_row = (
-            self.selectors.resolve_service_for_engagement(
-                user_id=int(user_id),
-                tenant_id=int(tenant_id),
-                engagement_id=int(engagement_id),
-                service_key=str(normalized.service_key),
-            )
-            if normalized.service_key
-            else None
-        )
-        asset_row = (
-            self.selectors.resolve_asset_for_engagement(
-                user_id=int(user_id),
-                tenant_id=int(tenant_id),
-                engagement_id=int(engagement_id),
-                asset_key=str(normalized.asset_key),
-            )
-            if normalized.asset_key
-            else None
+        service_row, asset_row, fallback_asset_id = self._resolve_web_surface_scope(
+            user_id=int(user_id),
+            tenant_id=int(tenant_id),
+            engagement_id=int(engagement_id),
+            service_key=normalized.service_key,
+            asset_key=normalized.asset_key,
         )
         if service_row is None and asset_row is None:
             return {
@@ -844,7 +870,7 @@ class KnowledgeQueryEngine:
             tenant_id=int(tenant_id),
             engagement_id=int(engagement_id),
             service_id=str(service_row.id) if service_row is not None else None,
-            asset_id=str(asset_row.id) if asset_row is not None else None,
+            asset_id=fallback_asset_id,
             origin_key=normalized.origin_key,
             include_noisy=bool(normalized.include_noisy),
             limit=int(normalized.limit),

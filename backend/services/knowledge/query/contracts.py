@@ -16,6 +16,11 @@ DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
 WEB_SURFACE_NOISY_HIDE_THRESHOLD = 0.5
 
+
+class WebSurfaceScopeError(ValueError):
+    """Raised when combined web-surface keys do not identify one asset scope."""
+
+
 FindingSort = Literal["last_seen_desc", "last_seen_asc", "severity_desc", "severity_asc"]
 AssetSort = Literal["last_seen_desc", "last_seen_asc", "asset_type_asc", "asset_type_desc"]
 EvidenceSort = Literal["observed_desc", "observed_asc", "source_tool_asc", "source_tool_desc"]

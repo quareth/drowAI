@@ -21,6 +21,7 @@ from .query import (
     PaginatedResult,
     PaginationParams,
     WebSurfacePathsFilters,
+    WebSurfaceScopeError,
     normalize_optional_bool,
 )
 
@@ -223,6 +224,7 @@ __all__ = [
     "AssetsFilters",
     "EvidenceFilters",
     "WebSurfacePathsFilters",
+    "WebSurfaceScopeError",
     "KnowledgeQueryService",
     "normalize_optional_bool",
 ]
