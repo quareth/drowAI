@@ -19,6 +19,7 @@ from backend.database import Base
 from backend.models.core import Engagement, Task, User
 from backend.models.knowledge import KnowledgeIngestionRun
 from backend.models.provenance import ExecutionArtifact, ToolExecution
+from backend.models.tenant import Tenant, TenantMembership
 from backend.scripts import backfill_engagement_knowledge as script
 from backend.services.knowledge.ingestion_service import KnowledgeIngestionService
 
@@ -39,18 +40,40 @@ def _seed_user_engagement_task(db):
     user = User(username=f"candidate-replay-backfill-user-{uuid_lib.uuid4()}", password="secret")
     db.add(user)
     db.flush()
-    engagement = Engagement(user_id=user.id, name="Candidate Replay Backfill Engagement", status="active")
+    tenant = Tenant(
+        slug=f"candidate-replay-backfill-{uuid_lib.uuid4()}",
+        name="Candidate Replay Backfill Tenant",
+    )
+    db.add(tenant)
+    db.flush()
+    db.add(TenantMembership(tenant_id=tenant.id, user_id=user.id, role="owner"))
+    db.flush()
+    engagement = Engagement(
+        user_id=user.id,
+        tenant_id=tenant.id,
+        name="Candidate Replay Backfill Engagement",
+        status="active",
+    )
     db.add(engagement)
     db.flush()
-    task = Task(user_id=user.id, engagement_id=engagement.id, name="Candidate Replay Backfill Task")
+    task = Task(
+        user_id=user.id,
+        tenant_id=tenant.id,
+        engagement_id=engagement.id,
+        name="Candidate Replay Backfill Task",
+    )
     db.add(task)
     db.flush()
     return engagement, task
 
 
 def _seed_execution_with_id(db, *, task_id: int, execution_uuid: uuid_lib.UUID, content_text: str) -> str:
+    tenant_id = db.query(Task.tenant_id).filter(Task.id == int(task_id)).scalar()
+    if tenant_id is None:
+        raise ValueError(f"Task {task_id} has no tenant_id")
     execution = ToolExecution(
         id=execution_uuid,
+        tenant_id=int(tenant_id),
         task_id=task_id,
         tool_name="shell.exec",
         tool_arguments={"command": "echo backfill"},
@@ -65,6 +88,7 @@ def _seed_execution_with_id(db, *, task_id: int, execution_uuid: uuid_lib.UUID, 
         ExecutionArtifact(
             id=uuid_lib.uuid4(),
             execution_id=execution.id,
+            tenant_id=int(tenant_id),
             task_id=task_id,
             artifact_kind="stdout",
             content_text=content_text,

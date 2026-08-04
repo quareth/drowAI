@@ -136,6 +136,43 @@ def test_failure_detection_prefers_compact_errors() -> None:
     assert failure_category == "timeout"
 
 
+def test_failure_detection_ignores_secondary_compact_lane() -> None:
+    state = _build_state(
+        {
+            "last_tool_result": {
+                "status": "success",
+                "success": True,
+                "exit_code": 0,
+            },
+            "last_tool_result_compact": {
+                "status": "success",
+                "success": True,
+                "exit_code": 0,
+                "summary": "Primary compact result stayed successful.",
+                "key_findings": ["primary finding"],
+                "errors": [],
+            },
+            "last_tool_result_deterministic_compact": {
+                "status": "failed",
+                "success": False,
+                "exit_code": 124,
+                "summary": "Secondary compact result must not drive failure detection.",
+                "errors": ["secondary timeout"],
+            },
+        }
+    )
+
+    context = build_failure_context_from_state(state)
+    failure_detected, failure_category = detect_failure(context)
+
+    assert context.status == "success"
+    assert context.success_flag is True
+    assert context.summary == "Primary compact result stayed successful."
+    assert context.stderr == ""
+    assert failure_detected is False
+    assert failure_category is None
+
+
 def test_post_tool_prompt_renders_compact_fields_without_raw_excerpts() -> None:
     builder = PostToolReasoningPromptBuilder()
     state = _build_state(

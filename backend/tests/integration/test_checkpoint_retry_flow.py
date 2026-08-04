@@ -32,6 +32,7 @@ from backend.models.chat import ChatMessage
 from backend.models.core import Task, User
 from backend.models.hitl import TurnWorkflow
 from backend.models.streaming import StreamEvent
+from backend.models.tenant import Tenant, TenantMembership
 from backend.services.chat.transcript_query_service import (
     ChatTranscriptQueryService,
 )
@@ -58,14 +59,38 @@ def _ensure_user_and_task(
         db.commit()
         db.refresh(user)
 
+    tenant_slug = f"{username}-tenant"
+    tenant = db.query(Tenant).filter(Tenant.slug == tenant_slug).first()
+    if tenant is None:
+        tenant = Tenant(slug=tenant_slug, name=f"{username} Tenant")
+        db.add(tenant)
+        db.commit()
+        db.refresh(tenant)
+
+    membership = (
+        db.query(TenantMembership)
+        .filter(
+            TenantMembership.tenant_id == tenant.id,
+            TenantMembership.user_id == user.id,
+        )
+        .first()
+    )
+    if membership is None:
+        db.add(TenantMembership(tenant_id=tenant.id, user_id=user.id, role="owner"))
+        db.commit()
+
     task = (
         db.query(Task)
         .filter(Task.user_id == user.id, Task.name == task_name)
         .first()
     )
     if task is None:
-        task = Task(user_id=user.id, name=task_name)
+        task = Task(user_id=user.id, tenant_id=tenant.id, name=task_name)
         db.add(task)
+        db.commit()
+        db.refresh(task)
+    elif task.tenant_id != tenant.id:
+        task.tenant_id = tenant.id
         db.commit()
         db.refresh(task)
 
@@ -80,8 +105,10 @@ def _create_assistant_message(
     turn_number: int,
     content: str = "[Error] checkpoint retry test",
 ) -> ChatMessage:
+    tenant_id = int(db.query(Task.tenant_id).filter(Task.id == task_id).scalar())
     msg = ChatMessage(
         task_id=task_id,
+        tenant_id=tenant_id,
         conversation_id=conversation_id,
         parent_message_id=None,
         message_type="assistant",
@@ -108,6 +135,7 @@ def _create_failed_retryable_workflow(
 ) -> TurnWorkflow:
     workflow = TurnWorkflow(
         task_id=task_id,
+        tenant_id=int(db.query(Task.tenant_id).filter(Task.id == task_id).scalar()),
         conversation_id=conversation_id,
         turn_id=turn_id,
         turn_sequence=turn_sequence,

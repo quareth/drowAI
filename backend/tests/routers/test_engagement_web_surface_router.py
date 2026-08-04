@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.routers import engagement_knowledge as engagement_routes
+from backend.services.knowledge.query_service import WebSurfaceScopeError
 
 
 class _FakeQueryService:
@@ -15,13 +16,14 @@ class _FakeQueryService:
         self.origins_calls: list[dict[str, object]] = []
         self.paths_calls: list[dict[str, object]] = []
 
-    def list_service_web_surface_origins(
+    def list_web_surface_origins(
         self,
         *,
         user_id: int,
         tenant_id: int,
         engagement_id: int,
-        service_key: str,
+        service_key: str | None,
+        asset_key: str | None,
         include_noisy: bool,
     ) -> dict[str, object]:
         self.origins_calls.append(
@@ -30,15 +32,17 @@ class _FakeQueryService:
                 "tenant_id": tenant_id,
                 "engagement_id": engagement_id,
                 "service_key": service_key,
+                "asset_key": asset_key,
                 "include_noisy": include_noisy,
             }
         )
         return {
             "service_key": service_key,
+            "asset_key": asset_key,
             "items": [{"origin_key": "https://example.com", "total_paths": 2}],
         }
 
-    def list_service_web_surface_paths(
+    def list_web_surface_paths(
         self,
         *,
         user_id: int,
@@ -57,6 +61,7 @@ class _FakeQueryService:
         normalized = filters.normalized()
         return {
             "service_key": normalized.service_key,
+            "asset_key": normalized.asset_key,
             "origin_key": normalized.origin_key,
             "items": [{"canonical_url": "https://example.com/admin"}],
             "total": 1,
@@ -90,8 +95,8 @@ def test_web_surface_origins_endpoint_uses_service_key_query(monkeypatch) -> Non
     monkeypatch.setattr(engagement_routes, "_query_service", lambda _db: fake_service)
     monkeypatch.setattr(
         engagement_routes,
-        "get_engagement_in_tenant_or_404",
-        lambda db, engagement_id, tenant_id: SimpleNamespace(id=engagement_id, tenant_id=tenant_id),
+        "get_owned_engagement_or_404",
+        lambda *, db, engagement_id, user_id, tenant_id: SimpleNamespace(id=engagement_id, tenant_id=tenant_id),
     )
 
     client = TestClient(app)
@@ -113,6 +118,7 @@ def test_web_surface_origins_endpoint_uses_service_key_query(monkeypatch) -> Non
             "tenant_id": 601,
             "engagement_id": 42,
             "service_key": "service.socket:10.0.0.10/tcp/443",
+            "asset_key": None,
             "include_noisy": True,
         }
     ]
@@ -130,8 +136,8 @@ def test_web_surface_origins_endpoint_normalizes_include_noisy_string(monkeypatc
     monkeypatch.setattr(engagement_routes, "_query_service", lambda _db: fake_service)
     monkeypatch.setattr(
         engagement_routes,
-        "get_engagement_in_tenant_or_404",
-        lambda db, engagement_id, tenant_id: SimpleNamespace(id=engagement_id, tenant_id=tenant_id),
+        "get_owned_engagement_or_404",
+        lambda *, db, engagement_id, user_id, tenant_id: SimpleNamespace(id=engagement_id, tenant_id=tenant_id),
     )
 
     client = TestClient(app)
@@ -151,13 +157,104 @@ def test_web_surface_origins_endpoint_normalizes_include_noisy_string(monkeypatc
         assert call["include_noisy"] is False
 
 
+def test_web_surface_origins_endpoint_accepts_asset_scope(monkeypatch) -> None:
+    app, fake_service = _build_client()
+    monkeypatch.setattr(engagement_routes, "_query_service", lambda _db: fake_service)
+    monkeypatch.setattr(
+        engagement_routes,
+        "get_owned_engagement_or_404",
+        lambda *, db, engagement_id, user_id, tenant_id: SimpleNamespace(
+            id=engagement_id,
+            tenant_id=tenant_id,
+        ),
+    )
+
+    client = TestClient(app)
+    try:
+        response = client.get(
+            "/api/engagements/42/web-surface?asset_key=host.dns:example.com",
+            headers={"Authorization": "Bearer owner-token"},
+        )
+    finally:
+        client.close()
+
+    assert response.status_code == 200, response.text
+    assert fake_service.origins_calls == [
+        {
+            "user_id": 77,
+            "tenant_id": 601,
+            "engagement_id": 42,
+            "service_key": None,
+            "asset_key": "host.dns:example.com",
+            "include_noisy": False,
+        }
+    ]
+
+
+def test_web_surface_endpoints_require_service_or_asset_scope() -> None:
+    app, _fake_service = _build_client()
+    client = TestClient(app)
+    try:
+        origins_response = client.get(
+            "/api/engagements/42/web-surface",
+            headers={"Authorization": "Bearer owner-token"},
+        )
+        paths_response = client.get(
+            "/api/engagements/42/web-surface/paths",
+            headers={"Authorization": "Bearer owner-token"},
+        )
+    finally:
+        client.close()
+
+    assert origins_response.status_code == 422
+    assert paths_response.status_code == 422
+
+
+def test_web_surface_endpoints_reject_inconsistent_combined_scope(monkeypatch) -> None:
+    app, fake_service = _build_client()
+    monkeypatch.setattr(engagement_routes, "_query_service", lambda _db: fake_service)
+    monkeypatch.setattr(
+        engagement_routes,
+        "get_owned_engagement_or_404",
+        lambda *, db, engagement_id, user_id, tenant_id: SimpleNamespace(
+            id=engagement_id,
+            tenant_id=tenant_id,
+        ),
+    )
+
+    def reject_scope(**_kwargs):
+        raise WebSurfaceScopeError("service_key and asset_key must refer to the same asset")
+
+    monkeypatch.setattr(fake_service, "list_web_surface_origins", reject_scope)
+    monkeypatch.setattr(fake_service, "list_web_surface_paths", reject_scope)
+    query = "?service_key=service.socket:10.0.0.10/tcp/443&asset_key=host.ip:10.0.0.20"
+
+    client = TestClient(app)
+    try:
+        origins_response = client.get(
+            f"/api/engagements/42/web-surface{query}",
+            headers={"Authorization": "Bearer owner-token"},
+        )
+        paths_response = client.get(
+            f"/api/engagements/42/web-surface/paths{query}",
+            headers={"Authorization": "Bearer owner-token"},
+        )
+    finally:
+        client.close()
+
+    assert origins_response.status_code == 422
+    assert origins_response.json()["detail"] == "service_key and asset_key must refer to the same asset"
+    assert paths_response.status_code == 422
+    assert paths_response.json()["detail"] == "service_key and asset_key must refer to the same asset"
+
+
 def test_web_surface_paths_endpoint_uses_service_key_and_origin_query(monkeypatch) -> None:
     app, fake_service = _build_client()
     monkeypatch.setattr(engagement_routes, "_query_service", lambda _db: fake_service)
     monkeypatch.setattr(
         engagement_routes,
-        "get_engagement_in_tenant_or_404",
-        lambda db, engagement_id, tenant_id: SimpleNamespace(id=engagement_id, tenant_id=tenant_id),
+        "get_owned_engagement_or_404",
+        lambda *, db, engagement_id, user_id, tenant_id: SimpleNamespace(id=engagement_id, tenant_id=tenant_id),
     )
 
     client = TestClient(app)
@@ -188,8 +285,8 @@ def test_web_surface_paths_endpoint_normalizes_pagination_before_query_service(m
     monkeypatch.setattr(engagement_routes, "_query_service", lambda _db: fake_service)
     monkeypatch.setattr(
         engagement_routes,
-        "get_engagement_in_tenant_or_404",
-        lambda db, engagement_id, tenant_id: SimpleNamespace(id=engagement_id, tenant_id=tenant_id),
+        "get_owned_engagement_or_404",
+        lambda *, db, engagement_id, user_id, tenant_id: SimpleNamespace(id=engagement_id, tenant_id=tenant_id),
     )
 
     client = TestClient(app)

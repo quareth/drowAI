@@ -3,8 +3,11 @@
 This document lists the current tool catalog exposed to model planning and self-selection.
 These are the tools currently completed for LLM use: their argument contracts,
 output parsing, compact result projection, artifact/provenance behavior, and
-knowledge/evidence-layer hooks are wired well enough for the agent to reason
-over their results. The list is generated from
+canonical Knowledge/evidence paths are wired well enough for the agent to
+reason over their results. The reusable full-wiring contract, including the
+producer-owned semantic envelope and shared Knowledge/compact consumers, is
+defined in `docs/architecture/tools.md` under "Current Tool Completion
+Reference." The list is generated from
 `agent.tools.catalog_visibility.visible_available_tools()` and should be treated
 as the prompt-facing subset, not the complete implemented tool registry.
 Inclusion indicates functional agent wiring; it does not by itself represent
@@ -54,7 +57,7 @@ the Amass Open Asset Model graph.
 ### Amass Validation Maturity
 
 Amass v5 support is functionally wired for agent selection, task-scoped
-execution, DNS/IP parsing, deterministic compression, and knowledge
+execution, DNS/IP parsing, canonical-fact compact projection, and Knowledge
 projection.
 
 Validation currently consists of targeted automated coverage and limited

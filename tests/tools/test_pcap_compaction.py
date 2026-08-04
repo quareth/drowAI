@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from agent.tools.pcap_compaction import PCAP_COMPACT_SCHEMA_VERSION, build_pcap_compaction
+from agent.tools.pcap_compaction import (
+    PCAP_COMPACT_SCHEMA_VERSION,
+    build_pcap_compaction,
+    render_pcap_compact_json,
+)
 
 
 def test_pcap_compaction_empty_metadata_is_stable() -> None:
@@ -16,6 +20,16 @@ def test_pcap_compaction_empty_metadata_is_stable() -> None:
     assert compact["summary_counts"]["secret_exposure"] == 0
     assert first["compact_summary"] == "PCAP compact analysis parsed 0 packets, 0 hosts, 0 conversations."
     assert first["compact_key_findings"] == ["PCAP analysis parsed 0 packets."]
+    assert set(first) == {
+        "pcap_compact",
+        "compact_summary",
+        "compact_key_findings",
+        "compact_decision_evidence",
+    }
+    assert "compact_structured_signals" not in first
+    assert render_pcap_compact_json(compact).startswith(
+        '{"analysis_mode":"unknown","coverage":'
+    )
 
 
 def test_pcap_compaction_prioritizes_secret_and_auth_evidence() -> None:

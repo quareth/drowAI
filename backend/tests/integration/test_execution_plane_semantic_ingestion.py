@@ -1,4 +1,4 @@
-"""Integration tests for registry-based semantic ingestion flow."""
+"""Integration tests for canonical semantic ingestion flow."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from backend.database import Base
 from backend.models.core import Engagement, Task, User
 from backend.models.knowledge import KnowledgeIngestionRun, KnowledgeObservation
 from backend.models.provenance import ExecutionArtifact, ToolExecution
+from backend.models.tenant import Tenant, TenantMembership
 from backend.services.knowledge.ingestion_service import KnowledgeIngestionService
 from backend.services.knowledge.replay_service import KnowledgeReplayService
 
@@ -29,10 +30,28 @@ def _seed_user_engagement_task(db):
     user = User(username=f"execution-plane-semantic-user-{uuid_lib.uuid4()}", password="secret")
     db.add(user)
     db.flush()
-    engagement = Engagement(user_id=user.id, name="Execution Plane Semantic Engagement", status="active")
+    tenant = Tenant(
+        slug=f"execution-plane-semantic-{uuid_lib.uuid4()}",
+        name="Execution Plane Semantic Tenant",
+    )
+    db.add(tenant)
+    db.flush()
+    db.add(TenantMembership(tenant_id=tenant.id, user_id=user.id, role="owner"))
+    db.flush()
+    engagement = Engagement(
+        user_id=user.id,
+        tenant_id=tenant.id,
+        name="Execution Plane Semantic Engagement",
+        status="active",
+    )
     db.add(engagement)
     db.flush()
-    task = Task(user_id=user.id, engagement_id=engagement.id, name="Execution Plane Semantic Task")
+    task = Task(
+        user_id=user.id,
+        tenant_id=tenant.id,
+        engagement_id=engagement.id,
+        name="Execution Plane Semantic Task",
+    )
     db.add(task)
     db.flush()
     return engagement, task
@@ -47,8 +66,12 @@ def _seed_execution(
     execution_metadata: dict | None = None,
     stdout: str = "",
 ) -> str:
+    tenant_id = db.query(Task.tenant_id).filter(Task.id == int(task_id)).scalar()
+    if tenant_id is None:
+        raise ValueError(f"Task {task_id} has no tenant_id")
     execution = ToolExecution(
         id=uuid_lib.uuid4(),
+        tenant_id=int(tenant_id),
         task_id=task_id,
         tool_name=tool_name,
         tool_arguments=tool_arguments,
@@ -65,6 +88,7 @@ def _seed_execution(
             ExecutionArtifact(
                 id=uuid_lib.uuid4(),
                 execution_id=execution.id,
+                tenant_id=int(tenant_id),
                 task_id=task_id,
                 artifact_kind="stdout",
                 content_text=stdout,
@@ -78,7 +102,45 @@ def _seed_execution(
     return str(execution.id)
 
 
-def test_registry_ingestion_writes_observations_and_adapter_stats_for_supported_tool() -> None:
+def _semantic_metadata(
+    rows: list[dict],
+    *,
+    capability_family: str = "network_discovery",
+    schema_version: str = "integration-test.v1",
+) -> dict:
+    return {
+        "semantic_observations": rows,
+        "semantic_evidence": [],
+        "semantic_schema_version": schema_version,
+        "capability_family": capability_family,
+    }
+
+
+def _host_discovered_row(ip: str) -> dict:
+    return {
+        "observation_type": "network.host_discovered",
+        "subject_type": "host.ip",
+        "subject_key": f"host.ip:{ip}",
+        "payload": {"ip": ip, "source": "integration-test"},
+    }
+
+
+def _open_port_row(ip: str, port: int, *, service_name: str) -> dict:
+    return {
+        "observation_type": "network.open_port",
+        "subject_type": "service.socket",
+        "subject_key": f"service.socket:{ip}/tcp/{port}",
+        "payload": {
+            "ip": ip,
+            "protocol": "tcp",
+            "port": port,
+            "service_name": service_name,
+            "source": "integration-test",
+        },
+    }
+
+
+def test_canonical_ingestion_writes_observations_and_fact_stats_for_supported_tool() -> None:
     engine, db = _build_session()
     try:
         engagement, task = _seed_user_engagement_task(db)
@@ -87,19 +149,13 @@ def test_registry_ingestion_writes_observations_and_adapter_stats_for_supported_
             task_id=task.id,
             tool_name="information_gathering.network_discovery.nmap",
             tool_arguments={"target": "10.10.10.5"},
-            execution_metadata={
-                "tool_metadata": {
-                    "hosts": [
-                        {
-                            "ip": "10.10.10.5",
-                            "ports": [
-                                {"port": 443, "protocol": "tcp", "service": "https"},
-                            ],
-                        }
-                    ]
-                },
-                "capability_family": "network_discovery",
-            },
+            execution_metadata=_semantic_metadata(
+                [
+                    _host_discovered_row("10.10.10.5"),
+                    _open_port_row("10.10.10.5", 443, service_name="https"),
+                ],
+                schema_version="nmap.v1",
+            ),
             stdout="443/tcp open https",
         )
         service = KnowledgeIngestionService(db)
@@ -117,17 +173,19 @@ def test_registry_ingestion_writes_observations_and_adapter_stats_for_supported_
             .filter(KnowledgeIngestionRun.id == result["ingestion_run_id"])
             .one()
         )
-        stats = dict(run.run_metadata.get("adapter_stats") or {})
+        run_metadata = dict(run.run_metadata or {})
+        stats = dict(run_metadata.get("fact_stats") or {})
+        assert "adapter_stats" not in run_metadata
         assert stats["source_tool_name"] == "information_gathering.network_discovery.nmap"
-        assert stats["resolved_adapter_count"] >= 1
-        assert stats["adapter_observation_count"] >= 2
+        assert stats["fact_input_count"] == 2
+        assert stats["fact_accepted_count"] == 2
         assert stats["observation_count_total"] >= 2
     finally:
         db.close()
         engine.dispose()
 
 
-def test_registry_ingestion_keeps_unsupported_tool_as_clean_zero_observation_run() -> None:
+def test_canonical_ingestion_keeps_no_semantic_facts_as_clean_zero_observation_run() -> None:
     engine, db = _build_session()
     try:
         _engagement, task = _seed_user_engagement_task(db)
@@ -153,15 +211,17 @@ def test_registry_ingestion_keeps_unsupported_tool_as_clean_zero_observation_run
             .filter(KnowledgeIngestionRun.id == result["ingestion_run_id"])
             .one()
         )
-        stats = dict(run.run_metadata.get("adapter_stats") or {})
-        assert stats["resolved_adapter_count"] == 0
+        run_metadata = dict(run.run_metadata or {})
+        stats = dict(run_metadata.get("fact_stats") or {})
+        assert "adapter_stats" not in run_metadata
+        assert stats["fact_input_count"] == 0
         assert stats["observation_count_total"] == 0
     finally:
         db.close()
         engine.dispose()
 
 
-def test_replay_uses_same_registry_after_task_delete_with_semantic_snapshot() -> None:
+def test_replay_uses_canonical_semantic_snapshot_after_task_delete() -> None:
     engine, db = _build_session()
     try:
         _engagement, task = _seed_user_engagement_task(db)
@@ -170,17 +230,13 @@ def test_replay_uses_same_registry_after_task_delete_with_semantic_snapshot() ->
             task_id=task.id,
             tool_name="information_gathering.network_discovery.nmap",
             tool_arguments={"target": "10.10.10.9"},
-            execution_metadata={
-                "tool_metadata": {
-                    "hosts": [
-                        {
-                            "ip": "10.10.10.9",
-                            "ports": [{"port": 22, "protocol": "tcp", "service": "ssh"}],
-                        }
-                    ]
-                },
-                "capability_family": "network_discovery",
-            },
+            execution_metadata=_semantic_metadata(
+                [
+                    _host_discovered_row("10.10.10.9"),
+                    _open_port_row("10.10.10.9", 22, service_name="ssh"),
+                ],
+                schema_version="nmap.v1",
+            ),
             stdout="22/tcp open ssh",
         )
         ingestion = KnowledgeIngestionService(db)
@@ -209,9 +265,11 @@ def test_replay_uses_same_registry_after_task_delete_with_semantic_snapshot() ->
             .filter(KnowledgeIngestionRun.id == replay["ingestion_run_id"])
             .one()
         )
-        stats = dict(replay_run.run_metadata.get("adapter_stats") or {})
+        replay_metadata = dict(replay_run.run_metadata or {})
+        stats = dict(replay_metadata.get("fact_stats") or {})
+        assert "adapter_stats" not in replay_metadata
         assert stats["source_tool_name"] == "information_gathering.network_discovery.nmap"
-        assert stats["resolved_adapter_count"] >= 1
+        assert stats["fact_accepted_count"] >= 2
         inserted = (
             db.query(KnowledgeObservation)
             .filter(KnowledgeObservation.ingestion_run_id == replay_run.id)

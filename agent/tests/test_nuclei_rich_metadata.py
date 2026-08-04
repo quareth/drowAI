@@ -37,8 +37,12 @@ from agent.tools.web_applications.web_vulnerability_scanners.nuclei_semantics im
     _truncate,
     normalize_result_row,
     build_finding_observation,
+    build_nuclei_semantic_observations,
     build_nuclei_semantic_evidence,
+    build_web_path_observation,
+    normalize_evidence_refs,
 )
+from runtime_shared.semantic.pentest_facts import SemanticFactEnvelope, compile_facts
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +238,48 @@ class TestNormalizeResultRow:
         assert "references" not in result
         assert "extracted_results" not in result
 
+    def test_explicit_path_discovery_fields_are_preserved(self):
+        row = {
+            **RICH_JSONL_ROW,
+            "path_discovery": True,
+            "status_code": "200",
+            "response_size": 1234,
+        }
+
+        result = normalize_result_row(row)
+
+        assert result["path_discovery"] is True
+        assert result["status_code"] == 200
+        assert result["response_size"] == 1234
+
+    def test_valid_evidence_refs_are_normalized(self):
+        row = {
+            **RICH_JSONL_ROW,
+            "evidence_refs": [
+                {"evidence_archive_id": " archive-1 ", "excerpt": " matched header "},
+                {"evidence_archive_id": "archive-1", "excerpt": "matched header"},
+                {"artifact_id": "artifact-only"},
+                {"evidence_archive_id": ""},
+                "invalid",
+            ],
+        }
+
+        result = normalize_result_row(row)
+
+        assert result["evidence_refs"] == [
+            {"evidence_archive_id": "archive-1", "excerpt": "matched header"}
+        ]
+
+    def test_empty_missing_and_malformed_evidence_refs_are_omitted(self):
+        assert "evidence_refs" not in normalize_result_row({**RICH_JSONL_ROW})
+        assert "evidence_refs" not in normalize_result_row({**RICH_JSONL_ROW, "evidence_refs": []})
+        assert "evidence_refs" not in normalize_result_row(
+            {**RICH_JSONL_ROW, "evidence_refs": {"evidence_archive_id": "archive-1"}}
+        )
+        assert "evidence_refs" not in normalize_result_row(
+            {**RICH_JSONL_ROW, "evidence_refs": [{"artifact_id": "artifact-only"}]}
+        )
+
     def test_completely_empty_row(self):
         """An empty dict should produce an empty result."""
         result = normalize_result_row({})
@@ -290,6 +336,20 @@ class TestNormalizationHelpers:
         assert _normalize_tags([]) == []
         assert _normalize_references(None) == []
         assert _normalize_extracted_results("not a list") == []
+
+    def test_normalize_evidence_refs_keeps_only_durable_refs(self):
+        assert normalize_evidence_refs(
+            [
+                {"evidence_archive_id": "archive-a"},
+                {"evidence_archive_id": "archive-a"},
+                {"evidence_archive_id": "archive-b", "excerpt": "proof"},
+                {"source_artifact_id": "artifact-1"},
+                {},
+            ]
+        ) == [
+            {"evidence_archive_id": "archive-a"},
+            {"evidence_archive_id": "archive-b", "excerpt": "proof"},
+        ]
 
     def test_normalize_severity_valid(self):
         assert _normalize_severity("HIGH") == "high"
@@ -378,6 +438,18 @@ class TestBuildFindingObservation:
         obs = build_finding_observation(row)
         assert obs["payload"]["extracted_results"] == ["admin portal", "password field"]
 
+    def test_rich_row_observation_includes_valid_evidence_refs(self):
+        row = normalize_result_row(
+            {
+                **RICH_JSONL_ROW,
+                "evidence_refs": [{"evidence_archive_id": "archive-nuclei", "excerpt": "proof"}],
+            }
+        )
+        obs = build_finding_observation(row)
+        assert obs["payload"]["evidence_refs"] == [
+            {"evidence_archive_id": "archive-nuclei", "excerpt": "proof"}
+        ]
+
     def test_rich_row_observation_includes_matcher_id(self):
         row = normalize_result_row(RICH_JSONL_ROW)
         obs = build_finding_observation(row)
@@ -422,6 +494,91 @@ class TestBuildFindingObservation:
         obs_a = build_finding_observation(normalize_result_row(row_a))
         obs_b = build_finding_observation(normalize_result_row(row_b))
         assert obs_a["subject_key"] != obs_b["subject_key"]
+
+
+class TestBuildWebPathObservation:
+    """Verify conservative nuclei web-path observation construction."""
+
+    def test_explicit_path_discovery_row_produces_web_path(self):
+        row = normalize_result_row(
+            {
+                **RICH_JSONL_ROW,
+                "matched-at": "HTTPS://Example.com:443//admin?debug=1#frag",
+                "path_discovery": True,
+                "status_code": 200,
+                "response_size": 1234,
+                "evidence_refs": [{"evidence_archive_id": "archive-path"}],
+            }
+        )
+
+        obs = build_web_path_observation(row)
+
+        assert obs == {
+            "observation_type": "web.path_discovered",
+            "subject_type": "web.path",
+            "subject_key": "web.path:https://example.com/admin",
+            "payload": {
+                "source": "web_applications.web_vulnerability_scanners.nuclei",
+                "path": "/admin",
+                "target_url": "https://example.com/admin",
+                "status_code": 200,
+                "response_size": 1234,
+                "evidence_refs": [{"evidence_archive_id": "archive-path"}],
+            },
+        }
+
+    def test_ambiguous_root_and_malformed_rows_emit_no_web_path(self):
+        assert build_web_path_observation(normalize_result_row(RICH_JSONL_ROW)) is None
+        assert build_web_path_observation(
+            normalize_result_row({**RICH_JSONL_ROW, "matched-at": "https://example.com", "path_discovery": True})
+        ) is None
+        assert build_web_path_observation({"target_url": "not a url", "path_discovery": True}) is None
+
+
+class TestNucleiSemanticObservationBuilder:
+    """Verify final producer-owned nuclei fact rows."""
+
+    def test_builds_finding_and_explicit_web_path_in_order(self):
+        row = normalize_result_row(
+            {
+                **RICH_JSONL_ROW,
+                "path_discovery": True,
+                "status_code": 200,
+                "response_size": 1234,
+            }
+        )
+
+        observations = build_nuclei_semantic_observations([row])
+
+        assert [item["observation_type"] for item in observations] == [
+            "finding.vulnerability_detected",
+            "web.path_discovered",
+        ]
+
+    def test_direct_compiler_accepts_supported_nuclei_finding_and_web_path(self):
+        row = normalize_result_row(
+            {
+                **RICH_JSONL_ROW,
+                "path_discovery": True,
+                "status_code": 200,
+                "response_size": 1234,
+                "evidence_refs": [{"evidence_archive_id": "archive-nuclei"}],
+            }
+        )
+        observations = build_nuclei_semantic_observations([row])
+
+        compiled = compile_facts(
+            SemanticFactEnvelope(
+                semantic_schema_version="nuclei.v1",
+                capability_family="vulnerability_scanning",
+                observations=tuple(observations),
+                evidence=(),
+            )
+        )
+
+        assert compiled.accepted_count == 2
+        assert compiled.rejected_count == 0
+        assert compiled.diagnostics == ()
 
 
 # ---------------------------------------------------------------------------
@@ -748,6 +905,8 @@ def test_nuclei_prompt_baseline_frozen_v4_with_evidence():
         llm_client=llm,
         logger=logging.getLogger("test.nuclei.prompt.baseline.pre_v4"),
     )
+    processor._LLM_BYPASS_MAX_CHARS = 0
+    processor._LLM_BYPASS_MAX_LINES = 0
     tool = NucleiTool()
     stdout = _make_jsonl(RICH_JSONL_ROW)
     args = NucleiArgs(target="http://example.com")
@@ -784,22 +943,20 @@ def test_nuclei_prompt_baseline_frozen_v4_with_evidence():
     )
 
     assert llm.last_prompt is not None
-    # Rebaselined 2026-04-21 after centralizing evidence normalization through
-    # validate_semantic_evidence_entries so extract_runtime_semantic_inputs no
-    # longer bypasses the validator. The canonical detail={} field now reaches
-    # the prompt for all emitter-produced evidence.
-    assert len(llm.last_prompt) == 10966
+    # Refreshed 2026-07-26 to the current v4 prompt text while preserving the
+    # production renderer and semantic payload.
+    assert len(llm.last_prompt) == 12005
     assert (
         hashlib.sha256(llm.last_prompt.encode("utf-8")).hexdigest()
-        == "adbcc239ed00bf3dea32dec1a541289b63e53a3047e4081ce388791dce814b98"
+        == "2720ef20557094b48b5844d9236f3de102954a72db906b9f1f8f0313d38c081c"
     )
     assert "finding.vulnerability_detected" in llm.last_prompt
     assert '"result_summary":[' in llm.last_prompt
 
-    assert result.summary == "prompt-sha256:adbcc239ed00bf3dea32dec1a541289b63e53a3047e4081ce388791dce814b98"
-    assert result.key_findings == ["prompt-len:10966"]
+    assert result.summary == "prompt-sha256:2720ef20557094b48b5844d9236f3de102954a72db906b9f1f8f0313d38c081c"
+    assert result.key_findings == ["prompt-len:12005"]
     assert result.structured_signals == []
-    assert result.decision_evidence == ["adbcc239ed00bf3d"]
+    assert result.decision_evidence == ["2720ef20557094b4"]
     assert result.lossiness_risk == "low"
 
 

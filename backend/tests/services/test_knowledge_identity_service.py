@@ -353,6 +353,93 @@ def test_identity_service_preserves_service_fingerprint_contradictions_in_metada
     assert contradictions[0]["incoming"] == "nginx"
 
 
+@pytest.mark.parametrize(
+    ("observation_type", "payload", "expected_status"),
+    (
+        ("network.open_port", {}, "open"),
+        ("network.service_observed", {"state": "closed"}, "closed"),
+        ("network.service_observed", {"state": "filtered"}, "filtered"),
+        (
+            "network.service_observed",
+            {"status": "open", "state": "closed"},
+            "open",
+        ),
+        (
+            "network.service_observed",
+            {"status": " ", "state": "closed"},
+            "closed",
+        ),
+    ),
+)
+def test_identity_service_normalizes_service_reachability_to_status(
+    observation_type: str,
+    payload: dict[str, str],
+    expected_status: str,
+) -> None:
+    service = KnowledgeIdentityService()
+    observation = ObservationCreate(
+        engagement_id=1,
+        task_id=10,
+        source_execution_id="exec-service-status",
+        ingestion_run_id="run-service-status",
+        observation_type=observation_type,
+        subject_type="service.socket",
+        subject_key="service.socket:10.10.10.5/tcp/8080",
+        assertion_level="observed",
+        observed_at=datetime.now(timezone.utc),
+        payload=payload,
+    )
+
+    result = service.resolve_observations([observation])
+    decision = result.merge_decisions[
+        "service:service.socket:10.10.10.5/tcp/8080"
+    ]
+
+    assert decision.metadata["state"]["status"] == expected_status
+
+
+def test_identity_service_tracks_service_reachability_contradictions() -> None:
+    service = KnowledgeIdentityService()
+    now = datetime.now(timezone.utc)
+    service_key = "service.socket:10.10.10.5/tcp/8080"
+    observations = [
+        ObservationCreate(
+            engagement_id=1,
+            task_id=10,
+            source_execution_id="exec-service-open",
+            ingestion_run_id="run-service-open",
+            observation_type="network.open_port",
+            subject_type="service.socket",
+            subject_key=service_key,
+            assertion_level="observed",
+            observed_at=now,
+            payload={},
+        ),
+        ObservationCreate(
+            engagement_id=1,
+            task_id=10,
+            source_execution_id="exec-service-filtered",
+            ingestion_run_id="run-service-filtered",
+            observation_type="network.service_observed",
+            subject_type="service.socket",
+            subject_key=service_key,
+            assertion_level="observed",
+            observed_at=now + timedelta(seconds=30),
+            payload={"state": "filtered"},
+        ),
+    ]
+
+    result = service.resolve_observations(observations)
+    decision = result.merge_decisions[f"service:{service_key}"]
+    contradictions = list(decision.metadata.get("contradictions") or [])
+
+    assert decision.metadata["state"]["status"] == "filtered"
+    assert len(contradictions) == 1
+    assert contradictions[0]["field"] == "status"
+    assert contradictions[0]["previous"] == "open"
+    assert contradictions[0]["incoming"] == "filtered"
+
+
 def test_identity_service_preserves_host_status_contradictions_in_metadata() -> None:
     service = KnowledgeIdentityService()
     now = datetime.now(timezone.utc)

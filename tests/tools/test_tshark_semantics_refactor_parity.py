@@ -263,7 +263,7 @@ FIELD_PROFILE_STDOUT = "\n".join(
                 "tcp.stream": "9",
                 "frame.len": "74",
                 "ftp.request.command": "USER",
-                "ftp.request.arg": "nathan",
+                "ftp.request.arg": "demo-user",
             },
         ),
         _field_row(
@@ -279,7 +279,7 @@ FIELD_PROFILE_STDOUT = "\n".join(
                 "tcp.stream": "9",
                 "frame.len": "86",
                 "ftp.request.command": "PASS",
-                "ftp.request.arg": "Buck3tH4TF0RM3!",
+                "ftp.request.arg": "synthetic-password!",
             },
         ),
         _field_row(
@@ -802,6 +802,14 @@ def test_refactored_security_secret_exposure_diagnostics_and_findings() -> None:
     assert finding is not None
     assert finding["observation_type"] == "finding.vulnerability_detected"
     assert finding["payload"]["finding_subtype"] == "credential_exposure_detected"
+    assert finding["payload"]["detector_family"] == (
+        "tshark/credential_exposure_detected/http.authorization"
+    )
+    assert finding["payload"]["detector_id"] == finding["subject_key"].rsplit(":", 1)[-1]
+    assert finding["payload"]["exposure_proof_id"] == (
+        "sha|2|7|http.authorization|Bearer <DURABLE_SECRET_MASK:token>"
+    )
+    assert ":secret-exposure/tshark/" in finding["subject_key"]
     assert security.build_secret_exposure_finding(metadata["secret_exposure"][1], base) is None
 
     assert security.service_subject_from_secret_exposure(
@@ -970,6 +978,7 @@ def test_refactored_semantic_observation_helpers() -> None:
         {"dst": "203.0.113.20", "dst_port": "80", "protocol": "http"},
         {"dst": "203.0.113.53", "dst_port": "53", "protocol": "dns"},
         {"dst": "bad host", "dst_port": "80", "protocol": "tcp"},
+        {"dst": "example.test", "dst_port": "80", "protocol": "tcp"},
         {"dst": "203.0.113.20", "dst_port": "bad", "protocol": "tcp"},
     ]
     assert [
@@ -979,6 +988,7 @@ def test_refactored_semantic_observation_helpers() -> None:
         ("service.socket:203.0.113.20/tcp/80", "203.0.113.20", "tcp", 80, None),
         ("service.socket:203.0.113.20/tcp/80", "203.0.113.20", "tcp", 80, "http"),
         ("service.socket:203.0.113.53/udp/53", "203.0.113.53", "udp", 53, "dns"),
+        None,
         None,
         None,
     ]
@@ -1913,7 +1923,7 @@ def test_refactored_ftp_field_parser_matches_legacy_request_response_metadata() 
             "tcp.len": "18",
             "frame.len": "74",
             "ftp.request.command": "USER",
-            "ftp.request.arg": "nathan",
+            "ftp.request.arg": "demo-user",
         },
         {
             "frame.number": "61",
@@ -1927,7 +1937,7 @@ def test_refactored_ftp_field_parser_matches_legacy_request_response_metadata() 
             "tcp.len": "22",
             "frame.len": "86",
             "ftp.request.command": "PASS",
-            "ftp.request.arg": "Buck3tH4TF0RM3!",
+            "ftp.request.arg": "synthetic-password!",
         },
         {
             "frame.number": "62",
@@ -1968,7 +1978,7 @@ def test_refactored_ftp_field_parser_matches_legacy_request_response_metadata() 
             "src_port": "51521",
             "dst_port": "21",
             "request_command": "USER",
-            "request_arg": "nathan",
+            "request_arg": "demo-user",
             "response_code": None,
             "response_arg": None,
             "tcp_len": "18",
@@ -1983,7 +1993,7 @@ def test_refactored_ftp_field_parser_matches_legacy_request_response_metadata() 
             "src_port": "51521",
             "dst_port": "21",
             "request_command": "PASS",
-            "request_arg": "Buck3tH4TF0RM3!",
+            "request_arg": "synthetic-password!",
             "response_code": None,
             "response_arg": None,
             "tcp_len": "22",
@@ -2997,7 +3007,7 @@ def test_facade_snapshot_field_survey_and_protocol_rows() -> None:
             "src_port": "49154",
             "dst_port": "21",
             "request_command": "USER",
-            "request_arg": "nathan",
+            "request_arg": "demo-user",
             "response_code": None,
             "response_arg": None,
             "tcp_len": None,
@@ -3012,7 +3022,7 @@ def test_facade_snapshot_field_survey_and_protocol_rows() -> None:
             "src_port": "49154",
             "dst_port": "21",
             "request_command": "PASS",
-            "request_arg": "Buck3tH4TF0RM3!",
+            "request_arg": "synthetic-password!",
             "response_code": None,
             "response_arg": None,
             "tcp_len": None,
@@ -3034,6 +3044,39 @@ def test_facade_snapshot_field_survey_and_protocol_rows() -> None:
             "frame_len": "70",
         },
     ]
+
+
+def test_facade_field_security_mode_emits_masked_ftp_credential_finding() -> None:
+    metadata = _facade_parse(
+        FIELD_PROFILE_STDOUT,
+        "",
+        analysis_mode="find_security_relevant_artifacts",
+        fields=FIELD_PROFILE_FIELDS,
+        artifact_sha256="sha",
+        max_rows=20,
+    )
+
+    ftp_exposures = [
+        item
+        for item in metadata.get("secret_exposure", [])
+        if item.get("protocol") == "ftp" and item.get("field") == "ftp.request.arg"
+    ]
+    assert len(ftp_exposures) == 1
+
+    observations = tshark_semantics.build_tshark_semantic_observations(metadata, args=None)
+    ftp_findings = [
+        item
+        for item in observations
+        if item["observation_type"] == "finding.vulnerability_detected"
+        and item["payload"].get("protocol") == "ftp"
+    ]
+
+    assert len(ftp_findings) == 1
+    assert ftp_findings[0]["payload"]["subject_key"] == (
+        "service.socket:203.0.113.21/tcp/21"
+    )
+    assert "<DURABLE_SECRET_MASK:secret>" in ftp_findings[0]["payload"]["proof_excerpt"]
+    assert "synthetic-password!" not in str(ftp_findings)
 
 
 def test_facade_snapshot_mail_field_rows_emit_auth_security_signals() -> None:
@@ -3159,17 +3202,20 @@ def test_facade_snapshot_semantic_observations_and_evidence_are_masked() -> None
         "host.ip:192.0.2.10",
         "host.ip:198.51.100.53",
         "host.ip:203.0.113.20",
-        "host.ip:203.0.113.443",
         "service.socket:198.51.100.53/udp/53",
         "service.socket:203.0.113.20/tcp/80",
         (
             "finding.vulnerability:service.socket:203.0.113.20/tcp/80:"
-            "tshark/credential_exposure_detected/http.authorization"
+            "secret-exposure/tshark/secret_exposure/http.authorization/"
+            "http/authorization_header/tcp-192.0.2.10-49152--203.0.113.20-80/"
+            "sha-2-7-http.authorization-bearer-durable_secret_mask-token"
         ),
         "service.socket:203.0.113.20/tcp/80",
         (
             "finding.vulnerability:service.socket:203.0.113.20/tcp/80:"
-            "tshark/credential_exposure_detected/http.cookie"
+            "secret-exposure/tshark/secret_exposure/http.cookie/"
+            "http/cookie/tcp-192.0.2.10-49152--203.0.113.20-80/"
+            "sha-2-7-http.cookie-durable_secret_mask-secret"
         ),
     ]
     assert [item["payload"]["proof_excerpt"] for item in findings] == [

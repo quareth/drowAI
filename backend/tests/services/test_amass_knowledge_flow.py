@@ -23,13 +23,13 @@ from backend.models.knowledge import (
     KnowledgeService,
 )
 from backend.models.provenance import ExecutionArtifact, ToolExecution
-from backend.services.knowledge.adapters.amass_adapter import AMASS_TOOL_ID
 from backend.services.knowledge.identity.canonical_keys import build_finding_vulnerability_key
 from backend.services.knowledge.ingestion_service import KnowledgeIngestionService
 from backend.services.knowledge.query_service import KnowledgeQueryService
 from runtime_shared.semantic.canonical_keys import build_relationship_edge_key
 
 
+AMASS_TOOL_ID = "information_gathering.dns.amass"
 NMAP_TOOL_ID = "information_gathering.network_discovery.nmap"
 DNS_KEY = "host.dns:api.example.com"
 IP_KEY = "host.ip:192.0.2.20"

@@ -108,9 +108,17 @@ def test_build_command_transport_tshark_compacts_model_stdout_and_keeps_process_
 
     compact_stdout = json.loads(result.stdout)
     assert result.process_stdout == raw_stdout
+    assert compact_stdout == result.metadata["pcap_compact"]
     assert compact_stdout["schema_version"] == "pcap.compact.v1"
+    assert compact_stdout["pcap"]["packet_count"] == 1
+    assert compact_stdout["summary_counts"]["secret_exposure"] == 1
     assert "_source" not in result.stdout
     assert "raw-runtime-token" in result.stdout
     assert result.metadata["pcap_compact"]["schema_version"] == "pcap.compact.v1"
+    assert result.metadata["compact_summary"] == (
+        "PCAP compact analysis parsed 1 packets, 2 hosts, 1 conversations, "
+        "1 credential events, 1 auth sequences, 1 secret exposures."
+    )
     assert result.metadata["compact_key_findings"]
+    assert result.metadata["compact_decision_evidence"]
     assert result.stderr == ""

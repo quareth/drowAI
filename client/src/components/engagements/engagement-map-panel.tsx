@@ -31,6 +31,7 @@ export function EngagementMapPanel({
   onSelectEdge,
 }: EngagementMapPanelProps) {
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
+  const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null);
   const topologyView = useMemo(() => adaptEngagementGraphToTopology(graph), [graph]);
   const topology = topologyView.graph;
   const assetNodes = useMemo(
@@ -59,6 +60,25 @@ export function EngagementMapPanel({
       return a.label.localeCompare(b.label);
     })[0];
   }, [assetNodes, selectedAssetId]);
+  const selectedService = useMemo(
+    () =>
+      selectedAsset?.childServices.find(
+        (service) => service.id === selectedServiceId,
+      ) || null,
+    [selectedAsset, selectedServiceId],
+  );
+  const selectedServiceNode = useMemo<GraphNode | null>(() => {
+    if (!selectedService) {
+      return null;
+    }
+    return selectedService.sourceNode || {
+      id: selectedService.id,
+      subject_key: selectedService.id,
+      node_type: "service",
+      label: selectedService.label,
+      metadata: selectedService.metadata,
+    };
+  }, [selectedService]);
 
   const findAssetForGraphNode = (node: GraphNode): TopologyNode | null => {
     const direct = assetNodes.find((asset) => asset.id === node.id);
@@ -74,6 +94,7 @@ export function EngagementMapPanel({
   const handleSelectTopologyNode = (node: TopologyNode) => {
     if (node.kind === "asset") {
       setSelectedAssetId(node.id);
+      setSelectedServiceId(null);
     }
   };
 
@@ -81,6 +102,12 @@ export function EngagementMapPanel({
     const relatedAsset = findAssetForGraphNode(node);
     if (relatedAsset) {
       setSelectedAssetId(relatedAsset.id);
+    }
+    if (
+      node.node_type === "service" ||
+      String(node.subject_key || "").startsWith("service.")
+    ) {
+      setSelectedServiceId(node.id);
     }
     onSelectNode?.(node);
   };
@@ -90,6 +117,7 @@ export function EngagementMapPanel({
     if (!service) {
       return;
     }
+    setSelectedServiceId(service.id);
     onSelectNode?.(service.sourceNode || {
       id: service.id,
       subject_key: service.id,
@@ -134,7 +162,9 @@ export function EngagementMapPanel({
             onSelectTopologyNode={handleSelectTopologyNode}
           />
           <AssetInspectorPanel
+            engagementId={topology.engagementId}
             selectedAsset={selectedAsset}
+            selectedService={selectedServiceNode}
             onSelectService={handleSelectInspectorService}
           />
         </div>

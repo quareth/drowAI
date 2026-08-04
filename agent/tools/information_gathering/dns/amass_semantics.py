@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from agent.semantic.evidence_vocabulary import SemanticEvidenceType
+from runtime_shared.semantic.pentest_facts import SemanticEvidenceType
 from runtime_shared.semantic.amass_facts import (
     collect_amass_facts,
     dns_record_type,

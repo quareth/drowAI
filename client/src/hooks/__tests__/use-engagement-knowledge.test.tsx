@@ -79,6 +79,7 @@ describe("use-engagement-knowledge", () => {
       "web-surface",
       "origins",
       "service.socket:10.0.0.10/tcp/443",
+      null,
       { include_noisy: true },
     ]);
     expect(
@@ -255,10 +256,12 @@ describe("use-engagement-knowledge", () => {
     await waitFor(() => {
       expect(originsResult.current.data).toEqual({
         service_key: "service.socket:10.0.0.10/tcp/443",
+        asset_key: null,
         items: [],
       });
       expect(pathPageResult.current.data).toEqual({
         service_key: "service.socket:10.0.0.10/tcp/443",
+        asset_key: null,
         origin_key: null,
         items: [],
         total: 0,
@@ -280,6 +283,45 @@ describe("use-engagement-knowledge", () => {
     expect(secondUrl).toContain("include_noisy=true");
     expect(secondUrl).toContain("limit=50");
     expect(secondUrl).toContain("offset=0");
+  });
+
+  it("loads web-surface paths by asset when no service association exists", async () => {
+    mocked.apiFetch
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({}),
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({}),
+      } as Response);
+
+    renderHook(
+      () =>
+        useEngagementWebSurfaceOrigins("42", null, {
+          asset_key: "host.dns:example.com",
+        }),
+      { wrapper },
+    );
+    renderHook(
+      () =>
+        useEngagementWebSurfacePathPage("42", null, {
+          asset_key: "host.dns:example.com",
+          origin_key: "https://example.com",
+        }),
+      { wrapper },
+    );
+
+    await waitFor(() => {
+      expect(mocked.apiFetch).toHaveBeenCalledTimes(2);
+    });
+
+    const firstUrl = String(mocked.apiFetch.mock.calls[0]?.[0] ?? "");
+    const secondUrl = String(mocked.apiFetch.mock.calls[1]?.[0] ?? "");
+    expect(firstUrl).toContain("asset_key=host.dns%3Aexample.com");
+    expect(firstUrl).not.toContain("service_key=");
+    expect(secondUrl).toContain("asset_key=host.dns%3Aexample.com");
+    expect(secondUrl).not.toContain("service_key=");
   });
 
   it("invalidates only the targeted engagement cache keys", async () => {

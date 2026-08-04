@@ -24,6 +24,7 @@ Review only:
 - residual code introduced by the reviewed implementation;
 - module docstrings and code-level responsibility documentation;
 - test-code structure, determinism, duplication, readability, and brittleness;
+- implementation-specific and development-only tests changed by the frozen scope, including stale, dead, or legacy tests that no longer exercise a wired path or only cover code retired by the same scoped implementation;
 - type and interface clarity as maintainability concerns.
 
 Explicitly exclude:
@@ -90,7 +91,9 @@ Create an active finding only when all are true:
 4. The fix is obvious and bounded to a small or medium behavior-neutral cleanup inside non-deleted frozen changed files.
 5. Focused verification can prove the change did not alter behavior.
 
-Small and medium fixes may remove scoped unused imports/variables/branches/helpers/files, remove scoped dead or residual compatibility code, remove or refine scoped duplication by delegating to an established read-only authority, collapse unnecessary wrapper or helper layers, consolidate equivalent branches, eliminate provably redundant local computation or data transformations, simplify internal control flow, improve misleading internal names, add accurate module docstrings, or improve brittle scoped tests without changing assertions or behavior.
+Small and medium fixes may remove scoped unused imports/variables/branches/helpers/files, remove scoped dead or residual compatibility code, remove or refine scoped duplication by delegating to an established read-only authority, collapse unnecessary wrapper or helper layers, consolidate equivalent branches, eliminate provably redundant local computation or data transformations, simplify internal control flow, improve misleading internal names, add accurate module docstrings, improve brittle scoped tests without changing assertions or behavior, or delete stale/dead/legacy implementation-specific or development-only tests when frozen-scope evidence proves their exercised code was retired or their coverage is redundant.
+
+Test cleanup must remain inside the frozen branch or commit changed-file set. Do not infer that a test is dead from naming, age, or a missing direct call alone; trace the wired production or development path and preserve meaningful behavior and contract coverage.
 
 Do not use arbitrary line counts or file counts. A large file is not a finding by itself.
 
