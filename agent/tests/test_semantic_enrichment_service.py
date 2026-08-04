@@ -8,6 +8,7 @@ from agent.semantic.enrichment import (
     extract_runtime_semantic_inputs_with_fallback,
     validate_semantic_evidence_entries,
 )
+from agent.tool_runtime.result_enrichment import merge_semantic_emitter_metadata
 from runtime_shared.semantic.pentest_facts import SemanticEvidenceType
 
 
@@ -118,6 +119,70 @@ def test_build_runtime_semantic_metadata_validates_existing_semantic_evidence() 
             "detail": {},
         }
     ]
+
+
+def test_result_enrichment_drops_non_finite_emitted_and_legacy_evidence() -> None:
+    class EvidenceTool:
+        def __init__(self, *, emitted_evidence, legacy_evidence) -> None:
+            self.emitted_evidence = emitted_evidence
+            self.legacy_evidence = legacy_evidence
+
+        def parse_output(self, **_kwargs):
+            return {"semantic_evidence": self.legacy_evidence}
+
+        def emit_semantic_observations(self, **_kwargs):
+            return []
+
+        def emit_semantic_evidence(self, **_kwargs):
+            return self.emitted_evidence
+
+    valid_evidence = {
+        "type": SemanticEvidenceType.BASELINE.value,
+        "name": "valid_baseline",
+        "value": 1,
+    }
+    cases = (
+        (
+            [
+                {
+                    "type": SemanticEvidenceType.RESULT_SUMMARY.value,
+                    "name": "invalid_emitted_value",
+                    "value": float("nan"),
+                },
+                valid_evidence,
+            ],
+            None,
+        ),
+        (
+            None,
+            [
+                {
+                    "type": SemanticEvidenceType.RESULT_SUMMARY.value,
+                    "name": "invalid_legacy_detail",
+                    "value": 1,
+                    "detail": {"after_filter_count": float("inf")},
+                },
+                valid_evidence,
+            ],
+        ),
+    )
+
+    for emitted_evidence, legacy_evidence in cases:
+        metadata = merge_semantic_emitter_metadata(
+            tool=EvidenceTool(
+                emitted_evidence=emitted_evidence,
+                legacy_evidence=legacy_evidence,
+            ),
+            args=object(),
+            stdout="successful output",
+            stderr="",
+            exit_code=0,
+            existing_metadata=None,
+        )
+
+        assert metadata["semantic_evidence"] == [
+            {**valid_evidence, "detail": {}},
+        ]
 
 
 def test_extract_runtime_semantic_inputs_normalizes_supported_fields() -> None:

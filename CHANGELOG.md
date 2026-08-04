@@ -40,6 +40,8 @@ The format is based on
 
 ### Fixed
 
+- Semantic evidence validation now drops non-finite numeric entries without
+  failing otherwise successful tool-result assembly.
 - Masscan semantic projection now excludes explicitly closed or filtered rows
   from canonical open-port and detected-service facts.
 - Knowledge service projection now preserves canonical open, closed, and

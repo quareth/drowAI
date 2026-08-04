@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 
 import pytest
@@ -168,6 +169,45 @@ def test_detail_scalar_only_non_scalar_removed() -> None:
     )
 
     assert valid[0]["detail"] == {"source": "tool"}
+
+
+@pytest.mark.parametrize("non_finite", (float("nan"), float("inf"), float("-inf")))
+@pytest.mark.parametrize("location", ("value", "detail"))
+def test_non_finite_evidence_scalars_are_dropped_with_diagnostics(
+    non_finite: float,
+    location: str,
+) -> None:
+    invalid_entry = {
+        "type": SemanticEvidenceType.RESULT_SUMMARY.value,
+        "name": f"invalid_{location}",
+        "value": non_finite if location == "value" else 1,
+        "detail": (
+            {"after_filter_count": non_finite}
+            if location == "detail"
+            else {}
+        ),
+    }
+    valid_entry = {
+        "type": SemanticEvidenceType.BASELINE.value,
+        "name": "valid_baseline",
+        "value": 1,
+    }
+
+    accepted, diagnostics = validate_semantic_evidence(
+        [invalid_entry, valid_entry]
+    )
+    mutable_accepted, dropped = validate_semantic_evidence_entries(
+        [invalid_entry, valid_entry]
+    )
+
+    assert [entry["name"] for entry in accepted] == ["valid_baseline"]
+    assert diagnostics == (
+        FactDiagnostic(0, f"invalid_evidence_{location}"),
+    )
+    assert [entry["name"] for entry in mutable_accepted] == ["valid_baseline"]
+    assert len(dropped) == 1
+    assert dropped[0]["name"] == f"invalid_{location}"
+    json.dumps(mutable_accepted, allow_nan=False)
 
 
 def test_detail_may_be_empty_after_sanitization() -> None:
