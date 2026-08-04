@@ -668,37 +668,57 @@ class KnowledgeQueryEngine:
             offset=int(normalized.offset),
         ).to_dict()
 
-    def list_service_web_surface_origins(
+    def list_web_surface_origins(
         self,
         *,
         user_id: int,
         tenant_id: int | None = None,
         engagement_id: int,
-        service_key: str,
+        service_key: str | None,
+        asset_key: str | None = None,
         include_noisy: bool = False,
     ) -> dict[str, object]:
+        normalized_service_key = str(service_key or "").strip() or None
+        normalized_asset_key = str(asset_key or "").strip() or None
         if tenant_id is None:
             return {
-                "service_key": str(service_key or "").strip(),
+                "service_key": normalized_service_key,
+                "asset_key": normalized_asset_key,
                 "items": [],
             }
-        service_row = self.selectors.resolve_service_for_engagement(
-            user_id=int(user_id),
-            tenant_id=int(tenant_id),
-            engagement_id=int(engagement_id),
-            service_key=service_key,
+        service_row = (
+            self.selectors.resolve_service_for_engagement(
+                user_id=int(user_id),
+                tenant_id=int(tenant_id),
+                engagement_id=int(engagement_id),
+                service_key=normalized_service_key,
+            )
+            if normalized_service_key
+            else None
         )
-        if service_row is None:
+        asset_row = (
+            self.selectors.resolve_asset_for_engagement(
+                user_id=int(user_id),
+                tenant_id=int(tenant_id),
+                engagement_id=int(engagement_id),
+                asset_key=normalized_asset_key,
+            )
+            if normalized_asset_key
+            else None
+        )
+        if service_row is None and asset_row is None:
             return {
-                "service_key": str(service_key or "").strip(),
+                "service_key": normalized_service_key,
+                "asset_key": normalized_asset_key,
                 "items": [],
             }
 
-        web_path_rows = self.selectors.list_web_surface_origins_for_service(
+        web_path_rows = self.selectors.list_web_surface_origins_for_scope(
             user_id=int(user_id),
             tenant_id=int(tenant_id),
             engagement_id=int(engagement_id),
-            service_id=str(service_row.id),
+            service_id=str(service_row.id) if service_row is not None else None,
+            asset_id=str(asset_row.id) if asset_row is not None else None,
         )
         grouped: dict[str, list] = {}
         for row in web_path_rows:
@@ -750,11 +770,12 @@ class KnowledgeQueryEngine:
             reverse=True,
         )
         return {
-            "service_key": str(service_row.service_key or ""),
+            "service_key": str(service_row.service_key) if service_row is not None else None,
+            "asset_key": str(asset_row.asset_key) if asset_row is not None else None,
             "items": summaries,
         }
 
-    def list_service_web_surface_paths(
+    def list_web_surface_paths(
         self,
         *,
         user_id: int,
@@ -766,6 +787,7 @@ class KnowledgeQueryEngine:
         if tenant_id is None:
             return {
                 "service_key": normalized.service_key,
+                "asset_key": normalized.asset_key,
                 "origin_key": normalized.origin_key,
                 "items": [],
                 "total": 0,
@@ -773,9 +795,10 @@ class KnowledgeQueryEngine:
                 "offset": int(normalized.offset),
                 "hidden_noisy": 0,
             }
-        if not normalized.service_key:
+        if not normalized.service_key and not normalized.asset_key:
             return {
                 "service_key": None,
+                "asset_key": None,
                 "origin_key": normalized.origin_key,
                 "items": [],
                 "total": 0,
@@ -784,15 +807,30 @@ class KnowledgeQueryEngine:
                 "hidden_noisy": 0,
             }
 
-        service_row = self.selectors.resolve_service_for_engagement(
-            user_id=int(user_id),
-            tenant_id=int(tenant_id),
-            engagement_id=int(engagement_id),
-            service_key=str(normalized.service_key),
+        service_row = (
+            self.selectors.resolve_service_for_engagement(
+                user_id=int(user_id),
+                tenant_id=int(tenant_id),
+                engagement_id=int(engagement_id),
+                service_key=str(normalized.service_key),
+            )
+            if normalized.service_key
+            else None
         )
-        if service_row is None:
+        asset_row = (
+            self.selectors.resolve_asset_for_engagement(
+                user_id=int(user_id),
+                tenant_id=int(tenant_id),
+                engagement_id=int(engagement_id),
+                asset_key=str(normalized.asset_key),
+            )
+            if normalized.asset_key
+            else None
+        )
+        if service_row is None and asset_row is None:
             return {
-                "service_key": str(normalized.service_key),
+                "service_key": normalized.service_key,
+                "asset_key": normalized.asset_key,
                 "origin_key": normalized.origin_key,
                 "items": [],
                 "total": 0,
@@ -801,11 +839,12 @@ class KnowledgeQueryEngine:
                 "hidden_noisy": 0,
             }
 
-        rows, total, hidden_noisy = self.selectors.list_web_surface_paths_for_service(
+        rows, total, hidden_noisy = self.selectors.list_web_surface_paths_for_scope(
             user_id=int(user_id),
             tenant_id=int(tenant_id),
             engagement_id=int(engagement_id),
-            service_id=str(service_row.id),
+            service_id=str(service_row.id) if service_row is not None else None,
+            asset_id=str(asset_row.id) if asset_row is not None else None,
             origin_key=normalized.origin_key,
             include_noisy=bool(normalized.include_noisy),
             limit=int(normalized.limit),
@@ -813,7 +852,8 @@ class KnowledgeQueryEngine:
         )
         items = [serialize_web_surface_path_item(row) for row in rows]
         return {
-            "service_key": str(service_row.service_key or ""),
+            "service_key": str(service_row.service_key) if service_row is not None else None,
+            "asset_key": str(asset_row.asset_key) if asset_row is not None else None,
             "origin_key": normalized.origin_key,
             "items": items,
             "total": int(total),

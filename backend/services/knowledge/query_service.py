@@ -175,24 +175,26 @@ class KnowledgeQueryService:
             engagement_id=engagement_id,
         )
 
-    def list_service_web_surface_origins(
+    def list_web_surface_origins(
         self,
         *,
         user_id: int,
         tenant_id: int | None = None,
         engagement_id: int,
-        service_key: str,
+        service_key: str | None,
+        asset_key: str | None = None,
         include_noisy: bool = False,
     ) -> dict[str, object]:
-        return self._engine.list_service_web_surface_origins(
+        return self._engine.list_web_surface_origins(
             user_id=user_id,
             tenant_id=tenant_id,
             engagement_id=engagement_id,
             service_key=service_key,
+            asset_key=asset_key,
             include_noisy=include_noisy,
         )
 
-    def list_service_web_surface_paths(
+    def list_web_surface_paths(
         self,
         *,
         user_id: int,
@@ -200,7 +202,7 @@ class KnowledgeQueryService:
         engagement_id: int,
         filters: WebSurfacePathsFilters | None = None,
     ) -> dict[str, object]:
-        return self._engine.list_service_web_surface_paths(
+        return self._engine.list_web_surface_paths(
             user_id=user_id,
             tenant_id=tenant_id,
             engagement_id=engagement_id,

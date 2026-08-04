@@ -799,18 +799,51 @@ class KnowledgeQuerySelectors:
             .one_or_none()
         )
 
-    def list_web_surface_paths_for_service(
+    def resolve_asset_for_engagement(
         self,
         *,
         user_id: int,
         tenant_id: int,
         engagement_id: int,
-        service_id: str,
+        asset_key: str,
+    ) -> KnowledgeAsset | None:
+        normalized_asset_key = str(asset_key or "").strip()
+        if not normalized_asset_key:
+            return None
+        return (
+            self.db.query(KnowledgeAsset)
+            .join(
+                EngagementAssetLink,
+                EngagementAssetLink.asset_id == KnowledgeAsset.id,
+            )
+            .filter(
+                KnowledgeAsset.asset_key == normalized_asset_key,
+                EngagementAssetLink.engagement_id == int(engagement_id),
+                KnowledgeAsset.tenant_id == int(tenant_id),
+                KnowledgeAsset.user_id == int(user_id),
+            )
+            .one_or_none()
+        )
+
+    def list_web_surface_paths_for_scope(
+        self,
+        *,
+        user_id: int,
+        tenant_id: int,
+        engagement_id: int,
+        service_id: str | None,
+        asset_id: str | None,
         origin_key: str | None,
         include_noisy: bool,
         limit: int,
         offset: int,
     ) -> tuple[list[KnowledgeWebPath], int, int]:
+        scope_filter = self._web_surface_scope_filter(
+            service_id=service_id,
+            asset_id=asset_id,
+        )
+        if scope_filter is None:
+            return [], 0, 0
         base_query = (
             self.db.query(KnowledgeWebPath)
             .join(
@@ -818,7 +851,7 @@ class KnowledgeQuerySelectors:
                 EngagementWebPathLink.web_path_id == KnowledgeWebPath.id,
             )
             .filter(
-                KnowledgeWebPath.service_id == str(service_id),
+                scope_filter,
                 EngagementWebPathLink.engagement_id == int(engagement_id),
                 KnowledgeWebPath.tenant_id == int(tenant_id),
                 KnowledgeWebPath.user_id == int(user_id),
@@ -855,14 +888,21 @@ class KnowledgeQuerySelectors:
         )
         return rows, total, hidden_noisy
 
-    def list_web_surface_origins_for_service(
+    def list_web_surface_origins_for_scope(
         self,
         *,
         user_id: int,
         tenant_id: int,
         engagement_id: int,
-        service_id: str,
+        service_id: str | None,
+        asset_id: str | None,
     ) -> list[KnowledgeWebPath]:
+        scope_filter = self._web_surface_scope_filter(
+            service_id=service_id,
+            asset_id=asset_id,
+        )
+        if scope_filter is None:
+            return []
         return (
             self.db.query(KnowledgeWebPath)
             .join(
@@ -870,7 +910,7 @@ class KnowledgeQuerySelectors:
                 EngagementWebPathLink.web_path_id == KnowledgeWebPath.id,
             )
             .filter(
-                KnowledgeWebPath.service_id == str(service_id),
+                scope_filter,
                 EngagementWebPathLink.engagement_id == int(engagement_id),
                 KnowledgeWebPath.tenant_id == int(tenant_id),
                 KnowledgeWebPath.user_id == int(user_id),
@@ -878,6 +918,23 @@ class KnowledgeQuerySelectors:
             .order_by(KnowledgeWebPath.origin_key.asc(), KnowledgeWebPath.canonical_url.asc())
             .all()
         )
+
+    @staticmethod
+    def _web_surface_scope_filter(*, service_id: str | None, asset_id: str | None):
+        if service_id:
+            service_filter = KnowledgeWebPath.service_id == str(service_id)
+            if not asset_id:
+                return service_filter
+            return or_(
+                service_filter,
+                and_(
+                    KnowledgeWebPath.service_id.is_(None),
+                    KnowledgeWebPath.asset_id == str(asset_id),
+                ),
+            )
+        if asset_id:
+            return KnowledgeWebPath.asset_id == str(asset_id)
+        return None
 
     @staticmethod
     def _normalize_origin_key_filter(origin_key: str | None) -> str | None:

@@ -40,6 +40,7 @@ from backend.services.knowledge.pentest_facts import (
 from backend.services.knowledge.projection.relationship_projector import RelationshipProjector
 from backend.services.knowledge.contracts import ObservationCreate as _ObservationCreate
 from backend.services.knowledge.projection_service import KnowledgeProjectionService
+from backend.services.knowledge.query.contracts import WebSurfacePathsFilters
 from backend.services.knowledge.query_service import KnowledgeQueryService
 from runtime_shared.semantic.pentest_facts import SemanticFactEnvelope
 from runtime_shared.semantic.web_common import build_web_response_observations
@@ -818,7 +819,7 @@ def test_projection_service_projects_ip_web_response_without_prior_network_scan(
         assert db.query(EngagementServiceLink).count() == 1
         assert db.query(EngagementWebPathLink).count() == 1
 
-        web_surface = KnowledgeQueryService(db).list_service_web_surface_origins(
+        web_surface = KnowledgeQueryService(db).list_web_surface_origins(
             user_id=int(engagement.user_id),
             tenant_id=1,
             engagement_id=int(engagement.id),
@@ -835,6 +836,80 @@ def test_projection_service_projects_ip_web_response_without_prior_network_scan(
                 "first_seen_at": web_surface["items"][0]["first_seen_at"],
                 "last_seen_at": web_surface["items"][0]["last_seen_at"],
             }
+        ]
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_projection_service_exposes_dns_web_response_through_asset_scope() -> None:
+    engine, db = _build_session()
+    try:
+        engagement = _seed_engagement(db)
+        semantic_rows = build_web_response_observations(
+            url="https://example.com/admin",
+            source="web_applications.web_crawlers.ffuf",
+            target_url="https://example.com/FUZZ",
+            status_code=200,
+            response_size=321,
+        )
+        bridge_result = build_knowledge_observations(
+            envelope=SemanticFactEnvelope(
+                semantic_schema_version="ffuf.v1",
+                capability_family="web_discovery",
+                observations=tuple(semantic_rows),
+                evidence=(),
+            ),
+            context=KnowledgeFactContext(
+                tenant_id=1,
+                user_id=int(engagement.user_id),
+                engagement_id=int(engagement.id),
+                task_id=None,
+                source_execution_id="exec-ffuf-dns-web-response",
+                ingestion_run_id="run-ffuf-dns-web-response",
+                observed_at=None,
+                artifact_summaries=(),
+                evidence_archives=(),
+            ),
+        )
+
+        result = KnowledgeProjectionService(db).project_observations(
+            engagement_id=engagement.id,
+            observations=bridge_result.observations,
+        )
+
+        assert result.asset_insert_count == 1
+        assert result.service_insert_count == 0
+        assert result.web_path_insert_count == 1
+        asset = db.query(KnowledgeAsset).one()
+        web_path = db.query(KnowledgeWebPath).one()
+        assert asset.asset_key == "host.dns:example.com"
+        assert str(web_path.asset_id) == str(asset.id)
+        assert web_path.service_id is None
+
+        query_service = KnowledgeQueryService(db)
+        origins = query_service.list_web_surface_origins(
+            user_id=int(engagement.user_id),
+            tenant_id=1,
+            engagement_id=int(engagement.id),
+            service_key=None,
+            asset_key="host.dns:example.com",
+        )
+        assert [item["origin_key"] for item in origins["items"]] == [
+            "https://example.com"
+        ]
+
+        paths = query_service.list_web_surface_paths(
+            user_id=int(engagement.user_id),
+            tenant_id=1,
+            engagement_id=int(engagement.id),
+            filters=WebSurfacePathsFilters(
+                asset_key="host.dns:example.com",
+                origin_key="https://example.com",
+            ),
+        )
+        assert [item["canonical_url"] for item in paths["items"]] == [
+            "https://example.com/admin"
         ]
     finally:
         db.close()

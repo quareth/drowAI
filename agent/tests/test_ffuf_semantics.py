@@ -182,11 +182,14 @@ def test_ffuf_crawler_emits_path_discovered_when_results_present() -> None:
         metadata=metadata,
     )
 
-    assert len(observations) == 1
-    observation = observations[0]
-    assert observation["observation_type"] == "web.path_discovered"
-    assert observation["subject_key"] == "web.path:https://example.com/admin"
-    assert observation["payload"]["path"] == "/admin"
+    assert [
+        (observation["observation_type"], observation["subject_key"])
+        for observation in observations
+    ] == [
+        ("dns.name_discovered", "host.dns:example.com"),
+        ("web.path_discovered", "web.path:https://example.com/admin"),
+    ]
+    assert observations[1]["payload"]["path"] == "/admin"
 
 
 def test_ffuf_semantic_target_strips_userinfo_and_preserves_ipv6() -> None:
@@ -326,6 +329,30 @@ def test_http_request_and_ffuf_emit_same_shared_web_response_facts() -> None:
     assert shared_domain_view(http_observations) == shared_domain_view(ffuf_observations)
 
 
+def test_http_request_dns_response_emits_dns_asset_and_web_path() -> None:
+    args = HttpRequestArgs(target="https://example.com/admin", method="GET")
+
+    observations = HttpRequestTool().emit_semantic_observations(
+        stdout="",
+        stderr="",
+        exit_code=0,
+        args=args,
+        metadata={
+            "effective_url": args.target,
+            "status_code": 200,
+            "content_length": 321,
+        },
+    )
+
+    assert [
+        (observation["observation_type"], observation["subject_key"])
+        for observation in observations
+    ] == [
+        ("dns.name_discovered", "host.dns:example.com"),
+        ("web.path_discovered", "web.path:https://example.com/admin"),
+    ]
+
+
 @pytest.mark.parametrize(
     ("url", "expected_url", "expected_port"),
     (
@@ -417,10 +444,14 @@ def test_ffuf_variants_emit_same_web_path_contract_for_equivalent_results() -> N
         FuzzerArgs(target="https://example.com/FUZZ", inline_wordlist=["admin"]),
     )
 
-    assert len(crawler_observations) == 1
-    assert len(fuzzer_observations) == 1
-    crawler_payload = dict(crawler_observations[0]["payload"])
-    fuzzer_payload = dict(fuzzer_observations[0]["payload"])
+    crawler_path = next(
+        row for row in crawler_observations if row["subject_type"] == "web.path"
+    )
+    fuzzer_path = next(
+        row for row in fuzzer_observations if row["subject_type"] == "web.path"
+    )
+    crawler_payload = dict(crawler_path["payload"])
+    fuzzer_payload = dict(fuzzer_path["payload"])
     assert crawler_payload.pop("source") == "web_applications.web_crawlers.ffuf"
     assert fuzzer_payload.pop("source") == "web_applications.web_application_fuzzers.ffuf"
     assert crawler_payload == fuzzer_payload == {
@@ -430,8 +461,8 @@ def test_ffuf_variants_emit_same_web_path_contract_for_equivalent_results() -> N
         "status_code": 301,
         "response_size": 512,
     }
-    assert crawler_observations[0]["subject_key"] == "web.path:https://example.com/admin"
-    assert fuzzer_observations[0]["subject_key"] == "web.path:https://example.com/admin"
+    assert crawler_path["subject_key"] == "web.path:https://example.com/admin"
+    assert fuzzer_path["subject_key"] == "web.path:https://example.com/admin"
 
 
 def test_ffuf_fuzzer_emits_web_path_discovered_when_results_present() -> None:
@@ -452,8 +483,10 @@ def test_ffuf_fuzzer_emits_web_path_discovered_when_results_present() -> None:
         metadata=metadata,
     )
 
-    assert len(observations) == 1
-    assert observations[0]["payload"]["source"] == "web_applications.web_application_fuzzers.ffuf"
+    path_observation = next(
+        row for row in observations if row["subject_type"] == "web.path"
+    )
+    assert path_observation["payload"]["source"] == "web_applications.web_application_fuzzers.ffuf"
 
 
 def test_ffuf_fuzzer_empty_run_emits_no_observations() -> None:
@@ -525,9 +558,10 @@ def test_ffuf_semantic_observations_respect_per_origin_cap_order() -> None:
         },
         FuzzerArgs(target="https://example.com/FUZZ", inline_wordlist=["admin"]),
     )
-    subject_keys = {item["subject_key"] for item in observations}
+    path_observations = [item for item in observations if item["subject_type"] == "web.path"]
+    subject_keys = {item["subject_key"] for item in path_observations}
 
-    assert len(observations) == 200
+    assert len(path_observations) == 200
     assert "web.path:https://example.com/important" in subject_keys
     assert "web.path:https://example.com/p204" not in subject_keys
 
@@ -560,10 +594,11 @@ def test_ffuf_semantic_observations_compile_directly_as_supported_web_path_facts
         )
     )
 
-    assert compiled.accepted_count == 1
+    assert compiled.accepted_count == 2
     assert compiled.rejected_count == 0
     assert compiled.diagnostics == ()
-    assert compiled.facts[0].payload == {
+    web_path_fact = next(fact for fact in compiled.facts if fact.subject_type == "web.path")
+    assert web_path_fact.payload == {
         "source": "web_applications.web_crawlers.ffuf",
         "path": "/admin",
         "target_url": "https://example.com/FUZZ",

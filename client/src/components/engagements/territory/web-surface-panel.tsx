@@ -1,4 +1,4 @@
-/* Service-bound web-surface panel that renders origin summaries and expandable path rows. */
+/* Asset/service-scoped web-surface panel for origin summaries and expandable paths. */
 
 import { useEffect, useMemo, useState } from "react";
 
@@ -14,6 +14,7 @@ import type { GraphNode } from "@/types/engagement-knowledge";
 interface WebSurfacePanelProps {
   engagementId: string | number | null | undefined;
   selectedNode: GraphNode | null;
+  assetKey?: string | null;
 }
 
 function isServiceNode(node: GraphNode): boolean {
@@ -59,27 +60,29 @@ function ProducerBadge({ producer }: { producer: string }) {
   );
 }
 
-export function WebSurfacePanel({ engagementId, selectedNode }: WebSurfacePanelProps) {
+export function WebSurfacePanel({ engagementId, selectedNode, assetKey = null }: WebSurfacePanelProps) {
   const [expandedOriginKey, setExpandedOriginKey] = useState<string | null>(null);
   const [includeNoisy, setIncludeNoisy] = useState(false);
 
-  const serviceKey = selectedNode?.id || null;
-  const eligible = Boolean(selectedNode && isWebSurfaceGraphNode(selectedNode) && engagementId && serviceKey);
+  const serviceKey = selectedNode && isWebSurfaceGraphNode(selectedNode) ? selectedNode.id : null;
+  const eligible = Boolean(engagementId && (serviceKey || assetKey));
+  const assetScope = assetKey ? { asset_key: assetKey } : {};
 
   useEffect(() => {
     setExpandedOriginKey(null);
-  }, [serviceKey, engagementId]);
+  }, [serviceKey, assetKey, engagementId]);
 
   const originsQuery = useEngagementWebSurfaceOrigins(
     engagementId,
     eligible ? serviceKey : null,
-    { include_noisy: includeNoisy },
+    { ...assetScope, include_noisy: includeNoisy },
   );
   const pathsQuery = useEngagementWebSurfacePathPage(
     engagementId,
     eligible && expandedOriginKey ? serviceKey : null,
     {
       origin_key: expandedOriginKey || undefined,
+      ...assetScope,
       include_noisy: includeNoisy,
       limit: 100,
       offset: 0,

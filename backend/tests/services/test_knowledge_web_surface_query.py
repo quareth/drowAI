@@ -1,4 +1,4 @@
-"""Tests for service-scoped web-surface query selectors and service methods."""
+"""Tests for service/asset-scoped web-surface selectors and query methods."""
 
 from __future__ import annotations
 
@@ -11,8 +11,10 @@ from sqlalchemy.orm import sessionmaker
 from backend.database import Base
 from backend.models.core import Engagement, User
 from backend.models.knowledge import (
+    EngagementAssetLink,
     EngagementServiceLink,
     EngagementWebPathLink,
+    KnowledgeAsset,
     KnowledgeService,
     KnowledgeWebPath,
 )
@@ -193,7 +195,7 @@ def test_service_bound_origin_summary_is_keyed_by_service_key() -> None:
         seeded = _seed_web_surface_sample(db)
         service = KnowledgeQueryService(db)
 
-        payload = service.list_service_web_surface_origins(
+        payload = service.list_web_surface_origins(
             user_id=seeded["owner"].id,
             tenant_id=seeded["tenant_id"],
             engagement_id=seeded["engagement"].id,
@@ -224,7 +226,7 @@ def test_service_bound_path_page_hides_noisy_rows_by_default() -> None:
         seeded = _seed_web_surface_sample(db)
         service = KnowledgeQueryService(db)
 
-        payload = service.list_service_web_surface_paths(
+        payload = service.list_web_surface_paths(
             user_id=seeded["owner"].id,
             tenant_id=seeded["tenant_id"],
             engagement_id=seeded["engagement"].id,
@@ -255,7 +257,7 @@ def test_service_bound_path_page_can_include_noisy_rows() -> None:
         seeded = _seed_web_surface_sample(db)
         service = KnowledgeQueryService(db)
 
-        payload = service.list_service_web_surface_paths(
+        payload = service.list_web_surface_paths(
             user_id=seeded["owner"].id,
             tenant_id=seeded["tenant_id"],
             engagement_id=seeded["engagement"].id,
@@ -280,13 +282,121 @@ def test_service_bound_path_page_can_include_noisy_rows() -> None:
         engine.dispose()
 
 
+def test_service_scope_uses_asset_only_for_unassociated_path_fallback() -> None:
+    engine, db = _build_session()
+    try:
+        seeded = _seed_web_surface_sample(db)
+        now = datetime(2026, 4, 22, 11, 0, tzinfo=timezone.utc)
+        asset = KnowledgeAsset(
+            id=_stable_uuid("asset"),
+            tenant_id=seeded["tenant_id"],
+            user_id=seeded["owner"].id,
+            engagement_id=seeded["engagement"].id,
+            asset_key="host.ip:10.10.10.10",
+            asset_type="host.ip",
+            display_name="10.10.10.10",
+            ip_address="10.10.10.10",
+            first_seen_at=now,
+            last_seen_at=now,
+            asset_metadata={},
+        )
+        db.add(asset)
+        db.flush()
+        seeded["service"].asset_id = asset.id
+        db.add(
+            EngagementAssetLink(
+                tenant_id=seeded["tenant_id"],
+                engagement_id=seeded["engagement"].id,
+                asset_id=asset.id,
+                first_seen_in_engagement=now,
+                last_seen_in_engagement=now,
+            )
+        )
+
+        other_service = KnowledgeService(
+            id=_stable_uuid("other-service"),
+            tenant_id=seeded["tenant_id"],
+            user_id=seeded["owner"].id,
+            engagement_id=seeded["engagement"].id,
+            service_key="service.socket:10.10.10.10/tcp/8443",
+            asset_id=asset.id,
+            protocol="tcp",
+            port=8443,
+            service_name="https",
+            first_seen_at=now,
+            last_seen_at=now,
+            service_metadata={},
+        )
+        fallback_path = KnowledgeWebPath(
+            id=_stable_uuid("fallback-path"),
+            tenant_id=seeded["tenant_id"],
+            user_id=seeded["owner"].id,
+            asset_id=asset.id,
+            service_id=None,
+            canonical_url="https://fallback.example.com/admin",
+            origin_key="https://fallback.example.com",
+            path="/admin",
+            noise_score=0.0,
+            first_seen_at=now,
+            last_seen_at=now,
+            producer_summary={"ffuf": {"seen_count": 1}},
+            evidence_refs=[],
+        )
+        other_service_path = KnowledgeWebPath(
+            id=_stable_uuid("other-service-path"),
+            tenant_id=seeded["tenant_id"],
+            user_id=seeded["owner"].id,
+            asset_id=asset.id,
+            service_id=other_service.id,
+            canonical_url="https://other.example.com/private",
+            origin_key="https://other.example.com",
+            path="/private",
+            noise_score=0.0,
+            first_seen_at=now,
+            last_seen_at=now,
+            producer_summary={"ffuf": {"seen_count": 1}},
+            evidence_refs=[],
+        )
+        db.add_all([other_service, fallback_path, other_service_path])
+        db.flush()
+        for web_path in (fallback_path, other_service_path):
+            db.add(
+                EngagementWebPathLink(
+                    tenant_id=seeded["tenant_id"],
+                    engagement_id=seeded["engagement"].id,
+                    web_path_id=web_path.id,
+                    first_seen_in_engagement=now,
+                    last_seen_in_engagement=now,
+                )
+            )
+        db.commit()
+
+        payload = KnowledgeQueryService(db).list_web_surface_paths(
+            user_id=seeded["owner"].id,
+            tenant_id=seeded["tenant_id"],
+            engagement_id=seeded["engagement"].id,
+            filters=WebSurfacePathsFilters(
+                service_key=seeded["service"].service_key,
+                asset_key=asset.asset_key,
+                include_noisy=True,
+            ),
+        )
+
+        urls = {item["canonical_url"] for item in payload["items"]}
+        assert fallback_path.canonical_url in urls
+        assert other_service_path.canonical_url not in urls
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_service_engagement_ownership_is_enforced_in_selectors() -> None:
     engine, db = _build_session()
     try:
         seeded = _seed_web_surface_sample(db)
         service = KnowledgeQueryService(db)
 
-        wrong_engagement = service.list_service_web_surface_paths(
+        wrong_engagement = service.list_web_surface_paths(
             user_id=seeded["owner"].id,
             tenant_id=seeded["tenant_id"],
             engagement_id=seeded["other_engagement"].id,
@@ -295,7 +405,7 @@ def test_service_engagement_ownership_is_enforced_in_selectors() -> None:
                 origin_key="https://example.com",
             ),
         )
-        foreign_owner = service.list_service_web_surface_paths(
+        foreign_owner = service.list_web_surface_paths(
             user_id=seeded["foreign"].id,
             tenant_id=seeded["foreign_tenant_id"],
             engagement_id=seeded["engagement"].id,

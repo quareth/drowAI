@@ -102,7 +102,8 @@ export interface WebSurfaceOriginSummary {
 }
 
 export interface WebSurfaceOriginsResponse {
-  service_key: string;
+  service_key: string | null;
+  asset_key: string | null;
   items: WebSurfaceOriginSummary[];
 }
 
@@ -127,6 +128,7 @@ export interface WebSurfacePathItem {
 
 export interface WebSurfacePathPage {
   service_key: string | null;
+  asset_key: string | null;
   origin_key: string | null;
   items: WebSurfacePathItem[];
   total: number;

@@ -142,7 +142,7 @@ describe("engagement-map-panel", () => {
     expect(mockedHooks.useEngagementWebSurfaceOrigins).toHaveBeenLastCalledWith(
       42,
       serviceKey,
-      { include_noisy: false },
+      { asset_key: "host.ip:198.51.100.24", include_noisy: false },
     );
   });
 });

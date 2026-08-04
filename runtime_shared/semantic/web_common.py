@@ -1,8 +1,8 @@
-"""Pure semantic helpers for web-finding key construction.
+"""Pure semantic helpers for canonical web observations and finding keys.
 
-This module centralizes deterministic token, URL, and finding-subject-key
-helpers that must be shared by runtime-image tool semantics and backend
-knowledge adapters without backend imports.
+This module centralizes deterministic web-response facts, token, URL, and
+finding-subject-key helpers shared by runtime tool semantics and backend
+Knowledge consumers without backend imports.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import re
 from typing import Any, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
-from runtime_shared.semantic.canonical_keys import build_host_ip_key
+from runtime_shared.semantic.canonical_keys import build_host_dns_key, build_host_ip_key
 from runtime_shared.semantic.service_identity import build_service_socket_key
 
 _SAFE_TOKEN_RE = re.compile(r"[^a-z0-9._:/@#-]+")
@@ -105,8 +105,8 @@ def build_web_response_observations(
     """Build canonical facts for one observed HTTP response.
 
     IP-backed URLs prove a host and socket alongside the discovered path.
-    DNS-backed URLs remain path facts until a resolved IP is available because
-    the canonical service identity is intentionally socket-based.
+    DNS-backed URLs prove a DNS asset and path, but not a socket service until
+    a resolved IP is available for the canonical service identity.
     """
 
     canonical_url = normalize_url(url)
@@ -144,18 +144,34 @@ def build_web_response_observations(
         "payload": path_payload,
     }
 
-    try:
-        ip = str(ipaddress.ip_address(parsed.hostname))
-    except ValueError:
-        return [path_observation]
-
-    port = parsed.port or (443 if parsed.scheme == "https" else 80)
-    service_key = build_service_socket_key(ip=ip, protocol="tcp", port=port)
     common_payload = {
         "source": source_name,
         "target_url": target,
         "evidence_source": "web_response",
     }
+
+    try:
+        ip = str(ipaddress.ip_address(parsed.hostname))
+    except ValueError:
+        try:
+            dns_key = build_host_dns_key(parsed.hostname)
+        except ValueError:
+            return [path_observation]
+        return [
+            {
+                "observation_type": "dns.name_discovered",
+                "subject_type": "host.dns",
+                "subject_key": dns_key,
+                "payload": {
+                    **common_payload,
+                    "hostname": dns_key.removeprefix("host.dns:"),
+                },
+            },
+            path_observation,
+        ]
+
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    service_key = build_service_socket_key(ip=ip, protocol="tcp", port=port)
     return [
         {
             "observation_type": "network.host_discovered",

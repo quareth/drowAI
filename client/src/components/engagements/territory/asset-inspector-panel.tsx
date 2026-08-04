@@ -149,6 +149,7 @@ export function AssetInspectorPanel({
           <WebSurfacePanel
             engagementId={engagementId}
             selectedNode={selectedService}
+            assetKey={selectedAsset.id}
           />
         </div>
       </div>

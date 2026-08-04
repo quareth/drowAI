@@ -55,6 +55,23 @@ afterEach(() => {
 });
 
 describe("web-surface-panel", () => {
+  it("loads hostname-backed paths from the selected asset without a service", () => {
+    render(
+      <WebSurfacePanel
+        engagementId="7"
+        selectedNode={null}
+        assetKey="host.dns:example.com"
+      />,
+    );
+
+    expect(screen.getByTestId("web-surface-panel")).toBeTruthy();
+    expect(mockedHooks.useEngagementWebSurfaceOrigins).toHaveBeenCalledWith(
+      "7",
+      null,
+      { asset_key: "host.dns:example.com", include_noisy: false },
+    );
+  });
+
   it("hides for non-service selections", () => {
     const nonServiceNode: GraphNode = {
       id: "host.ip:10.0.0.10",

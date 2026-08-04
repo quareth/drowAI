@@ -222,6 +222,12 @@ Both routers delegate to the same `KnowledgeQueryService`. Global endpoints
 pass tenant/user scope without an engagement id; engagement endpoints pass the
 selected engagement id to produce an engagement-lensed view.
 
+The engagement web-surface endpoints accept `service_key`, `asset_key`, or
+both. When both are present, service-linked paths remain primary and the asset
+scope contributes only paths without a service association. This keeps
+hostname-backed paths visible without mixing paths assigned to another service
+on the same asset.
+
 ## Data Model
 
 Knowledge persistence lives in `backend/models/knowledge.py`.
@@ -243,7 +249,9 @@ Canonical read models:
 - `KnowledgeRelationship`: tenant/user-owned relationship records.
 - `KnowledgeWebPath`: tenant/user-owned canonical web path records whose
   canonical URL and origin identity come from shared web identity helpers, not
-  backend-local Knowledge helpers.
+  backend-local Knowledge helpers. Confirmed DNS-backed responses also project
+  a canonical `host.dns` asset, allowing the path to retain an asset association
+  when no IP socket identity is available.
 
 Engagement lens tables:
 
@@ -328,7 +336,9 @@ flowchart LR
    grouping use `build_web_origin_key()` from
    `runtime_shared.semantic.web_common`; the retired backend-local
    `backend/services/knowledge/web_common.py` helper and retired Knowledge
-   deterministic adapters are not active wired owners.
+   deterministic adapters are not active wired owners. The same shared web
+   response builder emits `host.dns` plus `web.path` facts for hostname URLs,
+   independently of the producing tool.
 8. The query service reads the projected models and shapes tab payloads for the
    frontend.
 9. Local queued ingestion calls
@@ -350,6 +360,11 @@ On page render, the global summary, findings, assets, and evidence list queries
 are active. Finding and asset detail queries are disabled until a row is
 selected. The Territory graph query is disabled until the user selects an
 engagement.
+
+The Territory asset inspector passes both the selected asset identity and any
+selected web-service identity to its web-surface queries. DNS assets therefore
+show hostname-backed origins even when the canonical path has no IP-backed
+service association.
 
 `useRuntimeNotifications` listens for browser `task-notification` events. When
 the event category is `knowledge_delta`, it invalidates the global `["knowledge"]`
