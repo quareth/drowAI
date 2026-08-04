@@ -10,7 +10,7 @@ from __future__ import annotations
 import ipaddress
 import re
 from typing import Any, Mapping
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from runtime_shared.semantic.canonical_keys import build_host_ip_key
 from runtime_shared.semantic.service_identity import build_service_socket_key
@@ -31,21 +31,55 @@ def normalize_url(value: Any) -> str:
     raw = str(value or "").strip()
     if not raw:
         return ""
-    parts = urlsplit(raw)
+    try:
+        parts = urlsplit(raw)
+    except ValueError:
+        return ""
     if parts.scheme and parts.netloc:
         scheme = parts.scheme.lower()
         host = (parts.hostname or "").lower()
         if not host:
             return ""
-        port = parts.port
+        try:
+            port = parts.port
+        except ValueError:
+            return ""
         include_port = port is not None and not (
             (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
         )
-        netloc = f"{host}:{port}" if include_port else host
+        serialized_host = f"[{host}]" if ":" in host else host
+        netloc = f"{serialized_host}:{port}" if include_port else serialized_host
         path = re.sub(r"/{2,}", "/", parts.path or "/")
         return f"{scheme}://{netloc}{path}"
     # Fallback for path-only values.
     return sanitize_token(raw)
+
+
+def strip_url_userinfo(value: Any) -> str:
+    """Return a URL with username/password userinfo removed for durable semantics."""
+
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        parts = urlsplit(raw)
+        username = parts.username
+        password = parts.password
+    except ValueError:
+        return ""
+    if username is None and password is None:
+        return raw
+
+    host = parts.hostname or ""
+    if not host:
+        return ""
+    try:
+        port = parts.port
+    except ValueError:
+        return ""
+    serialized_host = f"[{host}]" if ":" in host else host
+    netloc = f"{serialized_host}:{port}" if port is not None else serialized_host
+    return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
 
 
 def build_web_origin_key(url: Any) -> str:
@@ -77,7 +111,7 @@ def build_web_response_observations(
 
     canonical_url = normalize_url(url)
     source_name = str(source or "").strip()
-    target = str(target_url or "").strip()
+    target = strip_url_userinfo(target_url)
     parsed = urlsplit(canonical_url)
     if (
         not canonical_url

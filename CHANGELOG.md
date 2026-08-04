@@ -40,6 +40,8 @@ The format is based on
 
 ### Fixed
 
+- HTTP and FFUF semantic facts now strip URL userinfo before durable
+  persistence and preserve bracketed IPv6 literals in canonical web identity.
 - Compact canonical pentest projections now retain result summaries and
   matcher/filter context ahead of routine execution parameters when evidence
   budgets are exceeded.

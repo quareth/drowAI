@@ -7,6 +7,8 @@ import json
 import logging
 from types import SimpleNamespace
 
+import pytest
+
 from agent.context.tool_processor import UniversalToolProcessor
 from agent.semantic.enrichment import validate_semantic_evidence_entries
 from runtime_shared.semantic.pentest_facts import SemanticEvidenceType
@@ -27,6 +29,7 @@ from agent.tools.web_applications.web_crawlers.ffuf import (
     FfufTool as CrawlerTool,
 )
 from runtime_shared.semantic.pentest_facts import SemanticFactEnvelope, compile_facts
+from runtime_shared.semantic.web_common import build_web_response_observations
 
 class _EvidenceAwarePromptLLM:
     """Deterministic fake LLM that checks evidence presence in prompt bytes."""
@@ -186,6 +189,38 @@ def test_ffuf_crawler_emits_path_discovered_when_results_present() -> None:
     assert observation["payload"]["path"] == "/admin"
 
 
+def test_ffuf_semantic_target_strips_userinfo_and_preserves_ipv6() -> None:
+    credential = "synthetic-password"
+    target = f"https://user:{credential}@[2001:db8::1]:8443/FUZZ"
+    observations = build_ffuf_semantic_observations(
+        {
+            "ffuf_variant": "crawler",
+            "config": {"url": target},
+            "results": [
+                {
+                    "url": f"https://user:{credential}@[2001:db8::1]:8443/admin",
+                    "status": 200,
+                    "length": 321,
+                }
+            ],
+        },
+        CrawlerArgs(target=target, inline_wordlist=["admin"]),
+    )
+
+    path_observation = next(
+        row
+        for row in observations
+        if row["observation_type"] == "web.path_discovered"
+    )
+    assert credential not in json.dumps(observations, sort_keys=True)
+    assert path_observation["subject_key"] == (
+        "web.path:https://[2001:db8::1]:8443/admin"
+    )
+    assert path_observation["payload"]["target_url"] == (
+        "https://[2001:db8::1]:8443/FUZZ"
+    )
+
+
 def test_ffuf_ip_response_emits_complete_web_surface_fact_set() -> None:
     observations = build_ffuf_semantic_observations(
         {
@@ -289,6 +324,51 @@ def test_http_request_and_ffuf_emit_same_shared_web_response_facts() -> None:
         )
 
     assert shared_domain_view(http_observations) == shared_domain_view(ffuf_observations)
+
+
+@pytest.mark.parametrize(
+    ("url", "expected_url", "expected_port"),
+    (
+        (
+            "http://[2001:db8::1]/admin",
+            "http://[2001:db8::1]/admin",
+            80,
+        ),
+        (
+            "http://[2001:db8::1]:8080/admin",
+            "http://[2001:db8::1]:8080/admin",
+            8080,
+        ),
+    ),
+)
+def test_shared_web_response_ipv6_facts_compile_canonically(
+    url: str,
+    expected_url: str,
+    expected_port: int,
+) -> None:
+    observations = build_web_response_observations(
+        url=url,
+        source="web-response-test",
+        target_url=url,
+        status_code=200,
+    )
+
+    compiled = compile_facts(
+        SemanticFactEnvelope(
+            semantic_schema_version="web-response-test.v1",
+            capability_family="web_enumeration",
+            observations=tuple(observations),
+            evidence=(),
+        )
+    )
+
+    assert compiled.accepted_count == 3
+    assert compiled.rejected_count == 0
+    assert {fact.subject_key for fact in compiled.facts} == {
+        "host.ip:2001:db8::1",
+        f"service.socket:2001:db8::1/tcp/{expected_port}",
+        f"web.path:{expected_url}",
+    }
 
 
 def test_http_request_without_confirmed_response_emits_no_web_facts() -> None:
