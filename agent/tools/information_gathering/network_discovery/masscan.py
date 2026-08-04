@@ -907,6 +907,9 @@ def _masscan_open_port_rows(open_ports_raw: Any, host_ips: set[str]) -> list[dic
     for item in open_ports_raw:
         if not isinstance(item, dict):
             continue
+        status = str(item.get("status") or "").strip().lower()
+        if status and status != "open":
+            continue
         ip = str(item.get("ip") or single_host_ip or "").strip().lower()
         port = normalize_port(item.get("port"))
         protocol = normalize_transport_protocol(item.get("protocol"), default=None)

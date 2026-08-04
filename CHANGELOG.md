@@ -40,6 +40,8 @@ The format is based on
 
 ### Fixed
 
+- Masscan semantic projection now excludes explicitly closed or filtered rows
+  from canonical open-port and detected-service facts.
 - Knowledge service projection now preserves canonical open, closed, and
   filtered network-service states in durable inventory and topology views.
 - HTTP and FFUF semantic facts now strip URL userinfo before durable
