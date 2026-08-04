@@ -142,6 +142,47 @@ def test_compact_metadata_includes_optional_deterministic_lane():
     }
 
 
+def test_compact_metadata_omits_optional_deterministic_lane_when_absent():
+    batch = _batch("http retirement row")
+    rows = [_result("tc-1")]
+    aggregator = BatchAggregator()
+    result = aggregator.aggregate(
+        rows,
+        batch=batch,
+        effective_strategy=ExecutionStrategy.SEQUENTIAL,
+    )
+
+    metadata = aggregator.to_compact_metadata(
+        result,
+        batch=batch,
+        compact_by_call_id={"tc-1": {"summary": "primary only"}},
+    )
+
+    row = metadata["results"][0]
+    assert row["compact_tool_result"] == {"summary": "primary only"}
+    assert "deterministic_compact_tool_result" not in row
+
+
+def test_compact_metadata_omits_empty_deterministic_lane():
+    batch = _batch("approved retirement-only row")
+    rows = [_result("tc-1")]
+    aggregator = BatchAggregator()
+    result = aggregator.aggregate(
+        rows,
+        batch=batch,
+        effective_strategy=ExecutionStrategy.SEQUENTIAL,
+    )
+
+    metadata = aggregator.to_compact_metadata(
+        result,
+        batch=batch,
+        compact_by_call_id={"tc-1": {"summary": "primary only"}},
+        deterministic_compact_by_call_id={"tc-1": {}},
+    )
+
+    assert "deterministic_compact_tool_result" not in metadata["results"][0]
+
+
 def test_failed_middle_call_not_hidden_by_later_success():
     batch = _batch("a", "b", "c")
     rows = [

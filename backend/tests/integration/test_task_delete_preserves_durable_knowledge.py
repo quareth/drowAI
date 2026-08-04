@@ -163,8 +163,8 @@ async def test_task_delete_preserves_durable_knowledge_rows(
         engagement_id = int(engagement.id)
 
         monkeypatch.setattr(
-            "backend.services.task.cleanup_service.get_task_in_tenant_or_404",
-            lambda db, task_id, tenant_id: task,
+            "backend.services.task.cleanup_service.get_owned_task_or_404",
+            lambda db, task_id, user_id, tenant_id: task,
         )
 
         class _RetirementService:
@@ -226,8 +226,8 @@ async def test_task_delete_blocks_when_durable_evidence_cannot_be_materialized(
         user_id = int(user.id)
 
         monkeypatch.setattr(
-            "backend.services.task.cleanup_service.get_task_in_tenant_or_404",
-            lambda db, task_id, tenant_id: task,
+            "backend.services.task.cleanup_service.get_owned_task_or_404",
+            lambda db, task_id, user_id, tenant_id: task,
         )
 
         class _RetirementService:
@@ -278,8 +278,8 @@ async def test_task_delete_runtime_phase_failure_keeps_task_row(
         user_id = int(user.id)
 
         monkeypatch.setattr(
-            "backend.services.task.cleanup_service.get_task_in_tenant_or_404",
-            lambda db, task_id, tenant_id: task,
+            "backend.services.task.cleanup_service.get_owned_task_or_404",
+            lambda db, task_id, user_id, tenant_id: task,
         )
 
         class _RetirementService:

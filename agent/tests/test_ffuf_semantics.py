@@ -7,12 +7,17 @@ import json
 import logging
 from types import SimpleNamespace
 
+import pytest
+
 from agent.context.tool_processor import UniversalToolProcessor
 from agent.semantic.enrichment import validate_semantic_evidence_entries
-from agent.semantic.evidence_vocabulary import SemanticEvidenceType
+from runtime_shared.semantic.pentest_facts import SemanticEvidenceType
 from agent.tool_runtime.result_enrichment import merge_semantic_emitter_metadata
+from agent.tools.information_gathering.web_enumeration.contracts import HttpRequestArgs
+from agent.tools.information_gathering.web_enumeration.http_request import HttpRequestTool
 from agent.tools.web_applications._ffuf_semantics import (
     build_ffuf_semantic_evidence,
+    build_ffuf_semantic_observations,
     detect_ffuf_variant,
 )
 from agent.tools.web_applications.web_application_fuzzers.ffuf import (
@@ -23,6 +28,8 @@ from agent.tools.web_applications.web_crawlers.ffuf import (
     FfufArgs as CrawlerArgs,
     FfufTool as CrawlerTool,
 )
+from runtime_shared.semantic.pentest_facts import SemanticFactEnvelope, compile_facts
+from runtime_shared.semantic.web_common import build_web_response_observations
 
 class _EvidenceAwarePromptLLM:
     """Deterministic fake LLM that checks evidence presence in prompt bytes."""
@@ -175,11 +182,311 @@ def test_ffuf_crawler_emits_path_discovered_when_results_present() -> None:
         metadata=metadata,
     )
 
-    assert len(observations) == 1
-    observation = observations[0]
-    assert observation["observation_type"] == "web.path_discovered"
-    assert observation["subject_key"] == "web.path:https://example.com/admin"
-    assert observation["payload"]["path"] == "/admin"
+    assert [
+        (observation["observation_type"], observation["subject_key"])
+        for observation in observations
+    ] == [
+        ("dns.name_discovered", "host.dns:example.com"),
+        ("web.path_discovered", "web.path:https://example.com/admin"),
+    ]
+    assert observations[1]["payload"]["path"] == "/admin"
+
+
+def test_ffuf_semantic_target_strips_userinfo_and_preserves_ipv6() -> None:
+    credential = "synthetic-password"
+    target = f"https://user:{credential}@[2001:db8::1]:8443/FUZZ"
+    observations = build_ffuf_semantic_observations(
+        {
+            "ffuf_variant": "crawler",
+            "config": {"url": target},
+            "results": [
+                {
+                    "url": f"https://user:{credential}@[2001:db8::1]:8443/admin",
+                    "status": 200,
+                    "length": 321,
+                }
+            ],
+        },
+        CrawlerArgs(target=target, inline_wordlist=["admin"]),
+    )
+
+    path_observation = next(
+        row
+        for row in observations
+        if row["observation_type"] == "web.path_discovered"
+    )
+    assert credential not in json.dumps(observations, sort_keys=True)
+    assert path_observation["subject_key"] == (
+        "web.path:https://[2001:db8::1]:8443/admin"
+    )
+    assert path_observation["payload"]["target_url"] == (
+        "https://[2001:db8::1]:8443/FUZZ"
+    )
+
+
+def test_ffuf_ip_response_emits_complete_web_surface_fact_set() -> None:
+    observations = build_ffuf_semantic_observations(
+        {
+            "ffuf_variant": "crawler",
+            "config": {"url": "http://198.51.100.24/FUZZ"},
+            "results": [
+                {"url": "http://198.51.100.24/ip", "status": 200, "length": 17455},
+                {"url": "http://198.51.100.24/capture", "status": 302, "length": 220},
+            ],
+        },
+        CrawlerArgs(
+            target="http://198.51.100.24/FUZZ",
+            inline_wordlist=["ip", "capture"],
+        ),
+    )
+
+    identities = [
+        (
+            observation["observation_type"],
+            observation["subject_type"],
+            observation["subject_key"],
+        )
+        for observation in observations
+    ]
+    assert identities == [
+        ("network.host_discovered", "host.ip", "host.ip:198.51.100.24"),
+        (
+            "network.service_observed",
+            "service.socket",
+            "service.socket:198.51.100.24/tcp/80",
+        ),
+        (
+            "web.path_discovered",
+            "web.path",
+            "web.path:http://198.51.100.24/ip",
+        ),
+        (
+            "web.path_discovered",
+            "web.path",
+            "web.path:http://198.51.100.24/capture",
+        ),
+    ]
+    service_payload = observations[1]["payload"]
+    assert service_payload["service_name"] == "http"
+    assert service_payload["application_protocol"] == "http"
+
+
+def test_http_request_and_ffuf_emit_same_shared_web_response_facts() -> None:
+    url = "http://198.51.100.10/download/1"
+    ffuf_observations = build_ffuf_semantic_observations(
+        {
+            "ffuf_variant": "crawler",
+            "config": {"url": "http://198.51.100.10/download/FUZZ"},
+            "results": [{"url": url, "status": 200, "length": 24}],
+        },
+        CrawlerArgs(
+            target="http://198.51.100.10/download/FUZZ",
+            inline_wordlist=["1"],
+        ),
+    )
+
+    http_args = HttpRequestArgs(target=url, method="GET")
+    http_stdout = (
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: application/vnd.tcpdump.pcap\r\n"
+        "Content-Length: 24\r\n\r\n"
+        "mock-body\n"
+        "__DROWAI_HTTP_META__200\thttp://198.51.100.10/download/1\t"
+        "application/vnd.tcpdump.pcap\t24\t0\t0.125"
+    )
+    http_tool = HttpRequestTool()
+    enriched_http_metadata = merge_semantic_emitter_metadata(
+        tool=http_tool,
+        args=http_args,
+        stdout=http_stdout,
+        stderr="",
+        exit_code=0,
+        existing_metadata={},
+    )
+    http_observations = enriched_http_metadata["semantic_observations"]
+
+    ignored_payload_keys = {"source", "target_url", "evidence_source"}
+
+    def shared_domain_view(
+        observations: list[dict[str, object]],
+    ) -> list[tuple[object, ...]]:
+        return sorted(
+            (
+                observation["observation_type"],
+                observation["subject_type"],
+                observation["subject_key"],
+                tuple(
+                    sorted(
+                        (key, str(value))
+                        for key, value in observation["payload"].items()
+                        if key not in ignored_payload_keys
+                    )
+                ),
+            )
+            for observation in observations
+        )
+
+    assert shared_domain_view(http_observations) == shared_domain_view(ffuf_observations)
+
+
+def test_http_request_dns_response_emits_dns_asset_and_web_path() -> None:
+    args = HttpRequestArgs(target="https://example.com/admin", method="GET")
+
+    observations = HttpRequestTool().emit_semantic_observations(
+        stdout="",
+        stderr="",
+        exit_code=0,
+        args=args,
+        metadata={
+            "effective_url": args.target,
+            "status_code": 200,
+            "content_length": 321,
+        },
+    )
+
+    assert [
+        (observation["observation_type"], observation["subject_key"])
+        for observation in observations
+    ] == [
+        ("dns.name_discovered", "host.dns:example.com"),
+        ("web.path_discovered", "web.path:https://example.com/admin"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("url", "expected_url", "expected_port"),
+    (
+        (
+            "http://[2001:db8::1]/admin",
+            "http://[2001:db8::1]/admin",
+            80,
+        ),
+        (
+            "http://[2001:db8::1]:8080/admin",
+            "http://[2001:db8::1]:8080/admin",
+            8080,
+        ),
+    ),
+)
+def test_shared_web_response_ipv6_facts_compile_canonically(
+    url: str,
+    expected_url: str,
+    expected_port: int,
+) -> None:
+    observations = build_web_response_observations(
+        url=url,
+        source="web-response-test",
+        target_url=url,
+        status_code=200,
+    )
+
+    compiled = compile_facts(
+        SemanticFactEnvelope(
+            semantic_schema_version="web-response-test.v1",
+            capability_family="web_enumeration",
+            observations=tuple(observations),
+            evidence=(),
+        )
+    )
+
+    assert compiled.accepted_count == 3
+    assert compiled.rejected_count == 0
+    assert {fact.subject_key for fact in compiled.facts} == {
+        "host.ip:2001:db8::1",
+        f"service.socket:2001:db8::1/tcp/{expected_port}",
+        f"web.path:{expected_url}",
+    }
+
+
+def test_http_request_without_confirmed_response_emits_no_web_facts() -> None:
+    args = HttpRequestArgs(target="http://198.51.100.10/download/1", method="GET")
+
+    assert HttpRequestTool().emit_semantic_observations(
+        "",
+        "connection refused",
+        7,
+        args,
+        {
+            "effective_url": args.target,
+            "status_code": None,
+            "content_length": None,
+        },
+    ) == []
+
+
+def test_ffuf_variants_emit_same_web_path_contract_for_equivalent_results() -> None:
+    result_row = {
+        "url": "HTTPS://Example.com:443//admin?debug=1#fragment",
+        "status": 301,
+        "length": 512,
+        "words": 22,
+        "lines": 7,
+        "redirectlocation": "https://example.com/login",
+        "content-type": "text/html; charset=utf-8",
+    }
+    crawler_metadata = {
+        "ffuf_variant": "crawler",
+        "config": {"url": "https://example.com/FUZZ"},
+        "results": [result_row],
+    }
+    fuzzer_metadata = {
+        "ffuf_variant": "fuzzer",
+        "config": {"url": "https://example.com/FUZZ"},
+        "results": [result_row],
+    }
+
+    crawler_observations = build_ffuf_semantic_observations(
+        crawler_metadata,
+        CrawlerArgs(target="https://example.com/FUZZ", inline_wordlist=["admin"]),
+    )
+    fuzzer_observations = build_ffuf_semantic_observations(
+        fuzzer_metadata,
+        FuzzerArgs(target="https://example.com/FUZZ", inline_wordlist=["admin"]),
+    )
+
+    crawler_path = next(
+        row for row in crawler_observations if row["subject_type"] == "web.path"
+    )
+    fuzzer_path = next(
+        row for row in fuzzer_observations if row["subject_type"] == "web.path"
+    )
+    crawler_payload = dict(crawler_path["payload"])
+    fuzzer_payload = dict(fuzzer_path["payload"])
+    assert crawler_payload.pop("source") == "web_applications.web_crawlers.ffuf"
+    assert fuzzer_payload.pop("source") == "web_applications.web_application_fuzzers.ffuf"
+    assert crawler_payload == fuzzer_payload == {
+        "url": "https://example.com/admin",
+        "path": "/admin",
+        "target_url": "https://example.com/FUZZ",
+        "status_code": 301,
+        "response_size": 512,
+    }
+    assert crawler_path["subject_key"] == "web.path:https://example.com/admin"
+    assert fuzzer_path["subject_key"] == "web.path:https://example.com/admin"
+
+
+def test_ffuf_fuzzer_emits_web_path_discovered_when_results_present() -> None:
+    tool = FuzzerTool()
+    args = FuzzerArgs(target="https://example.com/FUZZ", inline_wordlist=["admin"])
+    metadata = {
+        "config": {"url": "https://example.com/FUZZ"},
+        "results": [
+            {"url": "https://example.com/admin", "status": 200, "length": 321},
+        ],
+    }
+
+    observations = tool.emit_semantic_observations(
+        stdout="",
+        stderr="",
+        exit_code=0,
+        args=args,
+        metadata=metadata,
+    )
+
+    path_observation = next(
+        row for row in observations if row["subject_type"] == "web.path"
+    )
+    assert path_observation["payload"]["source"] == "web_applications.web_application_fuzzers.ffuf"
 
 
 def test_ffuf_fuzzer_empty_run_emits_no_observations() -> None:
@@ -204,6 +511,102 @@ def test_ffuf_fuzzer_empty_run_emits_no_observations() -> None:
     assert observations == []
 
 
+def test_ffuf_semantic_observations_match_filter_cap_duplicate_and_calibration_behavior() -> None:
+    metadata = {
+        "ffuf_variant": "crawler",
+        "config": {
+            "url": "https://example.com/FUZZ",
+            "matchers": {
+                "IsCalibrated": True,
+                "Filters": {"status": "200", "size": "123", "words": "9", "lines": "3"},
+            },
+        },
+        "results": [
+            {"url": "https://example.com/soft-404", "status": 404, "length": 120},
+            {"url": "https://example.com/calibrated", "status": 200, "length": 123, "words": 9, "lines": 3},
+            {"url": "https://example.com/redirect", "status": 302, "length": 512, "redirect": "/login"},
+            {"url": "https://example.com/dup", "status": 403, "length": 42},
+            {"url": "https://example.com/dup", "status": 403, "length": 42},
+        ],
+    }
+
+    observations = build_ffuf_semantic_observations(
+        metadata,
+        CrawlerArgs(target="https://example.com/FUZZ", inline_wordlist=["admin"]),
+    )
+    subject_keys = [item["subject_key"] for item in observations]
+    payloads = {item["subject_key"]: item["payload"] for item in observations}
+
+    assert "web.path:https://example.com/soft-404" not in subject_keys
+    assert subject_keys.count("web.path:https://example.com/dup") == 1
+    assert payloads["web.path:https://example.com/calibrated"]["calibrated"] is True
+    assert "calibration_filters" not in payloads["web.path:https://example.com/calibrated"]
+    assert "redirect_url" not in payloads["web.path:https://example.com/redirect"]
+
+
+def test_ffuf_semantic_observations_respect_per_origin_cap_order() -> None:
+    results = [{"url": "https://example.com/important", "status": 200, "length": 1}]
+    results.extend(
+        {"url": f"https://example.com/p{index:03d}", "status": 500, "length": index}
+        for index in range(205)
+    )
+    observations = build_ffuf_semantic_observations(
+        {
+            "ffuf_variant": "fuzzer",
+            "config": {"url": "https://example.com/FUZZ"},
+            "results": results,
+        },
+        FuzzerArgs(target="https://example.com/FUZZ", inline_wordlist=["admin"]),
+    )
+    path_observations = [item for item in observations if item["subject_type"] == "web.path"]
+    subject_keys = {item["subject_key"] for item in path_observations}
+
+    assert len(path_observations) == 200
+    assert "web.path:https://example.com/important" in subject_keys
+    assert "web.path:https://example.com/p204" not in subject_keys
+
+
+def test_ffuf_semantic_observations_compile_directly_as_supported_web_path_facts() -> None:
+    observations = build_ffuf_semantic_observations(
+        {
+            "ffuf_variant": "crawler",
+            "config": {"url": "https://example.com/FUZZ"},
+            "results": [
+                {
+                    "url": "https://example.com/admin",
+                    "status": 200,
+                    "length": 512,
+                    "words": 22,
+                    "lines": 7,
+                    "redirectlocation": "https://example.com/login",
+                    "content-type": "text/html",
+                }
+            ],
+        },
+        CrawlerArgs(target="https://example.com/FUZZ", inline_wordlist=["admin"]),
+    )
+    compiled = compile_facts(
+        SemanticFactEnvelope(
+            semantic_schema_version="ffuf.v1",
+            capability_family="web_discovery",
+            observations=tuple(observations),
+            evidence=(),
+        )
+    )
+
+    assert compiled.accepted_count == 2
+    assert compiled.rejected_count == 0
+    assert compiled.diagnostics == ()
+    web_path_fact = next(fact for fact in compiled.facts if fact.subject_type == "web.path")
+    assert web_path_fact.payload == {
+        "source": "web_applications.web_crawlers.ffuf",
+        "path": "/admin",
+        "target_url": "https://example.com/FUZZ",
+        "status_code": 200,
+        "response_size": 512,
+    }
+
+
 def test_ffuf_prompt_regression_from_design_doc() -> None:
     """End-to-end regression: raw ffuf JSON stdout → real emitter/merge → prompt.
 
@@ -217,6 +620,8 @@ def test_ffuf_prompt_regression_from_design_doc() -> None:
         llm_client=llm,
         logger=logging.getLogger("test.ffuf.prompt.regression"),
     )
+    processor._LLM_BYPASS_MAX_CHARS = 0
+    processor._LLM_BYPASS_MAX_LINES = 0
     tool = FuzzerTool()
     args = FuzzerArgs(
         target="http://10.10.11.242/FUZZ",

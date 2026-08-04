@@ -55,6 +55,23 @@ afterEach(() => {
 });
 
 describe("web-surface-panel", () => {
+  it("loads hostname-backed paths from the selected asset without a service", () => {
+    render(
+      <WebSurfacePanel
+        engagementId="7"
+        selectedNode={null}
+        assetKey="host.dns:example.com"
+      />,
+    );
+
+    expect(screen.getByTestId("web-surface-panel")).toBeTruthy();
+    expect(mockedHooks.useEngagementWebSurfaceOrigins).toHaveBeenCalledWith(
+      "7",
+      null,
+      { asset_key: "host.dns:example.com", include_noisy: false },
+    );
+  });
+
   it("hides for non-service selections", () => {
     const nonServiceNode: GraphNode = {
       id: "host.ip:10.0.0.10",
@@ -113,8 +130,19 @@ describe("web-surface-panel", () => {
       },
     });
 
-    render(<WebSurfacePanel engagementId="7" selectedNode={httpServiceNode} />);
+    render(
+      <WebSurfacePanel
+        engagementId="7"
+        selectedNode={httpServiceNode}
+        assetKey="host.ip:10.0.0.10"
+      />,
+    );
 
+    expect(mockedHooks.useEngagementWebSurfaceOrigins).toHaveBeenCalledWith(
+      "7",
+      "service.socket:10.0.0.10/tcp/443",
+      { include_noisy: false },
+    );
     expect(screen.getByTestId("web-surface-summary")).toBeTruthy();
     expect(screen.getByText("Origins: 1")).toBeTruthy();
     expect(screen.getByText("Visible paths: 4")).toBeTruthy();

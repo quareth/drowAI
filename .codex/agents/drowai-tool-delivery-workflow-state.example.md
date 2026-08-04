@@ -46,7 +46,13 @@ preimplementation:
     status: pending
     selected_by_responsibility: {}
     evidence: []
-  budget_helper: "agent/graph/compression/deterministic/budget.py::budget_rendered_items"
+  canonical_fact_architecture:
+    compiler: "runtime_shared/semantic/pentest_facts/compiler.py::compile_facts"
+    policy: "runtime_shared/semantic/pentest_facts/policy.py"
+    knowledge_bridge: "backend/services/knowledge/pentest_facts/bridge.py"
+    compact_projection: "agent/graph/compression/pentest_facts/projection.py"
+    supported_pair_status: pending
+    requires_new_fact_family: false
   executable: ""
   resolved_path: ""
   installed_version: ""

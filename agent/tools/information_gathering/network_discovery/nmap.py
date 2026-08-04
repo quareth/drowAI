@@ -18,6 +18,7 @@ from ...schemas import BaseToolArgs, ToolResult
 from .nmap_semantics import (
     build_nmap_semantic_evidence,
     build_host_profiled_observation,
+    build_non_open_port_observation,
     build_semantic_transport_markers,
     build_service_detected_payload,
     build_service_profiled_observation,
@@ -395,8 +396,9 @@ class NmapTool(BaseTool):
         """Emit canonical semantic observations from parsed nmap metadata.
 
         Produces existing inventory observations (host_discovered, open_port,
-        service_detected) plus new profiling observations (host_profiled,
-        service_profiled) and curated findings from the allowlist.
+        service_detected) plus explicit non-open port states, profiling
+        observations (host_profiled, service_profiled), and curated findings
+        from the allowlist.
 
         All observations are built from already-normalized metadata produced
         by parse_output(), not from re-parsing XML.
@@ -467,6 +469,11 @@ class NmapTool(BaseTool):
                         ip, port, protocol, profile["script_summaries"],
                     )
                     observations.extend(findings)
+
+            for port_info in host_info.get("scanned_ports", []):
+                state_observation = build_non_open_port_observation(ip, port_info)
+                if state_observation is not None:
+                    observations.append(state_observation)
 
         return observations
 

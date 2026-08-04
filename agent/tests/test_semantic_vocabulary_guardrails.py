@@ -6,7 +6,7 @@ import ast
 import re
 from pathlib import Path
 
-from agent.semantic.evidence_vocabulary import (
+from runtime_shared.semantic.pentest_facts import (
     SemanticEvidenceType,
     get_evidence_detail_schema,
 )
@@ -42,7 +42,7 @@ TOOL_SPECIFIC_COMPRESSION_MODULES = {
 }
 POLICY_CONSTANT_NAMES = (
     "EVIDENCE_PER_TYPE_LIMIT",
-    "_SEMANTIC_EVIDENCE_GLOBAL_LIMIT",
+    "SEMANTIC_EVIDENCE_GLOBAL_LIMIT",
     "EVIDENCE_DETAIL_SCHEMA",
     "SEMANTIC_EVIDENCE_NAME_MAX_LEN",
     "SEMANTIC_EVIDENCE_VALUE_MAX_LEN",
@@ -175,40 +175,42 @@ def test_detail_schema_has_no_name_or_value_keys() -> None:
 
 def test_policy_constants_used_only_inside_authority_modules() -> None:
     allowed_files = {
-        REPO_ROOT / "agent" / "semantic" / "evidence_vocabulary.py",
-        REPO_ROOT / "agent" / "semantic" / "enrichment.py",
+        REPO_ROOT
+        / "runtime_shared"
+        / "semantic"
+        / "pentest_facts"
+        / "evidence.py",
     }
 
     violations: list[str] = []
-    for path in _iter_files(REPO_ROOT / "agent", "*.py"):
-        source = path.read_text(encoding="utf-8-sig")
-        tree = ast.parse(source, filename=str(path))
-        for node in ast.walk(tree):
-            constant_name: str | None = None
-            if isinstance(node, ast.Name) and node.id in POLICY_CONSTANT_NAMES:
-                constant_name = node.id
-            elif isinstance(node, ast.Attribute) and node.attr in POLICY_CONSTANT_NAMES:
-                constant_name = node.attr
-            elif (
-                isinstance(node, ast.ImportFrom)
-                and node.module == "agent.semantic.evidence_vocabulary"
-            ):
-                for alias in node.names:
-                    if alias.name in POLICY_CONSTANT_NAMES and path not in allowed_files:
-                        violations.append(
-                            f"{path.relative_to(REPO_ROOT)}:{node.lineno} references `{alias.name}`"
-                        )
-                continue
+    for scan_root in (REPO_ROOT / "agent", REPO_ROOT / "runtime_shared"):
+        for path in _iter_files(scan_root, "*.py"):
+            source = path.read_text(encoding="utf-8-sig")
+            tree = ast.parse(source, filename=str(path))
+            for node in ast.walk(tree):
+                constant_name: str | None = None
+                if isinstance(node, ast.Name) and node.id in POLICY_CONSTANT_NAMES:
+                    constant_name = node.id
+                elif (
+                    isinstance(node, ast.Attribute)
+                    and node.attr in POLICY_CONSTANT_NAMES
+                ):
+                    constant_name = node.attr
 
-            if constant_name and path not in allowed_files:
-                violations.append(
-                    f"{path.relative_to(REPO_ROOT)}:{node.lineno} references `{constant_name}`"
-                )
+                if constant_name and path not in allowed_files:
+                    violations.append(
+                        f"{path.relative_to(REPO_ROOT)}:{node.lineno} references `{constant_name}`"
+                    )
 
     assert not violations, (
-        "Semantic evidence policy constants must be owned by evidence_vocabulary.py and consumed only "
-        "inside evidence_vocabulary.py and enrichment.py.\n" + "\n".join(violations)
+        "Semantic evidence policy constants must be owned only by "
+        "runtime_shared/semantic/pentest_facts/evidence.py.\n"
+        + "\n".join(violations)
     )
+
+
+def test_agent_has_no_second_evidence_vocabulary_authority() -> None:
+    assert not (REPO_ROOT / "agent" / "semantic" / "evidence_vocabulary.py").exists()
 
 
 def test_renderers_do_not_invoke_validator() -> None:

@@ -45,12 +45,14 @@ state is ignored and must never be staged.
 - Select references per responsibility and use the closest proven analogue;
   Nmap is the first candidate for network-scanning responsibilities, not a
   universal template.
-- Amass is not the architecture baseline. Its only mandatory reusable element
-  is the shared `budget_rendered_items` helper; never copy Amass-specific
-  timeout, inactivity, command, parsing, or semantic policy.
-- Reuse `budget_rendered_items` from
-  `agent/graph/compression/deterministic/budget.py`; do not duplicate its
-  accounting.
+- Treat `runtime_shared/semantic/pentest_facts`, the Knowledge fact bridge, and
+  canonical compact fact projection as the mandatory reusable semantic
+  architecture. Never create per-tool Knowledge or compression adapters for an
+  existing fact family.
+- Use mature tools only as producer-side schema, runtime, parser, artifact, and
+  semantic-emitter references. Never copy a tool's timeout, inactivity,
+  command, parsing, or semantic policy without responsibility-specific
+  evidence.
 - Visibility is the final enablement step, after the underlying mechanics have
   evidence.
 
@@ -68,9 +70,13 @@ state is ignored and must never be staged.
    knowledge, and visibility, with evidence and selection rationale for each;
    use Nmap as the first network-scanning candidate and replace it where another
    verified mature tool is a closer match.
-4. Record Amass separately only as provenance for the mandatory shared
-   `agent/graph/compression/deterministic/budget.py::budget_rendered_items`
-   helper, never as the default tool reference.
+4. Map the candidate's intended semantic observations to the exact supported
+   pairs in `runtime_shared/semantic/pentest_facts/policy.py`:
+   - for an existing fact family, record that Knowledge and compact projection
+     reuse requires no tool-specific downstream adapter;
+   - for a genuinely new fact family, record the shared policy/compiler,
+     Knowledge bridge/projection, compact presentation/projection, and parity
+     work as an implementation-guide gap.
 5. As the main agent, trace only far enough through the selected registry entry,
    tool class, command builder, and args model to identify the executable,
    documented version command, and existing function/definition files.
@@ -138,10 +144,10 @@ Assess each dimension separately:
 7. Executor/runtime command construction and runtime-provider dispatch.
 8. Output parsing, success/empty/partial/failure semantics, and artifacts.
 9. Semantic observations/evidence.
-10. Deterministic compression and exact `total` / `shown` / `omitted`
-   accounting.
+10. Shared canonical fact admission and deterministic compact projection,
+    including selected/omitted counts and lossiness.
 11. Post-tool-reasoning projection.
-12. Knowledge adapter and useful engagement facts.
+12. Knowledge ingestion/bridge projection and useful scoped engagement facts.
 13. Focused tests and canonical docs.
 14. LLM catalog visibility and selected-category reachability, checked last.
 
