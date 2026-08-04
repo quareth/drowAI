@@ -158,26 +158,44 @@ export async function pollPersistedStreamEvents(
 }
 
 export async function ensureToolOutputVisible(page: Page): Promise<void> {
-  await expect(async () => {
-    const activityCard = page.locator("[data-testid^='turn-activity-card-']").last();
-    if ((await activityCard.count()) > 0 && (await activityCard.isVisible())) {
-      const activityToggle = activityCard.locator(":scope > button").first();
-      if ((await activityToggle.getAttribute("aria-expanded")) !== "true") {
-        await activityToggle.click();
-      }
-    }
+  await expect
+    .poll(
+      async () => {
+        const activityCard = page.locator("[data-testid^='turn-activity-card-']").last();
+        if ((await activityCard.count()) === 0 || !(await activityCard.isVisible())) return false;
+        const activityToggle = activityCard.locator(":scope > button").first();
+        if (
+          (await activityToggle.count()) > 0
+          && (await activityToggle.getAttribute("aria-expanded")) !== "true"
+        ) {
+          await activityToggle.click();
+        }
 
-    const toolCard = page.locator("[data-testid^='tool-batch-card-']").last();
-    await expect(toolCard).toBeVisible();
-    await expect(toolCard).toContainText(/completed|success/i);
-    const toggle = toolCard.getByRole("button", { name: "Toggle tool output" }).first();
-    if (await toggle.isEnabled()) {
-      if ((await toggle.getAttribute("aria-expanded")) !== "true") {
-        await toggle.click();
-      }
-      await expect(toolCard.locator("[data-testid$='-terminal'], p").last()).toBeVisible();
-    }
-  }).toPass({ timeout: 30_000 });
+        const toolCard = activityCard
+          .locator("[data-testid^='tool-batch-card-']")
+          .filter({ has: page.getByRole("button", { name: "Toggle tool output" }) })
+          .last();
+        if ((await toolCard.count()) === 0 || !(await toolCard.isVisible())) return false;
+        if (!/completed|success/i.test((await toolCard.textContent()) ?? "")) return false;
+
+        const toggle = toolCard.getByRole("button", { name: "Toggle tool output" }).first();
+        if ((await toggle.count()) === 0) return false;
+        if (!(await toggle.isEnabled())) return true;
+        if ((await toggle.getAttribute("aria-expanded")) !== "true") {
+          await toggle.click();
+          return false;
+        }
+
+        return toolCard.locator("[data-testid$='-terminal'], p").evaluateAll((nodes) =>
+          nodes.some((node) => {
+            const { height, width } = node.getBoundingClientRect();
+            return height > 0 && width > 0 && getComputedStyle(node).visibility !== "hidden";
+          }),
+        );
+      },
+      { timeout: 30_000 },
+    )
+    .toBe(true);
 }
 
 export async function assertLatestTurnGroupOrder(page: Page, expected: string[]): Promise<void> {
@@ -228,7 +246,7 @@ export async function assertLatestActivityDetailOrder(
   if ((await activityToggle.getAttribute("aria-expanded")) !== "true") {
     await activityToggle.click();
   }
-  const details = activityCard.locator("[data-testid^='turn-activity-details-']");
+  const details = activityCard.locator(":scope > [data-activity-chain='true']");
   await expect(details).toBeVisible();
   const actual = await details.locator("[data-testid]").evaluateAll((nodes) => {
     const kinds: string[] = [];
@@ -291,7 +309,7 @@ async function latestTurnGroupTypes(page: Page): Promise<string[]> {
 }
 
 async function activityDetailKinds(activityCard: ReturnType<Page["locator"]>): Promise<string[]> {
-  const details = activityCard.locator("[data-testid^='turn-activity-details-']");
+  const details = activityCard.locator(":scope > [data-activity-chain='true']");
   if (!(await details.isVisible())) return [];
   return details.locator("[data-testid]").evaluateAll((nodes) => {
     const kinds: string[] = [];
