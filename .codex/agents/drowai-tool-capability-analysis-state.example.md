@@ -32,11 +32,15 @@ repository_references:
     visibility: ""
   rationale: {}
   evidence: []
-budget_reference:
-  source_tool_id: "information_gathering.dns.amass"
-  helper: "agent/graph/compression/deterministic/budget.py::budget_rendered_items"
-  reuse_required: true
+canonical_fact_reference:
+  compiler: "runtime_shared/semantic/pentest_facts/compiler.py::compile_facts"
+  policy: "runtime_shared/semantic/pentest_facts/policy.py"
+  knowledge_bridge: "backend/services/knowledge/pentest_facts/bridge.py"
+  compact_projection: "agent/graph/compression/pentest_facts/projection.py"
+  supported_pair_status: unknown
+  requires_new_fact_family: false
   status: unknown
+  evidence: []
 analysis:
   registry:
     status: unknown
@@ -79,13 +83,18 @@ analysis:
   semantic_observations:
     status: unknown
     evidence: []
-  deterministic_compression:
+  canonical_fact_admission:
+    status: unknown
+    supported_pairs: []
+    requires_new_fact_family: false
+    evidence: []
+  compact_projection:
     status: unknown
     evidence: []
   ptr_projection:
     status: unknown
     evidence: []
-  knowledge:
+  knowledge_bridge_projection:
     status: unknown
     evidence: []
   tests_docs:

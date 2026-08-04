@@ -14,10 +14,11 @@ from core.prompts.constants import COMPACT_ERROR_ENTRY_MAX_CHARS
 from ..schema import ArtifactReference
 from .common import (
     _metadata_compact_decision_evidence,
+    as_int,
+    compact_evidence_line,
     dedupe_string_list,
     sanitize_artifact_refs,
 )
-from .filesystem import _extract_locator_evidence_from_metadata
 
 
 def merge_decision_evidence(
@@ -33,6 +34,52 @@ def merge_decision_evidence(
         *_extract_locator_evidence_from_metadata(raw_result, limit=limit),
     ]
     return dedupe_string_list([*deterministic, *list(processed_evidence)], limit=limit)
+
+
+def _extract_locator_evidence_from_metadata(
+    raw_result: Mapping[str, Any],
+    *,
+    limit: int = 5,
+) -> List[str]:
+    """Build locator evidence from structured filesystem metadata."""
+
+    runtime_metadata = raw_result.get("metadata")
+    if not isinstance(runtime_metadata, Mapping):
+        return []
+
+    evidence: List[str] = []
+    seen: set[str] = set()
+
+    def add(raw: Any) -> None:
+        if len(evidence) >= limit:
+            return
+        compact = compact_evidence_line(raw)
+        if compact and compact not in seen:
+            seen.add(compact)
+            evidence.append(compact)
+
+    fs_search = runtime_metadata.get("fs_search_text")
+    if isinstance(fs_search, Mapping):
+        matches = fs_search.get("matches")
+        if isinstance(matches, list):
+            for item in matches:
+                if not isinstance(item, Mapping):
+                    continue
+                path = str(item.get("path") or "").strip()
+                line = as_int(item.get("line"))
+                snippet = str(item.get("snippet") or "").strip()
+                if not path or line is None or not snippet:
+                    continue
+                add(f"{path}:{line}:{snippet}")
+
+    fs_read = runtime_metadata.get("fs_read")
+    if isinstance(fs_read, Mapping):
+        line_evidence = fs_read.get("line_evidence")
+        if isinstance(line_evidence, list):
+            for item in line_evidence:
+                add(item)
+
+    return evidence
 
 
 def extract_artifact_refs(

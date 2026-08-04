@@ -1,12 +1,11 @@
 """Knowledge domain services package.
 
-Consolidates ingestion, projection, query, evidence, identity, retention, and
-replay services under one canonical namespace. Sub-packages: adapters,
-identity, projection, candidate_extraction, query.
+Consolidates ingestion, projection, query, evidence, identity, retention,
+and replay services under one canonical namespace. Sub-packages: identity,
+projection, candidate_extraction, query.
 """
 
 from . import candidate_extraction, query
-from .adapter_registry import KnowledgeAdapterRegistryService
 from .archive_service import KnowledgeArchiveService
 from .contracts import IngestionRunCreate, IngestionRunStatus, ObservationCreate
 from .delete_guard_service import KnowledgeDeleteGuardService
@@ -31,7 +30,6 @@ __all__ = [
     "IngestionRunCreate",
     "IngestionRunStatus",
     "ObservationCreate",
-    "KnowledgeAdapterRegistryService",
     "KnowledgeArchiveService",
     "KnowledgeDeleteGuardService",
     "EvidenceStorageService",

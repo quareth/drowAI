@@ -16,6 +16,7 @@ from .contracts import (
     PaginatedResult,
     PaginationParams,
     WebSurfacePathsFilters,
+    WebSurfaceScopeError,
     normalize_optional_bool,
 )
 from .engine import KnowledgeQueryEngine
@@ -33,6 +34,7 @@ __all__ = [
     "AssetsFilters",
     "EvidenceFilters",
     "WebSurfacePathsFilters",
+    "WebSurfaceScopeError",
     "KnowledgeQueryEngine",
     "normalize_optional_bool",
 ]

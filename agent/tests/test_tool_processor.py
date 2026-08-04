@@ -17,7 +17,7 @@ try:
     from agent.context.tool_processor import UniversalToolProcessor, ProcessedOutput
     from agent.providers.llm.core.exceptions import LLMRefusalError, LLMRefusalOutcome
     from agent.semantic.enrichment import validate_semantic_evidence_entries
-    from agent.semantic.evidence_vocabulary import (
+    from runtime_shared.semantic.pentest_facts import (
         SemanticEvidenceType,
         get_evidence_per_type_limit,
     )
@@ -25,7 +25,7 @@ except Exception:
     from context.tool_processor import UniversalToolProcessor, ProcessedOutput
     from providers.llm.core.exceptions import LLMRefusalError, LLMRefusalOutcome
     from semantic.enrichment import validate_semantic_evidence_entries
-    from semantic.evidence_vocabulary import (
+    from runtime_shared.semantic.pentest_facts import (
         SemanticEvidenceType,
         get_evidence_per_type_limit,
     )

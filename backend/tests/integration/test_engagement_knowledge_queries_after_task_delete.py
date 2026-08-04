@@ -23,6 +23,7 @@ from backend.database import Base
 from backend.models.core import Engagement, Task, User
 from backend.models.knowledge import KnowledgeAsset, KnowledgeEvidenceArchive, KnowledgeFinding, KnowledgeIngestionRun, KnowledgeObservation, KnowledgeRelationship, KnowledgeService
 from backend.models.provenance import ExecutionArtifact, ToolExecution
+from backend.models.tenant import Tenant, TenantMembership
 from backend.routers import engagement_knowledge as engagement_routes
 from backend.services.task.cleanup_service import TaskCleanupService
 
@@ -45,17 +46,36 @@ def _seed_runner_control_durable_fixture(db):
     user = User(username=f"runner-control-delete-user-{uuid_lib.uuid4()}", password="secret")
     db.add(user)
     db.flush()
+    tenant = Tenant(
+        slug=f"runner-control-delete-{uuid_lib.uuid4()}",
+        name="Runner Control Delete Tenant",
+    )
+    db.add(tenant)
+    db.flush()
+    db.add(TenantMembership(tenant_id=tenant.id, user_id=user.id, role="owner"))
+    db.flush()
 
-    engagement = Engagement(user_id=user.id, name="Runner Control Delete Survival", status="active")
+    engagement = Engagement(
+        user_id=user.id,
+        tenant_id=tenant.id,
+        name="Runner Control Delete Survival",
+        status="active",
+    )
     db.add(engagement)
     db.flush()
 
-    task = Task(user_id=user.id, engagement_id=engagement.id, name="Runner Control Durable Task")
+    task = Task(
+        user_id=user.id,
+        tenant_id=tenant.id,
+        engagement_id=engagement.id,
+        name="Runner Control Durable Task",
+    )
     db.add(task)
     db.flush()
 
     execution = ToolExecution(
         id=uuid_lib.uuid4(),
+        tenant_id=tenant.id,
         task_id=task.id,
         tool_name="shell.exec",
         tool_arguments={"command": "collect"},
@@ -71,6 +91,7 @@ def _seed_runner_control_durable_fixture(db):
     artifact = ExecutionArtifact(
         id=uuid_lib.uuid4(),
         execution_id=execution.id,
+        tenant_id=tenant.id,
         task_id=task.id,
         artifact_kind="file",
         source_path=None,
@@ -86,6 +107,7 @@ def _seed_runner_control_durable_fixture(db):
 
     run = KnowledgeIngestionRun(
         id=uuid_lib.uuid4(),
+        tenant_id=tenant.id,
         user_id=user.id,
         engagement_id=engagement.id,
         task_id=task.id,
@@ -99,6 +121,7 @@ def _seed_runner_control_durable_fixture(db):
 
     observation = KnowledgeObservation(
         id=uuid_lib.uuid4(),
+        tenant_id=tenant.id,
         user_id=user.id,
         ingestion_run_id=run.id,
         engagement_id=engagement.id,
@@ -116,6 +139,7 @@ def _seed_runner_control_durable_fixture(db):
 
     asset = KnowledgeAsset(
         id=uuid_lib.uuid4(),
+        tenant_id=tenant.id,
         user_id=user.id,
         engagement_id=engagement.id,
         asset_key="host.ip:10.0.0.10",
@@ -134,6 +158,7 @@ def _seed_runner_control_durable_fixture(db):
 
     service = KnowledgeService(
         id=uuid_lib.uuid4(),
+        tenant_id=tenant.id,
         user_id=user.id,
         engagement_id=engagement.id,
         service_key="service.socket:10.0.0.10/tcp/443",
@@ -154,6 +179,7 @@ def _seed_runner_control_durable_fixture(db):
     evidence_id = uuid_lib.uuid4()
     evidence_archive = KnowledgeEvidenceArchive(
         id=evidence_id,
+        tenant_id=tenant.id,
         user_id=user.id,
         engagement_id=engagement.id,
         task_id=task.id,
@@ -169,6 +195,7 @@ def _seed_runner_control_durable_fixture(db):
 
     finding = KnowledgeFinding(
         id=uuid_lib.uuid4(),
+        tenant_id=tenant.id,
         user_id=user.id,
         engagement_id=engagement.id,
         finding_key="finding.vulnerability:host.ip:10.0.0.10:openssl-cve",
@@ -191,6 +218,7 @@ def _seed_runner_control_durable_fixture(db):
 
     relationship = KnowledgeRelationship(
         id=uuid_lib.uuid4(),
+        tenant_id=tenant.id,
         user_id=user.id,
         engagement_id=engagement.id,
         relationship_key="relationship.edge:host.ip:10.0.0.10:exposes:service.socket:10.0.0.10/tcp/443",
@@ -240,8 +268,8 @@ async def test_runner_control_engagement_queries_survive_task_delete(
 
         cleanup_service = TaskCleanupService(db)
         monkeypatch.setattr(
-            "backend.services.task.cleanup_service.get_task_in_tenant_or_404",
-            lambda db, task_id, tenant_id: task,
+            "backend.services.task.cleanup_service.get_owned_task_or_404",
+            lambda db, task_id, user_id, tenant_id: task,
         )
 
         class _FakeRetirementService:

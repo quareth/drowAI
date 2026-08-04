@@ -20,12 +20,17 @@ import re
 import subprocess
 import time
 from typing import List, Optional, Dict, Any, Literal
+from urllib.parse import urljoin, urlsplit
+
 from pydantic import ConfigDict, Field, field_validator, model_validator
+from runtime_shared.semantic.web_common import normalize_url
 
 from ...base_tool import BaseTool
 from ...canonical_capture import CaptureFamily, CanonicalCaptureFormat, ToolCaptureContract
 from ...schemas import BaseToolArgs, ToolResult
 from ..parsing_utils import clean_output, parse_crawler_line
+
+_GOBUSTER_SOURCE_TOOL = "web_applications.web_crawlers.gobuster"
 
 
 class GobusterArgs(BaseToolArgs):
@@ -440,6 +445,18 @@ class GobusterTool(BaseTool):
             metadata["stderr"] = clean_output(stderr)
         return metadata
 
+    def emit_semantic_observations(
+        self,
+        stdout: str,
+        stderr: str,
+        exit_code: int,
+        args: GobusterArgs,
+        metadata: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Emit canonical web-path observations from parsed Gobuster metadata."""
+        _ = stdout, stderr, exit_code
+        return build_gobuster_semantic_observations(metadata, args)
+
     def create_artifacts(
         self, stdout: str, args: GobusterArgs, timestamp: Optional[float] = None
     ) -> List[str]:
@@ -535,5 +552,122 @@ register_enhanced_tool_metadata(
         parallel_compatible=True,
         stealth_level=2,
         estimated_runtime_minutes=15,
-    )
+        )
 )
+
+
+def build_gobuster_semantic_observations(
+    metadata: Dict[str, Any],
+    args: GobusterArgs,
+) -> List[Dict[str, Any]]:
+    """Build final web.path_discovered facts from parsed HTTP-mode results."""
+    if args.mode == "dns":
+        return []
+
+    target_url = normalize_url(getattr(args, "target", None))
+    rows = _candidate_web_path_payloads(metadata, target_url=target_url)
+    observations: List[Dict[str, Any]] = []
+    seen: set[tuple[str, tuple[tuple[str, str], ...]]] = set()
+
+    for row in rows:
+        subject_key = str(row.pop("_subject_key"))
+        marker = (
+            subject_key,
+            tuple(sorted((str(key), str(value)) for key, value in row.items())),
+        )
+        if marker in seen:
+            continue
+        seen.add(marker)
+        observations.append(
+            {
+                "observation_type": "web.path_discovered",
+                "subject_type": "web.path",
+                "subject_key": subject_key,
+                "payload": row,
+            }
+        )
+    return observations
+
+
+def _candidate_web_path_payloads(
+    metadata: Dict[str, Any],
+    *,
+    target_url: str,
+) -> List[Dict[str, Any]]:
+    payloads: List[Dict[str, Any]] = []
+    findings = metadata.get("findings")
+    if isinstance(findings, list):
+        for item in findings:
+            if not isinstance(item, dict):
+                continue
+            payload = _build_web_path_payload(item, target_url=target_url)
+            if payload:
+                payloads.append(payload)
+        if payloads:
+            return payloads
+
+    for item in _found_path_rows(metadata):
+        payload = _build_web_path_payload(item, target_url=target_url)
+        if payload:
+            payloads.append(payload)
+    return payloads
+
+
+def _found_path_rows(metadata: Dict[str, Any]) -> List[Dict[str, Any]]:
+    found_paths = metadata.get("found_paths")
+    if isinstance(found_paths, list):
+        return [{"path": value} for value in found_paths]
+    return []
+
+
+def _build_web_path_payload(
+    item: Dict[str, Any],
+    *,
+    target_url: str,
+) -> Dict[str, Any] | None:
+    raw_url = str(item.get("url") or item.get("target_url") or "").strip()
+    canonical_url = normalize_url(raw_url)
+    if not canonical_url:
+        raw_path = str(item.get("path") or "").strip()
+        if not raw_path or not target_url:
+            return None
+        canonical_url = normalize_url(urljoin(target_url.rstrip("/") + "/", raw_path.lstrip("/")))
+    if not canonical_url:
+        return None
+
+    parsed = urlsplit(canonical_url)
+    if not parsed.scheme or not parsed.netloc:
+        return None
+
+    path = str(item.get("path") or "").strip() or (parsed.path or "/")
+    if not path.startswith("/"):
+        return None
+
+    payload: Dict[str, Any] = {
+        "_subject_key": f"web.path:{canonical_url}",
+        "url": canonical_url,
+        "source": _GOBUSTER_SOURCE_TOOL,
+        "path": path,
+        "target_url": target_url or canonical_url,
+    }
+    status_code = _coerce_int(item.get("status"))
+    if status_code is not None:
+        payload["status_code"] = status_code
+    response_size = _coerce_int(item.get("size"))
+    if response_size is not None:
+        payload["response_size"] = response_size
+    return payload
+
+
+def _coerce_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw.isdigit():
+            return int(raw)
+    return None

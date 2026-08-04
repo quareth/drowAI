@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -9,6 +10,9 @@ from pathlib import Path
 import pytest
 
 from agent.tools.information_gathering.web_enumeration._helpers import validate_http_url
+from agent.tools.information_gathering.web_enumeration._http_redaction import (
+    redact_url_credentials,
+)
 from agent.tools.information_gathering.web_enumeration.http_download import HttpDownloadTool
 from agent.tools.information_gathering.web_enumeration.http_request import HttpRequestTool
 from agent.tools.information_gathering.web_enumeration.contracts import HttpDownloadArgs, HttpRequestArgs
@@ -73,6 +77,40 @@ def test_http_request_redacts_api_key_header_lines_and_url_credentials():
     assert metadata["effective_url"] == "https://<REDACTED>@example.com/secure"
     assert "server-secret" not in rendered_stdout
     assert "<REDACTED>" in rendered_stdout
+
+
+def test_http_request_strips_url_credentials_from_semantic_observations():
+    credential = "synthetic-password"
+    args = HttpRequestArgs(
+        target=f"https://synthetic-user:{credential}@example.com/secure"
+    )
+
+    observations = HttpRequestTool().emit_semantic_observations(
+        stdout="",
+        stderr="",
+        exit_code=0,
+        args=args,
+        metadata={
+            "effective_url": "https://<REDACTED>@example.com/secure",
+            "status_code": 200,
+            "content_length": 12,
+        },
+    )
+
+    assert credential not in json.dumps(observations, sort_keys=True)
+    assert observations[0]["payload"]["target_url"] == "https://example.com/secure"
+
+
+def test_url_credential_redaction_preserves_ipv6_brackets_and_port():
+    assert redact_url_credentials(
+        "https://user:pass@[2001:db8::1]:8443/secure"
+    ) == "https://<REDACTED>@[2001:db8::1]:8443/secure"
+
+
+def test_url_credential_redaction_fails_closed_for_malformed_urls():
+    assert redact_url_credentials(
+        "https://user:pass@[2001:db8::1/secure"
+    ) == "<REDACTED>"
 
 
 def test_http_request_redacts_basic_and_bearer_auth_traces():

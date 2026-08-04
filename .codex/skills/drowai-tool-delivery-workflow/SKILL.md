@@ -83,9 +83,12 @@ Run `$drowai-tool-capability-analysis` on the current branch.
   implementation.
 - `NEEDS_CLARIFICATION` stops for the exact unresolved tool or scope decision.
 
-Do not use Amass as the universal implementation reference; reuse only
-`agent/graph/compression/deterministic/budget.py::budget_rendered_items` as the
-mandatory shared budget authority and do not copy other Amass-specific policy.
+Use mature tools only as responsibility-specific producer references. Reuse
+`runtime_shared/semantic/pentest_facts`, the Knowledge fact bridge, and compact
+fact projection as the mandatory semantic architecture. For an existing fact
+family, do not create a per-tool Knowledge adapter, compression adapter,
+registry entry, compressor import, or pentest `compact_*` override. Do not copy
+another tool's timeout, command, parsing, or semantic policy without evidence.
 
 ## 3. Create and review the implementation guide
 
@@ -161,7 +164,8 @@ Refactor suggestion files remain ignored and are never committed.
 
 Run:
 
-- focused tool/parser/runtime/semantic/compression/knowledge checks;
+- focused tool/parser/runtime/semantic compiler/compact projection/Knowledge
+  bridge and read-model checks;
 - `python3 scripts/check_publication_safety.py`;
 - `git diff --check`;
 - frontend checks only when the branch changed frontend contracts;

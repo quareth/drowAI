@@ -29,6 +29,7 @@ from backend.services.knowledge.query_service import (
     FindingsFilters,
     KnowledgeQueryService,
     WebSurfacePathsFilters,
+    WebSurfaceScopeError,
     normalize_optional_bool,
 )
 from backend.services.tenant.authorization import ACTION_KNOWLEDGE_READ
@@ -87,6 +88,14 @@ def _query_service(db: Session) -> KnowledgeQueryService:
 
 def _evidence_read_service(db: Session) -> KnowledgeEvidenceReadService:
     return KnowledgeEvidenceReadService(db)
+
+
+def _require_web_surface_scope(*, service_key: str | None, asset_key: str | None) -> None:
+    if not service_key and not asset_key:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="service_key or asset_key is required",
+        )
 
 
 def _sanitize_payload(value: Any) -> Any:
@@ -334,12 +343,14 @@ def list_services(
 @router.get("/{engagement_id}/web-surface")
 def list_web_surface_origins(
     engagement_id: int,
-    service_key: str = Query(..., min_length=1),
+    service_key: str | None = Query(default=None, min_length=1),
+    asset_key: str | None = Query(default=None, min_length=1),
     include_noisy: bool | str | None = Query(default=False),
     current_user: User = Depends(get_current_user),
     tenant_context: TenantRequestContext = Depends(get_tenant_request_context),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    _require_web_surface_scope(service_key=service_key, asset_key=asset_key)
     enforce_tenant_action(tenant_context=tenant_context, action=ACTION_KNOWLEDGE_READ)
     engagement = get_owned_engagement_or_404(
         db=db,
@@ -347,20 +358,28 @@ def list_web_surface_origins(
         user_id=int(current_user.id),
         tenant_id=int(tenant_context.tenant_id),
     )
-    result = _query_service(db).list_service_web_surface_origins(
-        user_id=int(current_user.id),
-        tenant_id=int(engagement.tenant_id),
-        engagement_id=engagement_id,
-        service_key=service_key,
-        include_noisy=normalize_optional_bool(include_noisy) is True,
-    )
+    try:
+        result = _query_service(db).list_web_surface_origins(
+            user_id=int(current_user.id),
+            tenant_id=int(engagement.tenant_id),
+            engagement_id=engagement_id,
+            service_key=service_key,
+            asset_key=asset_key,
+            include_noisy=normalize_optional_bool(include_noisy) is True,
+        )
+    except WebSurfaceScopeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
     return _sanitize_payload(result)
 
 
 @router.get("/{engagement_id}/web-surface/paths")
 def list_web_surface_paths(
     engagement_id: int,
-    service_key: str = Query(..., min_length=1),
+    service_key: str | None = Query(default=None, min_length=1),
+    asset_key: str | None = Query(default=None, min_length=1),
     origin_key: str | None = Query(default=None),
     include_noisy: bool | str | None = Query(default=False),
     limit: int | str | None = Query(default=100),
@@ -369,6 +388,7 @@ def list_web_surface_paths(
     tenant_context: TenantRequestContext = Depends(get_tenant_request_context),
     db: Session = Depends(get_db),
 ) -> dict[str, Any]:
+    _require_web_surface_scope(service_key=service_key, asset_key=asset_key)
     enforce_tenant_action(tenant_context=tenant_context, action=ACTION_KNOWLEDGE_READ)
     engagement = get_owned_engagement_or_404(
         db=db,
@@ -376,18 +396,25 @@ def list_web_surface_paths(
         user_id=int(current_user.id),
         tenant_id=int(tenant_context.tenant_id),
     )
-    result = _query_service(db).list_service_web_surface_paths(
-        user_id=int(current_user.id),
-        tenant_id=int(engagement.tenant_id),
-        engagement_id=engagement_id,
-        filters=WebSurfacePathsFilters(
-            service_key=service_key,
-            origin_key=origin_key,
-            include_noisy=include_noisy,
-            limit=limit,
-            offset=offset,
-        ),
-    )
+    try:
+        result = _query_service(db).list_web_surface_paths(
+            user_id=int(current_user.id),
+            tenant_id=int(engagement.tenant_id),
+            engagement_id=engagement_id,
+            filters=WebSurfacePathsFilters(
+                service_key=service_key,
+                asset_key=asset_key,
+                origin_key=origin_key,
+                include_noisy=include_noisy,
+                limit=limit,
+                offset=offset,
+            ),
+        )
+    except WebSurfaceScopeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=str(exc),
+        ) from exc
     return _sanitize_payload(result)
 
 

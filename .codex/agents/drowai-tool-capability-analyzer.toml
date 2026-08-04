@@ -24,9 +24,9 @@ Inspect and record separate evidence for registry identity, execution schema,
 expected executable/version command, existing selected-tool function and
 definition files, planner/function schema, executor/runtime binding,
 parse/result semantics, artifacts, semantic observations/evidence,
-deterministic compression, shared `budget_rendered_items` use, PTR projection,
-knowledge ingestion, tests/docs, and finally LLM visibility. Registered and
-visible are separate facts.
+canonical fact admission, deterministic compact fact projection and omission
+accounting, PTR projection, Knowledge bridge/projection, tests/docs, and finally
+LLM visibility. Registered and visible are separate facts.
 
 Discover the current registered and visible tool surfaces from active code,
 then choose mature reference tools separately for schema, runtime, result
@@ -36,10 +36,14 @@ responsibilities, inspect `information_gathering.network_discovery.nmap` first
 and replace it only when another verified mature tool is a closer analogue.
 Do not use one fixed tool as the universal reference.
 
-Treat Amass only as provenance for the reusable
-`agent/graph/compression/deterministic/budget.py::budget_rendered_items`
-authority. Require direct reuse of that helper, but never copy Amass-specific
-timeouts, inactivity policy, command construction, parsing, or semantics.
+Treat `runtime_shared/semantic/pentest_facts`,
+`backend/services/knowledge/pentest_facts/bridge.py`, and
+`agent/graph/compression/pentest_facts` as the reusable semantic authorities.
+For an existing fact family, require producer-owned semantic emission and
+forbid per-tool Knowledge adapters, compression adapters, registry entries,
+compressor imports, or pentest `compact_*` overrides. Never copy another tool's
+timeouts, inactivity policy, command construction, parsing, or semantics
+without responsibility-specific evidence.
 
 Allowed final statuses are SUITABLE, NEEDS_FOUNDATION, DEFERRED, NOT_PLANNED,
 and NEEDS_CLARIFICATION. Do not finalize SUITABLE until the main router records

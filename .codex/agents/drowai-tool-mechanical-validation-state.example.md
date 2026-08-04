@@ -37,14 +37,45 @@ cases:
   empty: {required: true, status: pending, evidence_ref: ""}
   partial_timeout: {required: true, status: pending, evidence_ref: ""}
   failure: {required: true, status: pending, evidence_ref: ""}
+semantic_envelope:
+  required: true
+  status: pending
+  schema_version: ""
+  capability_family: ""
+  observation_count: 0
+  evidence_count: 0
+  evidence_ref: ""
+canonical_facts:
+  required: true
+  status: pending
+  accepted: 0
+  duplicates: 0
+  rejected: 0
+  diagnostics_by_code: {}
+  fact_families: []
+  evidence_ref: ""
 compression:
-  total: 0
-  shown: 0
-  omitted: 0
-  deterministic: false
-  omission_marker_in_budget: false
+  primary_present: false
+  canonical_secondary_applicable: true
+  canonical_secondary_present: false
+  facts_total: 0
+  facts_selected: 0
+  facts_omitted: 0
+  evidence_total: 0
+  evidence_selected: 0
+  evidence_omitted: 0
+  lossiness_risk: ""
+  ptr_reachable: false
 artifacts: {required: false, status: pending, evidence_ref: ""}
-knowledge: {required: false, status: pending, evidence_ref: ""}
+knowledge:
+  required: false
+  status: pending
+  observation_count: 0
+  projected_models: []
+  lineage_verified: false
+  archive_scope_verified: false
+  independent_from_compact_omissions: false
+  evidence_ref: ""
 gui:
   selected_tool_id: ""
   parameters_preserved: false

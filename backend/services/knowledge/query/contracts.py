@@ -16,6 +16,11 @@ DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
 WEB_SURFACE_NOISY_HIDE_THRESHOLD = 0.5
 
+
+class WebSurfaceScopeError(ValueError):
+    """Raised when combined web-surface keys do not identify one asset scope."""
+
+
 FindingSort = Literal["last_seen_desc", "last_seen_asc", "severity_desc", "severity_asc"]
 AssetSort = Literal["last_seen_desc", "last_seen_asc", "asset_type_asc", "asset_type_desc"]
 EvidenceSort = Literal["observed_desc", "observed_asc", "source_tool_asc", "source_tool_desc"]
@@ -208,9 +213,10 @@ class EvidenceFilters:
 
 @dataclass(frozen=True, slots=True)
 class WebSurfacePathsFilters:
-    """Normalized filters for service-scoped web-surface path reads."""
+    """Normalized filters for service- or asset-scoped web-surface path reads."""
 
     service_key: str | None = None
+    asset_key: str | None = None
     origin_key: str | None = None
     include_noisy: bool | str | None = False
     limit: int | str | None = MAX_LIMIT
@@ -222,6 +228,7 @@ class WebSurfacePathsFilters:
         safe_offset = _coerce_int(self.offset, default=0)
         return WebSurfacePathsFilters(
             service_key=_normalize_text(self.service_key),
+            asset_key=_normalize_text(self.asset_key),
             origin_key=_normalize_text(self.origin_key),
             include_noisy=normalize_optional_bool(self.include_noisy) is True,
             limit=max(1, min(safe_limit, MAX_LIMIT)),

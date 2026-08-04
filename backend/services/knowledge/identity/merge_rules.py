@@ -126,11 +126,17 @@ def derive_identity_state(
             "version",
             "version_raw",
             "version_relation",
-            "status",
         ):
             value = payload.get(key)
             if value is not None and str(value).strip() != "":
                 state[key] = str(value).strip().lower()
+        service_status = payload.get("status")
+        if not str(service_status or "").strip():
+            service_status = payload.get("state")
+        if not str(service_status or "").strip() and obs == "network.open_port":
+            service_status = "open"
+        if service_status is not None and str(service_status).strip():
+            state["status"] = str(service_status).strip().lower()
         # Rich service profile fields from network.service_profiled
         if obs == "network.service_profiled":
             for key in ("http_title", "server_header"):

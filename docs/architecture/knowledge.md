@@ -73,6 +73,25 @@ The Knowledge workspace does not own:
   - Own database retrieval for tenant/user and engagement-scoped reads.
 - **Payload mappers:** `backend/services/knowledge/query/mappers.py`
   - Shape ORM rows into API payload dictionaries.
+- **Ingestion service:** `backend/services/knowledge/ingestion_service.py`
+  - Resolves ownership, archives evidence, parses semantic inputs from
+    execution records, calls the canonical Knowledge fact bridge, persists
+    observations, records semantic metrics, and projects read models.
+- **Canonical fact compiler:** `runtime_shared/semantic/pentest_facts/*`
+  - Validates semantic envelopes and compiles backend-free canonical pentest
+    facts.
+- **Shared web identity authority:** `runtime_shared/semantic/web_common.py`
+  - Owns URL normalization, web origin keys, web response observation helpers,
+    and finding subject keys shared by runtime semantics, canonical fact
+    admission, Knowledge web-path projection, and web-surface query grouping.
+- **Knowledge fact bridge:** `backend/services/knowledge/pentest_facts/bridge.py`
+  - Attaches archive-scoped evidence and backend lineage to compiled facts and
+    creates normalized `ObservationCreate` values.
+- **Replay service:** `backend/services/knowledge/replay_service.py`
+  - Resolves stored execution payloads and re-enters `KnowledgeIngestionService`.
+- **Candidate extraction:** `backend/services/knowledge/candidate_extraction/`
+  - Owns optional candidate observation extraction separately from
+    deterministic fact compilation.
 
 ## Workspace Subpages
 
@@ -203,6 +222,12 @@ Both routers delegate to the same `KnowledgeQueryService`. Global endpoints
 pass tenant/user scope without an engagement id; engagement endpoints pass the
 selected engagement id to produce an engagement-lensed view.
 
+The engagement web-surface endpoints accept `service_key`, `asset_key`, or
+both. When both are present, service-linked paths remain primary and the asset
+scope contributes only paths without a service association. This keeps
+hostname-backed paths visible without mixing paths assigned to another service
+on the same asset.
+
 ## Data Model
 
 Knowledge persistence lives in `backend/models/knowledge.py`.
@@ -222,7 +247,11 @@ Canonical read models:
 - `KnowledgeService`: tenant/user-owned service records.
 - `KnowledgeFinding`: tenant/user-owned finding records.
 - `KnowledgeRelationship`: tenant/user-owned relationship records.
-- `KnowledgeWebPath`: tenant/user-owned canonical web path records.
+- `KnowledgeWebPath`: tenant/user-owned canonical web path records whose
+  canonical URL and origin identity come from shared web identity helpers, not
+  backend-local Knowledge helpers. Confirmed DNS-backed responses also project
+  a canonical `host.dns` asset, allowing the path to retain an asset association
+  when no IP socket identity is available.
 
 Engagement lens tables:
 
@@ -247,7 +276,9 @@ flowchart LR
     Artifacts["Execution artifacts + provenance"]
     Archive["KnowledgeArchiveService"]
     Ingestion["KnowledgeIngestionService"]
-    Adapters["KnowledgeAdapterRegistryService"]
+    Inputs["Semantic observations + evidence"]
+    Compiler["Canonical fact compiler"]
+    Bridge["Knowledge fact bridge"]
     Observations["KnowledgeObservation rows"]
     Projection["KnowledgeProjectionService"]
     ReadModels["Assets, services, findings, relationships, web paths"]
@@ -255,12 +286,17 @@ flowchart LR
     Client["Knowledge workspace tabs"]
     LocalTrigger["Local async ingestion trigger"]
     Notify["knowledge_delta notification"]
+    Candidate["Candidate extraction"]
 
     Runtime --> Artifacts
     Artifacts --> Archive
     Archive --> Ingestion
-    Ingestion --> Adapters
-    Adapters --> Observations
+    Ingestion --> Inputs
+    Inputs --> Compiler
+    Compiler --> Bridge
+    Archive --> Bridge
+    Bridge --> Observations
+    Candidate -. "optional, separate" .-> Ingestion
     Observations --> Projection
     Projection --> ReadModels
     ReadModels --> API
@@ -275,23 +311,43 @@ flowchart LR
 2. `KnowledgeIngestionService` resolves task ownership, loads execution
    provenance, creates or reuses a `KnowledgeIngestionRun`, and archives
    delete-critical evidence through `KnowledgeArchiveService`.
-3. `KnowledgeAdapterRegistryService` dispatches deterministic adapters for
-   supported tool families such as nmap, masscan, fping, ffuf, nuclei, sqlmap,
-   gobuster, hydra, msfconsole, and tshark.
-4. Extracted and optional candidate observations are normalized and inserted as
-   append-only `KnowledgeObservation` rows with run-local deduplication.
-5. `KnowledgeProjectionService` resolves canonical identities and upserts
+3. The ingestion service calls `parse_semantic_inputs_from_execution()`, builds
+   a `SemanticFactEnvelope`, and calls `build_knowledge_observations()` with a
+   `KnowledgeFactContext` containing tenant, user, engagement, task,
+   execution, ingestion-run, archive, and timestamp context.
+4. The shared compiler validates deterministic semantic rows, applies durable
+   masking, records accepted/duplicate/rejected/diagnostic counts, and returns
+   canonical facts. Web URL, origin, and finding subject identity are delegated
+   to `runtime_shared/semantic/web_common.py`, which is also used by runtime
+   semantic emitters and Knowledge consumers. The Knowledge bridge attaches
+   archive-scoped evidence references and produces normalized
+   `ObservationCreate` values.
+5. Optional candidate extraction runs as a separate policy-controlled path. It
+   may add candidate observations, but it is not a fallback deterministic fact
+   authority.
+6. Observations are inserted as append-only `KnowledgeObservation` rows with
+   run-local deduplication. Run metadata stores canonical semantic metrics such
+   as `fact_input_count`, `fact_accepted_count`, `fact_duplicate_count`,
+   `fact_rejected_count`, `fact_diagnostic_count_by_code`,
+   `observation_count_by_type`, and projection counts.
+7. `KnowledgeProjectionService` resolves canonical identities and upserts
    assets, services, findings, relationships, web paths, and engagement link
-   rows through focused projectors.
-6. The query service reads the projected models and shapes tab payloads for the
+   rows through focused projectors. Web-path projection and web-surface query
+   grouping use `build_web_origin_key()` from
+   `runtime_shared.semantic.web_common`; the retired backend-local
+   `backend/services/knowledge/web_common.py` helper and retired Knowledge
+   deterministic adapters are not active wired owners. The same shared web
+   response builder emits `host.dns` plus `web.path` facts for hostname URLs,
+   independently of the producing tool.
+8. The query service reads the projected models and shapes tab payloads for the
    frontend.
-7. Local queued ingestion calls
+9. Local queued ingestion calls
    `schedule_projection_notification_from_result` after the ingestion commit;
    when the result inserted assets or findings, it publishes a task-scoped
    notification with category `knowledge_delta`. Runner promotion ingestion and
    upload-complete reconciliation also ingest and project records, but they do
    not currently publish `knowledge_delta`.
-8. Received `knowledge_delta` notifications invalidate global knowledge caches
+10. Received `knowledge_delta` notifications invalidate global knowledge caches
    and the relevant engagement cache in the client.
 
 ## Frontend Runtime Flow
@@ -304,6 +360,11 @@ On page render, the global summary, findings, assets, and evidence list queries
 are active. Finding and asset detail queries are disabled until a row is
 selected. The Territory graph query is disabled until the user selects an
 engagement.
+
+The Territory asset inspector passes both the selected asset identity and any
+selected web-service identity to its web-surface queries. DNS assets therefore
+show hostname-backed origins even when the canonical path has no IP-backed
+service association.
 
 `useRuntimeNotifications` listens for browser `task-notification` events. When
 the event category is `knowledge_delta`, it invalidates the global `["knowledge"]`
@@ -329,19 +390,29 @@ the client cache.
   responses.
 - Durable evidence content is read through archive/object-store services, not
   by exposing arbitrary host paths to the client.
+- Deterministic observations carry backend-owned tenant, user, engagement,
+  task, source-execution, and ingestion-run lineage from
+  `KnowledgeFactContext`; tool producers do not supply this backend lineage.
+- Evidence references are normalized against the current archive scope before
+  they are persisted on observations.
 
 ## Operational Notes
 
 - `KnowledgeReadModelRebuildService` can rebuild projected read models for an
-  engagement or source execution from stored observations.
+  engagement or source execution from the stored observation ledger.
 - `KnowledgeReplayService` and replay source resolution support replaying
-  historical or durable archive inputs into the knowledge pipeline.
+  historical or durable archive inputs by calling the same ingestion service
+  used by runtime ingestion.
 - `KnowledgeRetentionService` and retention executors apply operational and
   evidence-retention policies over knowledge-related records.
 - Candidate extraction is optional and controlled through knowledge candidate
-  extraction policy and feature-flagged confidence thresholds.
+  extraction policy and feature-flagged confidence thresholds; it remains
+  separate from deterministic canonical fact compilation.
 - Unsupported tools can still produce archive rows and a successful ingestion
   with zero deterministic observations.
+- Compact tool-output compression is not part of the Knowledge fact authority.
+  Compact output hints may be recorded as bounded run metadata, but
+  deterministic Knowledge facts come from semantic observations and evidence.
 
 ## Known Gaps Or Drift
 

@@ -2,7 +2,7 @@
 
 This module is the single semantic mapping authority for both ffuf variants
 (`web_application_fuzzers.ffuf` and `web_crawlers.ffuf`). It emits:
-- canonical semantic observations (`web.path_discovered`) for crawler results
+- canonical host, service, and web-path observations for confirmed responses
 - bounded semantic evidence entries using the locked shared vocabulary
 
 Result-summary policy:
@@ -16,12 +16,24 @@ No backend imports are allowed here; this module is agent-runtime only.
 from __future__ import annotations
 
 from typing import Any, Mapping
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
-from agent.semantic.evidence_vocabulary import SemanticEvidenceType
+from runtime_shared.semantic.pentest_facts import SemanticEvidenceType
+from runtime_shared.semantic.web_common import (
+    build_web_origin_key,
+    build_web_response_observations,
+    normalize_url,
+)
 
 FFUF_VARIANT_CRAWLER = "crawler"
 FFUF_VARIANT_FUZZER = "fuzzer"
+_FFUF_SOURCE_BY_VARIANT = {
+    FFUF_VARIANT_CRAWLER: "web_applications.web_crawlers.ffuf",
+    FFUF_VARIANT_FUZZER: "web_applications.web_application_fuzzers.ffuf",
+}
+_MAX_PATHS_PER_ORIGIN = 200
+_SOFT_404_STATUS_CODE = 404
+_SOFT_404_RESPONSE_SIZE_MAX = 255
 
 _MATCHER_FIELDS: tuple[str, ...] = (
     "match_status",
@@ -61,6 +73,20 @@ def _safe_int(value: Any) -> int:
         if raw.isdigit():
             return int(raw)
     return 0
+
+
+def _coerce_int(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        raw = value.strip()
+        if raw.isdigit():
+            return int(raw)
+    return None
 
 
 def _safe_bool(value: Any) -> bool | None:
@@ -133,51 +159,217 @@ def build_ffuf_semantic_observations(
     metadata: Mapping[str, Any],
     args: Any,
 ) -> list[dict[str, Any]]:
-    """Emit crawler-only `web.path_discovered` observations for concrete results."""
-    if detect_ffuf_variant(metadata) != FFUF_VARIANT_CRAWLER:
-        return []
-
+    """Emit canonical web-response observations for supported ffuf rows."""
+    metadata_dict = dict(metadata) if isinstance(metadata, Mapping) else {}
+    variant = detect_ffuf_variant(metadata_dict)
+    source = _FFUF_SOURCE_BY_VARIANT[variant]
     target = _target_template(metadata, args)
+    rows = _apply_per_origin_cap(
+        _apply_pre_observation_drop_rules(
+            _candidate_web_path_payloads(metadata_dict, args=args, source=source, target=target)
+        )
+    )
+
     observations: list[dict[str, Any]] = []
-    seen_subject_keys: set[str] = set()
+    seen: set[tuple[str, str, str, tuple[tuple[str, str], ...]]] = set()
+    for row in rows:
+        canonical_url = str(row.pop("_subject_key")).removeprefix("web.path:")
+        for observation in build_web_response_observations(
+            url=canonical_url,
+            source=row.get("source"),
+            target_url=row.get("target_url"),
+            status_code=row.get("status_code"),
+            response_size=row.get("response_size"),
+            calibrated=bool(row.get("calibrated")),
+        ):
+            payload = _as_mapping(observation.get("payload"))
+            marker = (
+                str(observation.get("observation_type") or ""),
+                str(observation.get("subject_type") or ""),
+                str(observation.get("subject_key") or ""),
+                tuple(sorted((str(key), str(value)) for key, value in payload.items())),
+            )
+            if marker in seen:
+                continue
+            seen.add(marker)
+            observations.append(observation)
+
+    return observations
+
+
+def _candidate_web_path_payloads(
+    metadata: Mapping[str, Any],
+    *,
+    args: Any,
+    source: str,
+    target: str,
+) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    calibration = _calibration_policy(metadata, args)
+    target_url = target or ""
 
     for row in _as_list(metadata.get("results")):
         result = _as_mapping(row)
-        url_value = result.get("url")
-        if not isinstance(url_value, str) or not url_value.strip():
+        canonical_url = normalize_url(_pick_value(result, "url", "target_url"))
+        if not canonical_url:
             continue
-        discovered_url = url_value.strip()
-        parsed = urlparse(discovered_url)
-        path = parsed.path or "/"
-        subject_key = f"web.path:{discovered_url.lower()}"
-        if subject_key in seen_subject_keys:
+        parsed = urlsplit(canonical_url)
+        if not parsed.scheme or not parsed.netloc:
             continue
-        seen_subject_keys.add(subject_key)
 
         payload: dict[str, Any] = {
-            "source": "ffuf",
-            "path": path,
-            "url": discovered_url,
+            "_subject_key": f"web.path:{canonical_url}",
+            "url": canonical_url,
+            "source": source,
+            "path": parsed.path or "/",
+            "target_url": target_url or canonical_url,
         }
-        if target:
-            payload["target_template"] = target
-        status = _safe_int(result.get("status"))
-        if status > 0:
+
+        status = _coerce_int(_pick_value(result, "status_code", "status"))
+        if status is not None and status > 0:
             payload["status_code"] = status
-        size = _safe_int(result.get("length"))
-        if size > 0:
-            payload["response_size"] = size
 
-        observations.append(
-            {
-                "observation_type": "web.path_discovered",
-                "subject_type": "web.path",
-                "subject_key": subject_key,
-                "payload": payload,
-            }
+        response_size = _coerce_int(_pick_value(result, "response_size", "length", "size"))
+        if response_size is not None and response_size >= 0:
+            payload["response_size"] = response_size
+
+        content_words = _coerce_int(_pick_value(result, "content_words", "words"))
+        content_lines = _coerce_int(_pick_value(result, "content_lines", "lines"))
+        matched_calibration = _matched_calibration_fields(
+            status_code=status,
+            response_size=response_size,
+            content_words=content_words,
+            content_lines=content_lines,
+            calibration=calibration,
         )
+        if matched_calibration:
+            payload["calibrated"] = True
 
-    return observations
+        payloads.append(payload)
+
+    return payloads
+
+
+def _apply_pre_observation_drop_rules(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    kept: list[dict[str, Any]] = []
+    for row in rows:
+        status_code = row.get("status_code")
+        response_size = row.get("response_size")
+        if (
+            isinstance(status_code, int)
+            and status_code == _SOFT_404_STATUS_CODE
+            and isinstance(response_size, int)
+            and response_size <= _SOFT_404_RESPONSE_SIZE_MAX
+        ):
+            continue
+        kept.append(row)
+    return kept
+
+
+def _apply_per_origin_cap(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        url_value = str(row.get("url") or "")
+        origin_key = build_web_origin_key(url_value)
+        if not origin_key:
+            continue
+        grouped.setdefault(origin_key, []).append(row)
+
+    capped_rows: list[dict[str, Any]] = []
+    for origin_key in sorted(grouped):
+        ranked_rows = sorted(
+            grouped[origin_key],
+            key=lambda item: (
+                _status_rank(item),
+                str(item.get("url") or ""),
+                str(item.get("path") or ""),
+            ),
+        )
+        capped_rows.extend(ranked_rows[:_MAX_PATHS_PER_ORIGIN])
+    return capped_rows
+
+
+def _status_rank(item: Mapping[str, Any]) -> int:
+    status_code = item.get("status_code")
+    if not isinstance(status_code, int):
+        return 999
+    if status_code == 200:
+        return 0
+    if status_code == 301:
+        return 1
+    if status_code == 302:
+        return 2
+    if 200 <= status_code < 300:
+        return 3
+    if 300 <= status_code < 400:
+        return 4
+    if status_code == 401:
+        return 5
+    if status_code == 403:
+        return 6
+    return 7
+
+
+def _calibration_policy(metadata: Mapping[str, Any], args: Any) -> dict[str, set[int]]:
+    config = _as_mapping(metadata.get("config"))
+    matchers_block = _as_mapping(_pick_value(config, "matchers"))
+    filters_block = _as_mapping(_pick_value(matchers_block, "filters", "Filters"))
+    is_calibrated = _safe_bool(_pick_value(matchers_block, "IsCalibrated", "is_calibrated"))
+    if is_calibrated is None:
+        is_calibrated = bool(getattr(args, "auto_calibrate", False))
+    if not is_calibrated:
+        return {}
+    return {
+        "status_code": _int_set_from_filter(
+            _pick_value(filters_block, "status", "status_code")
+            or getattr(args, "filter_status", None)
+        ),
+        "response_size": _int_set_from_filter(
+            _pick_value(filters_block, "size", "length", "response_size")
+            or getattr(args, "filter_size", None)
+        ),
+        "content_words": _int_set_from_filter(
+            _pick_value(filters_block, "words", "content_words")
+            or getattr(args, "filter_words", None)
+        ),
+        "content_lines": _int_set_from_filter(
+            _pick_value(filters_block, "lines", "content_lines")
+            or getattr(args, "filter_lines", None)
+        ),
+    }
+
+
+def _int_set_from_filter(value: Any) -> set[int]:
+    values: set[int] = set()
+    if isinstance(value, (list, tuple, set)):
+        candidates = value
+    else:
+        candidates = str(value or "").split(",")
+    for candidate in candidates:
+        raw = str(candidate).strip()
+        if raw.isdigit():
+            values.add(int(raw))
+    return values
+
+
+def _matched_calibration_fields(
+    *,
+    status_code: int | None,
+    response_size: int | None,
+    content_words: int | None,
+    content_lines: int | None,
+    calibration: Mapping[str, set[int]],
+) -> dict[str, int]:
+    matched: dict[str, int] = {}
+    for name, value in (
+        ("status_code", status_code),
+        ("response_size", response_size),
+        ("content_words", content_words),
+        ("content_lines", content_lines),
+    ):
+        if value is not None and value in calibration.get(name, set()):
+            matched[name] = value
+    return matched
 
 
 def _append_execution_parameter(

@@ -7,6 +7,7 @@ envelope, no raw output in state, and artifact references are valid.
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Dict, List
 
@@ -45,6 +46,8 @@ from tests.tool_execution_module_helper import (
     load_tool_execution_module,
     patch_tool_execution_attr,
 )
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 class _StubCompactResult:
@@ -258,6 +261,21 @@ def test_write_compact_batch_metadata_keeps_batch_and_primary_field_shapes() -> 
         artifact_refs=[],
         compression=CompressionMetadata(source="deterministic"),
     ).to_dict()
+    deterministic_compact = CompactToolOutput(
+        tool="http.request",
+        status="success",
+        success=True,
+        exit_code=0,
+        summary="Deterministic HTTP 200 from target",
+        key_findings=["deterministic status 200"],
+        errors=[],
+        report_recommendations=[],
+        structured_signals=[{"type": "kv_pair", "key": "status_code", "value": 200}],
+        decision_evidence=["deterministic GET / returned 200"],
+        lossiness_risk="low",
+        artifact_refs=[],
+        compression=CompressionMetadata(source="deterministic"),
+    ).to_dict()
     facts = SimpleNamespace(metadata={})
     batch = ToolBatch(
         tool_batch_id="batch-compact-contract",
@@ -305,6 +323,9 @@ def test_write_compact_batch_metadata_keeps_batch_and_primary_field_shapes() -> 
             "call-primary": primary_compact,
             "call-secondary": secondary_compact,
         },
+        deterministic_compact_by_call_id={
+            "call-secondary": deterministic_compact,
+        },
     )
 
     metadata = facts.metadata
@@ -327,23 +348,55 @@ def test_write_compact_batch_metadata_keeps_batch_and_primary_field_shapes() -> 
 
     rows = compact_batch["results"]
     assert [row["tool_call_id"] for row in rows] == ["call-primary", "call-secondary"]
-    assert all(
-        set(row) == {
-            "tool_call_id",
-            "tool_id",
-            "intent",
-            "status",
-            "success",
-            "compact_tool_result",
-        }
-        for row in rows
-    )
+    primary_row_keys = {
+        "tool_call_id",
+        "tool_id",
+        "intent",
+        "status",
+        "success",
+        "compact_tool_result",
+    }
+    assert set(rows[0]) == primary_row_keys
+    assert set(rows[1]) == primary_row_keys | {"deterministic_compact_tool_result"}
     assert rows[0]["compact_tool_result"] == primary_compact
     assert rows[1]["compact_tool_result"] == secondary_compact
+    assert rows[1]["deterministic_compact_tool_result"] == deterministic_compact
 
     assert metadata["last_tool_result_compact"] == primary_compact
     assert metadata["last_tool_result_compact"] == rows[0]["compact_tool_result"]
     assert_compact_envelope_present(metadata)
+
+
+def test_secondary_compact_lane_production_inventory_is_explicit() -> None:
+    """Every production secondary-lane author/reader must be in this inventory."""
+    allowed_by_token = {
+        "deterministic_compact_output": {
+            "agent/graph/compression/compressor.py",
+            "agent/graph/compression/schema.py",
+            "agent/graph/subgraphs/tool_execution_runtime/result_state_projection.py",
+        },
+        "last_tool_result_deterministic_compact": {
+            "agent/graph/subgraphs/tool_execution_runtime/approval_and_idempotency.py",
+            "agent/graph/subgraphs/tool_execution_runtime/per_call_execution.py",
+        },
+        "deterministic_compact_tool_result": {
+            "agent/tool_runtime/batch/aggregator.py",
+            "core/prompts/builders/post_tool/last_tool.py",
+        },
+    }
+    production_roots = ("agent", "backend", "core")
+
+    for token, expected_paths in allowed_by_token.items():
+        actual_paths: set[str] = set()
+        for root_name in production_roots:
+            for path in (_REPO_ROOT / root_name).rglob("*.py"):
+                relative = path.relative_to(_REPO_ROOT).as_posix()
+                if "/tests/" in relative or relative.endswith("_test.py"):
+                    continue
+                if token in path.read_text(encoding="utf-8"):
+                    actual_paths.add(relative)
+
+        assert actual_paths == expected_paths
 
 
 @pytest.mark.asyncio

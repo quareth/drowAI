@@ -24,7 +24,7 @@ import ipaddress
 import xml.etree.ElementTree as ET
 from typing import TYPE_CHECKING, Any, Mapping, Optional
 
-from agent.semantic.evidence_vocabulary import SemanticEvidenceType
+from runtime_shared.semantic.pentest_facts import SemanticEvidenceType
 from runtime_shared.semantic.canonical_keys import build_finding_vulnerability_key
 from runtime_shared.semantic.network_common import normalize_service_version
 from runtime_shared.semantic.service_identity import build_service_socket_key
@@ -387,6 +387,44 @@ def build_service_detected_payload(port_info: dict[str, Any]) -> dict[str, Any]:
         payload["product_hint"] = " ".join(part for part in (product, version_text) if part).strip()
 
     return payload
+
+
+def build_non_open_port_observation(
+    ip: str,
+    port_info: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Return a canonical service fact for an explicit non-open port state."""
+    state = str(port_info.get("status") or port_info.get("state") or "").strip().lower()
+    if not state or state == "open":
+        return None
+
+    protocol = str(port_info.get("protocol") or "tcp").strip().lower()
+    port = port_info.get("port")
+    try:
+        subject_key = build_service_socket_key(ip=ip, protocol=protocol, port=port)
+    except ValueError:
+        return None
+
+    payload: dict[str, Any] = {
+        "ip": ip,
+        "protocol": protocol,
+        "port": port,
+        "source": "nmap",
+        "state": state,
+    }
+    state_reason = str(port_info.get("state_reason") or "").strip()
+    if state_reason:
+        payload["state_reason"] = state_reason
+    service_name = str(port_info.get("service") or "").strip()
+    if service_name and service_name.lower() not in {"unknown", "?"}:
+        payload["service_name"] = service_name
+
+    return {
+        "observation_type": "network.service_observed",
+        "subject_type": "service.socket",
+        "subject_key": subject_key,
+        "payload": payload,
+    }
 
 
 def build_semantic_transport_markers() -> dict[str, str]:

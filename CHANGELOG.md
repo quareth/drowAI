@@ -40,6 +40,23 @@ The format is based on
 
 ### Fixed
 
+- Semantic evidence validation now drops non-finite numeric entries without
+  failing otherwise successful tool-result assembly.
+- Masscan semantic projection now excludes explicitly closed or filtered rows
+  from canonical open-port and detected-service facts.
+- Knowledge service projection now preserves canonical open, closed, and
+  filtered network-service states in durable inventory and topology views.
+- HTTP and FFUF semantic facts now strip URL userinfo before durable
+  persistence and preserve bracketed IPv6 literals in canonical web identity.
+- Compact canonical pentest projections now retain result summaries and
+  matcher/filter context ahead of routine execution parameters when evidence
+  budgets are exceeded.
+- Compact canonical pentest projections now retain findings and services ahead
+  of lower-priority asset facts when fact budgets are exceeded.
+- Canonical pentest facts now preserve FFUF and HTTP web surfaces, including
+  hostname-backed paths through DNS asset scope, alongside TShark
+  credential-exposure findings, compact omission accounting, and linked
+  Knowledge details across deterministic processing and Territory views.
 - Stopping a subagent during approval continuation now cancels the resumed
   child without allowing it to complete, while parent-turn cancellation still
   stops the parent flow and lifecycle publication failures no longer strand a

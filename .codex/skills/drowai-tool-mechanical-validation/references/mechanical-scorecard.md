@@ -12,9 +12,11 @@ targets, or full sensitive output.
 | `safe_target` | loopback/reserved target source and local resolver when DNS |
 | `schema_runs` | minimal and full parameter execution |
 | `cases` | success, empty, partial/timeout, actual failure; applicability explicit |
-| `compression` | exact total/shown/omitted, deterministic result, marker budget |
+| `semantic_envelope` | expected schema/family, observations, evidence, and secret-safe transport |
+| `canonical_facts` | accepted/duplicate/rejected/diagnostic counts and supported fact families |
+| `compression` | primary lane plus applicable canonical secondary selection, omissions, lossiness, and PTR reachability |
 | `artifacts` | expected vs observed and secret-safe reference |
-| `knowledge` | expected vs observed task-scoped facts |
+| `knowledge` | expected ledger/read-model facts, lineage, evidence scope, and independence from compact omissions |
 | `gui` | selected tool, preserved params, rendered result, attempt count |
 | `documentation` | current branch guide/runbook checks and any corrections |
 | `cleanup` | task/runtime deletion and stack ownership |

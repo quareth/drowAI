@@ -3,21 +3,28 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any, Dict
+from typing import Any, Dict, Mapping
 
 import pytest
 
-from agent.graph.compression.compressor import compress_tool_output
-from agent.providers.llm.core.exceptions import LLMRefusalError, LLMRefusalOutcome
-from agent.graph.compression.deterministic import registry as deterministic_registry
-from agent.graph.compression.deterministic.contracts import (
-    CompressionInput,
-    DeterministicCompressionResult,
+from core.prompts.constants import (
+    COMPACT_DECISION_EVIDENCE_MAX_CHARS,
+    COMPACT_KEY_FINDINGS_MAX_ITEMS,
+    COMPACT_KEY_FINDINGS_TOTAL_MAX_CHARS,
+    COMPACT_SUMMARY_MAX_CHARS,
 )
-from agent.graph.compression.deterministic.http import HTTP_REQUEST_TOOL_ID
-from agent.graph.compression.deterministic.network_discovery import NMAP_TOOL_ID
-from agent.graph.compression.deterministic.registry import register_adapter
-from agent.graph.compression.deterministic.credential_attack import HYDRA_TOOL_ID
+from agent.graph.compression.compressor import (
+    _build_canonical_pentest_fact_projection,
+    compress_tool_output,
+)
+from agent.graph.compression.pentest_facts import CompactFactContext
+from agent.providers.llm.core.exceptions import LLMRefusalError, LLMRefusalOutcome
+from agent.graph.compression.schema import CompactToolOutput, CompressionMetadata
+from runtime_shared.semantic.pentest_facts.contracts import CompiledFactSet
+
+HTTP_REQUEST_TOOL_ID = "information_gathering.web_enumeration.http_request"
+HYDRA_TOOL_ID = "password_attacks.online_attacks.hydra"
+NMAP_TOOL_ID = "information_gathering.network_discovery.nmap"
 
 
 class _PromptCapturingLLMClient:
@@ -61,6 +68,265 @@ def _base_raw_result(**overrides: Any) -> Dict[str, Any]:
     }
     raw.update(overrides)
     return raw
+
+
+def _open_port_semantic_row() -> Dict[str, Any]:
+    return {
+        "observation_type": "network.open_port",
+        "subject_type": "service.socket",
+        "subject_key": "service.socket:192.0.2.20/tcp/443",
+        "payload": {"ip": "192.0.2.20", "protocol": "tcp", "port": 443},
+    }
+
+
+def _canonical_projection_raw_result(
+    *,
+    metadata: Mapping[str, Any] | None = None,
+) -> Dict[str, Any]:
+    merged_metadata: Dict[str, Any] = {
+        "semantic_schema_version": "pentest-facts.v1",
+        "capability_family": "network.discovery",
+        "semantic_observations": [_open_port_semantic_row()],
+        "semantic_evidence": [
+            {
+                "type": "diagnostic",
+                "name": "service_banner",
+                "value": "443/tcp open https",
+            }
+        ],
+    }
+    if metadata:
+        merged_metadata.update(dict(metadata))
+    return _base_raw_result(metadata=merged_metadata)
+
+
+def test_canonical_projection_helper_passes_only_compiled_facts_and_context(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Canonical projection receives compiled facts plus explicit context only."""
+
+    captured: Dict[str, Any] = {}
+
+    def _project_stub(
+        compiled: CompiledFactSet,
+        context: CompactFactContext,
+    ) -> SimpleNamespace:
+        captured["compiled"] = compiled
+        captured["context"] = context
+        return SimpleNamespace(
+            compact_output=CompactToolOutput(
+                tool=context.tool,
+                status=context.status,
+                success=context.success,
+                exit_code=context.exit_code,
+                summary=context.compact_summary or "projected summary",
+                key_findings=list(context.compact_key_findings),
+                structured_signals=[
+                    dict(item) for item in context.compact_structured_signals
+                ],
+                decision_evidence=list(context.compact_decision_evidence),
+                artifact_refs=list(context.artifact_refs),
+                compression=CompressionMetadata(source="deterministic"),
+            )
+        )
+
+    monkeypatch.setattr(
+        "agent.graph.compression.compressor.project_compact_facts",
+        _project_stub,
+    )
+
+    compact = _build_canonical_pentest_fact_projection(
+        tool_name="information_gathering.network_discovery.nmap",
+        raw_result=_canonical_projection_raw_result(
+            metadata={
+                "compact_summary": " Canonical override summary. ",
+                "compact_key_findings": [" 443/tcp open ", "443/tcp open"],
+                "compact_decision_evidence": [" proof line\ncontinues "],
+                "structured_signals": [
+                    {
+                        "type": "service",
+                        "port": 443,
+                        "service": "https",
+                        "extra": "drop",
+                    }
+                ],
+            }
+        ),
+        artifact_path="/workspace/artifacts/nmap.xml",
+        execution_id="exec-canonical",
+        status="success",
+        success=True,
+        exit_code=0,
+    )
+
+    assert compact is not None
+    assert isinstance(captured["compiled"], CompiledFactSet)
+    assert captured["compiled"].accepted_count == 1
+    context = captured["context"]
+    assert isinstance(context, CompactFactContext)
+    assert context.compact_summary == "Canonical override summary."
+    assert context.compact_key_findings == ("443/tcp open",)
+    assert context.compact_decision_evidence == ("proof line continues",)
+    assert context.compact_structured_signals == (
+        {"type": "service", "port": 443, "service": "https"},
+    )
+    assert [ref.to_dict() for ref in context.artifact_refs] == [
+        {
+            "path": "/workspace/artifacts/nmap.xml",
+            "artifact_id": None,
+            "execution_id": "exec-canonical",
+            "tool_call_id": None,
+            "tool_name": None,
+            "artifact_kind": None,
+            "label": None,
+            "relative_path": None,
+        }
+    ]
+
+
+def test_canonical_projection_helper_keeps_projector_dto_with_all_generic_overrides(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Compressor must not replace the projector-owned compact DTO."""
+
+    projected_output = CompactToolOutput(
+        tool="information_gathering.network_discovery.nmap",
+        status="success",
+        success=True,
+        exit_code=0,
+        summary="Projector-owned summary.",
+        key_findings=["Projector-owned finding."],
+        structured_signals=[
+            {"type": "service", "port": 8443, "service": "projector"}
+        ],
+        decision_evidence=[
+            "Projector-owned metadata evidence.",
+            "Projector-owned canonical evidence.",
+        ],
+        compression=CompressionMetadata(source="deterministic"),
+    )
+
+    def _project_stub(
+        compiled: CompiledFactSet,
+        context: CompactFactContext,
+    ) -> SimpleNamespace:
+        assert compiled.accepted_count == 1
+        assert context.compact_summary == "Override summary."
+        assert context.compact_key_findings == ("Override finding.",)
+        assert context.compact_structured_signals == (
+            {"type": "service", "port": 443, "service": "https"},
+        )
+        assert context.compact_decision_evidence == ("Override evidence.",)
+        return SimpleNamespace(compact_output=projected_output)
+
+    monkeypatch.setattr(
+        "agent.graph.compression.compressor.project_compact_facts",
+        _project_stub,
+    )
+
+    compact = _build_canonical_pentest_fact_projection(
+        tool_name="information_gathering.network_discovery.nmap",
+        raw_result=_canonical_projection_raw_result(
+            metadata={
+                "compact_summary": " Override summary. ",
+                "compact_key_findings": [" Override finding. "],
+                "compact_structured_signals": [
+                    {"type": "service", "port": 443, "service": "https"}
+                ],
+                "compact_decision_evidence": [" Override evidence. "],
+            }
+        ),
+        artifact_path=None,
+        execution_id="exec-projector-authority",
+        status="success",
+        success=True,
+        exit_code=0,
+    )
+
+    assert compact is projected_output
+
+
+def test_canonical_projection_helper_ignores_pcap_compact_metadata() -> None:
+    """PCAP compact payloads are not deterministic inputs for canonical projection."""
+
+    compact = _build_canonical_pentest_fact_projection(
+        tool_name="sniffing_spoofing.network_sniffers.tshark",
+        raw_result=_canonical_projection_raw_result(
+            metadata={
+                "pcap_compact": {
+                    "schema_version": "pcap.compact.v1",
+                    "hosts": [{"ip": "192.0.2.20"}],
+                }
+            }
+        ),
+        artifact_path=None,
+        execution_id="exec-pcap-ignore",
+        status="success",
+        success=True,
+        exit_code=0,
+    )
+
+    assert compact is not None
+    payload = compact.to_dict()
+    assert "pcap_compact" not in str(payload)
+
+
+@pytest.mark.asyncio
+async def test_compress_tool_output_merges_partial_metadata_evidence_before_canonical() -> None:
+    """Partial metadata evidence override should not suppress canonical projection."""
+
+    result = await compress_tool_output(
+        tool_name="information_gathering.network_discovery.nmap",
+        raw_result=_canonical_projection_raw_result(
+            metadata={
+                "compact_decision_evidence": [" metadata evidence first "],
+            }
+        ),
+        artifact_path=None,
+        execution_id="exec-partial-evidence",
+        llm_client=None,
+    )
+
+    deterministic = result.deterministic_compact_output
+    assert deterministic is not None
+    assert deterministic.summary == "Projected 1 service facts."
+    assert deterministic.key_findings == [
+        "service: network.open_port service.socket:192.0.2.20/tcp/443"
+    ]
+    assert deterministic.decision_evidence == [
+        "metadata evidence first",
+        "evidence: diagnostic; service_banner=443/tcp open https; detail={}",
+    ]
+
+
+def test_canonical_projection_helper_invalid_semantics_do_not_emit_secondary() -> None:
+    """Invalid canonical input is non-crashing and cannot revive legacy parsing."""
+
+    compact = _build_canonical_pentest_fact_projection(
+        tool_name="information_gathering.network_discovery.nmap",
+        raw_result=_base_raw_result(
+            metadata={
+                "semantic_schema_version": "pentest-facts.v1",
+                "capability_family": "network.discovery",
+                "semantic_observations": [
+                    {
+                        "observation_type": "network.open_port",
+                        "subject_type": "service.socket",
+                        "subject_key": "service.socket:192.0.2.20/tcp/443",
+                        "payload": "invalid payload",
+                    }
+                ],
+                "semantic_evidence": [{"bad": "row"}],
+            }
+        ),
+        artifact_path=None,
+        execution_id="exec-invalid",
+        status="success",
+        success=True,
+        exit_code=0,
+    )
+
+    assert compact is None
 
 
 @pytest.mark.asyncio
@@ -387,10 +653,7 @@ async def test_compress_tool_output_preserves_current_merge_precedence(
     assert compact.decision_evidence == ["Processor evidence should remain last."]
     assert deterministic.summary == "Metadata compact summary wins."
     assert deterministic.key_findings == ["Metadata compact finding wins."]
-    assert deterministic.decision_evidence == [
-        "Metadata evidence stays first.",
-        "artifacts/service.txt:7:service=ssh",
-    ]
+    assert deterministic.decision_evidence == ["Metadata evidence stays first."]
     assert compact.structured_signals == [{"type": "service", "port": 22, "service": "ssh"}]
     assert deterministic.structured_signals == [
         {"type": "service", "port": 443, "service": "https"}
@@ -398,6 +661,243 @@ async def test_compress_tool_output_preserves_current_merge_precedence(
     assert compact.report_recommendations == []
     assert compact.compression is not None
     assert compact.compression.source == "llm"
+
+
+@pytest.mark.asyncio
+async def test_compress_tool_output_metadata_overrides_replace_adapter_fields_and_lock_bounds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Generic metadata overrides own the deterministic lane with current bounds."""
+
+    long_evidence = "x" * (COMPACT_DECISION_EVIDENCE_MAX_CHARS + 10)
+    long_summary = "s" * (COMPACT_SUMMARY_MAX_CHARS + 10)
+    max_key_finding = "k" * COMPACT_KEY_FINDINGS_TOTAL_MAX_CHARS
+
+    async def _process_output_stub(
+        self: object,
+        tool_name: str,
+        raw_output: str,
+        metadata: Dict[str, Any],
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            summary="Processor summary remains primary.",
+            key_findings=["Processor finding remains primary."],
+            next_actions=[],
+            structured_signals=[{"type": "service", "port": 443, "service": "https"}],
+            decision_evidence=["Processor evidence remains primary."],
+            lossiness_risk="medium",
+            analysis_source="llm",
+            usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        )
+
+    monkeypatch.setattr(
+        "agent.graph.compression.compressor.UniversalToolProcessor.process_output",
+        _process_output_stub,
+    )
+
+    result = await compress_tool_output(
+        tool_name="registry_wiring_tests.override_adapter",
+        raw_result=_base_raw_result(
+            metadata={
+                "compact_summary": f" {long_summary} ",
+                "compact_key_findings": [
+                    " finding-1 ",
+                    "finding-2",
+                    "finding-3",
+                    "finding-4",
+                    "finding-5",
+                    "finding-6",
+                    "finding-2",
+                    *[
+                        f"finding-extra-{index}"
+                        for index in range(COMPACT_KEY_FINDINGS_MAX_ITEMS)
+                    ],
+                    max_key_finding,
+                    "",
+                ],
+                "compact_structured_signals": [
+                    {"type": "service", "port": 22, "service": "ssh"},
+                ],
+                "compact_decision_evidence": [
+                    " metadata first \n line ",
+                    "metadata first line",
+                    long_evidence,
+                ],
+                "fs_search_text": {
+                    "matches": [
+                        {
+                            "path": "artifacts/result.txt",
+                            "line": 9,
+                            "column": 1,
+                            "snippet": "service=ssh",
+                        }
+                    ],
+                    "truncated": False,
+                },
+            },
+        ),
+        artifact_path=None,
+        execution_id="exec-override-bounds",
+        llm_client=SimpleNamespace(model="gpt-4.1"),
+    )
+
+    deterministic = result.deterministic_compact_output
+    assert deterministic is not None
+    assert result.compact_output.summary == "Processor summary remains primary."
+    assert deterministic.summary == long_summary[:COMPACT_SUMMARY_MAX_CHARS]
+    assert deterministic.key_findings == [
+        "finding-1",
+        "finding-2",
+        "finding-3",
+        "finding-4",
+        "finding-5",
+        "finding-6",
+        *[
+            f"finding-extra-{index}"
+            for index in range(COMPACT_KEY_FINDINGS_MAX_ITEMS - 6)
+        ],
+    ]
+    assert len(deterministic.key_findings) == COMPACT_KEY_FINDINGS_MAX_ITEMS
+    assert (
+        sum(len(item) for item in deterministic.key_findings)
+        + len(deterministic.key_findings)
+        - 1
+    ) <= COMPACT_KEY_FINDINGS_TOTAL_MAX_CHARS
+    assert max_key_finding not in deterministic.key_findings
+    assert deterministic.structured_signals == [
+        {"type": "service", "port": 22, "service": "ssh"}
+    ]
+    assert deterministic.decision_evidence == [
+        "metadata first line",
+        long_evidence[: COMPACT_DECISION_EVIDENCE_MAX_CHARS - 3] + "...",
+    ]
+    assert all(
+        len(item) <= COMPACT_DECISION_EVIDENCE_MAX_CHARS
+        for item in deterministic.decision_evidence
+    )
+
+
+@pytest.mark.asyncio
+async def test_compress_tool_output_normalizes_structured_signals_alias_only_in_secondary_lane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Current structured_signals alias is compressor metadata only."""
+
+    captured_metadata: Dict[str, Any] = {}
+    alias_signals = [{"type": "unsupported", "value": "drop"}] + [
+        {"type": "service", "port": index, "service": "ssh", "extra": "drop"}
+        for index in range(30)
+    ]
+
+    async def _process_output_stub(
+        self: object,
+        tool_name: str,
+        raw_output: str,
+        metadata: Dict[str, Any],
+    ) -> SimpleNamespace:
+        captured_metadata.update(metadata)
+        return SimpleNamespace(
+            summary="Processor primary summary.",
+            key_findings=[],
+            next_actions=[],
+            structured_signals=[],
+            decision_evidence=[],
+            lossiness_risk="low",
+            analysis_source="llm",
+            usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        )
+
+    monkeypatch.setattr(
+        "agent.graph.compression.compressor.UniversalToolProcessor.process_output",
+        _process_output_stub,
+    )
+
+    result = await compress_tool_output(
+        tool_name="registry_wiring_tests.structured_alias",
+        raw_result=_base_raw_result(
+            metadata={
+                "compact_summary": "Alias secondary summary.",
+                "structured_signals": alias_signals,
+            },
+        ),
+        artifact_path=None,
+        execution_id="exec-structured-alias",
+        llm_client=SimpleNamespace(model="gpt-4.1"),
+    )
+
+    deterministic = result.deterministic_compact_output
+    assert deterministic is not None
+    assert "structured_signals" not in captured_metadata
+    assert len(deterministic.structured_signals) == 25
+    assert deterministic.structured_signals[0] == {
+        "type": "service",
+        "port": 0,
+        "service": "ssh",
+    }
+    assert deterministic.structured_signals[-1] == {
+        "type": "service",
+        "port": 24,
+        "service": "ssh",
+    }
+    assert all("extra" not in signal for signal in deterministic.structured_signals)
+
+
+def test_compact_tool_output_to_dict_locks_schema_version_and_shape() -> None:
+    """CompactToolOutput serialization stays stable for primary and secondary lanes."""
+
+    compact = CompactToolOutput(
+        tool="registry_wiring_tests.schema",
+        status="success",
+        success=True,
+        exit_code=0,
+        summary="Schema lock summary.",
+        key_findings=["finding"],
+        structured_signals=[{"type": "service", "port": 443, "service": "https"}],
+        decision_evidence=["evidence"],
+        lossiness_risk="low",
+        compression=CompressionMetadata(source="deterministic"),
+    )
+
+    payload = compact.to_dict()
+
+    assert list(payload) == [
+        "schema_version",
+        "tool",
+        "status",
+        "success",
+        "exit_code",
+        "summary",
+        "key_findings",
+        "errors",
+        "report_recommendations",
+        "structured_signals",
+        "decision_evidence",
+        "lossiness_risk",
+        "artifact_refs",
+        "compression",
+    ]
+    assert payload == {
+        "schema_version": "2.0",
+        "tool": "registry_wiring_tests.schema",
+        "status": "success",
+        "success": True,
+        "exit_code": 0,
+        "summary": "Schema lock summary.",
+        "key_findings": ["finding"],
+        "errors": [],
+        "report_recommendations": [],
+        "structured_signals": [{"type": "service", "port": 443, "service": "https"}],
+        "decision_evidence": ["evidence"],
+        "lossiness_risk": "low",
+        "artifact_refs": [],
+        "compression": {
+            "source": "deterministic",
+            "model": None,
+            "token_usage": None,
+            "fallback_reason": None,
+        },
+    }
+    assert CompactToolOutput.from_dict(payload).to_dict() == payload
 
 
 @pytest.mark.asyncio
@@ -902,95 +1402,13 @@ async def test_compress_tool_output_no_adapter_fallback_preserves_current_output
     assert result.usage_record["prompt_tokens"] == 3
 
 
-@pytest.mark.parametrize(
-    ("tool_name", "raw_result", "artifact_path", "expected_summary"),
-    [
-        (
-            HTTP_REQUEST_TOOL_ID,
-            _base_raw_result(
-                stdout="<html>RAW_BODY_SHOULD_NOT_BE_PROMOTED</html>",
-                parameters={"target": "https://example.test/login", "method": "POST"},
-                metadata={
-                    "complete_fixture": {
-                        "summary": "HTTP complete fixture summary.",
-                        "finding": "http complete fixture finding",
-                        "evidence": "http complete fixture evidence",
-                        "signal_key": "fixture_family",
-                        "signal_value": "http",
-                    },
-                    "status_code": 302,
-                    "effective_url": "https://example.test/home",
-                    "request_method": "POST",
-                    "content_type": "text/html",
-                },
-            ),
-            "/workspace/artifacts/http-complete.txt",
-            "HTTP complete fixture summary.",
-        ),
-        (
-            NMAP_TOOL_ID,
-            _base_raw_result(
-                stdout="<nmaprun>RAW_XML_SHOULD_NOT_BE_PROMOTED</nmaprun>",
-                parameters={"target": "10.0.0.5"},
-                metadata={
-                    "complete_fixture": {
-                        "summary": "Nmap complete fixture summary.",
-                        "finding": "nmap complete fixture finding",
-                        "evidence": "nmap complete fixture evidence",
-                        "signal_key": "fixture_family",
-                        "signal_value": "nmap",
-                    },
-                    "hosts_total": 1,
-                    "hosts_up": 1,
-                    "open_ports": [
-                        {
-                            "host": "10.0.0.5",
-                            "port": 443,
-                            "protocol": "tcp",
-                            "service": "https",
-                            "status": "open",
-                        }
-                    ],
-                },
-            ),
-            "/workspace/artifacts/nmap-complete.xml",
-            "Nmap complete fixture summary.",
-        ),
-    ],
-)
 @pytest.mark.asyncio
-async def test_compress_tool_output_deterministic_complete_pentest_tools_augments_processor(
+async def test_compress_tool_output_pentest_uses_canonical_projection_not_registry(
     monkeypatch: pytest.MonkeyPatch,
-    tool_name: str,
-    raw_result: Dict[str, Any],
-    artifact_path: str,
-    expected_summary: str,
 ) -> None:
-    """Complete deterministic pentest-role fixtures use a separate lane."""
-    adapter_calls: list[str] = []
+    """Pentest-role secondary output comes from canonical projection only."""
     processor_calls: list[str] = []
     captured_metadata: list[Dict[str, Any]] = []
-
-    def _complete_adapter(input_data: CompressionInput) -> DeterministicCompressionResult:
-        adapter_calls.append(input_data.tool_name)
-        metadata = input_data.raw_result.get("metadata")
-        fixture = metadata.get("complete_fixture") if isinstance(metadata, dict) else {}
-        if not isinstance(fixture, dict):
-            fixture = {}
-        return DeterministicCompressionResult(
-            summary=str(fixture.get("summary") or ""),
-            key_findings=(str(fixture.get("finding") or ""),),
-            structured_signals=(
-                {
-                    "type": "kv_pair",
-                    "key": str(fixture.get("signal_key") or "fixture"),
-                    "value": str(fixture.get("signal_value") or input_data.tool_name),
-                },
-            ),
-            decision_evidence=(str(fixture.get("evidence") or ""),),
-            lossiness_risk="low",
-            completeness="complete",
-        )
 
     async def _process_output_stub(
         self,
@@ -1016,27 +1434,31 @@ async def test_compress_tool_output_deterministic_complete_pentest_tools_augment
             },
         )
 
-    monkeypatch.setitem(deterministic_registry._ADAPTERS, tool_name, _complete_adapter)
     monkeypatch.setattr(
         "agent.graph.compression.compressor.UniversalToolProcessor.process_output",
         _process_output_stub,
     )
+    raw_result = _canonical_projection_raw_result(
+        metadata={
+            "compact_summary": "Canonical secondary summary.",
+            "compact_key_findings": ["canonical secondary finding"],
+            "compact_decision_evidence": ["canonical secondary evidence"],
+        }
+    )
 
     result = await compress_tool_output(
-        tool_name=tool_name,
+        tool_name=NMAP_TOOL_ID,
         raw_result=raw_result,
-        artifact_path=artifact_path,
+        artifact_path="/workspace/artifacts/nmap-complete.xml",
         execution_id="exec-complete-real-tool-fixture",
         llm_client=SimpleNamespace(model="gpt-4.1"),
     )
 
     compact = result.compact_output
-    fixture = raw_result["metadata"]["complete_fixture"]
 
-    assert adapter_calls == [tool_name]
-    assert processor_calls == [tool_name]
+    assert processor_calls == [NMAP_TOOL_ID]
     assert "deterministic_analysis" not in captured_metadata[0]
-    assert compact.summary == f"Processor summary for {tool_name}."
+    assert compact.summary == f"Processor summary for {NMAP_TOOL_ID}."
     assert compact.key_findings == ["Processor finding wins."]
     assert compact.structured_signals == [
         {
@@ -1056,16 +1478,20 @@ async def test_compress_tool_output_deterministic_complete_pentest_tools_augment
     }
     assert result.usage_record is not None
     assert result.usage_record["total_tokens"] == 13
+    assert result.compact_output is result.llm_compact_output
     deterministic = result.deterministic_compact_output
     assert deterministic is not None
-    assert deterministic.summary == expected_summary
-    assert deterministic.key_findings == [fixture["finding"]]
-    assert deterministic.decision_evidence == [fixture["evidence"]]
+    assert deterministic.summary == "Canonical secondary summary."
+    assert deterministic.key_findings == ["canonical secondary finding"]
+    assert deterministic.decision_evidence == [
+        "canonical secondary evidence",
+        "evidence: diagnostic; service_banner=443/tcp open https; detail={}",
+    ]
 
 
 @pytest.mark.asyncio
-async def test_http_request_compact_output_prefers_parsed_page_facts_over_raw_body() -> None:
-    """HTTP deterministic page facts should be separate from raw LLM lane."""
+async def test_http_request_without_canonical_facts_does_not_use_old_adapter() -> None:
+    """HTTP request output without canonical facts does not revive old parsing."""
 
     result = await compress_tool_output(
         tool_name=HTTP_REQUEST_TOOL_ID,
@@ -1102,35 +1528,20 @@ Content-Type: text/html; charset=utf-8
 
     compact = result.compact_output
     deterministic = result.deterministic_compact_output
-    assert deterministic is not None
-    rendered = str(deterministic.to_dict())
 
     assert compact.summary == "HTTP/1.1 200 OK"
-    assert deterministic.summary == (
-        "HTTP GET https://example.test/; status 200; "
-        "content_type text/html; charset=utf-8; bytes 400"
-    )
-    assert 'page title: "Security Dashboard"' in deterministic.key_findings
-    assert "internal links: /capture, /download/1" in deterministic.key_findings
-    assert "download links: /download/1" in deterministic.key_findings
-    assert "RAW_SECRET_BODY_LINE_SHOULD_NOT_BE_PROMOTED" not in rendered
+    assert deterministic is None
     assert compact.compression is not None
     assert compact.compression.source == "deterministic"
-    assert deterministic.compression is not None
-    assert deterministic.compression.source == "deterministic"
 
 
 @pytest.mark.asyncio
-async def test_compress_tool_output_utility_catalog_role_skips_deterministic_registry(
+async def test_compress_tool_output_utility_catalog_role_uses_processor_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Utility-role tools should use the processor path even with a registered adapter."""
+    """Utility-role tools should use the processor path without registry dispatch."""
     service_access_tool_id = "service_access.ftp_login"
     calls: list[str] = []
-
-    def _deterministic_should_not_run(input_data: CompressionInput) -> DeterministicCompressionResult:
-        calls.append(f"adapter:{input_data.tool_name}")
-        raise AssertionError("utility tools must skip the deterministic registry")
 
     async def _process_output_stub(self, tool_name: str, raw_output: str, metadata: Dict[str, Any]):  # noqa: ANN001
         calls.append(f"processor:{tool_name}")
@@ -1150,10 +1561,6 @@ async def test_compress_tool_output_utility_catalog_role_skips_deterministic_reg
             },
         )
 
-    monkeypatch.setattr(
-        "agent.graph.compression.compressor.compress_deterministically",
-        _deterministic_should_not_run,
-    )
     monkeypatch.setattr(
         "agent.graph.compression.compressor.UniversalToolProcessor.process_output",
         _process_output_stub,
@@ -1196,23 +1603,60 @@ async def test_compress_tool_output_utility_catalog_role_skips_deterministic_reg
 
 
 @pytest.mark.asyncio
+async def test_non_pentest_metadata_secondary_preserves_skipped_fallback_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Generic non-pentest metadata keeps its pre-refactor envelope marker."""
+
+    async def _process_output_stub(
+        self: object,
+        tool_name: str,
+        raw_output: str,
+        metadata: Dict[str, Any],
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            summary="Processor utility summary.",
+            key_findings=[],
+            next_actions=[],
+            structured_signals=[],
+            decision_evidence=[],
+            lossiness_risk="low",
+            analysis_source="deterministic",
+            usage=None,
+        )
+
+    monkeypatch.setattr(
+        "agent.graph.compression.compressor.UniversalToolProcessor.process_output",
+        _process_output_stub,
+    )
+
+    result = await compress_tool_output(
+        tool_name="service_access.ftp_login",
+        raw_result=_base_raw_result(
+            metadata={"compact_summary": "Metadata utility summary."}
+        ),
+        artifact_path=None,
+        execution_id="exec-utility-metadata",
+        llm_client=None,
+    )
+
+    deterministic = result.deterministic_compact_output
+    assert deterministic is not None
+    assert deterministic.summary == "Metadata utility summary."
+    assert deterministic.compression is not None
+    assert (
+        deterministic.compression.fallback_reason
+        == "deterministic_adapter_skipped"
+    )
+
+
+@pytest.mark.asyncio
 async def test_compress_tool_output_complete_adapter_augments_processor_and_keeps_metadata_first(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Complete deterministic adapters should not augment the generic processor path."""
+    """Generic compact metadata remains secondary without adapter execution."""
     calls: list[str] = []
     captured_metadata: Dict[str, Any] = {}
-
-    def _adapter(input_data: CompressionInput) -> DeterministicCompressionResult:
-        calls.append(f"adapter:{input_data.tool_name}")
-        return DeterministicCompressionResult(
-            summary="Adapter summary is available.",
-            key_findings=("Adapter finding is available.",),
-            structured_signals=({"type": "service", "port": 8080, "service": "http"},),
-            decision_evidence=("Adapter evidence is available.",),
-            lossiness_risk="high",
-            completeness="complete",
-        )
 
     async def _process_output_stub(self, tool_name: str, raw_output: str, metadata: Dict[str, Any]):  # noqa: ANN001
         calls.append(f"processor:{tool_name}")
@@ -1233,7 +1677,6 @@ async def test_compress_tool_output_complete_adapter_augments_processor_and_keep
             },
         )
 
-    register_adapter("registry_wiring_tests.complete_adapter", _adapter)
     monkeypatch.setattr(
         "agent.graph.compression.compressor.UniversalToolProcessor.process_output",
         _process_output_stub,
@@ -1256,10 +1699,7 @@ async def test_compress_tool_output_complete_adapter_augments_processor_and_keep
 
     compact = result.compact_output
 
-    assert calls == [
-        "adapter:registry_wiring_tests.complete_adapter",
-        "processor:registry_wiring_tests.complete_adapter",
-    ]
+    assert calls == ["processor:registry_wiring_tests.complete_adapter"]
     assert "deterministic_analysis" not in captured_metadata
     assert compact.summary == "Processor summary is available."
     assert compact.key_findings == ["Processor finding is available."]
@@ -1269,13 +1709,8 @@ async def test_compress_tool_output_complete_adapter_augments_processor_and_keep
     assert deterministic is not None
     assert deterministic.summary == "Metadata compact summary wins."
     assert deterministic.key_findings == ["Metadata compact finding wins."]
-    assert deterministic.structured_signals == [
-        {"type": "service", "port": 8080, "service": "http"}
-    ]
-    assert deterministic.decision_evidence == [
-        "Metadata compact evidence wins.",
-        "Adapter evidence is available.",
-    ]
+    assert deterministic.structured_signals == []
+    assert deterministic.decision_evidence == ["Metadata compact evidence wins."]
     assert compact.lossiness_risk == "low"
     assert compact.compression is not None
     assert compact.compression.source == "llm"
@@ -1291,20 +1726,9 @@ async def test_compress_tool_output_complete_adapter_augments_processor_and_keep
 async def test_compress_tool_output_deterministic_partial_adapter_augments_processor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Partial deterministic fields should use a separate lane from LLM output."""
+    """Pentest fallback-role tools do not use partial deterministic adapters."""
     calls: list[str] = []
     captured_metadata: Dict[str, Any] = {}
-
-    def _adapter(input_data: CompressionInput) -> DeterministicCompressionResult:
-        calls.append(f"adapter:{input_data.tool_name}")
-        return DeterministicCompressionResult(
-            summary="Deterministic summary wins.",
-            key_findings=("Deterministic finding wins.",),
-            structured_signals=({"type": "service", "port": 8080, "service": "http"},),
-            decision_evidence=("Deterministic evidence stays before fill-ins.",),
-            lossiness_risk="high",
-            completeness="partial",
-        )
 
     async def _process_output_stub(self, tool_name: str, raw_output: str, metadata: Dict[str, Any]):  # noqa: ANN001
         calls.append(f"processor:{tool_name}")
@@ -1324,7 +1748,6 @@ async def test_compress_tool_output_deterministic_partial_adapter_augments_proce
             },
         )
 
-    register_adapter("registry_wiring_tests.partial_adapter", _adapter)
     monkeypatch.setattr(
         "agent.graph.compression.compressor.UniversalToolProcessor.process_output",
         _process_output_stub,
@@ -1341,7 +1764,6 @@ async def test_compress_tool_output_deterministic_partial_adapter_augments_proce
     compact = result.compact_output
 
     assert calls == [
-        "adapter:registry_wiring_tests.partial_adapter",
         "processor:registry_wiring_tests.partial_adapter",
     ]
     assert "deterministic_analysis" not in captured_metadata
@@ -1362,38 +1784,15 @@ async def test_compress_tool_output_deterministic_partial_adapter_augments_proce
     assert result.usage_record["model"] == "gpt-4.1"
     assert result.usage_record["total_tokens"] == 24
     deterministic = result.deterministic_compact_output
-    assert deterministic is not None
-    assert deterministic.summary == "Deterministic summary wins."
-    assert deterministic.key_findings == ["Deterministic finding wins."]
-    assert deterministic.structured_signals == [
-        {"type": "service", "port": 8080, "service": "http"}
-    ]
-    assert deterministic.decision_evidence == [
-        "Deterministic evidence stays before fill-ins."
-    ]
-    assert deterministic.lossiness_risk == "high"
+    assert deterministic is None
 
 
 @pytest.mark.asyncio
 async def test_compress_tool_output_partial_adapter_keeps_llm_output_authoritative(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """LLM-backed processor output remains authoritative over deterministic context."""
+    """LLM-backed primary output remains authoritative after pentest cutover."""
     calls: list[str] = []
-    deterministic_evidence = tuple(
-        f"Deterministic evidence {index} wins." for index in range(1, 6)
-    )
-
-    def _adapter(input_data: CompressionInput) -> DeterministicCompressionResult:
-        calls.append(f"adapter:{input_data.tool_name}")
-        return DeterministicCompressionResult(
-            summary="Deterministic summary wins all visible slots.",
-            key_findings=("Deterministic finding wins all visible slots.",),
-            structured_signals=({"type": "service", "port": 8080, "service": "http"},),
-            decision_evidence=deterministic_evidence,
-            lossiness_risk="high",
-            completeness="partial",
-        )
 
     async def _process_output_stub(self, tool_name: str, raw_output: str, metadata: Dict[str, Any]):  # noqa: ANN001
         calls.append(f"processor:{tool_name}")
@@ -1413,7 +1812,6 @@ async def test_compress_tool_output_partial_adapter_keeps_llm_output_authoritati
             },
         )
 
-    register_adapter("registry_wiring_tests.partial_hidden_llm_adapter", _adapter)
     monkeypatch.setattr(
         "agent.graph.compression.compressor.UniversalToolProcessor.process_output",
         _process_output_stub,
@@ -1430,7 +1828,6 @@ async def test_compress_tool_output_partial_adapter_keeps_llm_output_authoritati
     compact = result.compact_output
 
     assert calls == [
-        "adapter:registry_wiring_tests.partial_hidden_llm_adapter",
         "processor:registry_wiring_tests.partial_hidden_llm_adapter",
     ]
     assert compact.summary == "Processor summary is hidden by deterministic summary."
@@ -1456,10 +1853,7 @@ async def test_compress_tool_output_partial_adapter_keeps_llm_output_authoritati
 async def test_compress_tool_output_none_adapter_marks_fallback_reason(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Adapter none results should keep processor output and explain fallback."""
-
-    def _adapter(input_data: CompressionInput) -> DeterministicCompressionResult:
-        return DeterministicCompressionResult(completeness="none")
+    """Missing secondary metadata should keep processor output authoritative."""
 
     async def _process_output_stub(self, tool_name: str, raw_output: str, metadata: Dict[str, Any]):  # noqa: ANN001
         return SimpleNamespace(
@@ -1477,7 +1871,6 @@ async def test_compress_tool_output_none_adapter_marks_fallback_reason(
             },
         )
 
-    register_adapter("registry_wiring_tests.none_adapter", _adapter)
     monkeypatch.setattr(
         "agent.graph.compression.compressor.UniversalToolProcessor.process_output",
         _process_output_stub,
@@ -1639,7 +2032,7 @@ async def test_compress_tool_output_hydra_long_output_never_sends_raw_secrets_to
     assert raw_parameter_token not in rendered_prompt
     assert "<redacted>" in rendered_prompt
     assert "DETERMINISTIC OUTPUT" not in rendered_prompt
-    assert result.deterministic_compact_output is not None
+    assert result.deterministic_compact_output is None
 
 
 @pytest.mark.asyncio

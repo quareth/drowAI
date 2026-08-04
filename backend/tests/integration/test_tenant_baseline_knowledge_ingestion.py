@@ -25,17 +25,36 @@ def _build_session():
 
 
 def _seed_execution(db) -> tuple[int, str]:
+    tenant_id = 1
+    db.execute(
+        text(
+            "INSERT OR IGNORE INTO tenants (id, slug, name, created_at) "
+            "VALUES (:id, :slug, :name, CURRENT_TIMESTAMP)"
+        ),
+        {"id": tenant_id, "slug": "tenant-1", "name": "Tenant 1"},
+    )
     user = User(username=f"tenant-baseline-ingestion-user-{uuid_lib.uuid4()}", password="secret")
     db.add(user)
     db.flush()
-    engagement = Engagement(user_id=user.id, name="Runtime Ingestion Engagement", status="active")
+    engagement = Engagement(
+        user_id=user.id,
+        tenant_id=tenant_id,
+        name="Runtime Ingestion Engagement",
+        status="active",
+    )
     db.add(engagement)
     db.flush()
-    task = Task(user_id=user.id, engagement_id=engagement.id, name="Runtime Ingestion Task")
+    task = Task(
+        user_id=user.id,
+        engagement_id=engagement.id,
+        tenant_id=tenant_id,
+        name="Runtime Ingestion Task",
+    )
     db.add(task)
     db.flush()
     execution = ToolExecution(
         id=uuid_lib.uuid4(),
+        tenant_id=tenant_id,
         task_id=task.id,
         tool_name="custom.unsupported_tool",
         tool_arguments={"target": "10.0.0.5"},
@@ -50,6 +69,7 @@ def _seed_execution(db) -> tuple[int, str]:
         ExecutionArtifact(
             id=uuid_lib.uuid4(),
             execution_id=execution.id,
+            tenant_id=tenant_id,
             task_id=task.id,
             artifact_kind="stdout",
             content_text="unsupported tool output",
@@ -105,4 +125,3 @@ def test_unsupported_execution_still_records_clean_zero_observation_run() -> Non
     finally:
         db.close()
         engine.dispose()
-
