@@ -111,6 +111,66 @@ def test_replace_events_for_message_replaces_rows_and_orders_by_phase_sequence()
         engine.dispose()
 
 
+def test_event_rows_preserve_subagent_ownership_metadata() -> None:
+    engine, db = _build_session()
+    try:
+        message = _seed_assistant_message(db)
+        ownership = {
+            "producer_type": "subagent",
+            "agent_run_id": "pathfinder-run-1",
+            "agent_id": "pathfinder",
+            "parent_turn_id": "task-1-turn-7",
+        }
+        service = ChatTurnEventService(db)
+        service.replace_events_for_message(
+            task_id=message.task_id,
+            conversation_id=message.conversation_id,
+            chat_message_id=message.id,
+            turn_number=message.turn_number or 0,
+            reasoning_sections=[
+                {
+                    "content": "Evaluating scan output.",
+                    "phase_sequence": 0,
+                    **ownership,
+                }
+            ],
+            tool_calls=[
+                {
+                    "tool_call_id": "tc-subagent",
+                    "tool_name": "nmap",
+                    "tool_result": {"status": "success"},
+                    "phase_sequence": 1,
+                    **ownership,
+                }
+            ],
+            observation_sections=[
+                {
+                    "content": "Port 80 is closed.",
+                    "phase_sequence": 2,
+                    **ownership,
+                }
+            ],
+        )
+        db.commit()
+
+        rows = db.execute(
+            select(ChatTurnEvent)
+            .where(ChatTurnEvent.chat_message_id == message.id)
+            .order_by(ChatTurnEvent.phase_sequence.asc())
+        ).scalars().all()
+        assert [row.kind for row in rows] == ["reasoning", "tool", "observation"]
+        assert all(
+            row.event_metadata["producer_type"] == "subagent" for row in rows
+        )
+        assert all(
+            row.event_metadata["agent_run_id"] == "pathfinder-run-1"
+            for row in rows
+        )
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_replace_events_for_message_rejects_duplicate_phase_sequence() -> None:
     engine, db = _build_session()
     try:

@@ -1,3 +1,4 @@
+/** Submit one non-retryable durable HITL approval resume mutation. */
 import { useMutation } from "@tanstack/react-query";
 
 import { apiRequest } from "@/lib/queryClient";
@@ -58,5 +59,6 @@ export function useGraphResume() {
       }
       return res.json();
     },
+    retry: false,
   });
 }

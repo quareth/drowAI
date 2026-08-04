@@ -74,6 +74,7 @@ def network_discovery_adapter(
 
     host_findings = _host_findings(metadata)
     port_summaries = _port_summaries(metadata)
+    non_open_port_summaries = _non_open_port_summaries(metadata)
     open_port_count = _open_port_count(metadata, fallback=len(port_summaries))
     hosts_total = as_int(metadata.get("hosts_total"))
     hosts_up = as_int(metadata.get("hosts_up"))
@@ -91,7 +92,11 @@ def network_discovery_adapter(
         )
 
     artifact_findings = _artifact_findings(input_data.raw_result, metadata=metadata)
-    findings = tuple((host_findings + artifact_findings)[: _HOST_LIMIT + _ARTIFACT_REF_LIMIT])
+    findings = tuple(
+        (host_findings + non_open_port_summaries + artifact_findings)[
+            : _HOST_LIMIT + _PORT_LIMIT + _ARTIFACT_REF_LIMIT
+        ]
+    )
     if not findings and open_port_count == 0:
         findings = ("Nmap metadata contained no hosts and no open ports.",)
 
@@ -109,7 +114,9 @@ def network_discovery_adapter(
     )
     evidence = tuple(
         compact_evidence_line(value) for value in (
-            port_summaries[:_PORT_LIMIT] + semantic_evidence[:_SEMANTIC_EVIDENCE_LIMIT]
+            port_summaries[:_PORT_LIMIT]
+            + non_open_port_summaries[:_PORT_LIMIT]
+            + semantic_evidence[:_SEMANTIC_EVIDENCE_LIMIT]
             + semantic_observations[:_SEMANTIC_OBSERVATION_LIMIT]
         )
         if value
@@ -383,6 +390,23 @@ def _port_summaries(metadata: Mapping[str, Any]) -> list[str]:
     return _flat_open_port_summaries(metadata)
 
 
+def _non_open_port_summaries(metadata: Mapping[str, Any]) -> list[str]:
+    """Return explicit closed/filtered port states retained by the nmap parser."""
+    summaries: list[str] = []
+    for host in _mapping_items(metadata.get("hosts")):
+        ip = _first_text(host.get("ip"), host.get("address"), host.get("host"))
+        for port in _mapping_items(host.get("scanned_ports")):
+            status = (_text_or_none(port.get("status")) or "").lower()
+            if status == "open":
+                continue
+            summary = _format_port_summary(port, ip=ip)
+            if summary and summary not in summaries:
+                summaries.append(summary)
+            if len(summaries) >= _PORT_LIMIT:
+                return summaries
+    return summaries
+
+
 def _open_port_count(metadata: Mapping[str, Any], *, fallback: int) -> int:
     """Return total open ports from parsed metadata, independent of evidence caps."""
 
@@ -440,7 +464,8 @@ def _format_port_summary(port: Mapping[str, Any], *, ip: Optional[str]) -> Optio
     if ip:
         endpoint = f"{ip}:{endpoint}"
 
-    summary = f"open port: {endpoint} {service} {status}"
+    label = "open port" if status.lower() == "open" else "scanned port"
+    summary = f"{label}: {endpoint} {service} {status}"
     details = " ".join(part for part in (product, version) if part)
     if details:
         summary += f" ({details})"
@@ -515,6 +540,14 @@ def _structured_signals(
                 signals.append(signal)
             if len(signals) >= 25:
                 return signals
+        for port in _mapping_items(host.get("scanned_ports")):
+            if (_text_or_none(port.get("status")) or "").lower() == "open":
+                continue
+            signal = _service_signal(port, ip=ip)
+            if signal:
+                signals.append(signal)
+            if len(signals) >= 25:
+                return signals
 
     for ref in _artifact_refs(raw_result, metadata=metadata):
         signals.append(
@@ -531,7 +564,7 @@ def _structured_signals(
 
 
 def _service_signal(port: Mapping[str, Any], *, ip: Optional[str]) -> Optional[Mapping[str, Any]]:
-    """Return one canonical service signal for an open nmap port."""
+    """Return one canonical service signal for an observed nmap port state."""
 
     port_number = as_int(port.get("port"))
     if port_number is None:

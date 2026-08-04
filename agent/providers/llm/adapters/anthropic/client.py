@@ -15,7 +15,9 @@ from ...core.base import (
     ChatMessage,
     LLMClient,
     LLMResponse,
+    LLMResponseOutcome,
     LLMStreamingResponse,
+    LLMToolStreamingResponse,
     StructuredOutputSpec,
     ToolCallResult,
     ToolSpecInput,
@@ -65,6 +67,17 @@ ANTHROPIC_AVAILABLE = True
 
 
 logger = logging.getLogger(__name__)
+
+
+def _anthropic_outcome(stop_reason: Any) -> LLMResponseOutcome:
+    """Normalize an Anthropic Messages stop reason."""
+    reason = str(stop_reason or "").strip().lower()
+    if reason == "max_tokens":
+        return LLMResponseOutcome(status="incomplete", reason="output_limit")
+    if reason in {"end_turn", "tool_use", "stop_sequence"}:
+        return LLMResponseOutcome(status="completed", reason=reason)
+    return LLMResponseOutcome(status="unknown", reason=reason or None)
+
 
 DEFAULT_MAX_TOKENS = 4096
 DEFAULT_RETRY_COUNT = 2
@@ -368,6 +381,80 @@ class AnthropicMessagesClient(LLMClient):
         result.usage = None
         return result
 
+    async def stream_chat_with_tools_with_usage(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        tools: list[ToolSpecInput],
+        tool_choice: Any = "auto",
+        **kwargs: Any,
+    ) -> LLMToolStreamingResponse:
+        """Stream Anthropic text while withholding tool blocks until complete."""
+        if not tools:
+            return await super().stream_chat_with_tools_with_usage(
+                system_prompt,
+                user_prompt,
+                tools,
+                tool_choice=tool_choice,
+                **kwargs,
+            )
+
+        request_kwargs = self._build_request_kwargs(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            kwargs,
+        )
+        self._validate_tool_request(tool_choice)
+        request_kwargs["tools"] = [normalize_anthropic_tool_spec(tool) for tool in tools]
+        request_kwargs["tool_choice"] = normalize_anthropic_tool_choice(tool_choice)
+        final_usage: list[Any] = [None]
+        final_tool_calls: list[Any] = [None]
+        final_outcome: list[LLMResponseOutcome | None] = [None]
+
+        async def content_generator() -> AsyncIterator[str]:
+            partial_chunks: list[str] = []
+            try:
+                async with self._client.messages.stream(**request_kwargs) as stream:
+                    async for text in stream.text_stream:
+                        if text:
+                            chunk = str(text)
+                            partial_chunks.append(chunk)
+                            yield chunk
+
+                    final_message = await self._resolve_stream_final_message(stream)
+                    if final_message is not None:
+                        final_usage[0] = self._extract_usage(final_message)
+                        final_outcome[0] = _anthropic_outcome(
+                            getattr(final_message, "stop_reason", None)
+                        )
+                        raise_for_anthropic_refusal(
+                            final_message,
+                            model=self._model,
+                            usage=final_usage[0],
+                            partial_content="".join(partial_chunks),
+                        )
+                        final_tool_calls[0] = (
+                            extract_anthropic_tool_calls(final_message) or None
+                        )
+            except (APIError, APIConnectionError, RateLimitError, APIStatusError) as exc:
+                raise self._wrap_api_error(exc) from exc
+            except (LLMConfigurationError, LLMResponseError):
+                raise
+            except Exception as exc:
+                raise LLMAPIError(
+                    f"Unexpected error during Anthropic streaming tool call: {exc}",
+                    provider=ANTHROPIC_PROVIDER_ID,
+                ) from exc
+
+        return LLMToolStreamingResponse(
+            content_iterator=content_generator(),
+            get_final_tool_calls=lambda: final_tool_calls[0],
+            get_final_usage=lambda: final_usage[0],
+            get_final_outcome=lambda: final_outcome[0],
+        )
+
     async def chat_with_tools_with_usage(
         self,
         system_prompt: str,
@@ -428,6 +515,7 @@ class AnthropicMessagesClient(LLMClient):
                 tool_calls=tool_calls or None,
                 raw=response,
                 usage=usage,
+                outcome=_anthropic_outcome(getattr(response, "stop_reason", None)),
             )
         except (LLMResponseError, LLMConfigurationError):
             raise

@@ -31,6 +31,7 @@ The important architectural split is:
 - [Execution Plane](execution-plane.md)
 - [Agent Architecture](agent-architecture.md)
 - [LangGraph Graph Architecture](langgraph-graph-architecture.md)
+- [Streaming Architecture](streaming.md)
 - [Memory Architecture](memory.md)
 - [Knowledge Workspace Architecture](knowledge.md)
 - [Tool Architecture](tools.md)

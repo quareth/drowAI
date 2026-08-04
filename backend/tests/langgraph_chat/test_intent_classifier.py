@@ -13,9 +13,11 @@ from agent.graph.context.builder import (
     build_conversation_context_bundle,
 )
 from agent.providers.llm.core.exceptions import LLMConfigurationError
+from backend.services.agent_runs.ownership_policy import MAX_AGENT_HANDOFFS
 from backend.services.langgraph_chat.intent.classifier import (
     ANTHROPIC_INTENT_CLASSIFIER_MAX_TOKENS,
     IntentClassifier,
+    _normalize_agent_handoffs,
 )
 from backend.services.langgraph_chat.contracts import ChatInputs, ExecutionMode, LangGraphRuntimeConfig
 
@@ -109,6 +111,26 @@ def _runtime_config(
         metadata=metadata,
         execution_mode=ExecutionMode.NORMAL_CHAT,
     )
+
+
+def test_intent_classifier_normalizes_at_the_ownership_handoff_limit() -> None:
+    handoffs = [
+        {
+            "agent_handoff": "required",
+            "subagent": f"agent_{index}",
+            "objective": f"Objective {index}",
+        }
+        for index in range(MAX_AGENT_HANDOFFS + 1)
+    ]
+
+    normalized = _normalize_agent_handoffs({"agent_handoffs": handoffs})
+
+    assert len(normalized) == MAX_AGENT_HANDOFFS == 3
+    assert [entry["subagent"] for entry in normalized] == [
+        "agent_0",
+        "agent_1",
+        "agent_2",
+    ]
 
 
 @pytest.mark.asyncio
@@ -750,6 +772,13 @@ async def test_intent_classifier_prefers_structured_output_payload() -> None:
             "label": "tool_call",
             "confidence": 0.89,
             "suggested_capabilities": ["network_scan"],
+            "agent_handoffs": [
+                {
+                    "agent_handoff": "required",
+                    "subagent": "pathfinder",
+                    "objective": "Run an Nmap scan against 10.10.10.10.",
+                }
+            ],
             "requested_output_format": None,
             "question_type": "binary_check",
             "answer_style": "short",
@@ -785,6 +814,17 @@ async def test_intent_classifier_prefers_structured_output_payload() -> None:
     assert config.metadata["intent_target_resolution"]["resolved_target"] == "10.10.10.10"
     assert config.metadata["intent_target_continuity"]["status"] == "disallow"
     assert config.metadata["intent_hints"]["targets"] == ["10.10.10.10"]
+    assert config.metadata["intent_agent_handoffs"] == [
+        {
+            "agent_handoff": "required",
+            "subagent": "pathfinder",
+            "objective": "Run an Nmap scan against 10.10.10.10.",
+        }
+    ]
+    assert (
+        config.metadata["intent_hints"]["agent_handoffs"]
+        == config.metadata["intent_agent_handoffs"]
+    )
 
 
 @pytest.mark.asyncio
@@ -1282,12 +1322,14 @@ def _structured_output_with_interpretation(
     prior_target_reuse_evidence: Optional[str] = None,
     prior_turn_reference: Optional[Dict[str, Any]] = None,
     suggested_capabilities: Optional[List[str]] = None,
+    agent_handoffs: Optional[List[Dict[str, str]]] = None,
     reasoning: str = "Stub classifier reasoning.",
 ) -> Dict[str, Any]:
     return {
         "label": label,
         "confidence": 0.9,
         "suggested_capabilities": list(suggested_capabilities or []),
+        "agent_handoffs": list(agent_handoffs or []),
         "requested_output_format": None,
         "question_type": "open_ended",
         "answer_style": "normal",

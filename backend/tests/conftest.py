@@ -17,7 +17,7 @@ _DEFAULT_SQLITE_PATH = Path("backend_test.sqlite3").resolve()
 _DEFAULT_SQLITE_URL = f"sqlite:///{_DEFAULT_SQLITE_PATH.as_posix()}"
 _TEST_DATABASE_URL = os.getenv("BACKEND_TEST_DATABASE_URL", _DEFAULT_SQLITE_URL)
 os.environ["DATABASE_URL"] = _TEST_DATABASE_URL
-os.environ.setdefault("JWT_SECRET", "backend-test-jwt-secret")
+os.environ.setdefault("JWT_SECRET", "backend-test-jwt-secret-at-least-32-bytes")
 
 from backend.database import engine
 from backend.config.workspace_config import WorkspaceConfig

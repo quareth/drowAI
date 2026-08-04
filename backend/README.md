@@ -114,20 +114,21 @@ This FastAPI backend replaces the Node.js/Express server with Python-based imple
 
 ## Development Setup
 
-1. **Environment Variables**
-   ```bash
-   DATABASE_URL=postgresql+asyncpg://user:pass@localhost/drowai
-   JWT_SECRET=your-super-secret-key
-   ```
+Follow the repository [Local Development guide](../README.md#local-development)
+from the repository root. Start the backend, managed runner, and frontend with:
 
-2. **Run FastAPI Server**
-   ```bash
-   python3 run_fastapi.py
-   ```
+```bash
+python3 scripts/local_dev.py up
+```
 
-3. **Access API Documentation**
-   - Swagger UI: http://localhost:8000/docs
-   - ReDoc: http://localhost:8000/redoc
+The launcher generates local backend configuration and secrets under
+`.drowai-local`, including a `JWT_SECRET` that satisfies the enforced minimum
+of 32 UTF-8 bytes. Any manual `JWT_SECRET` override must meet the same minimum.
+
+After the backend starts, access the API documentation at:
+
+- Swagger UI: http://localhost:8000/docs
+- ReDoc: http://localhost:8000/redoc
 
 ## Migration from Express
 

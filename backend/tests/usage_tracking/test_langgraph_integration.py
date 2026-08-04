@@ -559,6 +559,12 @@ class TestRecordUsageListBestEffortRoundTrip:
                 execution_branch="simple_tool",
                 provider="openai",
                 turn_index=4,
+                agent_id="pathfinder",
+                agent_kind="recon",
+                agent_run_id="agent-run-42",
+                graph_thread_id="graph-agent-run-42",
+                parent_turn_id="turn-42",
+                parent_run_id="parent-run-42",
             ),
         )
 
@@ -591,6 +597,12 @@ class TestRecordUsageListBestEffortRoundTrip:
                 "request_mode": "unknown",
                 "cache_reporting": "unknown",
                 "turn_index": 4,
+                "agent_id": "pathfinder",
+                "agent_kind": "recon",
+                "agent_run_id": "agent-run-42",
+                "graph_thread_id": "graph-agent-run-42",
+                "parent_turn_id": "turn-42",
+                "parent_run_id": "parent-run-42",
             }
 
     def test_plain_usage_data_persists_without_canonical_metadata(self):

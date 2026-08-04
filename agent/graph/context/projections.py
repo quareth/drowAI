@@ -63,6 +63,12 @@ and code aligned):
   Runtime-materialized canonical prior-turn rows. Omitted for roles
   that should not consume referenced transcript context and suppressed
   when no materialized rows exist.
+- ``completed_agent_results`` (all roles, optional): Bounded safe
+  subagent result summaries projected by the backend process-local
+  registry for the current main turn.
+- ``active_agent_runs`` (planner / articulation, optional): Bounded safe
+  active subagent lifecycle summaries projected by the backend
+  process-local registry for the current main turn.
 
 Serialization
 -------------
@@ -71,12 +77,6 @@ The prompt-section serializer lives in
 ordered list of ``{"name", "content"}`` blocks using the fixed section
 order declared in that module. Ordering is intentionally stable to
 preserve provider-side cache prefixes.
-
-For backward compatibility during the migration, this module
-re-exports the section-name constants and
-``serialize_projection_to_prompt_sections`` from
-``agent.graph.context.serialization``; new code should import them
-from ``agent.graph.context.serialization`` directly.
 
 Scope notes
 -----------
@@ -106,15 +106,6 @@ from agent.graph.context.contracts import (
 # the migration window. The final cleanup pass (Phase 5) can drop
 # these re-exports once all consumers import from serialization.py
 # directly.
-from agent.graph.context.serialization import (
-    SECTION_EVIDENCE_REFS,
-    SECTION_REFERENCED_PRIOR_TURNS,
-    SECTION_RECENT_TRANSCRIPT,
-    SECTION_RUNTIME_STATE,
-    serialize_projection_to_prompt_sections,
-)
-
-
 # -- Role identifiers. --------------------------------------------------
 
 ROLE_INTENT_CLASSIFIER = "intent_classifier"
@@ -186,6 +177,45 @@ def _prior_turn_references_for_prompt(
     return references
 
 
+def _completed_agent_results_for_prompt(
+    bundle: ConversationContextBundle,
+) -> list[dict[str, Any]] | None:
+    """Return bounded subagent results only when present on the bundle."""
+    results = bundle.get("completed_agent_results")
+    if not isinstance(results, list) or not results:
+        return None
+    return [dict(item) for item in results if isinstance(item, dict)]
+
+
+def _active_agent_runs_for_prompt(
+    bundle: ConversationContextBundle,
+) -> list[dict[str, Any]] | None:
+    """Return bounded active subagent runs only when present on the bundle."""
+    runs = bundle.get("active_agent_runs")
+    if not isinstance(runs, list) or not runs:
+        return None
+    allowed_keys = {
+        "agent_run_id",
+        "assignment_id",
+        "agent_id",
+        "agent_kind",
+        "agent_display_name",
+        "objective",
+        "status",
+        "lifecycle_version",
+        "created_at",
+        "started_at",
+    }
+    projected: list[dict[str, Any]] = []
+    for item in runs:
+        if not isinstance(item, dict):
+            continue
+        projected.append(
+            {key: value for key, value in item.items() if key in allowed_keys}
+        )
+    return projected or None
+
+
 # -- Public projection helpers. -----------------------------------------
 
 # Each projection advertises, via the private ``_runtime_slot_order``
@@ -230,7 +260,7 @@ def project_for_intent_classifier(
     It does *not* receive evidence refs — classifier continuity should
     not hinge on evidence payloads.
     """
-    return {
+    projection: dict[str, Any] = {
         "role": ROLE_INTENT_CLASSIFIER,
         "turn_identity": _turn_identity(bundle),
         "transcript_window": bundle[CLASSIFIER_TRANSCRIPT_WINDOW_KEY],
@@ -240,6 +270,10 @@ def project_for_intent_classifier(
         "_runtime_slot_order": _CLASSIFIER_RUNTIME_SLOTS,
         "current_user_turn": _current_user_turn(bundle),
     }
+    completed_agent_results = _completed_agent_results_for_prompt(bundle)
+    if completed_agent_results:
+        projection["completed_agent_results"] = completed_agent_results
+    return projection
 
 
 def project_for_category_selector(
@@ -258,7 +292,7 @@ def project_for_category_selector(
     No evidence refs — category selection is a routing step, not a
     synthesis step.
     """
-    return {
+    projection: dict[str, Any] = {
         "role": ROLE_CATEGORY_SELECTOR,
         "turn_identity": _turn_identity(bundle),
         "transcript_window": bundle["transcript_window"],
@@ -268,6 +302,10 @@ def project_for_category_selector(
         "_runtime_slot_order": _CATEGORY_SELECTOR_RUNTIME_SLOTS,
         "current_user_turn": _current_user_turn(bundle),
     }
+    completed_agent_results = _completed_agent_results_for_prompt(bundle)
+    if completed_agent_results:
+        projection["completed_agent_results"] = completed_agent_results
+    return projection
 
 
 def project_for_planner(
@@ -305,6 +343,12 @@ def project_for_planner(
     prior_turn_references = _prior_turn_references_for_prompt(bundle)
     if prior_turn_references:
         projection["prior_turn_references"] = prior_turn_references
+    completed_agent_results = _completed_agent_results_for_prompt(bundle)
+    if completed_agent_results:
+        projection["completed_agent_results"] = completed_agent_results
+    active_agent_runs = _active_agent_runs_for_prompt(bundle)
+    if active_agent_runs:
+        projection["active_agent_runs"] = active_agent_runs
     if working_memory_summary:
         projection["working_memory_summary"] = working_memory_summary
     return projection
@@ -336,6 +380,12 @@ def project_for_articulation(
     prior_turn_references = _prior_turn_references_for_prompt(bundle)
     if prior_turn_references:
         projection["prior_turn_references"] = prior_turn_references
+    completed_agent_results = _completed_agent_results_for_prompt(bundle)
+    if completed_agent_results:
+        projection["completed_agent_results"] = completed_agent_results
+    active_agent_runs = _active_agent_runs_for_prompt(bundle)
+    if active_agent_runs:
+        projection["active_agent_runs"] = active_agent_runs
     return projection
 
 
@@ -344,13 +394,8 @@ __all__ = [
     "ROLE_CATEGORY_SELECTOR",
     "ROLE_INTENT_CLASSIFIER",
     "ROLE_PLANNER",
-    "SECTION_EVIDENCE_REFS",
-    "SECTION_REFERENCED_PRIOR_TURNS",
-    "SECTION_RECENT_TRANSCRIPT",
-    "SECTION_RUNTIME_STATE",
     "project_for_articulation",
     "project_for_category_selector",
     "project_for_intent_classifier",
     "project_for_planner",
-    "serialize_projection_to_prompt_sections",
 ]

@@ -1,3 +1,5 @@
+"""Tests for LangGraph feature flags exported by backend.config."""
+
 import importlib
 
 

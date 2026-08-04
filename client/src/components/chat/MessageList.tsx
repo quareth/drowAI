@@ -1,3 +1,11 @@
+/**
+ * Scrollable, feature-neutral chat transcript.
+ *
+ * Responsibilities:
+ * - group and render transcript messages and activity
+ * - preserve pagination, retry, unread, and scroll behavior
+ * - allow a caller to substitute feature-specific activity groups
+ */
 import {
   useCallback,
   useEffect,
@@ -12,6 +20,7 @@ import { cn } from "@/lib/utils";
 
 import type { ChatMessage } from "./types";
 import { useMessageGrouping } from "@/hooks/useMessageGrouping";
+import type { MessageGroup } from "@/hooks/useMessageGrouping";
 import { MessageGroupRenderer } from "./MessageGroup";
 import type { MessageBubbleRetryState } from "./MessageBubble";
 import { TurnActivityCard } from "./TurnActivityCard";
@@ -21,7 +30,6 @@ export interface MessageListProps {
   messages: ChatMessage[];
   taskId?: number | null;
   isLoading: boolean;
-  isConnected: boolean;
   onLoadMore?: () => void | Promise<void>;
   hasMore?: boolean;
   onMessageExpand?: (messageId: string) => void;
@@ -37,6 +45,7 @@ export interface MessageListProps {
   autoScrollThreshold?: number;
   emptyState?: ReactNode;
   className?: string;
+  renderActivityGroup?: (group: MessageGroup) => ReactNode | undefined;
 }
 
 const DEFAULT_AUTO_SCROLL_THRESHOLD = 96;
@@ -45,7 +54,6 @@ export function MessageList({
   messages,
   taskId,
   isLoading,
-  isConnected,
   onLoadMore,
   hasMore = false,
   onMessageExpand,
@@ -54,6 +62,7 @@ export function MessageList({
   autoScrollThreshold = DEFAULT_AUTO_SCROLL_THRESHOLD,
   emptyState,
   className,
+  renderActivityGroup,
 }: MessageListProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const topSentinelRef = useRef<HTMLButtonElement | null>(null);
@@ -175,10 +184,13 @@ export function MessageList({
     return () => observer.disconnect();
   }, [hasMore, onLoadMore, handleLoadMore]);
 
-  // Group messages by `ind` field for proper rendering
+  // Group messages by `ind` field for proper rendering.
   const messageGroups = useMessageGrouping(messages);
-  const renderBlocks = useMemo(() => buildMessageRenderBlocks(messageGroups), [messageGroups]);
-  
+  const renderBlocks = useMemo(
+    () => buildMessageRenderBlocks(messageGroups),
+    [messageGroups],
+  );
+
   const renderedMessages = useMemo(
     () =>
       renderBlocks.map((block, index) => {
@@ -197,16 +209,31 @@ export function MessageList({
                 taskId={taskId}
                 onGroupExpand={handleExpand}
                 onGroupRetry={handleRetry}
+                renderGroup={renderActivityGroup}
               />
             </li>
           );
         }
 
         const { group } = block;
+        const renderedActivityGroup = renderActivityGroup?.(group);
+        if (renderedActivityGroup !== undefined) {
+          return (
+            <li
+              key={block.key}
+              className="flex"
+              data-testid={`chat-message-${index}`}
+              data-group-type="activity"
+              data-turn-sequence={group.messages[0]?.metadata?.turn_sequence ?? ""}
+            >
+              {renderedActivityGroup}
+            </li>
+          );
+        }
         // Use stable group key when available
         const firstMessage = group.messages[0];
         const key = block.key ?? firstMessage?.id ?? `group-${group.ind}-${index}`;
-        
+
         return (
           <li
             key={key}
@@ -225,7 +252,14 @@ export function MessageList({
           </li>
         );
       }),
-    [renderBlocks, taskId, handleExpand, handleRetry, resolveRetryState],
+    [
+      handleExpand,
+      handleRetry,
+      renderActivityGroup,
+      renderBlocks,
+      resolveRetryState,
+      taskId,
+    ],
   );
 
   const resolvedEmptyState = emptyState ?? (
@@ -238,24 +272,14 @@ export function MessageList({
   );
 
   return (
-    <section
-      aria-label="Conversation history"
-      className={cn("relative flex h-full min-h-0 flex-col", className)}
-    >
-      <header className="flex items-center border-b border-slate-800 px-4 py-2 text-[11px] uppercase tracking-wide text-slate-500">
-        <span className="font-semibold text-slate-300">Conversation</span>
-        <span className="sr-only" aria-live="polite">
-          {isConnected ? "Stream connected" : "Stream disconnected"}
-        </span>
-      </header>
-
+    <div className={cn("relative h-full min-h-0", className)}>
       <div
         ref={containerRef}
         role="log"
         aria-live="polite"
         aria-busy={isLoading}
         data-testid="chat-message-list"
-        className="relative flex-1 overflow-y-auto overflow-x-hidden px-4 py-4"
+        className="relative h-full min-w-0 overflow-y-auto overflow-x-hidden px-4 py-4"
       >
         {hasMore && (
           <div className="flex justify-center pb-2 text-xs" data-testid="message-list-load-more">
@@ -279,17 +303,17 @@ export function MessageList({
         )}
 
         <div data-testid="reasoning-pane" className="contents">
-        {isLoading && messages.length === 0 ? (
-          <div className="flex items-center justify-center py-10 text-slate-400">
-            <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
-          </div>
-        ) : messages.length === 0 ? (
-          resolvedEmptyState
-        ) : (
-          <ul className="flex flex-col gap-2" aria-live="polite">
-            {renderedMessages}
-          </ul>
-        )}
+          {isLoading && messages.length === 0 ? (
+            <div className="flex items-center justify-center py-10 text-slate-400">
+              <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
+            </div>
+          ) : messages.length === 0 ? (
+            resolvedEmptyState
+          ) : (
+            <ul className="flex flex-col gap-2" aria-live="polite">
+              {renderedMessages}
+            </ul>
+          )}
         </div>
 
         <div ref={bottomAnchorRef} aria-hidden="true" />
@@ -310,8 +334,6 @@ export function MessageList({
           {unreadCount} unread
         </button>
       )}
-    </section>
+    </div>
   );
 }
-
-export default MessageList;

@@ -122,6 +122,7 @@ class EventEmitterFactory:
         turn_id: str,
         turn_sequence: Optional[int] = None,
         sub_turn_index: Optional[int] = None,
+        agent_run_attribution: Optional[Mapping[str, Any]] = None,
     ) -> UnifiedEventEmitter:
         """Create emitter with pre-resolved identity.
 
@@ -133,4 +134,9 @@ class EventEmitterFactory:
             writer, conversation_id, turn_id,
             turn_sequence=turn_sequence,
             sub_turn_index=sub_turn_index,
+            agent_run_attribution=(
+                dict(agent_run_attribution)
+                if isinstance(agent_run_attribution, Mapping)
+                else None
+            ),
         )

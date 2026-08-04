@@ -54,7 +54,10 @@ class BudgetEnforcingLLMClient(LLMClient):
         return getattr(self._wrapped, "model", self._provider_model.model)
 
     def __getattribute__(self, name: str) -> Any:
-        if name == "stream_chat_messages_with_usage":
+        if name in {
+            "stream_chat_messages_with_usage",
+            "stream_chat_with_tools_with_usage",
+        }:
             wrapped = object.__getattribute__(self, "_wrapped")
             if not hasattr(wrapped, name):
                 raise AttributeError(name)
@@ -156,6 +159,28 @@ class BudgetEnforcingLLMClient(LLMClient):
     ) -> Any:
         messages = _single_turn_messages(system_prompt, user_prompt)
         return await self._wrapped.chat_with_tools_with_usage(
+            system_prompt,
+            user_prompt,
+            tools,
+            tool_choice=tool_choice,
+            **self._enforce_output_budget(
+                kwargs,
+                messages=messages,
+                extra_context_payloads=[{"tools": tools, "tool_choice": tool_choice}],
+            ),
+        )
+
+    async def stream_chat_with_tools_with_usage(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        tools: list[ToolSpecInput],
+        tool_choice: ToolChoiceInput = "auto",
+        **kwargs: Any,
+    ) -> Any:
+        """Forward usage-aware tool streaming with the same budget policy."""
+        messages = _single_turn_messages(system_prompt, user_prompt)
+        return await self._wrapped.stream_chat_with_tools_with_usage(
             system_prompt,
             user_prompt,
             tools,

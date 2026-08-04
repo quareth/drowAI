@@ -100,12 +100,14 @@ def test_nmap_adapter_reuses_masscan_style_host_port_summary_shape() -> None:
     assert result.summary == "Nmap discovered 2 open ports; 1 hosts up, 2 hosts scanned."
     assert result.key_findings == (
         "host 10.0.0.5 (up, names=web.local): 2 open ports - tcp/80 http open (nginx 1.24; title=Welcome; server=nginx), tcp/443 https open",
+        "scanned port: 10.0.0.5:tcp/22 ssh closed",
         "artifact: artifacts/nmap_123.xml",
         "artifact: artifact://artifact-1",
     )
     assert result.decision_evidence == (
         "open port: 10.0.0.5:tcp/80 http open (nginx 1.24)",
         "open port: 10.0.0.5:tcp/443 https open",
+        "scanned port: 10.0.0.5:tcp/22 ssh closed",
         "semantic evidence: open_ports_count=2",
         "semantic observation: network.service_profiled service.socket:10.0.0.5:tcp:80",
     )
@@ -135,6 +137,14 @@ def test_nmap_adapter_reuses_masscan_style_host_port_summary_shape() -> None:
             "protocol": "tcp",
             "state": "open",
             "service": "https",
+        },
+        {
+            "type": "service",
+            "target": "10.0.0.5",
+            "port": 22,
+            "protocol": "tcp",
+            "state": "closed",
+            "service": "ssh",
         },
         {
             "type": "kv_pair",

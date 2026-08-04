@@ -87,7 +87,13 @@ class _StubCoordinator:
         )
 
 
-def _build_state(*, task_id: int, capability: str, command: str = "echo integration"):
+def _build_state(
+    *,
+    task_id: int,
+    capability: str,
+    command: str = "echo integration",
+    turn_sequence: int = 1,
+):
     from agent.graph.state import FactsState, InteractiveState
 
     facts = FactsState(
@@ -99,6 +105,7 @@ def _build_state(*, task_id: int, capability: str, command: str = "echo integrat
         metadata=build_tool_execution_metadata(
             task_id=task_id,
             message="Run echo",
+            turn_sequence=turn_sequence,
             selected_tools=["shell.exec"],
             tool_parameters={"shell.exec": {"command": command}},
         ),
@@ -196,10 +203,10 @@ async def test_langgraph_tool_execution_persists_provenance_when_enabled(
 
 
 @pytest.mark.asyncio
-async def test_langgraph_tool_execution_does_not_trigger_ingestion_hook_during_dispatch(
+async def test_langgraph_tool_execution_enqueues_ingestion_after_persisted_completion(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Dispatch path should no longer enqueue ingestion before post-tool reasoning completes."""
+    """Shared completion should enqueue deterministic evidence without waiting for PTR."""
     monkeypatch.setenv("ENABLE_ARTIFACT_PROVENANCE", "true")
     engine, session_factory = _make_engine_and_session()
     with session_factory() as db:
@@ -249,7 +256,11 @@ async def test_langgraph_tool_execution_does_not_trigger_ingestion_hook_during_d
     updated = InteractiveState.from_mapping(result)
 
     assert "last_execution_id" in updated.facts.metadata
-    assert captured == {}
+    assert captured["task_id"] == task_id
+    assert captured["execution_id"] == updated.facts.metadata["last_execution_id"]
+    assert captured["tool_name"] == "shell.exec"
+    assert captured["compact_output"]["summary"] == "deterministic compact output"
+    assert captured["compact_output"]["compression"]["source"] == "deterministic"
 
     engine.dispose()
 
@@ -533,7 +544,11 @@ async def test_artifact_memory_followup_is_task_scoped_across_turns_and_modes(
             ),
         )
         second_result = await run_tool_execution(
-            _build_state(task_id=primary_task_id, capability="deep_reasoning").as_graph_state(),
+            _build_state(
+                task_id=primary_task_id,
+                capability="deep_reasoning",
+                turn_sequence=2,
+            ).as_graph_state(),
             context=GraphRuntimeContext(
                 task_id=primary_task_id,
                 user_id=1,

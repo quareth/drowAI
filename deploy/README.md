@@ -82,6 +82,25 @@ Remove `/var/lib/drowai` only when intentionally resetting that Runner host.
 
 Full cloud runbook: [`docs/runbooks/cloud-installation.md`](../docs/runbooks/cloud-installation.md).
 
+## Pathfinder Subagent Routing
+
+Pathfinder ownership routing and its card/drawer UI are standard behavior and
+need no environment variables or frontend build arguments. Eligible, bounded
+recon turns are delegated by the backend ownership policy to the generic
+subagent runtime; non-recon and mixed-scope turns continue through their
+existing branches.
+
+The current owner is process-local. Supported Compose profiles run one
+Management backend process; horizontally scaled Management deployments need a
+distributed ownership mechanism before multiple backend replicas can accept
+chat for the same task population.
+
+Monitor backend logs, task stream replay, the Pathfinder card/drawer state, and
+the process-local agent-run status/cancel endpoints under
+`/api/tasks/{task_id}/agent-runs/...`. After a backend restart, any nonterminal
+replayed subagent run that is absent from the live process-local registry is
+expected to appear interrupted; the pilot does not relaunch or recover it.
+
 ## Dev
 
 ```bash

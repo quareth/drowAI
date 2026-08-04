@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, patch
@@ -20,6 +21,7 @@ from agent.graph.context.builder import (
 )
 from agent.graph.nodes import hitl_helpers as hitl_helpers_module
 from agent.graph.state import FactsState, InteractiveState, TraceState
+from agent.providers.llm.core.base import LLMResponseOutcome, ToolCall
 
 
 class _FakeLLMResponse:
@@ -225,11 +227,35 @@ class _PostToolStreamResponse:
             "provider": "openai",
         }
 
+    def get_final_tool_calls(self) -> list[ToolCall]:
+        return [
+            ToolCall(
+                id="ptr-commit-1",
+                name="ptr_commit",
+                arguments=json.dumps(
+                    {
+                        "next_action": "finalize",
+                        "action_reasoning": (
+                            "Tool output fully answers the user request."
+                        ),
+                        "user_goal_achieved": True,
+                    }
+                ),
+            )
+        ]
+
+    def get_final_outcome(self) -> LLMResponseOutcome:
+        return LLMResponseOutcome(status="completed")
+
 
 class _PostToolStreamingLLM:
     model = "gpt-5.2-mini"
 
-    async def stream_chat_messages_with_usage(self, *_args, **_kwargs):
+    def __init__(self, timeline: list[str]) -> None:
+        self._timeline = timeline
+
+    async def stream_chat_with_tools_with_usage(self, *_args, **_kwargs):
+        self._timeline.append("decision_analysis_call")
         return _PostToolStreamResponse()
 
 
@@ -626,12 +652,7 @@ async def test_synthesis_llm_call_is_inside_reasoning_section_boundary(monkeypat
 
 @pytest.mark.asyncio
 async def test_post_tool_decision_analysis_is_inside_observation_section(monkeypatch) -> None:
-    from types import SimpleNamespace
-
     from agent.graph.nodes.post_tool_reasoning import node as ptr_module
-    from agent.graph.nodes.post_tool_reasoning.models import (
-        PostToolReasoningDecisionOutput,
-    )
     from agent.graph.nodes.post_tool_reasoning.streaming import base as stream_base
 
     timeline: list[str] = []
@@ -639,19 +660,10 @@ async def test_post_tool_decision_analysis_is_inside_observation_section(monkeyp
     def _writer(event: dict) -> None:
         timeline.append(str(event.get("type") or ""))
 
-    async def _mark_decision_analysis(*_args, **_kwargs) -> PostToolReasoningDecisionOutput:
-        timeline.append("decision_analysis_call")
-        return PostToolReasoningDecisionOutput(
-            next_action="finalize",
-            action_reasoning="Tool output fully answers the user request.",
-            user_goal_achieved=True,
-        )
-
-    monkeypatch.setattr(ptr_module, "analyze_tool_result", _mark_decision_analysis)
     monkeypatch.setattr(
         ptr_module,
         "resolve_llm_client",
-        lambda *_args, **_kwargs: _PostToolStreamingLLM(),
+        lambda *_args, **_kwargs: _PostToolStreamingLLM(timeline),
     )
     monkeypatch.setattr(
         ptr_module,

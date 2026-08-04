@@ -49,9 +49,14 @@ const ARCHIVE_BLOCKING_TASK_STATUSES = new Set([
 export interface TaskPanelProps {
   searchQuery?: string;
   statusFilter?: string;
+  onToggleVisibility?: () => void;
 }
 
-export function TaskPanel({ searchQuery = "", statusFilter = "all" }: TaskPanelProps) {
+export function TaskPanel({
+  searchQuery = "",
+  statusFilter = "all",
+  onToggleVisibility,
+}: TaskPanelProps) {
   const [nameFilter, setNameFilter] = useState(searchQuery);
   const [showNewTaskModal, setShowNewTaskModal] = useState(false);
   const [showNewEngagementModal, setShowNewEngagementModal] = useState(false);
@@ -486,6 +491,7 @@ export function TaskPanel({ searchQuery = "", statusFilter = "all" }: TaskPanelP
         }}
         nameFilter={nameFilter}
         onNameFilterChange={setNameFilter}
+        onToggleVisibility={onToggleVisibility}
         canCreateTask={canCreateTask}
         canCreateEngagement={canWriteKnowledge}
       />

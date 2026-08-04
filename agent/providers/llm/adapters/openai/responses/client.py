@@ -30,7 +30,9 @@ from typing import Any, AsyncIterator, Dict, List, Optional
 from ....core.base import (
     LLMClient,
     LLMResponse,
+    LLMResponseOutcome,
     LLMStreamingResponse,
+    LLMToolStreamingResponse,
     StructuredOutputSpec,
     ToolChoiceInput,
     ToolCall,
@@ -79,6 +81,7 @@ from .retry import (
     wrap_api_error,
 )
 from .stream_parser import (
+    extract_output_text_delta,
     extract_stream_delta,
     is_done_event,
 )
@@ -107,6 +110,21 @@ def _safe_obj_value(value: Any, key: str, default: Any = None) -> Any:
     if isinstance(value, dict):
         return value.get(key, default)
     return getattr(value, key, default)
+
+
+def _responses_outcome(response: Any) -> LLMResponseOutcome:
+    """Normalize a Responses API terminal status and incomplete reason."""
+    status = str(_safe_obj_value(response, "status", "") or "").strip().lower()
+    if status == "incomplete":
+        details = _safe_obj_value(response, "incomplete_details", None)
+        reason = _safe_obj_value(details, "reason", None)
+        return LLMResponseOutcome(
+            status="incomplete",
+            reason=str(reason or "incomplete_response"),
+        )
+    if status == "completed":
+        return LLMResponseOutcome(status="completed")
+    return LLMResponseOutcome(status="unknown", reason=status or None)
 
 
 def _summarize_tool_names(tools: List[Dict[str, Any]]) -> List[str]:
@@ -996,6 +1014,7 @@ class OpenAIResponsesClient(LLMClient):
                     content=content,
                     tool_calls=tool_calls,
                     raw=response,
+                    outcome=_responses_outcome(response),
                 )
 
             except (APIError, APIConnectionError, RateLimitError, APIStatusError) as e:
@@ -1026,6 +1045,88 @@ class OpenAIResponsesClient(LLMClient):
 
         raise last_error if last_error else LLMAPIError(
             "Responses API tool call failed", provider="OpenAI"
+        )
+
+    async def stream_chat_with_tools_with_usage(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        tools: List[ToolSpecInput],
+        tool_choice: ToolChoiceInput = "auto",
+        **kwargs: Any,
+    ) -> LLMToolStreamingResponse:
+        """Stream visible text and expose completed Responses API tool calls."""
+        responses_tools = self._convert_tools_for_responses(tools)
+        final_usage: List[Optional["UsageData"]] = [None]
+        final_tool_calls: List[Optional[List[ToolCall]]] = [None]
+        final_outcome: List[Optional[LLMResponseOutcome]] = [None]
+
+        async def content_generator() -> AsyncIterator[str]:
+            partial_chunks: List[str] = []
+            refusal_parts: List[str] = []
+            try:
+                request_kwargs = build_tool_request_kwargs(
+                    model=self._model,
+                    user_prompt=user_prompt,
+                    system_prompt=system_prompt,
+                    max_output_tokens=kwargs.get("max_tokens", DEFAULT_MAX_TOKENS),
+                    reasoning_effort=self._resolve_reasoning_effort(kwargs),
+                    responses_tools=responses_tools,
+                    tool_choice=tool_choice,
+                    parallel_tool_calls=kwargs.get("parallel_tool_calls"),
+                )
+                async with self._client.responses.stream(**request_kwargs) as stream:
+                    async for event in stream:
+                        response = getattr(event, "response", None)
+                        if response is not None:
+                            extracted_usage = self._extract_usage_from_response(response)
+                            if extracted_usage is not None:
+                                final_usage[0] = extracted_usage
+                            outcome = _responses_outcome(response)
+                            if outcome.status != "unknown":
+                                final_outcome[0] = outcome
+                        if response is not None and (
+                            is_done_event(event)
+                            or final_outcome[0] is not None
+                            and final_outcome[0].status == "incomplete"
+                        ):
+                            final_tool_calls[0] = self._extract_tool_calls(response)
+
+                        chunk = extract_output_text_delta(event)
+                        if chunk:
+                            partial_chunks.append(chunk)
+                            yield chunk
+                        raise_for_openai_responses_stream_refusal(
+                            event,
+                            model=self._model,
+                            refusal_parts=refusal_parts,
+                            usage=final_usage[0],
+                            partial_content="".join(partial_chunks),
+                        )
+
+                if refusal_parts:
+                    raise_for_openai_responses_refusal(
+                        None,
+                        model=self._model,
+                        usage=final_usage[0],
+                        partial_content="".join(partial_chunks),
+                        explanation="".join(refusal_parts).strip() or None,
+                    )
+            except (APIError, APIConnectionError, RateLimitError, APIStatusError) as exc:
+                raise self._wrap_api_error(exc) from exc
+            except (LLMConfigurationError, LLMRefusalError):
+                raise
+            except Exception as exc:
+                raise LLMAPIError(
+                    f"Streaming tool call failed: {exc}",
+                    provider="OpenAI",
+                ) from exc
+
+        return LLMToolStreamingResponse(
+            content_iterator=content_generator(),
+            get_final_tool_calls=lambda: final_tool_calls[0],
+            get_final_usage=lambda: final_usage[0],
+            get_final_outcome=lambda: final_outcome[0],
         )
     
     async def chat_with_tools_with_usage(
@@ -1108,6 +1209,7 @@ class OpenAIResponsesClient(LLMClient):
                     tool_calls=tool_calls,
                     raw=response,
                     usage=usage,
+                    outcome=_responses_outcome(response),
                 )
 
             except (APIError, APIConnectionError, RateLimitError, APIStatusError) as e:

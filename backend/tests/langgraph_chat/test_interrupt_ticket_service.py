@@ -11,7 +11,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from backend.database import Base
-from backend.models.hitl import InterruptTicketState
+from backend.models.hitl import InterruptTicket, InterruptTicketState
 from backend.services.langgraph_chat.checkpoint.interrupt_ticket_service import (
     InterruptTicketClaimConflictError,
     InterruptTicketService,
@@ -313,6 +313,98 @@ def test_mark_pending_rejects_resumed_state() -> None:
 
         with pytest.raises(InterruptTicketClaimConflictError):
             service.mark_pending(interrupt_id="int-6", task_id=6)
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_fail_pending_for_graph_thread_requires_exact_execution_scope() -> None:
+    engine, db = _build_session()
+    graph_thread_id = "0123456789abcdef0123456789abcdef"
+    try:
+        db.add(
+            InterruptTicket(
+                interrupt_id="int-subagent-cancel",
+                task_id=42,
+                tenant_id=7,
+                graph_name="subagent",
+                interrupt_type="tool_approval",
+                thread_id=f"graph-{graph_thread_id}",
+                turn_id="turn-42",
+                state=InterruptTicketState.PENDING,
+            )
+        )
+        db.commit()
+        service = InterruptTicketService(db)
+
+        mismatched = service.fail_pending_for_graph_thread(
+            tenant_id=7,
+            task_id=42,
+            graph_name="subagent",
+            graph_thread_id="fedcba9876543210fedcba9876543210",
+        )
+        assert mismatched is None
+        assert db.query(InterruptTicket).one().state == InterruptTicketState.PENDING
+
+        failed = service.fail_pending_for_graph_thread(
+            tenant_id=7,
+            task_id=42,
+            graph_name="subagent",
+            graph_thread_id=graph_thread_id,
+        )
+        assert failed is not None
+        assert failed.interrupt_id == "int-subagent-cancel"
+        assert failed.state == InterruptTicketState.FAILED
+
+        repeated = service.fail_pending_for_graph_thread(
+            tenant_id=7,
+            task_id=42,
+            graph_name="subagent",
+            graph_thread_id=graph_thread_id,
+        )
+        assert repeated is None
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_fail_pending_for_turn_requires_main_graph_thread_match() -> None:
+    engine, db = _build_session()
+    main_graph_thread_id = "0123456789abcdef0123456789abcdef"
+    child_graph_thread_id = "fedcba9876543210fedcba9876543210"
+    try:
+        db.add(
+            InterruptTicket(
+                interrupt_id="int-main-cancel",
+                task_id=42,
+                tenant_id=7,
+                graph_name="simple_tool",
+                interrupt_type="tool_approval",
+                thread_id=f"graph-{main_graph_thread_id}",
+                turn_id="turn-42",
+                state=InterruptTicketState.PENDING,
+            )
+        )
+        db.commit()
+        service = InterruptTicketService(db)
+
+        mismatched = service.fail_pending_for_turn(
+            tenant_id=7,
+            task_id=42,
+            turn_id="turn-42",
+            graph_thread_id=child_graph_thread_id,
+        )
+        assert mismatched is None
+        assert db.query(InterruptTicket).one().state == InterruptTicketState.PENDING
+
+        failed = service.fail_pending_for_turn(
+            tenant_id=7,
+            task_id=42,
+            turn_id="turn-42",
+            graph_thread_id=main_graph_thread_id,
+        )
+        assert failed is not None
+        assert failed.state == InterruptTicketState.FAILED
     finally:
         db.close()
         engine.dispose()

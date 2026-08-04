@@ -18,6 +18,61 @@ from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from agent.subagents.handoff import AgentHandoffEntry
+
+PostActionNextAction = Literal[
+    "call_tool",
+    "think_more",
+    "reflect",
+    "finalize",
+    "delegate_subagent",
+    "wait_for_subagents",
+]
+
+PostActionOutcomeSource = Literal["direct_tool", "subagent_handoff_batch"]
+
+POST_ACTION_OUTCOME_SOURCE_METADATA_KEY = "post_action_outcome_source"
+DIRECT_TOOL_OUTCOME_SOURCE: PostActionOutcomeSource = "direct_tool"
+SUBAGENT_HANDOFF_BATCH_OUTCOME_SOURCE: PostActionOutcomeSource = (
+    "subagent_handoff_batch"
+)
+VALID_POST_ACTION_OUTCOME_SOURCES = frozenset(
+    {DIRECT_TOOL_OUTCOME_SOURCE, SUBAGENT_HANDOFF_BATCH_OUTCOME_SOURCE}
+)
+
+
+def normalize_irrelevant_active_run_ids(
+    value: Any,
+    *,
+    strict: bool = True,
+) -> list[str]:
+    """Return ordered, unique PAR-declared irrelevant active run IDs."""
+    if value is None:
+        return []
+    if not isinstance(value, list | tuple | set | frozenset):
+        if strict:
+            raise ValueError("par_irrelevant_active_agent_run_ids must be a list")
+        return []
+
+    normalized: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            if strict:
+                raise ValueError(
+                    "par_irrelevant_active_agent_run_ids entries must be strings"
+                )
+            continue
+        run_id = item.strip()
+        if not run_id:
+            if strict:
+                raise ValueError(
+                    "par_irrelevant_active_agent_run_ids entries must be non-empty"
+                )
+            continue
+        if run_id not in normalized:
+            normalized.append(run_id)
+    return normalized
+
 
 # =============================================================================
 # IMPORTANT: Do NOT duplicate these models - they exist in agent.graph.state:
@@ -119,6 +174,8 @@ class ToolIntent(BaseModel):
         ),
     )
 
+    model_config = ConfigDict(extra="forbid")
+
 
 class TodoProgress(BaseModel):
     """Progress status for a single todo item.
@@ -199,6 +256,8 @@ class TodoProgress(BaseModel):
                 )
         return self
 
+    model_config = ConfigDict(extra="forbid")
+
 
 _VULNERABILITY_OBSERVATION_PATTERN = re.compile(r"^finding\.vulnerability(?:[._]|$)")
 
@@ -208,6 +267,8 @@ class CandidateAttribute(BaseModel):
 
     key: str = Field(..., min_length=1)
     value: str = Field(default="")
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class CandidateEvidenceRef(BaseModel):
@@ -229,6 +290,8 @@ class CandidateEvidenceRef(BaseModel):
             )
         return self
 
+    model_config = ConfigDict(extra="forbid")
+
 
 class CandidateVulnerability(BaseModel):
     """Optional vulnerability metadata for vulnerability candidate rows."""
@@ -236,6 +299,8 @@ class CandidateVulnerability(BaseModel):
     id: str = Field(..., min_length=1)
     title: str = Field(..., min_length=1)
     severity: str = Field(..., min_length=1)
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class CandidateObservation(BaseModel):
@@ -268,20 +333,18 @@ class CandidateObservation(BaseModel):
             )
         return self
 
+    model_config = ConfigDict(extra="forbid")
+
     def to_payload_dict(self) -> dict[str, Any]:
         """Return stable payload dict shape for ingestion mapping."""
         return self.model_dump(exclude_none=True)
 
 
 class PostToolReasoningOutput(BaseModel):
-    """Structured output from post-tool reasoning LLM call.
+    """Combined runtime representation of PTR decision and observation.
 
-    This model ensures the LLM provides both an observation (for streaming
-    to frontend) and a decision (for graph routing) in a single coherent response.
-
-    The key guarantee: what the LLM says it will do in the observation
-    is the same as what actually happens next (because both come from
-    the same response).
+    The combined PTR turn produces optional visible narration and a validated
+    internal commit. The node maps both into this stable downstream contract.
 
     Attributes:
         observation: 4-5 sentence first-person observation about tool results,
@@ -307,14 +370,16 @@ class PostToolReasoningOutput(BaseModel):
             "any hypotheses or contradictions, and what you intend to do next."
         ),
     )
-    next_action: Literal["call_tool", "think_more", "reflect", "finalize"] = Field(
+    next_action: PostActionNextAction = Field(
         ...,
         description=(
             "The decided next action based on observation. "
             "call_tool: Execute another tool to gather more data. "
             "think_more: Reason further about current findings. "
             "reflect: Step back and reconsider approach. "
-            "finalize: Conclude the reasoning loop with findings."
+            "finalize: Conclude the reasoning loop with findings. "
+            "delegate_subagent: Launch a bounded subagent assignment. "
+            "wait_for_subagents: Wait for active subagent assignments."
         ),
     )
     action_reasoning: str = Field(
@@ -391,6 +456,21 @@ class PostToolReasoningOutput(BaseModel):
             "flows and legacy tests that return full output payloads."
         ),
     )
+    agent_handoff: Optional[AgentHandoffEntry] = Field(
+        default=None,
+        description=(
+            "Required only when next_action is 'delegate_subagent'. "
+            "Forbidden for direct-tool, wait, reflection, and finalization actions."
+        ),
+    )
+    par_irrelevant_active_agent_run_ids: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Exact active agent_run_id values that PAR explicitly determined are "
+            "no longer relevant to the parent goal. Used to allow finalization "
+            "while unrelated active child assignments continue."
+        ),
+    )
 
     @field_validator("todo_progress", mode="before")
     @classmethod
@@ -400,25 +480,39 @@ class PostToolReasoningOutput(BaseModel):
             return []
         return value
 
+    @field_validator("par_irrelevant_active_agent_run_ids", mode="before")
+    @classmethod
+    def _validate_irrelevant_active_run_ids(cls, value: Any) -> list[str]:
+        """Normalize and validate PAR-declared irrelevant active run IDs."""
+        return normalize_irrelevant_active_run_ids(value)
+
+    @model_validator(mode="after")
+    def _validate_agent_handoff_pairing(self) -> "PostToolReasoningOutput":
+        """Pair delegation entries with the only action that can consume them."""
+        if self.next_action == "delegate_subagent":
+            if self.agent_handoff is None:
+                raise ValueError("agent_handoff is required for delegate_subagent")
+            return self
+        if self.agent_handoff is not None:
+            raise ValueError("agent_handoff is only allowed for delegate_subagent")
+        return self
+
     model_config = ConfigDict(extra="ignore")
 
 
 class PostToolReasoningDecisionOutput(BaseModel):
-    """Decision-only post-tool reasoning payload (no observation text).
+    """Validated internal commit emitted by the combined PTR model turn."""
 
-    Used for the first structured LLM call in Phase 1/2 split.
-    Observation content is populated in a separate call and merged by
-    the post-tool reasoning node.
-    """
-
-    next_action: Literal["call_tool", "think_more", "reflect", "finalize"] = Field(
+    next_action: PostActionNextAction = Field(
         ...,
         description=(
             "Decides the next action after reviewing tool output. "
             "call_tool: Execute another tool call. "
             "think_more: Continue reasoning without a tool. "
             "reflect: Replan or revise the current approach. "
-            "finalize: Conclude the reasoning cycle."
+            "finalize: Conclude the reasoning cycle. "
+            "delegate_subagent: Launch a bounded subagent assignment. "
+            "wait_for_subagents: Wait for active subagent assignments."
         ),
     )
     action_reasoning: str = Field(
@@ -480,8 +574,23 @@ class PostToolReasoningDecisionOutput(BaseModel):
             "When provided, these become the durable candidate source during ingestion."
         ),
     )
+    agent_handoff: Optional[AgentHandoffEntry] = Field(
+        default=None,
+        description=(
+            "Required only when next_action is 'delegate_subagent'. "
+            "Forbidden for direct-tool, wait, reflection, and finalization actions."
+        ),
+    )
+    par_irrelevant_active_agent_run_ids: List[str] = Field(
+        default_factory=list,
+        description=(
+            "Exact active agent_run_id values that PAR explicitly determined are "
+            "no longer relevant to the parent goal. Used to allow finalization "
+            "while unrelated active child assignments continue."
+        ),
+    )
 
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid")
 
     @field_validator("todo_progress", mode="before")
     @classmethod
@@ -491,16 +600,38 @@ class PostToolReasoningDecisionOutput(BaseModel):
             return []
         return value
 
+    @field_validator("par_irrelevant_active_agent_run_ids", mode="before")
+    @classmethod
+    def _validate_irrelevant_active_run_ids(cls, value: Any) -> list[str]:
+        """Normalize and validate PAR-declared irrelevant active run IDs."""
+        return normalize_irrelevant_active_run_ids(value)
+
+    @model_validator(mode="after")
+    def _validate_agent_handoff_pairing(self) -> "PostToolReasoningDecisionOutput":
+        """Pair action-specific payloads with the only routes that consume them."""
+        if self.next_action == "call_tool":
+            if self.tool_intent is None:
+                raise ValueError("tool_intent is required for call_tool")
+        elif self.tool_intent is not None:
+            raise ValueError("tool_intent is only allowed for call_tool")
+
+        if self.next_action == "delegate_subagent":
+            if self.agent_handoff is None:
+                raise ValueError("agent_handoff is required for delegate_subagent")
+            return self
+        if self.agent_handoff is not None:
+            raise ValueError("agent_handoff is only allowed for delegate_subagent")
+        return self
+
 
 def map_decision_output_to_post_tool_reasoning_output(
     decision_output: PostToolReasoningDecisionOutput,
     *,
     observation: str,
 ) -> PostToolReasoningOutput:
-    """Merge decision payload with observation into runtime output contract.
+    """Merge optional visible text and its validated decision for downstream use.
 
-    This keeps downstream callsites unchanged while the decision and
-    observation are produced via separate LLM calls.
+    This keeps downstream call sites on the existing combined runtime model.
     """
 
     payload = decision_output.model_dump()
@@ -515,6 +646,12 @@ def map_decision_output_to_post_tool_reasoning_output(
 __all__ = [
     "PostToolReasoningError",
     "RetryablePostToolReasoningError",
+    "AgentHandoffEntry",
+    "PostActionOutcomeSource",
+    "POST_ACTION_OUTCOME_SOURCE_METADATA_KEY",
+    "DIRECT_TOOL_OUTCOME_SOURCE",
+    "SUBAGENT_HANDOFF_BATCH_OUTCOME_SOURCE",
+    "VALID_POST_ACTION_OUTCOME_SOURCES",
     "ToolIntent",
     "PostToolReasoningDecisionOutput",
     "TodoProgress",
@@ -524,10 +661,5 @@ __all__ = [
     "CandidateAttribute",
     "CandidateVulnerability",
     "map_decision_output_to_post_tool_reasoning_output",
+    "normalize_irrelevant_active_run_ids",
 ]
-
-
-
-
-
-

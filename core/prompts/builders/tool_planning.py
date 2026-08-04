@@ -25,12 +25,42 @@ _RUNBOOK_SERVICE = RunbookService()
 _ARTIFACT_SEARCH_TOOL_ID = "artifact.search"
 _ARTIFACT_READ_TOOL_ID = "artifact.read"
 _CVE_LOOKUP_TOOL_ID = "knowledge.cve_lookup"
+_MAIN_NATIVE_TOOL_CALL_REQUIREMENT = (
+    "You are the native tool-call builder. Emit native tool calls only.\n\n"
+    "Call between 1 and {max_committed_tools_per_batch} candidate tool "
+    "function(s) for this iteration."
+)
+_SUBAGENT_NATIVE_TOOL_CALL_REQUIREMENT = (
+    "When more evidence is required, call between 1 and "
+    "{max_committed_tools_per_batch} candidate tool function(s) for this "
+    "iteration. When the assignment is complete, emit no tool call and "
+    "return the concise parent handoff instead."
+)
+_MAIN_SELECTOR_STRATEGY_GUIDANCE = (
+    "Execution strategy (read from Selector Decision in the current turn input):\n"
+    '- The upstream selector sets requested execution strategy to "parallel" or '
+    '"sequential". This is scheduling guidance for the calls you commit, not '
+    "permission to call every candidate tool.\n"
+    "- Candidate Tools are a shortlist of allowed tool ids. They are alternatives "
+    "and context, not a mandatory multi-tool todo list. Do not emit one call per "
+    "candidate merely because several candidates were listed.\n\n"
+)
 
 
 def _render_latest(template_name: str, **context: Any) -> str:
     template = _LOADER.load_latest_version("tool_planning", template_name)
     safe_context = {key: str(value) if value is not None else "" for key, value in context.items()}
     return template.format_map(safe_context)
+
+
+def _normalize_committed_tool_cap(raw_cap: Any) -> int:
+    """Return the positive batch cap used by native tool-call prompts."""
+
+    try:
+        cap = int(raw_cap)
+    except (TypeError, ValueError):
+        return 1
+    return max(cap, 1)
 
 
 def _format_history(history: Sequence[Dict[str, Any]], max_turns: int = 5) -> str:
@@ -172,6 +202,25 @@ def _extract_tool_ids(raw_tools: Sequence[Any]) -> List[str]:
         if value and value not in resolved:
             resolved.append(value)
     return resolved
+
+
+def _prompt_tool_id(tool: Any) -> str:
+    """Extract one prompt-facing tool id from a string/object/mapping entry."""
+    if isinstance(tool, str):
+        return tool.strip()
+    if isinstance(tool, Mapping):
+        return str(tool.get("id") or tool.get("tool_id") or "").strip()
+    return str(getattr(tool, "tool_id", "") or "").strip()
+
+
+def _without_internal_tool_entries(raw_tools: Sequence[Any]) -> List[Any]:
+    """Return caller-supplied tools minus internal artifact overlay tools."""
+    return [
+        tool
+        for tool in raw_tools
+        if _prompt_tool_id(tool)
+        not in {_ARTIFACT_SEARCH_TOOL_ID, _ARTIFACT_READ_TOOL_ID}
+    ]
 
 
 def _format_available_tools(
@@ -390,16 +439,41 @@ class ToolPlanningPromptBuilder:
         max_committed_tools_per_batch: int = 1,
     ) -> str:
         """Build the native tool-call builder system prompt."""
-        try:
-            cap_value = int(max_committed_tools_per_batch)
-        except (TypeError, ValueError):
-            cap_value = 1
-        if cap_value < 1:
-            cap_value = 1
-        return _render_latest(
-            "tool_parameters_system.txt",
+        cap_value = _normalize_committed_tool_cap(max_committed_tools_per_batch)
+        call_requirement = _MAIN_NATIVE_TOOL_CALL_REQUIREMENT.format(
             max_committed_tools_per_batch=cap_value,
         )
+        native_tool_call_guidance = _render_latest(
+            "native_tool_call_guidance.txt",
+            call_requirement=call_requirement,
+            selector_strategy=_MAIN_SELECTOR_STRATEGY_GUIDANCE,
+        ).rstrip("\n")
+        return _render_latest(
+            "tool_parameters_system.txt",
+            native_tool_call_guidance=native_tool_call_guidance,
+        )
+
+    def build_native_tool_call_shared_guidance(
+        self,
+        *,
+        max_committed_tools_per_batch: int = 1,
+    ) -> str:
+        """Return exact selector-independent guidance for subagent tool calls.
+
+        A subagent binds its complete bounded tool profile directly, so
+        it must not inherit the main planner's upstream-selector paragraph.
+        The versioned guidance component is shared with the main planner while
+        the call requirement and selector paragraph remain caller-specific.
+        """
+        cap_value = _normalize_committed_tool_cap(max_committed_tools_per_batch)
+        call_requirement = _SUBAGENT_NATIVE_TOOL_CALL_REQUIREMENT.format(
+            max_committed_tools_per_batch=cap_value,
+        )
+        return _render_latest(
+            "native_tool_call_guidance.txt",
+            call_requirement=call_requirement,
+            selector_strategy="",
+        ).rstrip()
 
     def build_resolve_tools_prompt(
         self,
@@ -464,26 +538,32 @@ class ToolPlanningPromptBuilder:
         visible_tool_ids = filter_visible_tool_ids(_extract_tool_ids(resolved_tools))
         if not visible_tool_ids:
             visible_tool_ids = filter_visible_tool_ids(_extract_tool_ids(catalog))
-        visible_tool_id_set = set(visible_tool_ids)
-        visible_catalog = [
-            entry
-            for entry in catalog
-            if str(entry.get("id") or entry.get("tool_id") or "").strip() in visible_tool_id_set
-        ]
-        visible_resolved_tools = [
-            tool
-            for tool in resolved_tools
-            if str(
+        if visible_tool_ids:
+            visible_tool_id_set = set(visible_tool_ids)
+            visible_catalog = [
+                entry
+                for entry in catalog
+                if str(entry.get("id") or entry.get("tool_id") or "").strip()
+                in visible_tool_id_set
+            ]
+            visible_resolved_tools = [
                 tool
-                if isinstance(tool, str)
-                else getattr(tool, "tool_id", "")
-                or (tool.get("id") if isinstance(tool, Mapping) else "")
-                or (tool.get("tool_id") if isinstance(tool, Mapping) else "")
-            ).strip()
-            in visible_tool_id_set
-        ]
-        if not visible_resolved_tools:
-            visible_resolved_tools = list(visible_tool_ids)
+                for tool in resolved_tools
+                if _prompt_tool_id(tool) in visible_tool_id_set
+            ]
+            if not visible_resolved_tools:
+                visible_resolved_tools = list(visible_tool_ids)
+        else:
+            visible_catalog = [
+                entry
+                for entry in catalog
+                if _prompt_tool_id(entry)
+                not in {_ARTIFACT_SEARCH_TOOL_ID, _ARTIFACT_READ_TOOL_ID}
+            ]
+            visible_resolved_tools = _without_internal_tool_entries(resolved_tools)
+            visible_tool_ids = _extract_tool_ids(
+                visible_resolved_tools
+            ) or _extract_tool_ids(visible_catalog)
         artifact_policy = _build_artifact_policy_text(visible_tool_ids)
         cve_lookup_policy = _build_cve_lookup_policy_text(visible_tool_ids)
         tool_runbooks = _build_tool_selection_runbooks_section(

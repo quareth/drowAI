@@ -83,6 +83,23 @@ def _iter_execution_candidates(
             "matched_via": "current_step",
         }
 
+    selected_tool = str(facts.selected_tool or "").strip()
+    tool_parameters = facts.tool_parameters
+    if selected_tool and isinstance(tool_parameters, Mapping):
+        selected_params = tool_parameters.get(selected_tool)
+        if isinstance(selected_params, Mapping):
+            yield {
+                "tool_id": selected_tool,
+                "params": selected_params,
+                "matched_via": "current_step",
+            }
+        else:
+            yield {
+                "tool_id": selected_tool,
+                "params": tool_parameters,
+                "matched_via": "current_step",
+            }
+
     action_history = metadata.get("action_history")
     if not isinstance(action_history, list):
         return

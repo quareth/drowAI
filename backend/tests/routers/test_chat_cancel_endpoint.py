@@ -13,11 +13,18 @@ from sqlalchemy.pool import StaticPool
 
 from backend.database import Base
 from backend.models.core import Task, User
+from backend.models.hitl import InterruptTicket, InterruptTicketState
 from backend.models.provenance import ToolExecution
 from backend.models.streaming import StreamEvent
 from backend.models.tenant import Tenant, TenantMembership
 from backend.routers import chat as chat_routes
 from backend.services.langgraph_chat.checkpoint.turn_workflow_service import TurnWorkflowService
+from backend.services.langgraph_chat.checkpoint.interrupt_ticket_service import (
+    InterruptTicketService,
+)
+from backend.services.langgraph_chat.checkpoint.thread_identity import (
+    format_graph_thread_id,
+)
 from backend.services.langgraph_chat.runtime.run_lifecycle import get_run_lifecycle_service
 
 
@@ -41,7 +48,12 @@ def _build_client() -> tuple[TestClient, dict, object, object]:
         task = Task(user_id=user.id, tenant_id=tenant.id, name="cancel-task", status="running")
         db.add_all([membership, task])
         db.commit()
-        seeded = {"user_id": user.id, "tenant_id": tenant.id, "task_id": task.id}
+        seeded = {
+            "user_id": user.id,
+            "tenant_id": tenant.id,
+            "task_id": task.id,
+            "graph_thread_id": task.graph_thread_id,
+        }
 
     app = FastAPI()
     app.include_router(chat_routes.router)
@@ -212,6 +224,57 @@ def test_cancel_endpoint_requests_lifecycle_cancel() -> None:
                 status="cancelled",
                 db_session=lifecycle_db,
             )
+        client.close()
+        engine.dispose()
+
+
+def test_cancel_endpoint_fails_pending_interrupt_for_main_turn() -> None:
+    client, seeded, engine, session_factory = _build_client()
+    lifecycle = get_run_lifecycle_service()
+    task_id = seeded["task_id"]
+    turn_id = f"task-{task_id}-turn-interrupt"
+    with session_factory() as lifecycle_db:
+        TurnWorkflowService(lifecycle_db).start_turn(
+            task_id=task_id,
+            conversation_id=f"conv-{task_id}",
+            turn_id=turn_id,
+            turn_sequence=1,
+            graph_name="simple_tool",
+        )
+        lifecycle.start_run(
+            task_id=task_id,
+            turn_id=turn_id,
+            conversation_id=f"conv-{task_id}",
+            db_session=lifecycle_db,
+        )
+        InterruptTicketService(lifecycle_db).create_or_update_pending(
+            interrupt_id="interrupt-main-cancel",
+            task_id=task_id,
+            graph_name="simple_tool",
+            interrupt_type="tool_approval",
+            thread_id=format_graph_thread_id(
+                seeded["graph_thread_id"],
+                task_id=task_id,
+            ),
+            turn_id=turn_id,
+        )
+    try:
+        response = client.post(
+            f"/tasks/{task_id}/chat/cancel",
+            json={"turn_id": turn_id, "reason": "user_stop"},
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "cancelled"
+        with session_factory() as verify_db:
+            ticket = (
+                verify_db.query(InterruptTicket)
+                .filter(InterruptTicket.interrupt_id == "interrupt-main-cancel")
+                .one()
+            )
+            assert ticket.state == InterruptTicketState.FAILED
+    finally:
+        lifecycle._registry.finish(task_id=task_id, turn_id=turn_id, state="cancelled")
         client.close()
         engine.dispose()
 

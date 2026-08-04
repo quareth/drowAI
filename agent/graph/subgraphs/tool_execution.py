@@ -372,6 +372,7 @@ def _build_orchestrator_deps() -> Dict[str, Any]:
         "save_tool_output_artifact": save_tool_output_artifact,
         "store_dispatch_cache_result_service": store_dispatch_cache_result_service,
         "resolve_direct_executor_step_index": resolve_direct_executor_step_index,
+        "_enqueue_execution_ingestion": _enqueue_execution_ingestion,
     }
 
 

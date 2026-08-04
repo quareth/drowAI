@@ -196,6 +196,8 @@ class TestPostToolDecisionContract:
             "failure_category",
             "retry_suggested",
             "candidate_observations",
+            "agent_handoff",
+            "par_irrelevant_active_agent_run_ids",
         }
         assert required == {
             "next_action",
@@ -208,6 +210,8 @@ class TestPostToolDecisionContract:
             "failure_category",
             "retry_suggested",
             "candidate_observations",
+            "agent_handoff",
+            "par_irrelevant_active_agent_run_ids",
         }
 
     def test_decision_output_model_maps_to_runtime_output(self):
@@ -470,4 +474,3 @@ Some observation text here.
         assert output.next_action == "finalize"
         # Unknown fields should not be accessible
         assert not hasattr(output, "some_unknown_field")
-

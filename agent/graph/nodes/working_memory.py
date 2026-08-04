@@ -179,7 +179,11 @@ def _maybe_seed_simple_tool_todos(
     readiness = str(
         intent_turn_interpretation.get("execution_readiness") or ""
     ).strip().lower()
-    if readiness != "ready":
+    # Temporary workaround for https://github.com/quareth/drowAI/issues/42:
+    # blocked direct-executor turns still enter the execution graph, so retain
+    # their seed for todo attempt/stall tracking. Ambiguous turns remain
+    # unseeded because their objective is not stable.
+    if readiness not in {"ready", "blocked"}:
         return
 
     task_seed = _normalized_task_seed(

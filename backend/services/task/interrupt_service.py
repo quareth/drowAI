@@ -207,6 +207,7 @@ class TaskInterruptService:
             graph_name=ticket.graph_name,
             thread_id=ticket.thread_id,
             graph_thread_id=runtime_context.graph_thread_id,
+            tenant_id=tenant_id,
         )
         if not isinstance(hydrated_interrupt, dict):
             return response
@@ -324,6 +325,7 @@ class TaskInterruptService:
                 graph_name=resolved_graph_name,
                 thread_id=getattr(claimed_ticket, "thread_id", None),
                 graph_thread_id=runtime_context.graph_thread_id,
+                tenant_id=tenant_id,
             )
         except Exception:
             pending_interrupt = None
@@ -394,35 +396,7 @@ class TaskInterruptService:
 
         effective_reserved_message_id = payload_reserved_message_id
 
-        workflow = workflow_service.try_begin_resume(
-            task_id=task_id,
-            resume_key=resume_key,
-            checkpoint_id=normalized_checkpoint,
-            graph_name=resolved_graph_name,
-            reserved_message_id=effective_reserved_message_id,
-            metadata={
-                "resume_source": "tasks_router",
-                "interrupt_id": canonical_interrupt_id,
-            },
-        )
-        if workflow is None:
-            fallback_turn_id = payload_turn_id or (
-                f"task-{task_id}-checkpoint-{normalized_checkpoint}"
-                if normalized_checkpoint
-                else f"task-{task_id}-resume-{resume_key}"
-            )
-            workflow_service.ensure_waiting_workflow(
-                task_id=task_id,
-                conversation_id=payload_conversation_id,
-                turn_id=fallback_turn_id,
-                turn_sequence=payload_turn_sequence,
-                graph_name=resolved_graph_name,
-                checkpoint_id=normalized_checkpoint,
-                interrupt_type=claimed_ticket.interrupt_type,
-                reserved_message_id=effective_reserved_message_id,
-                resume_key=resume_key,
-                metadata={"backfilled": True},
-            )
+        try:
             workflow = workflow_service.try_begin_resume(
                 task_id=task_id,
                 resume_key=resume_key,
@@ -430,16 +404,60 @@ class TaskInterruptService:
                 graph_name=resolved_graph_name,
                 reserved_message_id=effective_reserved_message_id,
                 metadata={
-                    "resume_source": "tasks_router_backfill",
+                    "resume_source": "tasks_router",
                     "interrupt_id": canonical_interrupt_id,
                 },
             )
+            if workflow is None:
+                fallback_turn_id = payload_turn_id or (
+                    f"task-{task_id}-checkpoint-{normalized_checkpoint}"
+                    if normalized_checkpoint
+                    else f"task-{task_id}-resume-{resume_key}"
+                )
+                workflow_service.ensure_waiting_workflow(
+                    task_id=task_id,
+                    conversation_id=payload_conversation_id,
+                    turn_id=fallback_turn_id,
+                    turn_sequence=payload_turn_sequence,
+                    graph_name=resolved_graph_name,
+                    checkpoint_id=normalized_checkpoint,
+                    interrupt_type=claimed_ticket.interrupt_type,
+                    reserved_message_id=effective_reserved_message_id,
+                    resume_key=resume_key,
+                    metadata={"backfilled": True},
+                )
+                workflow = workflow_service.try_begin_resume(
+                    task_id=task_id,
+                    resume_key=resume_key,
+                    checkpoint_id=normalized_checkpoint,
+                    graph_name=resolved_graph_name,
+                    reserved_message_id=effective_reserved_message_id,
+                    metadata={
+                        "resume_source": "tasks_router_backfill",
+                        "interrupt_id": canonical_interrupt_id,
+                    },
+                )
 
-        if workflow is None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Resume already in flight for this interrupt.",
-            )
+            if workflow is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Resume already in flight for this interrupt.",
+                )
+        except Exception:
+            try:
+                ticket_service.mark_pending(
+                    interrupt_id=canonical_interrupt_id,
+                    task_id=task_id,
+                )
+            except Exception:
+                logger.warning(
+                    "Failed to revert interrupt ticket after workflow setup failure "
+                    "(task=%s, interrupt_id=%s)",
+                    task_id,
+                    canonical_interrupt_id,
+                    exc_info=True,
+                )
+            raise
 
         try:
             create_task_fn(

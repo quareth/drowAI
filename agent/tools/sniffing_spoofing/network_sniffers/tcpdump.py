@@ -456,10 +456,10 @@ register_enhanced_tool_metadata(
             ToolCapability(
                 name="packet_capture",
                 description=(
-                    "Capture network packets into a finite workspace-local PCAP "
-                    "for host, port, protocol, or plaintext payload proof; run "
-                    "in parallel with a trigger before analyzing the saved PCAP "
-                    "artifact with tshark."
+                    "Capture network packets passively into a finite workspace-local "
+                    "PCAP for host, port, protocol, or plaintext payload proof; "
+                    "run in parallel with a trigger before analyzing the saved "
+                    "PCAP artifact with tshark."
                 ),
                 output_indicators=["tcpdump", "pcap", "packet", "length"],
             ),

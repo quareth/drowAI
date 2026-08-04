@@ -75,8 +75,16 @@ def _sanitize_candidate_observations(payload: dict[str, Any]) -> dict[str, Any]:
     Invalid candidate rows are dropped to avoid failing the entire decision payload.
     """
     rows = payload.get("candidate_observations")
-    if not isinstance(rows, list):
+    if rows is None:
         return payload
+    if not isinstance(rows, list):
+        logger.warning(
+            "[LLM_ANALYSIS] Dropping invalid candidate_observations container (%s)",
+            type(rows).__name__,
+        )
+        sanitized_payload = dict(payload)
+        sanitized_payload["candidate_observations"] = []
+        return sanitized_payload
 
     sanitized_rows: list[dict[str, Any]] = []
     dropped_count = 0
@@ -118,6 +126,16 @@ def _sanitize_candidate_observations(payload: dict[str, Any]) -> dict[str, Any]:
     return sanitized_payload
 
 
+def sanitize_post_tool_decision_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Return a decision payload with invalid optional observations removed.
+
+    Routing fields remain strict. Candidate observations are supplemental
+    knowledge hints, so one malformed optional row must not invalidate an
+    otherwise valid graph decision.
+    """
+    return _sanitize_candidate_observations(dict(payload))
+
+
 def _build_provider_recovery_diagnostics(exc: Exception) -> dict[str, object]:
     """Build normalized diagnostics for provider-side decision call failures.
 
@@ -150,7 +168,7 @@ def _parse_decision_output_from_response(
         structured_payload = None
 
     if structured_payload is not None:
-        sanitized_payload = _sanitize_candidate_observations(structured_payload)
+        sanitized_payload = sanitize_post_tool_decision_payload(structured_payload)
         return PostToolReasoningDecisionOutput.model_validate(sanitized_payload)
 
     parsed_output = parse_reasoning_response(response)
@@ -253,7 +271,6 @@ async def analyze_tool_result(
     response: str = ""
     payload: Any = None
     provider_recovery_diagnostics: dict[str, object] | None = None
-
     try:
         response, payload = await _call_decision_llm(
             llm_client=llm_client,
@@ -405,4 +422,5 @@ __all__ = [
     "analyze_tool_result",
     "analyze_tool_result_with_retry",
     "build_analysis_context",
+    "sanitize_post_tool_decision_payload",
 ]

@@ -64,10 +64,12 @@ exclude = ["*.tests", "*.tests.*"]
 
 [tool.setuptools.package-data]
 agent = [
+    "subagents/definitions/*.toml",
     "tools/information_gathering/dns/amass_collector_v5.sh",
 ]
 core = [
     "prompts/versions/*/*.txt",
+    "prompts/versions/*/*.md",
     "prompts/versions/*/*/*.txt",
     "prompts/versions/*/*/*.md",
     "runbooks/builtin/tool_runbooks/*/RUNBOOK.md",

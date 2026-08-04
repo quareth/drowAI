@@ -1,7 +1,8 @@
 """Apply terminal ToolBatch results to graph state.
 
-This module owns manifest-order state application after batch execution. It
-does not execute tools, validate approvals, or project raw tool outcomes.
+This module owns manifest-order state application and durable-ingestion
+dispatch after batch execution. It does not execute tools, validate approvals,
+or project raw tool outcomes.
 """
 
 from __future__ import annotations
@@ -79,6 +80,14 @@ def finish_with_batch_result(
         compact_by_call_id=compact_by_call_id,
         deterministic_compact_by_call_id=deterministic_compact_by_call_id,
     )
+    _enqueue_completed_execution_ingestions(
+        facts=facts,
+        batch=batch,
+        execution_id_by_call_id=execution_id_by_call_id,
+        compact_by_call_id=compact_by_call_id,
+        deterministic_compact_by_call_id=deterministic_compact_by_call_id,
+        deps=deps,
+    )
     if projection_by_call_id or cached_dispatch_by_call_id:
         append_tool_phase_snapshot_from_metadata(
             facts=facts,
@@ -96,6 +105,50 @@ def finish_with_batch_result(
     deps["_clear_tool_plan_prepared_flag"](interactive)
     deps["_clear_approval_gate_metadata"](interactive)
     return interactive.as_graph_update()
+
+
+def _enqueue_completed_execution_ingestions(
+    *,
+    facts: Any,
+    batch: ToolBatch,
+    execution_id_by_call_id: Mapping[str, Optional[Any]],
+    compact_by_call_id: Mapping[str, Mapping[str, Any]],
+    deterministic_compact_by_call_id: Mapping[str, Mapping[str, Any]],
+    deps: Mapping[str, Any],
+) -> None:
+    """Queue durable knowledge ingestion for each persisted tool execution."""
+
+    task_id = getattr(facts, "task_id", None)
+    if not task_id:
+        return
+
+    enqueue = deps.get("_enqueue_execution_ingestion")
+    if not callable(enqueue):
+        return
+    for call in batch.tool_calls:
+        execution_id = execution_id_by_call_id.get(call.tool_call_id)
+        compact_output = deterministic_compact_by_call_id.get(
+            call.tool_call_id
+        ) or compact_by_call_id.get(call.tool_call_id)
+        if execution_id is None or not isinstance(compact_output, Mapping):
+            continue
+        try:
+            enqueue(
+                task_id=int(task_id),
+                execution_id=str(execution_id),
+                tool_name=call.tool_id,
+                compact_output=dict(compact_output),
+            )
+        except Exception as exc:
+            deps["logger"].warning(
+                "[KNOWLEDGE_INGESTION] Failed to enqueue completed execution "
+                "(task_id=%s execution_id=%s tool=%s): %s",
+                task_id,
+                execution_id,
+                call.tool_id,
+                exc,
+            )
+            deps["safe_inc"]("knowledge_ingestion_enqueue_failures")
 
 
 def _apply_call_results_in_manifest_order(

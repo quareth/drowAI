@@ -11,7 +11,10 @@ from typing import TYPE_CHECKING, Any, Dict, Iterable, List, Mapping, Optional
 from langgraph.config import get_stream_writer
 
 from agent.graph.context.builder import METADATA_CONTEXT_BUNDLE_KEY
-from agent.graph.context.serialization import render_referenced_prior_turns_section
+from agent.graph.context.serialization import (
+    render_completed_agent_results_section,
+    render_referenced_prior_turns_section,
+)
 from agent.providers.llm.core.exceptions import LLMRefusalError
 from core.llm import (
     LLM_STREAM_IDLE_TIMEOUT_CONVERSATION_MAIN_SEC,
@@ -93,6 +96,7 @@ def _build_simple_chat_messages(
     history: Iterable[Dict[str, Any]],
     current_user_turn: Optional[Dict[str, Any]],
     referenced_prior_turns: str = "",
+    completed_agent_results: str = "",
     system_prompt: str = DEFAULT_SYSTEM_PROMPT,
     retry_guidance: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
@@ -130,6 +134,17 @@ def _build_simple_chat_messages(
                 ),
             }
         )
+    if completed_agent_results.strip():
+        msgs.append(
+            {
+                "role": "system",
+                "content": (
+                    completed_agent_results.strip()
+                    + "\n\nUse these same-process subagent results as bounded context. "
+                    "Do not claim raw tool output, hidden reasoning, or durable delivery."
+                ),
+            }
+        )
     for m in history:
         role = m.get("role")
         content = m.get("content")
@@ -150,6 +165,16 @@ def _referenced_prior_turns_from_bundle(metadata: Mapping[str, Any]) -> str:
         return ""
     return render_referenced_prior_turns_section(
         {"prior_turn_references": bundle.get("prior_turn_references")}
+    )
+
+
+def _completed_agent_results_from_bundle(metadata: Mapping[str, Any]) -> str:
+    """Render completed same-process subagent results from the bundle."""
+    bundle = metadata.get(METADATA_CONTEXT_BUNDLE_KEY)
+    if not isinstance(bundle, Mapping):
+        return ""
+    return render_completed_agent_results_section(
+        {"completed_agent_results": bundle.get("completed_agent_results")}
     )
 
 
@@ -309,6 +334,7 @@ async def run_simple_chat(
                 history,
                 current_user_turn,
                 _referenced_prior_turns_from_bundle(metadata),
+                _completed_agent_results_from_bundle(metadata),
                 retry_guidance=retry_guidance,
             )
 

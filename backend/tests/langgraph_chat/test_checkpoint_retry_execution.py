@@ -355,6 +355,102 @@ async def test_resume_generation_closes_runtime_db_and_forwards_runtime_context(
 
 
 @pytest.mark.asyncio
+async def test_subagent_resume_defers_parent_completion_to_original_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Child resume must not publish or close the retained parent execution."""
+    session, runtime_services = _patch_provider_runtime_with_session(monkeypatch)
+    hub_states: list[bool] = []
+    lifecycle = _RetryTestLifecycle(cancel_requested=False)
+    completed_workflows: list[Dict[str, Any]] = []
+    completed_interrupts: list[Dict[str, Any]] = []
+    boundary_events: list[Dict[str, Any]] = []
+    usage_calls: list[Dict[str, Any]] = []
+
+    class _TrackingHub(_RetryTestHub):
+        def set_streaming_state(self, task_id: int, state: bool) -> None:
+            hub_states.append(state)
+
+    monkeypatch.setattr(
+        "backend.services.streaming.in_memory_hub.get_in_memory_stream_hub",
+        lambda: _TrackingHub(),
+    )
+    monkeypatch.setattr(
+        "backend.services.langgraph_chat.execution.orchestration.orchestrator.get_run_lifecycle_service",
+        lambda: lifecycle,
+    )
+    monkeypatch.setattr(
+        "backend.services.langgraph_chat.execution.orchestration.orchestrator.resolve_turn_id_from_workflow_best_effort",
+        lambda _workflow_id: "task-402-turn-1",
+    )
+    monkeypatch.setattr(
+        "backend.services.langgraph_chat.execution.orchestration.orchestrator.resolve_checkpoint_retry_identity_best_effort",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "backend.services.langgraph_chat.execution.turn_service.resolve_interrupt_tool_call_id_best_effort",
+        lambda **_kwargs: None,
+    )
+
+    async def _resume_from_interrupt(**_kwargs: Any) -> LangGraphChatResult:
+        return LangGraphChatResult(
+            final_text=None,
+            conversation_id="conv-subagent-resume",
+            metadata={
+                "subagent_parent_continuation_pending": True,
+                "id": "task-402-turn-1",
+                "turn_sequence": 1,
+            },
+        )
+
+    monkeypatch.setattr(
+        "backend.services.langgraph_chat.execution.turn_service.LangGraphChatFacade.resume_from_interrupt",
+        AsyncMock(side_effect=_resume_from_interrupt),
+    )
+
+    service = TurnExecutionService()
+    monkeypatch.setattr(
+        service,
+        "_publish_boundary_completion_events",
+        AsyncMock(side_effect=lambda **kwargs: boundary_events.append(kwargs)),
+    )
+    monkeypatch.setattr(
+        service,
+        "_record_result_usage",
+        lambda **kwargs: usage_calls.append(kwargs),
+    )
+
+    await service.resume_turn_generation(
+        task_id=402,
+        user_id=15,
+        graph_thread_id=GRAPH_THREAD_ID,
+        response={"action": "approve"},
+        graph_name="subagent",
+        checkpoint_id="ckpt-subagent-resume",
+        workflow_id=9402,
+        interrupt_id="intr-402",
+        mark_turn_workflow_completed=lambda **kwargs: completed_workflows.append(
+            kwargs
+        ),
+        mark_interrupt_ticket_resumed=lambda **_kwargs: None,
+        mark_interrupt_ticket_completed=lambda **kwargs: completed_interrupts.append(
+            kwargs
+        ),
+    )
+
+    assert session.closed is True
+    assert runtime_services is not None
+    assert usage_calls
+    assert completed_interrupts == [
+        {"task_id": 402, "interrupt_id": "intr-402"}
+    ]
+    assert completed_workflows == []
+    assert boundary_events == []
+    assert lifecycle.end_calls == []
+    assert hub_states == [True]
+
+
+@pytest.mark.asyncio
 async def test_run_checkpoint_retry_generation_threads_carrier_to_facade(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

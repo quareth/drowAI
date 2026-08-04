@@ -10,6 +10,10 @@ import { useSyncExternalStore } from "react";
 
 import { setChatState } from "@/state/chat-session-store";
 import {
+  isSubagentRunMetadata,
+  readAgentRunMetadata,
+} from "@/features/agent-runs/contracts/agent-run";
+import {
   STEP_COMPARATOR,
   mergeStepContent,
   normalizeStep,
@@ -303,10 +307,276 @@ function clearStreamingItems(draft: TaskStreamState, sequence?: number): Mutatio
   return { changed, itemsChanged };
 }
 
+function resolveStepType(step: Step): string {
+  const metadata = (step.metadata ?? {}) as Record<string, unknown>;
+  return typeof metadata.step_type === "string" ? metadata.step_type : step.type;
+}
+
+function isMessagePhaseStep(step: Step): boolean {
+  const stepType = resolveStepType(step);
+  return (
+    stepType === "message_start" ||
+    stepType === "message_delta" ||
+    stepType === "assistant_delta" ||
+    stepType === "assistant_message" ||
+    stepType === "assistant_final"
+  );
+}
+
+function sameMessageStreamScope(item: Step, terminal: Step): boolean {
+  if (!isMessagePhaseStep(item)) {
+    return false;
+  }
+  const itemMetadata = (item.metadata ?? {}) as Record<string, unknown>;
+  const terminalMetadata = (terminal.metadata ?? {}) as Record<string, unknown>;
+  const itemAgentRunId =
+    typeof itemMetadata.agent_run_id === "string" ? itemMetadata.agent_run_id : "";
+  const terminalAgentRunId =
+    typeof terminalMetadata.agent_run_id === "string" ? terminalMetadata.agent_run_id : "";
+  if (
+    (itemAgentRunId || terminalAgentRunId) &&
+    itemAgentRunId !== terminalAgentRunId
+  ) {
+    return false;
+  }
+  for (const key of [
+    "producer_type",
+    "conversation_id",
+    "conversationId",
+    "id",
+    "turn_sequence",
+  ]) {
+    const expected = terminalMetadata[key];
+    const actual = itemMetadata[key];
+    if (expected !== undefined && actual !== undefined && expected !== actual) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function clearMessageStreamScope(
+  draft: TaskStreamState,
+  terminal: Step,
+): MutationResult {
+  let changed = false;
+  let itemsChanged = false;
+  const clearedKeys: string[] = [];
+  draft.items = draft.items.map(item => {
+    if (!item.isStreaming || !sameMessageStreamScope(item, terminal)) {
+      return item;
+    }
+    const metadata = {
+      ...(item.metadata ?? {}),
+      streaming: false,
+      is_streaming: false,
+      in_progress: false,
+    } as Record<string, unknown>;
+    if (item.__internalKey) {
+      clearedKeys.push(item.__internalKey);
+    }
+    changed = true;
+    itemsChanged = true;
+    return { ...item, metadata, isStreaming: false };
+  });
+  for (const key of clearedKeys) {
+    draft.streamingKeys.delete(key);
+  }
+  return { changed, itemsChanged };
+}
+
+type AgentRunPhase = "reasoning" | "observation" | "message";
+
+interface OpenAgentRunSection {
+  phase: AgentRunPhase;
+  lastItem: Step;
+}
+
+function isMatchingAgentRunStep(item: Step, agentRunId: string): boolean {
+  const metadata = (item.metadata ?? {}) as Record<string, unknown>;
+  return (
+    isSubagentRunMetadata(metadata) &&
+    readAgentRunMetadata(metadata)?.agent_run_id === agentRunId
+  );
+}
+
+function resolveAgentRunSectionKey(item: Step, phase: AgentRunPhase): string {
+  const metadata = (item.metadata ?? {}) as Record<string, unknown>;
+  if (phase === "reasoning") {
+    const reasoningSectionId = metadata.reasoning_section_id;
+    if (typeof reasoningSectionId === "string" && reasoningSectionId.trim().length > 0) {
+      return reasoningSectionId.trim();
+    }
+  }
+  const id = typeof metadata.id === "string" ? metadata.id : "";
+  const turnSequence = typeof metadata.turn_sequence === "number" ? metadata.turn_sequence : "";
+  const ind = typeof metadata.ind === "number" ? metadata.ind : "";
+  const subTurnIndex =
+    typeof metadata.sub_turn_index === "number" ? metadata.sub_turn_index : "";
+  return `${phase}:${id}:${turnSequence}:${ind}:${subTurnIndex}`;
+}
+
+function resolveAgentRunPhase(stepType: string): AgentRunPhase | null {
+  if (stepType.startsWith("reasoning")) {
+    return "reasoning";
+  }
+  if (stepType.startsWith("observation")) {
+    return "observation";
+  }
+  if (
+    stepType === "message_start" ||
+    stepType === "message_delta" ||
+    stepType === "assistant_delta" ||
+    stepType === "message_section_end"
+  ) {
+    return "message";
+  }
+  return null;
+}
+
+function isSectionEndStep(stepType: string): boolean {
+  return (
+    stepType === "reasoning_section_end" ||
+    stepType === "observation_section_end" ||
+    stepType === "message_section_end"
+  );
+}
+
+function buildAgentRunSectionEnd(
+  section: OpenAgentRunSection,
+  sequence?: number | null,
+): Step {
+  const terminalTypes = {
+    reasoning: ["reasoning_section_end", "reasoning_section_end"],
+    observation: ["observation_section_end", "observation_section_end"],
+    message: ["message_section_end", "section_end"],
+  } as const satisfies Record<AgentRunPhase, readonly [string, string]>;
+  const [metadataStepType, eventType] = terminalTypes[section.phase];
+  const metadata = {
+    ...(section.lastItem.metadata ?? {}),
+    step_type: metadataStepType,
+    streaming: false,
+    is_streaming: false,
+    in_progress: false,
+    terminalized_by_agent_run_lifecycle: true,
+  } as Record<string, unknown>;
+  if (typeof sequence === "number") {
+    metadata.sequence = sequence;
+  }
+  return {
+    type: eventType,
+    content: "",
+    metadata,
+    timestamp: new Date().toISOString(),
+    isStreaming: false,
+  };
+}
+
+function terminalizeAgentRunStreamScope(
+  draft: TaskStreamState,
+  agentRunId: string,
+  sequence?: number | null,
+): MutationResult {
+  const openSections = new Map<string, OpenAgentRunSection>();
+  let changed = false;
+  let itemsChanged = false;
+  const clearedKeys: string[] = [];
+
+  draft.items = draft.items.map(item => {
+    if (!isMatchingAgentRunStep(item, agentRunId)) {
+      return item;
+    }
+
+    const stepType = resolveStepType(item);
+    const phase = resolveAgentRunPhase(stepType);
+    if (phase !== null) {
+      const sectionKey = `${phase}:${resolveAgentRunSectionKey(item, phase)}`;
+      if (isSectionEndStep(stepType)) {
+        openSections.delete(sectionKey);
+      } else if (item.isStreaming) {
+        openSections.set(sectionKey, { phase, lastItem: item });
+      }
+    }
+
+    if (!item.isStreaming) {
+      return item;
+    }
+
+    const metadata = {
+      ...(item.metadata ?? {}),
+      streaming: false,
+      is_streaming: false,
+      in_progress: false,
+      terminalized_by_agent_run_lifecycle: true,
+    } as Record<string, unknown>;
+    if (item.__internalKey) {
+      clearedKeys.push(item.__internalKey);
+    }
+    changed = true;
+    itemsChanged = true;
+    return { ...item, metadata, isStreaming: false };
+  });
+
+  for (const key of clearedKeys) {
+    draft.streamingKeys.delete(key);
+  }
+
+  for (const section of openSections.values()) {
+    const result = upsertNormalizedStep(
+      draft,
+      buildAgentRunSectionEnd(section, sequence),
+      sequence ?? undefined,
+    );
+    changed = changed || result.changed;
+    itemsChanged = itemsChanged || Boolean(result.itemsChanged);
+  }
+
+  return { changed, itemsChanged };
+}
+
 function isAssistantFinal(message: Step | StreamPacket): boolean {
   const normalized = normalizeStep(message);
   const metadata = (normalized.metadata ?? {}) as Record<string, unknown>;
-  return normalized.type === "assistant_final" || metadata.subtype === "assistant_final";
+  if (normalized.type === "assistant_final" || metadata.subtype === "assistant_final") {
+    return true;
+  }
+  return (
+    resolveStepType(normalized) === "message_delta" &&
+    metadata.final_snapshot === true &&
+    normalized.isStreaming !== true &&
+    metadata.streaming !== true
+  );
+}
+
+function projectParentRunCompletion(taskId: number, terminal: Step): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const metadata = (terminal.metadata ?? {}) as Record<string, unknown>;
+  const agentRunMetadata = readAgentRunMetadata(metadata);
+  if (
+    isSubagentRunMetadata(metadata) ||
+    (typeof agentRunMetadata?.agent_run_id === "string" &&
+      agentRunMetadata.agent_run_id.trim())
+  ) {
+    return;
+  }
+  const turnId =
+    typeof metadata.turn_id === "string"
+      ? metadata.turn_id
+      : typeof metadata.id === "string"
+        ? metadata.id
+        : null;
+  window.dispatchEvent(
+    new CustomEvent("task-run-state", {
+      detail: {
+        taskId,
+        state: "completed",
+        turnId,
+        cancelRequested: false,
+      },
+    }),
+  );
 }
 
 export function setTaskHistory(
@@ -339,11 +609,15 @@ export function setTaskHistory(
 export function applyStreamMessage(taskId: number, message: Step | StreamPacket, sequenceHint?: number): void {
   if (!taskId) return;
   const terminal = isAssistantFinal(message);
+  const normalized = normalizeStep(message);
+  const messageSectionEnd = resolveStepType(normalized) === "message_section_end";
   mutateTaskState(taskId, draft => {
     const completion = terminal
       ? clearStreamingItems(draft)
+      : messageSectionEnd
+        ? clearMessageStreamScope(draft, normalized)
       : { changed: false, itemsChanged: false };
-    const upsert = upsertNormalizedStep(draft, message, sequenceHint);
+    const upsert = upsertNormalizedStep(draft, normalized, sequenceHint);
     return {
       changed: completion.changed || upsert.changed,
       itemsChanged: completion.itemsChanged || upsert.itemsChanged,
@@ -351,7 +625,20 @@ export function applyStreamMessage(taskId: number, message: Step | StreamPacket,
   });
   if (terminal) {
     setChatState(taskId, "input");
+    projectParentRunCompletion(taskId, normalized);
   }
+}
+
+export function terminalizeAgentRunStreams(
+  taskId: number,
+  agentRunId: string,
+  sequence?: number | null,
+): void {
+  const normalizedAgentRunId = agentRunId.trim();
+  if (!taskId || !normalizedAgentRunId) return;
+  mutateTaskState(taskId, draft =>
+    terminalizeAgentRunStreamScope(draft, normalizedAgentRunId, sequence),
+  );
 }
 
 export function appendStreamingChunk(taskId: number, chunk: OpenAIChunk, fallbackSequence?: number): void {

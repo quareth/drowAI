@@ -28,11 +28,13 @@ from agent.graph.context.builder import (
     build_conversation_context_bundle,
 )
 from agent.graph.context.projections import (
-    SECTION_RECENT_TRANSCRIPT,
     project_for_intent_classifier,
-    serialize_projection_to_prompt_sections,
 )
-from agent.graph.context.serialization import serialize_projection_to_section_map
+from agent.graph.context.serialization import (
+    SECTION_RECENT_TRANSCRIPT,
+    serialize_projection_to_prompt_sections,
+    serialize_projection_to_section_map,
+)
 from backend.services.langgraph_chat.contracts import (
     ChatInputs,
     ExecutionMode,
@@ -47,13 +49,15 @@ from backend.services.langgraph_chat.model_role_registry import (
     ModelRoleRegistry,
     RoleCallSettings,
 )
+from agent.subagents.registry import get_subagent_registry
 from agent.providers.llm.core.exceptions import (
     LLMProfileNotFoundError,
     LLMRefusalError,
 )
-from core.prompts.builders.intent_classifier import build_classifier_user_prompt
-from core.prompts.constants import CLASSIFIER_SYSTEM_PROMPT
-from core.llm.structured_schemas import INTENT_CLASSIFIER_STRUCTURED_OUTPUT
+from core.prompts.builders.intent_classifier import (
+    build_classifier_system_prompt,
+    build_classifier_user_prompt,
+)
 
 
 class _CapturingClient:
@@ -233,7 +237,12 @@ async def test_classifier_sends_exact_current_request_to_selected_model(monkeypa
         environment="",
         execution_route_policy=None,
     )
-    assert prepared_request.system_prompt == CLASSIFIER_SYSTEM_PROMPT
+    assert prepared_request.system_prompt == build_classifier_system_prompt(
+        subagent_catalog=get_subagent_registry().classifier_catalog()
+    )
+    assert "`agent_handoffs` is the explicit routing contract" in (
+        prepared_request.system_prompt
+    )
     assert prepared_request.user_prompt == expected_prompt
     assert stub.last_system_prompt == prepared_request.system_prompt
     assert stub.last_user_prompt == prepared_request.user_prompt
@@ -242,7 +251,16 @@ async def test_classifier_sends_exact_current_request_to_selected_model(monkeypa
         "max_tokens": prepared_request.max_tokens,
         "structured_output": prepared_request.structured_output,
     }
-    assert prepared_request.structured_output is INTENT_CLASSIFIER_STRUCTURED_OUTPUT
+    schema = prepared_request.structured_output.schema
+    assert "agent_handoffs" in schema["properties"]
+    assert "agent_handoffs" in schema["required"]
+    handoff_items = schema["properties"]["agent_handoffs"]["items"]
+    assert handoff_items["required"] == [
+        "agent_handoff",
+        "subagent",
+        "objective",
+    ]
+    assert handoff_items["properties"]["subagent"]["enum"] == ["pathfinder"]
 
 
 def test_classifier_context_limit_rejects_unknown_provider_model() -> None:

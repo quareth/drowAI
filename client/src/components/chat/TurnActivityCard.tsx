@@ -1,14 +1,16 @@
 /**
- * Compact completed-turn activity row for collapsed intermediate events.
+ * Shared live/completed activity presentation for one parent turn.
  *
- * The expanded body delegates back to MessageGroupRenderer so reasoning,
- * completed tools, observations, and raw-output expansion keep their existing UI.
+ * Live events remain visible in the connected chain. Once the turn completes,
+ * the same groups collapse behind the compact summary row.
  */
 
+import { Fragment, type ReactNode } from "react";
 import { ChevronDown, ChevronRight, ListChecks } from "lucide-react";
 
 import { useCardToggleState } from "@/hooks/useCardToggleState";
 import type { MessageGroup } from "@/hooks/useMessageGrouping";
+import { ActivityChain } from "./ActivityChain";
 import { MessageGroupRenderer } from "./MessageGroup";
 import type { TurnActivityBlock, TurnActivitySummary } from "./turnActivityBlocks";
 
@@ -17,6 +19,7 @@ interface TurnActivityCardProps {
   taskId?: number | null;
   onGroupExpand?: (messageId: string) => void;
   onGroupRetry?: (messageId: string) => void;
+  renderGroup?: (group: MessageGroup) => ReactNode | undefined;
 }
 
 function formatCount(count: number, singular: string, plural: string): string | undefined {
@@ -28,6 +31,7 @@ function formatSummary(summary: TurnActivitySummary): string {
   const parts = [
     formatCount(summary.toolCount, "tool", "tools"),
     formatCount(summary.thoughtCount, "thought", "thoughts"),
+    formatCount(summary.agentCount, "agent", "agents"),
     formatCount(summary.observationCount, "observation", "observations"),
   ].filter((part): part is string => Boolean(part));
 
@@ -69,17 +73,89 @@ function expandActivityGroups(groups: MessageGroup[]): MessageGroup[] {
   return groups.flatMap(splitToolGroupForTranscript);
 }
 
+function groupIsStreaming(group: MessageGroup): boolean {
+  return group.messages.some((message) => {
+    const metadata = message.metadata ?? {};
+    return Boolean(
+      message.isStreaming ||
+        metadata.streaming ||
+        metadata.is_streaming ||
+        metadata.in_progress,
+    );
+  });
+}
+
+function renderDetailGroups(
+  groups: MessageGroup[],
+  {
+    taskId,
+    onGroupExpand,
+    onGroupRetry,
+    renderGroup,
+  }: Pick<
+    TurnActivityCardProps,
+    "taskId" | "onGroupExpand" | "onGroupRetry" | "renderGroup"
+  >,
+): ReactNode[] {
+  return groups.map((group) => {
+    const messageId = firstMessageId(group);
+    const renderedGroup = renderGroup?.(group);
+    if (renderedGroup !== undefined) {
+      return <Fragment key={group.key}>{renderedGroup}</Fragment>;
+    }
+    return (
+      <MessageGroupRenderer
+        key={group.key}
+        group={group}
+        taskId={taskId}
+        onToggleExpand={
+          messageId && onGroupExpand ? () => onGroupExpand(messageId) : undefined
+        }
+        onRetry={messageId && onGroupRetry ? () => onGroupRetry(messageId) : undefined}
+      />
+    );
+  });
+}
+
 export function TurnActivityCard({
   block,
   taskId,
   onGroupExpand,
   onGroupRetry,
+  renderGroup,
 }: TurnActivityCardProps) {
   const stateKey = `turn-activity-${block.turnKey}`;
   const [isOpen, setIsOpen] = useCardToggleState(stateKey, false);
   const label = formatSummary(block.summary);
   const DetailsIcon = isOpen ? ChevronDown : ChevronRight;
   const detailGroups = expandActivityGroups(block.groups);
+  const activeIndexes = new Set(
+    detailGroups
+      .map((group, index) => (groupIsStreaming(group) ? index : -1))
+      .filter((index) => index >= 0),
+  );
+  const detailContent = renderDetailGroups(detailGroups, {
+    taskId,
+    onGroupExpand,
+    onGroupRetry,
+    renderGroup,
+  });
+
+  if (!block.isComplete) {
+    return (
+      <div
+        className="mb-1 mr-auto block w-full min-w-0 max-w-[calc(100%-2rem)]"
+        data-testid={`turn-activity-card-${block.turnKey}`}
+      >
+        <ActivityChain
+          activeIndexes={activeIndexes}
+          testId={`turn-activity-details-${block.turnKey}`}
+        >
+          {detailContent}
+        </ActivityChain>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -98,25 +174,13 @@ export function TurnActivityCard({
       </button>
 
       {isOpen && (
-        <div
-          className="mt-1 flex min-w-0 flex-col gap-1"
-          data-testid={`turn-activity-details-${block.turnKey}`}
+        <ActivityChain
+          activeIndexes={activeIndexes}
+          className="mt-1"
+          testId={`turn-activity-details-${block.turnKey}`}
         >
-          {detailGroups.map((group) => {
-            const messageId = firstMessageId(group);
-            return (
-              <MessageGroupRenderer
-                key={group.key}
-                group={group}
-                taskId={taskId}
-                onToggleExpand={
-                  messageId && onGroupExpand ? () => onGroupExpand(messageId) : undefined
-                }
-                onRetry={messageId && onGroupRetry ? () => onGroupRetry(messageId) : undefined}
-              />
-            );
-          })}
-        </div>
+          {detailContent}
+        </ActivityChain>
       )}
     </div>
   );

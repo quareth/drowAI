@@ -311,7 +311,7 @@ class TestInterruptStateServiceGraphSelection:
 
     @pytest.mark.asyncio
     async def test_uses_simple_tool_graph_by_default(self):
-        """When graph_name is None, both graphs are checked (simple_tool first, then deep_reasoning)."""
+        """Default discovery checks each resumable parent graph identity."""
         service = InterruptStateService()
 
         # Mock checkpointer
@@ -336,17 +336,21 @@ class TestInterruptStateServiceGraphSelection:
             with patch(
                 "agent.graph.builders.deep_reasoning_builder.compile_deep_reasoning_graph"
             ) as mock_deep:
-                mock_simple.return_value = mock_compiled
-                mock_deep.return_value = mock_compiled
+                with patch(
+                    "agent.graph.builders.parent_handoff_builder.build_parent_handoff_graph"
+                ) as mock_parent:
+                    mock_simple.return_value = mock_compiled
+                    mock_deep.return_value = mock_compiled
+                    mock_parent.return_value = mock_compiled
 
-                await service.get_pending_interrupt(
-                    task_id=1,
-                    graph_thread_id=GRAPH_THREAD_ID,
-                )
+                    await service.get_pending_interrupt(
+                        task_id=1,
+                        graph_thread_id=GRAPH_THREAD_ID,
+                    )
 
-                # When graph_name is None, service checks both graphs in order
-                mock_simple.assert_called_once()
-                mock_deep.assert_called_once()
+                    mock_simple.assert_called_once()
+                    mock_deep.assert_called_once()
+                    mock_parent.assert_called_once_with(checkpointer=mock_checkpointer)
 
     @pytest.mark.asyncio
     async def test_uses_deep_reasoning_graph_when_specified(self):

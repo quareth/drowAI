@@ -6,6 +6,9 @@ from types import SimpleNamespace
 import pytest
 
 from agent.graph.context.builder import METADATA_CONTEXT_BUNDLE_KEY
+from agent.graph.utils.event_identity import (
+    POST_ACTION_STREAM_SEQUENCE_METADATA_KEY,
+)
 from backend.services.langgraph_chat import context_builder as context_builder_module
 from backend.services.langgraph_chat.context_builder import (
     ConflictingExecutionRouteError,
@@ -580,6 +583,28 @@ def test_build_metadata_does_not_add_quick_dr_graph_entry_override() -> None:
     assert "original_capability" not in initial_state_metadata
     assert "original_execution_mode" not in initial_state_metadata
     assert "intent_router_graph_entry_override" not in initial_state_metadata
+
+
+def test_build_metadata_preserves_post_action_stream_sequence() -> None:
+    """Separate parent-continuation graphs keep one monotonic card identity."""
+    builder = LangGraphContextBuilder()
+    chat_inputs = ChatInputs(
+        task_id=811,
+        user_id=1,
+        message="continue the delegated task",
+        conversation_id="conv-811",
+        history=[],
+        agent_mode=AgentMode.AGENT,
+        plan_mode=False,
+    )
+    config = builder.build_runtime_config(
+        chat_inputs=chat_inputs,
+        metadata={POST_ACTION_STREAM_SEQUENCE_METADATA_KEY: 3},
+    )
+
+    initial_state_metadata = build_metadata(chat_inputs, config)
+
+    assert initial_state_metadata[POST_ACTION_STREAM_SEQUENCE_METADATA_KEY] == 3
 
 
 def test_build_initial_interactive_state_exposes_plan_mode_metadata() -> None:

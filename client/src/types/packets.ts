@@ -26,7 +26,14 @@ export interface StreamEventMetadata {
   failure_category?: string | null;
   error?: string | null;
   subtype?: string | null;
+  producer_type?: string | null;
+  agent_run_id?: string | null;
+  agent_kind?: string | null;
+  agent_display_name?: string | null;
+  parent_turn_id?: string | null;
+  parent_run_id?: string | null;
   internal_only?: boolean | null;
+  lifecycle_version?: number | null;
   requires_user_action?: boolean | null;
   role?: string | null;
   message_type?: string | null;

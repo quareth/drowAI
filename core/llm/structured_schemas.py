@@ -6,9 +6,11 @@ runtime logic on wired LangGraph/backend paths.
 
 from __future__ import annotations
 
-from typing import Any, Dict
+from copy import deepcopy
+from typing import Any, Dict, Sequence
 
 from agent.providers.llm.core.base import StructuredOutputSpec
+from agent.subagents.handoff import agent_handoff_entry_json_schema
 from backend.services.reporting.report_section_schema import (
     engagement_report_section_json_schema,
 )
@@ -212,6 +214,10 @@ INTENT_CLASSIFIER_STRUCTURED_OUTPUT = _spec(
                 "type": "array",
                 "items": {"type": "string"},
             },
+            "agent_handoffs": {
+                "type": "array",
+                "items": agent_handoff_entry_json_schema(),
+            },
             "requested_output_format": {
                 "type": ["string", "null"],
                 "enum": ["json", "csv", "markdown", None],
@@ -338,6 +344,7 @@ INTENT_CLASSIFIER_STRUCTURED_OUTPUT = _spec(
             "label",
             "confidence",
             "suggested_capabilities",
+            "agent_handoffs",
             "requested_output_format",
             "question_type",
             "answer_style",
@@ -357,6 +364,24 @@ INTENT_CLASSIFIER_STRUCTURED_OUTPUT = _spec(
         "additionalProperties": False,
     },
 )
+
+
+def build_intent_classifier_structured_output(
+    subagent_names: Sequence[str],
+    *,
+    max_handoffs: int,
+) -> StructuredOutputSpec:
+    """Build the classifier schema with registry-scoped subagent names."""
+    if max_handoffs < 1:
+        raise ValueError("max_handoffs must be positive")
+    schema = deepcopy(INTENT_CLASSIFIER_STRUCTURED_OUTPUT.schema)
+    handoff_schema = schema["properties"]["agent_handoffs"]
+    handoff_schema["items"] = agent_handoff_entry_json_schema(subagent_names)
+    registered_names = handoff_schema["items"]["properties"]["subagent"].get(
+        "enum", []
+    )
+    handoff_schema["maxItems"] = max_handoffs if registered_names else 0
+    return _spec("intent_classifier", schema)
 
 
 TOOL_CATEGORY_SELECTOR_STRUCTURED_OUTPUT = _spec(
@@ -479,7 +504,14 @@ POST_TOOL_DECISION_STRUCTURED_OUTPUT = _spec(
         "properties": {
             "next_action": {
                 "type": "string",
-                "enum": ["call_tool", "think_more", "reflect", "finalize"],
+                "enum": [
+                    "call_tool",
+                    "think_more",
+                    "reflect",
+                    "finalize",
+                    "delegate_subagent",
+                    "wait_for_subagents",
+                ],
             },
             "action_reasoning": {
                 "type": "string",
@@ -559,6 +591,14 @@ POST_TOOL_DECISION_STRUCTURED_OUTPUT = _spec(
                     allow_source_artifact_ref=True
                 ),
             },
+            "agent_handoff": {
+                **agent_handoff_entry_json_schema(),
+                "type": ["object", "null"],
+            },
+            "par_irrelevant_active_agent_run_ids": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+            },
         },
         "required": [
             "next_action",
@@ -571,10 +611,25 @@ POST_TOOL_DECISION_STRUCTURED_OUTPUT = _spec(
             "failure_category",
             "retry_suggested",
             "candidate_observations",
+            "agent_handoff",
+            "par_irrelevant_active_agent_run_ids",
         ],
         "additionalProperties": False,
     },
 )
+
+
+def build_post_tool_decision_structured_output(
+    subagent_names: Sequence[str],
+) -> StructuredOutputSpec:
+    """Build the PAR decision schema with the shared delegation-entry shape."""
+    schema = deepcopy(POST_TOOL_DECISION_STRUCTURED_OUTPUT.schema)
+    handoff_schema = agent_handoff_entry_json_schema(subagent_names)
+    schema["properties"]["agent_handoff"] = {
+        **deepcopy(handoff_schema),
+        "type": ["object", "null"],
+    }
+    return _spec("post_tool_decision", schema)
 
 
 REFLECT_STRUCTURED_OUTPUT = _spec(
@@ -951,12 +1006,13 @@ ENGAGEMENT_REPORT_SECTION_STRUCTURED_OUTPUT = _spec(
     engagement_report_section_json_schema(),
 )
 
-
 __all__ = [
     "DECISION_ROUTER_STRUCTURED_OUTPUT",
     "ENGAGEMENT_REPORT_SECTION_STRUCTURED_OUTPUT",
     "GENERIC_CANDIDATE_EXTRACTOR_STRUCTURED_OUTPUT",
     "INTENT_CLASSIFIER_STRUCTURED_OUTPUT",
+    "build_intent_classifier_structured_output",
+    "build_post_tool_decision_structured_output",
     "MEMORY_EXTRACTION_STRUCTURED_OUTPUT",
     "MEMORY_GATE_STRUCTURED_OUTPUT",
     "PLANNER_CONTRACT_STRUCTURED_OUTPUT",

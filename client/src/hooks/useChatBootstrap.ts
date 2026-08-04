@@ -14,6 +14,7 @@ import {
   seedRetryStateFromTranscriptItems,
   type ChatHistoryStartupPayload,
 } from "@/hooks/chat-history-bootstrap";
+import { hydrateAgentRunsFromRecentReplay } from "@/features/agent-runs/services/agent-run-replay-hydration";
 import { setConversationId, useChatSessionSnapshot } from "@/state/chat-session-store";
 import {
   isConversationHistoryLoading,
@@ -148,6 +149,12 @@ export function useChatBootstrap({ taskId, enabled }: UseChatBootstrapOptions): 
         // (e.g. ``completed`` keeps the button disabled instead of
         // reviving the stale failed-attempt retry button).
         seedRetryStateFromTranscriptItems(taskId, transcriptItems);
+        await hydrateAgentRunsFromRecentReplay(taskId, { signal: controller.signal }).catch(error => {
+          if (controller.signal.aborted || (error instanceof DOMException && error.name === "AbortError")) {
+            throw error;
+          }
+        });
+        if (controller.signal.aborted) return;
         const normalizedSteps = normalizeTranscriptItemsToSteps(taskId, transcriptItems);
         if (normalizedSteps.length > 0) {
           setTaskHistory(taskId, normalizedSteps, {

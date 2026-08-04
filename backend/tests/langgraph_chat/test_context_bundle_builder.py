@@ -55,17 +55,22 @@ def test_bundle_exposes_all_required_keys() -> None:
         "turn_id",
         "turn_sequence",
         "transcript_window",
+        "classifier_transcript_window",
         "runtime_state",
         "evidence_refs",
         "current_user_turn",
-        "retrieved_prior_context",
         "prior_turn_references",
+        "completed_agent_results",
+        "active_agent_runs",
+        "retrieved_prior_context",
     }
     assert set(bundle.keys()) == expected_keys
 
     assert bundle["conversation_id"] == "conv-1"
     assert bundle["turn_id"] == "turn-1"
     assert bundle["turn_sequence"] == 0
+    assert bundle["completed_agent_results"] == []
+    assert bundle["active_agent_runs"] == []
 
 
 def test_retrieved_prior_context_is_reserved_empty() -> None:

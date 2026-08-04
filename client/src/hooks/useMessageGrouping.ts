@@ -12,7 +12,14 @@ export interface MessageGroup {
   key: string;
   ind: number;
   messages: ChatMessage[];
-  primaryType: "user" | "reasoning" | "tool" | "observation" | "message" | "other";
+  primaryType:
+    | "user"
+    | "reasoning"
+    | "tool"
+    | "observation"
+    | "message"
+    | "activity"
+    | "other";
 }
 
 function coerceNumber(value: unknown): number | undefined {
@@ -65,6 +72,7 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
     const isMessagePhase =
       stepType === "message_start" ||
       stepType === "message_delta" ||
+      stepType === "message_section_end" ||
       stepType === "assistant_delta" ||
       stepType === "assistant_message" ||
       stepType === "assistant_final";
@@ -72,6 +80,14 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
       typeof stepType === "string" &&
       (stepType.startsWith("reasoning") || stepType === "retry_start" || stepType === "retry_attempt");
     const isToolPhase = Boolean(stepType?.startsWith("tool"));
+    const transcriptActivityKind =
+      typeof message.metadata?.transcript_activity_kind === "string"
+        ? message.metadata.transcript_activity_kind.trim()
+        : "";
+    const transcriptActivityId =
+      typeof message.metadata?.transcript_activity_id === "string"
+        ? message.metadata.transcript_activity_id.trim()
+        : "";
     const toolCallId =
       typeof (message.metadata as any)?.tool_call_id === "string"
         ? (message.metadata as any).tool_call_id
@@ -86,7 +102,9 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
         : undefined;
 
     let baseId: string;
-    if (isReasoningLifecycleStep(stepType)) {
+    if (transcriptActivityKind && transcriptActivityId) {
+      baseId = `activity-${transcriptActivityKind}-${transcriptActivityId}`;
+    } else if (isReasoningLifecycleStep(stepType)) {
       const reasoningSectionId = (message.metadata as any)?.reasoning_section_id;
       if (typeof reasoningSectionId !== "string" || reasoningSectionId.length === 0) {
         throw new Error(`Reasoning message missing reasoning_section_id for ${stepType}`);
@@ -157,8 +175,16 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
         break;
       }
       const stepType = msg.metadata?.step_type ?? (msg.metadata as any)?.stepType;
+      const isTranscriptActivity =
+        typeof msg.metadata?.transcript_activity_kind === "string" &&
+        msg.metadata.transcript_activity_kind.trim().length > 0 &&
+        typeof msg.metadata?.transcript_activity_id === "string" &&
+        msg.metadata.transcript_activity_id.trim().length > 0;
 
-      if (
+      if (isTranscriptActivity) {
+        primaryType = "activity";
+        break;
+      } else if (
         stepType?.startsWith("reasoning") ||
         stepType === "retry_start" ||
         stepType === "retry_attempt"
@@ -174,6 +200,7 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
       } else if (
         stepType === "message_start" ||
         stepType === "message_delta" ||
+        stepType === "message_section_end" ||
         stepType === "assistant_delta" ||
         stepType === "assistant_message" ||
         stepType === "assistant_final"
@@ -235,6 +262,7 @@ export function groupMessages(messages: ChatMessage[]): MessageGroup[] {
         return 0;
       case "tool":
       case "observation":
+      case "activity":
         return 1;
       case "message":
         return 2;

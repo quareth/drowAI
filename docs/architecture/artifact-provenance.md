@@ -375,6 +375,10 @@ wired graph path does not convert those ids into reference objects.
   helper returns `True` unconditionally and provides no configurable off state.
 - Small text artifacts may be inline; large text artifacts may be object-backed.
 - Runner manifest artifacts can exist before the final `tool.result` arrives.
+- Every persisted graph tool call queues best-effort knowledge ingestion from
+  the shared batch-completion seam, including calls made inside subagent
+  graphs. Post-tool reasoning may provide later candidate enrichment, but is
+  not the trigger for baseline deterministic ingestion.
 - Upload completion can trigger knowledge ingestion reconciliation for ready
   execution artifacts.
 - Timeline and catalog queries rely on tenant/task indexes in provenance tables.

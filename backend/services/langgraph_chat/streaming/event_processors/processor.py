@@ -18,6 +18,7 @@ from typing import Any, Callable, Optional, TYPE_CHECKING
 
 from backend.services.metrics.utils import safe_inc
 
+from backend.services.agent_runs.event_projection import apply_agent_run_metadata
 from backend.services.langgraph_chat.streaming.event_types import ensure_mutable_metadata
 from backend.services.langgraph_chat.streaming.event_processors.execution_phase_processor import (
     ExecutionPhaseEventProcessor,
@@ -155,6 +156,7 @@ class StreamEventProcessor:
         self._apply_sequence_metadata(processed, raw_event)
         self._apply_sub_turn_metadata(processed, raw_event)
         self._apply_task_context_metadata(processed, raw_event)
+        apply_agent_run_metadata(processed, raw_event)
 
     def _apply_sequence_metadata(
         self,

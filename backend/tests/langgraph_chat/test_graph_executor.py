@@ -10,7 +10,10 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend.services.langgraph_chat.execution.graph_executor import LangGraphExecutor
+from backend.services.langgraph_chat.execution.graph_executor import (
+    GraphExecutionCancelled,
+    LangGraphExecutor,
+)
 from backend.services.langgraph_chat.checkpoint.thread_identity import format_graph_thread_id
 from backend.services.langgraph_chat.compression.window_models import (
     ContextWindowDecision,
@@ -70,23 +73,34 @@ class TestGraphExecutorStreaming:
 
     @pytest.mark.asyncio
     async def test_graph_executor_honors_cancel_checker(self):
-        """Cancellation checker aborts streaming before processing the next graph chunk."""
+        """Cancellation preserves the latest state captured before the next chunk."""
         executor = LangGraphExecutor()
         mock_graph = AsyncMock()
+        partial_state = {"facts": {"message": "partial"}, "trace": {}}
+        latest_state = {"facts": {"message": "latest"}, "trace": {}}
+        cancel_checks = 0
 
         async def mock_astream(input_state, config, stream_mode):
-            yield ("values", {"facts": {}, "trace": {}})
+            yield ("values", partial_state)
+            yield ("values", latest_state)
+
+        def should_cancel() -> bool:
+            nonlocal cancel_checks
+            cancel_checks += 1
+            return cancel_checks > 2
 
         mock_graph.astream = mock_astream
 
-        with pytest.raises(RuntimeError, match="run_cancelled"):
+        with pytest.raises(GraphExecutionCancelled) as raised:
             await executor.stream_graph(
                 compiled_graph=mock_graph,
                 graph_input={},
                 config={"configurable": {"thread_id": "test"}},
                 task_id=1,
-                should_cancel=lambda: True,
+                should_cancel=should_cancel,
             )
+
+        assert raised.value.execution_result.final_state == latest_state
     
     @pytest.mark.asyncio
     async def test_graph_executor_streaming_captures_final_state(self):
@@ -237,6 +251,68 @@ class TestGraphExecutorStreaming:
             call_args = mock_hub.publish.call_args
             assert call_args[1]["task_id"] == 1
             assert call_args[1]["event"]["type"] == "processed"
+
+    @pytest.mark.asyncio
+    async def test_graph_executor_stamps_subagent_attribution_on_custom_events(self):
+        """Pathfinder child config stamps raw custom events outside tool runtime internals."""
+        mock_adapter = MagicMock()
+        mock_adapter.process_streaming_event.return_value = {
+            "type": "processed",
+            "metadata": {},
+        }
+        executor = LangGraphExecutor(streaming_adapter=mock_adapter)
+        mock_graph = AsyncMock()
+
+        async def mock_astream(input_state, config, stream_mode):
+            yield (
+                "custom",
+                {
+                    "type": "tool_end",
+                    "tool": "information_gathering.network_discovery.nmap",
+                    "conversation_id": "conv-42",
+                    "turn_id": "parent-turn-1",
+                    "status": "success",
+                    "metadata": {
+                        "agent_id": "spoofed",
+                        "agent_display_name": "Spoofed",
+                    },
+                },
+            )
+            yield ("values", {"facts": {}, "trace": {}})
+
+        mock_graph.astream = mock_astream
+
+        with patch.object(executor, "_stream_hub") as mock_hub:
+            mock_hub.publish = AsyncMock()
+            await executor.stream_graph(
+                compiled_graph=mock_graph,
+                graph_input={},
+                config={
+                    "configurable": {
+                        "thread_id": "graph-child",
+                        "agent_run_id": "pathfinder-run-1",
+                        "agent_id": "pathfinder",
+                        "agent_kind": "recon",
+                        "parent_turn_id": "parent-turn-1",
+                        "parent_run_id": "parent-run-1",
+                        "internal_only": False,
+                        "lifecycle_version": 2,
+                    }
+                },
+                task_id=42,
+            )
+
+        raw_event = mock_adapter.process_streaming_event.call_args.args[0]
+        assert raw_event["type"] == "tool_end"
+        assert raw_event["producer_type"] == "subagent"
+        assert raw_event["agent_run_id"] == "pathfinder-run-1"
+        assert raw_event["agent_id"] == "pathfinder"
+        assert raw_event["agent_kind"] == "recon"
+        assert raw_event["agent_display_name"] == "Pathfinder"
+        assert raw_event["parent_turn_id"] == "parent-turn-1"
+        assert raw_event["parent_run_id"] == "parent-run-1"
+        assert raw_event["internal_only"] is False
+        assert raw_event["lifecycle_version"] == 2
 
     @pytest.mark.asyncio
     async def test_graph_executor_emits_interrupt_event(self):

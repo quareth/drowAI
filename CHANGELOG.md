@@ -18,9 +18,99 @@ The format is based on
   for the installed Amass and enum4linux-ng command interfaces.
 - Amass is available in the LLM-visible tool catalog for DNS enumeration, with
   normalized DNS/IP knowledge assets and `resolves_to` relationships.
+- Pathfinder recon routing and its card/drawer UI are now active by default without
+  backend or frontend feature-flag configuration.
+- The Pathfinder recon-agent pilot UI now reconstructs recent cards from task stream
+  replay, preserves their original lifecycle timing, rechecks process-local ownership
+  after stream reconnection, and marks replay-only active runs as interrupted when the
+  current backend no longer owns them.
+- Pathfinder now uses a dedicated colored identity mark across its parent event,
+  drawer list, and detail header instead of the generic robot icon.
+- The Operations task panel can now be resized within a bounded range, collapsed
+  from its divider or toolbar control, and reopened from the expanded
+  conversation header without remounting the chat.
+
+### Changed
+
+- Pathfinder subagent execution now runs through the declarative generic
+  subagent runtime without the old Scout-specific runtime modules.
+- Completed subagent handoffs now pass through parent post-action reasoning
+  after every scoped run is terminal and before the parent finalizes, delegates
+  follow-up work, or calls a tool.
 
 ### Fixed
 
+- Stopping a subagent during approval continuation now cancels the resumed
+  child without allowing it to complete, while parent-turn cancellation still
+  stops the parent flow and lifecycle publication failures no longer strand a
+  completed child result.
+- Parent post-handoff tool approvals now resume the same checkpointed reasoning
+  flow after an earlier subagent approval in the same turn, without losing
+  coordination state or replaying a failed approval request.
+- Cancelling a main or subagent run that is waiting for approval now retires
+  its pending approval ticket, preventing stale approvals from being resumed or
+  reused by later interrupts.
+- Interrupted subagent runs now remain terminal when delayed replay or live
+  events repeat an equal lifecycle version, preventing orphaned runs from
+  reappearing as active after a backend restart.
+- Parent continuation now waits for every relevant subagent run to become
+  terminal before evaluating their aggregated handoffs, preventing partial
+  batches from finalizing a task while sibling agents are still running.
+- Final answers now stream provider text chunks live again instead of appearing
+  only after a buffered structured response completes.
+- Process-local subagent replay now accepts the backend-owned response marker,
+  allowing orphaned nonterminal runs to reconcile to interrupted state.
+- Post-action reasoning now applies its complete progress, repetition, retry,
+  and stopping policies while committing routes through `ptr_commit`, restoring
+  reflection or finalization after repeated no-progress actions.
+- Blocked direct-executor turns now retain grounded task seeds so recovery
+  attempts remain visible to progress tracking and the three-phase stall guard.
+- Subagent tool calls now inherit the parent Agent or Full Access approval
+  policy, reuse the existing main conversation approval card, and show only a
+  waiting indicator in the subagent drawer.
+- Parent continuation after a completed subagent handoff now preserves its
+  remaining execution budget, allowing required follow-up tools to run without
+  resetting safety limits between handoff cycles.
+- Persisted tool results from both parent and subagent execution now trigger
+  durable knowledge ingestion at shared tool completion, independent of whether
+  parent post-action reasoning receives the child execution state.
+- Post-action Observations now use the same provider-neutral model turn that
+  commits the next graph route. Optional narration, larger output budgets,
+  truncation detection, and commit-only recovery prevent completed external
+  work from being repeated when an internal route commit is incomplete.
+- Each parent post-action phase now receives a distinct Observation stream
+  identity, so later phases no longer overwrite or reorder an earlier card.
+- Parent post-action reasoning now uses one provider-portable internal commit
+  schema for all routes, aligned with runtime validation while malformed
+  optional knowledge candidates are safely discarded.
+- Parent reasoning now receives completed handoff evidence from the canonical
+  context bundle, preventing redundant delegation after a subagent has already
+  completed the requested work.
+- Pathfinder now returns a parent handoff after successful tool evidence instead
+  of treating remaining iteration budget as a requirement to run the tool again.
+- Repeated subagent invocations in one conversation now remain separate drawer
+  rows keyed by run identity, with each row opening only its own transcript.
+- Pathfinder now shows its real pre-tool action-selection step as an attributed,
+  refresh-safe Thinking event before tool execution without adding another
+  model call.
+- Pathfinder now binds its complete bounded recon tool profile directly and reuses
+  the shared native call-builder guidance, allowing up to the configured batch
+  limit of concrete sequential or parallel calls without a redundant selector.
+- Intent classification now emits an explicit ordered `agent_handoffs`
+  contract for subagent routing. Pathfinder delegation no longer depends on
+  `suggested_capabilities` vocabulary, while those capabilities remain
+  available as advisory assignment context. Enabled agent names, ownership
+  boundaries, target requirements, concurrency, classifier catalog entries,
+  schema constraints, and dispatch branches now come from one subagent
+  registry instead of hardcoded prompt-local rules.
+- Subagent calls now participate in the parent turn's ordered activity chain by
+  run identity and stream sequence, regardless of the implemented subagent kind,
+  and completed-turn summaries count each distinct run as an agent.
+- Pathfinder handoff responses now stop their streaming indicator when the
+  answer section closes and return a bounded child result from the generic
+  runtime loop for parent reasoning.
+- JWT signing now rejects configured HS256 secrets shorter than 32 bytes and
+  automatically repairs legacy short generated secrets during bootstrap.
 - Queued prompts now remain visible and scrollable in constrained Overview
   layouts, keep their controls reachable, and advance exactly one item after
   each completed run.

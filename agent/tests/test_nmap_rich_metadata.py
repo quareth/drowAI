@@ -867,18 +867,18 @@ def test_nmap_prompt_baseline_frozen_v4_with_evidence():
     # validate_semantic_evidence_entries so extract_runtime_semantic_inputs no
     # longer bypasses the validator. Previously injected evidence without the
     # canonical detail={} field reached the prompt; the canonical shape does.
-    assert len(llm.last_prompt) == 19093
+    assert len(llm.last_prompt) == 19142
     assert (
         hashlib.sha256(llm.last_prompt.encode("utf-8")).hexdigest()
-        == "044cd84160b892cc690414c00bcae77703654053525d0e3f335c1daeb7b5ca28"
+        == "d10ea4ee1cf872be031420ceab6f9e6a3b78233fd8b91f16341ceddf6189147f"
     )
     assert "network.host_profiled" in llm.last_prompt
     assert '"result_summary":[' in llm.last_prompt
 
-    assert result.summary == "prompt-sha256:044cd84160b892cc690414c00bcae77703654053525d0e3f335c1daeb7b5ca28"
-    assert result.key_findings == ["prompt-len:19093"]
+    assert result.summary == "prompt-sha256:d10ea4ee1cf872be031420ceab6f9e6a3b78233fd8b91f16341ceddf6189147f"
+    assert result.key_findings == ["prompt-len:19142"]
     assert result.structured_signals == []
-    assert result.decision_evidence == ["044cd84160b892cc"]
+    assert result.decision_evidence == ["d10ea4ee1cf872be"]
     assert result.lossiness_risk == "low"
 
 

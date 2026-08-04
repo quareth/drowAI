@@ -21,7 +21,7 @@ from sqlalchemy.exc import SQLAlchemyError
 import os
 import logging
 
-from backend.config.generated_config import resolve_config_value
+from backend.config.generated_config import JWT_SECRET_MIN_BYTES, resolve_config_value
 from .database import get_db
 from .models.core import User
 from .config import (
@@ -57,8 +57,17 @@ class JWTSecretConfigurationError(RuntimeError):
 
 def _resolve_jwt_secret() -> str:
     """Resolve JWT signing secret from ``JWT_SECRET``; fail closed outside debug mode."""
-    jwt_secret = (resolve_config_value(_JWT_SECRET_ENV) or os.getenv(_JWT_SECRET_ENV) or "").strip()
+    try:
+        configured_secret = resolve_config_value(_JWT_SECRET_ENV)
+    except ValueError as exc:
+        raise JWTSecretConfigurationError(str(exc)) from exc
+
+    jwt_secret = (configured_secret or os.getenv(_JWT_SECRET_ENV) or "").strip()
     if jwt_secret:
+        if len(jwt_secret.encode("utf-8")) < JWT_SECRET_MIN_BYTES:
+            raise JWTSecretConfigurationError(
+                f"{_JWT_SECRET_ENV} must be at least {JWT_SECRET_MIN_BYTES} bytes for HS256."
+            )
         if not DEBUG and jwt_secret == _DEV_JWT_SECRET:
             raise JWTSecretConfigurationError(
                 f"{_JWT_SECRET_ENV} must not use the development default when DEBUG is false."

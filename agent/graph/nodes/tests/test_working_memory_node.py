@@ -282,18 +282,50 @@ def test_update_working_memory_node_does_not_seed_task_seed_for_plan_label() -> 
     assert result["facts"]["current_goal"] == "Plan-classified objective"
 
 
-def test_update_working_memory_node_does_not_seed_when_execution_not_ready() -> None:
+def test_update_working_memory_node_seeds_blocked_direct_executor_for_progress_tracking() -> None:
     state = _base_state()
     state["facts"]["todo_list"] = []
+    state["facts"]["metadata"]["intent_classifier_label"] = "direct_executor"
+    state["facts"]["metadata"]["intent_turn_interpretation"] = {
+        "next_operational_goal": "Resolve the prerequisite blocking the requested operation",
+        "execution_readiness": "blocked",
+    }
+    state["facts"]["metadata"]["intent_brief_seed"] = {
+        "original_goal": "Complete the bounded requested operation",
+        "task_seed": ["Complete the bounded requested operation"],
+        "execution_readiness": "blocked",
+        "target_status": "resolved",
+        "target_source": "explicit_current_message",
+        "explicit_constraints": [],
+        "suggested_category_focus": [],
+        "retrieval_hints": [],
+        "relevant_memory_fragments": [],
+        "request_contract": {},
+    }
+
+    result = update_working_memory_node(state)
+
+    todos = result["facts"]["todo_list"]
+    assert [todo["description"] for todo in todos] == [
+        "Complete the bounded requested operation"
+    ]
+    assert todos[0]["status"] == TodoStatus.IN_PROGRESS.value
+    assert result["facts"]["current_goal"] == "Complete the bounded requested operation"
+
+
+def test_update_working_memory_node_does_not_seed_ambiguous_direct_executor() -> None:
+    state = _base_state()
+    state["facts"]["todo_list"] = []
+    state["facts"]["metadata"]["intent_classifier_label"] = "direct_executor"
     state["facts"]["metadata"]["intent_turn_interpretation"] = {
         "next_operational_goal": None,
-        "execution_readiness": "blocked",
+        "execution_readiness": "ambiguous",
     }
     state["facts"]["metadata"]["intent_brief_seed"] = {
         "original_goal": None,
         "task_seed": ["Should not seed"],
-        "execution_readiness": "blocked",
-        "target_status": "unresolved",
+        "execution_readiness": "ambiguous",
+        "target_status": "ambiguous",
         "target_source": "none",
         "explicit_constraints": [],
         "suggested_category_focus": [],

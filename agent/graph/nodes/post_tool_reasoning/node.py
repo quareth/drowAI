@@ -1,17 +1,13 @@
-"""Unified post-tool reasoning node for deep reasoning flows.
+"""Unified post-action reasoning for visible observations and graph routing.
 
-This module replaces the fragmented observation_articulation → decision_router
-path with a single coherent LLM call that:
-1. Reasons about tool output
-2. Produces observation text (streamed to frontend)
-3. Determines next action based on that observation
-
-This ensures what the agent "says it will do" in observations
-actually drives what happens next.
+One provider-neutral model turn may stream natural language while committing
+the matching internal graph decision through ``ptr_commit``. Missing commits
+are recovered without repeating completed external work.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
@@ -21,7 +17,6 @@ from core.prompts.builders.post_tool import PostToolReasoningPromptBuilder
 from ...state import InteractiveState
 from ...utils.llm_resolver import (
     ROLE_POST_TOOL_OBSERVATION,
-    ROLE_POST_TOOL_ARTICULATOR,
     resolve_llm_call_settings,
     resolve_llm_client,
     get_llm_reasoning_effort,
@@ -37,15 +32,22 @@ from ..working_memory import (
     apply_post_tool_candidate_findings,
 )
 from ...memory.findings import build_relevant_findings_for_prompt
-from ...utils.event_identity import resolve_sub_turn_index, resolve_turn_sequence
+from ...utils.event_identity import (
+    reserve_post_action_sub_turn_index,
+    resolve_turn_sequence,
+)
 from ...utils import iteration_memory as _iteration_memory
+from ..node_utils import append_usage_to_state
 from agent.providers.llm.core.exceptions import (
     LLMConfigurationError,
     LLMProviderError,
     LLMRefusalError,
 )
+from agent.providers.llm.contracts.tool_contracts import ToolChoice
+from agent.graph.config.token_limits import LIMITS
+from agent.subagents.registry import get_subagent_registry
 from agent.tools.capability_surface import render_capability_surface
-from backend.services.metrics.utils import safe_inc
+from backend.services.metrics.utils import safe_gauge, safe_inc
 from backend.services.usage_tracking.models import ProviderUsageComponents, UsageData
 from backend.services.usage_tracking.pricing import (
     aggregate_pricing_statuses,
@@ -55,10 +57,14 @@ from backend.services.usage_tracking.pricing import (
 
 # Import models from the models submodule
 from .models import (
+    DIRECT_TOOL_OUTCOME_SOURCE,
+    POST_ACTION_OUTCOME_SOURCE_METADATA_KEY,
     PostToolReasoningError,
     PostToolReasoningDecisionOutput,
     PostToolReasoningOutput,
     RetryablePostToolReasoningError,
+    SUBAGENT_HANDOFF_BATCH_OUTCOME_SOURCE,
+    VALID_POST_ACTION_OUTCOME_SOURCES,
     map_decision_output_to_post_tool_reasoning_output,
 )
 
@@ -77,14 +83,20 @@ from .recorders import (
 
 # Import core logic (capability-agnostic)
 from .core import (
+    _ensure_min_length_observation,
+    _make_fallback_observation,
     build_failure_context_from_state,
     detect_failure,
     get_retry_count,
     can_retry,
     increment_retry_count,
-    analyze_tool_result,
 )
-
+from .route_tools import (
+    PTRCommitError,
+    build_post_tool_commit_tool,
+    parse_post_tool_commit_call,
+    recover_post_tool_commit,
+)
 # Import streaming adapters
 from .streaming import StreamingAdapterFactory
 from .streaming.base import STREAMING_STEP_NAME
@@ -105,6 +117,188 @@ except ImportError:  # pragma: no cover - typing fallback
     StreamWriter = Any  # type: ignore[misc, assignment]
 
 logger = logging.getLogger(__name__)
+
+_COMPLETED_AGENT_RESULTS_METADATA_KEY = "completed_agent_results"
+_ACTIVE_AGENT_RUNS_METADATA_KEY = "active_agent_runs"
+_CONTEXT_BUNDLE_METADATA_KEY = "context_bundle"
+
+
+def _metric_segment(value: str) -> str:
+    """Return a bounded metric-name segment for closed PAR enum values."""
+    return value.strip().lower().replace(" ", "_") or "unknown"
+
+
+def _resolve_outcome_source(metadata: Mapping[str, Any]) -> str:
+    """Return deterministic PAR outcome source from serializable metadata."""
+    raw_source = metadata.get(POST_ACTION_OUTCOME_SOURCE_METADATA_KEY)
+    if raw_source in (None, ""):
+        return DIRECT_TOOL_OUTCOME_SOURCE
+    if not isinstance(raw_source, str):
+        raise PostToolReasoningError(
+            "post_action_outcome_source must be a string",
+            error_code="invalid_post_action_outcome_source",
+            diagnostics={
+                "metadata_key": POST_ACTION_OUTCOME_SOURCE_METADATA_KEY,
+                "actual_type": type(raw_source).__name__,
+            },
+        )
+    source = raw_source.strip()
+    if source not in VALID_POST_ACTION_OUTCOME_SOURCES:
+        raise PostToolReasoningError(
+            f"Unknown post_action_outcome_source: {source}",
+            error_code="invalid_post_action_outcome_source",
+            diagnostics={
+                "metadata_key": POST_ACTION_OUTCOME_SOURCE_METADATA_KEY,
+                "value": source,
+                "valid_values": sorted(VALID_POST_ACTION_OUTCOME_SOURCES),
+            },
+        )
+    return source
+
+
+def _context_sequence(
+    metadata: Mapping[str, Any],
+    key: str,
+    allowed_types: type | tuple[type, ...],
+) -> list[Any] | tuple[Any, ...]:
+    """Return a typed sequence from metadata or its context bundle."""
+    value = metadata.get(key)
+    if isinstance(value, allowed_types):
+        return value
+    bundle = metadata.get(_CONTEXT_BUNDLE_METADATA_KEY)
+    if isinstance(bundle, Mapping):
+        value = bundle.get(key)
+        if isinstance(value, allowed_types):
+            return value
+    return ()
+
+
+def _has_completed_agent_results(metadata: Mapping[str, Any]) -> bool:
+    """Return whether metadata carries bounded completed subagent results."""
+    return bool(
+        _context_sequence(metadata, _COMPLETED_AGENT_RESULTS_METADATA_KEY, list)
+    )
+
+
+def _has_active_agent_runs(metadata: Mapping[str, Any]) -> bool:
+    """Return whether deterministic context carries active subagent runs."""
+    return bool(_context_sequence(metadata, _ACTIVE_AGENT_RUNS_METADATA_KEY, list))
+
+
+def _context_sequence_count(metadata: Mapping[str, Any], key: str) -> int:
+    """Return bounded context item count from metadata or its context bundle."""
+    return len(_context_sequence(metadata, key, (list, tuple)))
+
+
+def _record_par_cycle_observed_context(
+    *,
+    task_id: int | None,
+    outcome_source: str,
+    metadata: Mapping[str, Any],
+) -> None:
+    """Record bounded PAR source and context-size telemetry."""
+    source_segment = _metric_segment(outcome_source)
+    completed_count = _context_sequence_count(
+        metadata,
+        _COMPLETED_AGENT_RESULTS_METADATA_KEY,
+    )
+    active_count = _context_sequence_count(metadata, _ACTIVE_AGENT_RUNS_METADATA_KEY)
+    safe_inc(f"post_action_reasoning_cycle_source_{source_segment}")
+    safe_gauge("post_action_reasoning_handoff_batch_size", completed_count)
+    safe_gauge("post_action_reasoning_active_run_count", active_count)
+    logger.info(
+        "[POST_ACTION_REASONING] Cycle started task_id=%s source=%s "
+        "handoff_batch_size=%s active_run_count=%s",
+        task_id,
+        outcome_source,
+        completed_count,
+        active_count,
+    )
+
+
+def _record_par_decision_route(
+    *,
+    task_id: int | None,
+    outcome_source: str,
+    action: str,
+    user_goal_achieved: bool,
+) -> None:
+    """Record bounded PAR route telemetry without prompt or result content."""
+    action_segment = _metric_segment(action)
+    safe_inc(f"post_action_reasoning_decision_route_{action_segment}")
+    if action == "finalize" or user_goal_achieved:
+        safe_inc("post_action_reasoning_finalization_decisions")
+    logger.info(
+        "[POST_ACTION_REASONING] Decision route task_id=%s source=%s "
+        "action=%s user_goal_achieved=%s",
+        task_id,
+        outcome_source,
+        action,
+        user_goal_achieved,
+    )
+
+
+def _validate_outcome_source_metadata(
+    metadata: Mapping[str, Any],
+    *,
+    outcome_source: str,
+    synthesized: Any,
+) -> None:
+    """Reject contradictory deterministic source metadata before LLM work."""
+    if outcome_source != SUBAGENT_HANDOFF_BATCH_OUTCOME_SOURCE:
+        return
+    if synthesized:
+        raise PostToolReasoningError(
+            "subagent_handoff_batch source cannot include synthesized direct-tool output",
+            error_code="contradictory_post_action_outcome_source",
+            diagnostics={
+                "metadata_key": POST_ACTION_OUTCOME_SOURCE_METADATA_KEY,
+                "source": outcome_source,
+                "has_synthesized_output": True,
+            },
+        )
+    if not _has_completed_agent_results(metadata):
+        raise PostToolReasoningError(
+            "subagent_handoff_batch source requires completed_agent_results",
+            error_code="contradictory_post_action_outcome_source",
+            diagnostics={
+                "metadata_key": POST_ACTION_OUTCOME_SOURCE_METADATA_KEY,
+                "source": outcome_source,
+                "has_completed_agent_results": False,
+            },
+        )
+
+
+def _prefix_reasoning(prefix: str, existing: str) -> str:
+    """Return policy rationale without losing the LLM-authored reason."""
+    current = str(existing or "").strip()
+    if not current:
+        return prefix
+    return f"{prefix} Original PAR rationale: {current}"
+
+
+def _apply_source_aware_decision_policy(
+    interactive: InteractiveState,
+    output: PostToolReasoningOutput,
+    *,
+    outcome_source: str,
+) -> None:
+    """Apply deterministic source-specific route guardrails before recording."""
+    if (
+        outcome_source == SUBAGENT_HANDOFF_BATCH_OUTCOME_SOURCE
+        and output.next_action == "wait_for_subagents"
+        and not _has_active_agent_runs(interactive.facts.safe_metadata)
+    ):
+        output.next_action = "think_more"
+        output.action_reasoning = _prefix_reasoning(
+            (
+                "PAR selected wait_for_subagents, but deterministic context "
+                "contains no active subagent runs; continuing parent reasoning "
+                "instead."
+            ),
+            output.action_reasoning,
+        )
+        safe_inc("post_action_reasoning_wait_without_active_run_coerced")
 
 
 def _resolve_iteration_memory_prompt_context(
@@ -176,118 +370,6 @@ def derive_dr_stream_identifiers(
 
 # These are now imported from core.retry_logic, but keep local references for backward compatibility
 from .core.retry_logic import MAX_RETRIES  # noqa: E402
-
-
-def _make_fallback_observation(
-    interactive: InteractiveState,
-    decision_output: PostToolReasoningDecisionOutput,
-) -> str:
-    """Build a non-empty fallback observation when a separate articulation call
-    is not yet executed.
-    """
-    metadata = interactive.facts.safe_metadata
-    synthesized = metadata.get("synthesized_output")
-    if isinstance(synthesized, Mapping):
-        source_observation = synthesized.get("observation_text")
-        if isinstance(source_observation, str) and source_observation.strip():
-            return _ensure_min_length_observation(
-                source_observation.strip(),
-                decision_output,
-            )
-
-        summary = synthesized.get("summary")
-        if isinstance(summary, str) and summary.strip():
-            return _ensure_min_length_observation(
-                summary.strip(),
-                decision_output,
-            )
-
-    if decision_output.tool_intent is not None:
-        details = [decision_output.tool_intent.description]
-        if decision_output.tool_intent.target:
-            details.append(f"target={decision_output.tool_intent.target}")
-        if decision_output.tool_intent.focus:
-            details.append(f"focus={decision_output.tool_intent.focus}")
-        tool_focus = ", ".join(details)
-        return (
-            f"Decision: {decision_output.next_action}. "
-            f"Reasoning: {decision_output.action_reasoning}. "
-            f"Tool intent: {tool_focus}"
-        )
-
-    return (
-        f"Decision: {decision_output.next_action}. "
-        f"Reasoning: {decision_output.action_reasoning}"
-    )
-
-
-def _ensure_min_length_observation(
-    observation: str,
-    decision_output: PostToolReasoningDecisionOutput,
-) -> str:
-    """Ensure fallback observations satisfy model minimum length requirements."""
-    base = str(observation or "").strip()
-    if len(base) >= 10:
-        return base
-
-    parts = [
-        base or "Tool result observed.",
-        f"Action: {decision_output.next_action}.",
-        f"Reasoning: {decision_output.action_reasoning}",
-    ]
-
-    if decision_output.tool_intent:
-        intent_bits = [decision_output.tool_intent.description]
-        if decision_output.tool_intent.target:
-            intent_bits.append(f"target={decision_output.tool_intent.target}")
-        if decision_output.tool_intent.focus:
-            intent_bits.append(f"focus={decision_output.tool_intent.focus}")
-        parts.append("Intent: " + ", ".join(intent_bits))
-
-    return " ".join(parts).strip()
-
-
-async def _generate_observation_text(
-    llm_client: Any,
-    system_prompt: str,
-    user_prompt: str,
-    *,
-    interactive: InteractiveState,
-    reasoning_effort: Optional[str] = None,
-) -> str:
-    """Generate plain-text observation via the dedicated articulation prompt."""
-    if hasattr(llm_client, "chat_with_usage"):
-        response_obj = await llm_client.chat_with_usage(
-            system_prompt,
-            user_prompt,
-            temperature=0.3,
-            max_tokens=MAX_OBSERVATION_TOKENS,
-            reasoning_effort=reasoning_effort,
-        )
-        content = response_obj.content
-
-        if interactive is not None and getattr(response_obj, "usage", None):
-            from ...node_utils import append_usage_to_state
-
-            append_usage_to_state(
-                interactive,
-                response_obj.usage,
-                "post_tool_observation",
-                request_mode="non_streaming",
-            )
-    else:
-        content = await llm_client.chat(
-            system_prompt,
-            user_prompt,
-            temperature=0.3,
-            max_tokens=MAX_OBSERVATION_TOKENS,
-            reasoning_effort=reasoning_effort,
-        )
-
-    observation = str(content or "").strip()
-    if not observation:
-        raise PostToolReasoningError("Articulation LLM returned empty observation")
-    return observation
 
 
 # -----------------------------------------------------------------------------
@@ -616,8 +698,6 @@ _increment_retry_count = _increment_retry_count_in_state
 # Constants (streaming/history/parser constants imported from submodules)
 # -----------------------------------------------------------------------------
 
-MAX_OBSERVATION_TOKENS = 400
-
 # Progress tracking constants
 MAX_TODOS_IN_PROMPT = 10  # Maximum todos to include in prompt (prevent context bloat)
 
@@ -633,21 +713,15 @@ async def post_tool_reasoning(
     config: Optional[Mapping[str, Any]] = None,
     writer: Optional[StreamWriter] = None,
 ) -> Dict[str, Any]:
-    """Unified post-tool reasoning: observe results and decide next action.
-    
-    This node replaces the fragmented observation_articulation → decision_router
-    path with a single coherent LLM call. It:
+    """Analyze completed outcomes and commit the matching next action.
     
     1. Builds context from conversation history and tool output
-    2. Makes ONE LLM call that produces observation + decision
-    3. Streams observation to frontend (if writer provided)
-    4. Records observation to trace.observations
-    5. Records decision to decision_history (drives graph routing)
-    6. Updates history for next iteration context
-    
-    The key guarantee: what the LLM says it will do in the observation
-    is the same as what actually happens next (because both come from
-    the same response).
+    2. Streams optional narrative and receives one internal route commit
+    3. Recovers a missing commit without repeating completed external work
+    4. Streams the observation to the frontend (if writer provided)
+    5. Records observation to trace.observations
+    6. Records decision to decision_history (drives graph routing)
+    7. Updates history for next iteration context
     
     Args:
         state: Current graph state (Mapping or InteractiveState).
@@ -686,9 +760,22 @@ async def post_tool_reasoning(
         )
         return interactive.as_graph_update()
     
+    outcome_source = _resolve_outcome_source(metadata)
+    metadata[POST_ACTION_OUTCOME_SOURCE_METADATA_KEY] = outcome_source
+    _record_par_cycle_observed_context(
+        task_id=facts.task_id,
+        outcome_source=outcome_source,
+        metadata=metadata,
+    )
+
     # Get synthesized tool output
     synthesized = metadata.get("synthesized_output") or {}
-    if not synthesized:
+    _validate_outcome_source_metadata(
+        metadata,
+        outcome_source=outcome_source,
+        synthesized=synthesized,
+    )
+    if outcome_source == DIRECT_TOOL_OUTCOME_SOURCE and not synthesized:
         logger.warning(
             "[POST_TOOL_REASONING] No synthesized_output in metadata. "
             "This may indicate tool execution failed or was skipped."
@@ -700,14 +787,17 @@ async def post_tool_reasoning(
         )
         return interactive.as_graph_update()
 
-    if capability == "simple_tool_execution":
+    if (
+        outcome_source == DIRECT_TOOL_OUTCOME_SOURCE
+        and capability == "simple_tool_execution"
+    ):
         intent_contract = _evaluate_simple_tool_intent_contract(interactive)
         metadata["intent_contract_evaluation"] = intent_contract
     else:
         metadata.pop("intent_contract_evaluation", None)
     
-    # Resolve LLMClients - this will raise LLMConfigurationError if no API key.
-    # Keep decision and articulation roles separate per phase 4 role architecture.
+    # Resolve one provider-neutral client for both optional visible narration
+    # and the internal route commitment.
     try:
         decision_llm_client = resolve_llm_client(
             metadata,
@@ -728,33 +818,19 @@ async def post_tool_reasoning(
         logger.error(f"[POST_TOOL_REASONING] No API key available: {e}")
         raise  # Don't fall back - let caller handle
 
-    try:
-        articulation_llm_client = resolve_llm_client(
-            metadata,
-            context,
-            config=config,
-            role=ROLE_POST_TOOL_ARTICULATOR,
-        )
-        articulation_call_settings = resolve_llm_call_settings(
-            metadata,
-            context,
-            role=ROLE_POST_TOOL_ARTICULATOR,
-        )
-        articulation_reasoning_effort = get_llm_reasoning_effort(
-            articulation_llm_client,
-            articulation_call_settings,
-        )
-    except LLMConfigurationError as e:
-        logger.error(f"[POST_TOOL_REASONING] No API key available for articulation: {e}")
-        raise
-    
     # Build prompts
     prompt_builder = PostToolReasoningPromptBuilder()
     system_prompt = prompt_builder.build_system_prompt()
     
-    failure_detected, failure_category = _detect_tool_failure(interactive)
-    retry_count = _get_retry_count(interactive)
-    can_retry_flag = _can_retry(interactive)
+    if outcome_source == DIRECT_TOOL_OUTCOME_SOURCE:
+        failure_detected, failure_category = _detect_tool_failure(interactive)
+        retry_count = _get_retry_count(interactive)
+        can_retry_flag = _can_retry(interactive)
+    else:
+        failure_detected = False
+        failure_category = None
+        retry_count = 0
+        can_retry_flag = False
     failure_context = {
         "failure_detected": failure_detected,
         "failure_category": failure_category,
@@ -777,7 +853,7 @@ async def post_tool_reasoning(
         stream_ids = adapter.get_stream_identifiers(interactive, config)
         stream_conversation_id = stream_ids[0]
         stream_turn_id = stream_ids[1]
-        stream_sub_turn_index = resolve_sub_turn_index(metadata)
+        stream_sub_turn_index = reserve_post_action_sub_turn_index(metadata)
 
         observation_emitter = EventEmitterFactory.create_from_identity(
             writer,
@@ -788,7 +864,8 @@ async def post_tool_reasoning(
         )
         observation_emitter.emit_observation_start(STREAMING_STEP_NAME)
 
-    # Decision call (structured, no observation)
+    # One model turn: optional assistant text becomes the observation and one
+    # completed internal commit becomes the graph decision.
     logger.info(
         f"[POST_TOOL_REASONING] Making LLM call for task {facts.task_id} "
         f"(iteration {facts.iterations}, streaming={writer is not None})"
@@ -811,17 +888,100 @@ async def post_tool_reasoning(
             failure_context=failure_context,
             environment_context=environment_context,
             capability_surface=capability_surface,
+            outcome_source=outcome_source,
             turn_sequence=turn_sequence,
             current_ptr_phase_sequence=current_ptr_phase_sequence,
             latest_recorded_phase_sequence=latest_recorded_phase_sequence,
         )
-        decision_output = await analyze_tool_result(
-            llm_client=decision_llm_client,
-            system_prompt=system_prompt,
-            user_prompt=decision_user_prompt,
-            interactive=interactive,
-            reasoning_effort=decision_reasoning_effort,
-        )
+        decision_tools = [
+            build_post_tool_commit_tool(get_subagent_registry().ids())
+        ]
+        if writer is not None:
+            (
+                observation,
+                decision_output,
+                streamed,
+                streaming_usage,
+                recovery_usage,
+            ) = await adapter.stream_observation_with_route(
+                writer=writer,
+                llm_client=decision_llm_client,
+                call_settings=decision_call_settings,
+                system_prompt=system_prompt,
+                user_prompt=decision_user_prompt,
+                route_tools=decision_tools,
+                conversation_id=stream_conversation_id,
+                turn_id=stream_turn_id,
+                sequence=stream_turn_sequence,
+                sub_turn_index=stream_sub_turn_index,
+                reasoning_effort=decision_reasoning_effort,
+                task_id=interactive.facts.task_id,
+                suppress_observation_start=True,
+            )
+            metadata["observation_streamed"] = streamed
+            for usage_record in (streaming_usage, recovery_usage):
+                if usage_record is None:
+                    continue
+                if interactive.trace.usage_records is None:
+                    interactive.trace.usage_records = []
+                interactive.trace.usage_records.append(usage_record)
+        else:
+            route_result = await decision_llm_client.chat_with_tools_with_usage(
+                system_prompt,
+                decision_user_prompt,
+                decision_tools,
+                tool_choice=ToolChoice(mode="required"),
+                temperature=0.3,
+                max_tokens=LIMITS.post_tool_reasoning,
+                reasoning_effort=decision_reasoning_effort,
+                parallel_tool_calls=False,
+            )
+            if route_result.usage is not None:
+                append_usage_to_state(
+                    interactive,
+                    route_result.usage,
+                    "post_tool_analysis",
+                    request_mode="non_streaming",
+                )
+            try:
+                decision_output = parse_post_tool_commit_call(
+                    route_result.tool_calls
+                )
+            except PTRCommitError as exc:
+                outcome = getattr(route_result, "outcome", None)
+                incomplete = getattr(outcome, "status", None) == "incomplete"
+                if not incomplete and exc.code not in {
+                    "missing_commit",
+                    "invalid_commit_json",
+                }:
+                    raise
+                logger.warning(
+                    "[POST_TOOL_REASONING] Recovering PTR commit only "
+                    "(reason=%s); completed external work will not be rerun",
+                    getattr(outcome, "reason", None) if incomplete else exc.code,
+                )
+                decision_output, recovered_usage = await recover_post_tool_commit(
+                    llm_client=decision_llm_client,
+                    system_prompt=system_prompt,
+                    user_prompt=decision_user_prompt,
+                    route_tools=decision_tools,
+                    reasoning_effort=decision_reasoning_effort,
+                )
+                if recovered_usage is not None:
+                    append_usage_to_state(
+                        interactive,
+                        recovered_usage,
+                        "post_tool_analysis",
+                        request_mode="non_streaming",
+                    )
+            observation = str(route_result.content or "").strip()
+            if not observation:
+                observation = _ensure_min_length_observation(
+                    decision_output.action_reasoning,
+                    decision_output,
+                )
+            metadata["observation_streamed"] = False
+
         decision_candidate_payload = _build_post_tool_candidate_payload(decision_output)
         decision_candidate_usage = _extract_post_tool_decision_usage_summary(
             interactive,
@@ -844,6 +1004,14 @@ async def post_tool_reasoning(
             )
             observation_emitter.emit_observation_section_end(STREAMING_STEP_NAME)
         raise
+    except (LLMConfigurationError, LLMProviderError, LLMRefusalError):
+        if observation_emitter is not None:
+            observation_emitter.emit_stream_error(
+                error="Decision analysis failed at the configured LLM boundary",
+                recoverable=False,
+            )
+            observation_emitter.emit_observation_section_end(STREAMING_STEP_NAME)
+        raise
     except Exception as exc:
         if observation_emitter is not None:
             observation_emitter.emit_stream_error(
@@ -851,77 +1019,14 @@ async def post_tool_reasoning(
                 recoverable=False,
             )
             observation_emitter.emit_observation_section_end(STREAMING_STEP_NAME)
-        raise
-
-    # Articulation call (plain-text observation)
-    try:
-        articulation_system_prompt = prompt_builder.build_articulation_system_prompt()
-        articulation_user_prompt = prompt_builder.build_articulation_user_prompt(
-            interactive=interactive,
-            synthesized=synthesized,
-            decision_output=decision_output.model_dump(),
-            relevant_findings=relevant_findings,
-            environment_context=environment_context,
-        )
-    except Exception as exc:
-        if observation_emitter is not None:
-            observation_emitter.emit_stream_error(
-                error=f"Articulation setup failed: {exc}",
-                recoverable=False,
-            )
-            observation_emitter.emit_observation_section_end(STREAMING_STEP_NAME)
-        raise
-
-    if writer is not None:
-        observation, streamed, streaming_usage = await adapter.stream_observation_text(
-            writer=writer,
-            llm_client=articulation_llm_client,
-            call_settings=articulation_call_settings,
-            system_prompt=articulation_system_prompt,
-            user_prompt=articulation_user_prompt,
-            conversation_id=stream_conversation_id,
-            turn_id=stream_turn_id,
-            sequence=stream_turn_sequence,
-            sub_turn_index=stream_sub_turn_index,
-            reasoning_effort=articulation_reasoning_effort,
-            task_id=interactive.facts.task_id,
-            suppress_observation_start=True,
-        )
-        metadata["observation_streamed"] = streamed
-
-        if streaming_usage is not None:
-            if (
-                not hasattr(interactive.trace, "usage_records")
-                or interactive.trace.usage_records is None
-            ):
-                interactive.trace.usage_records = []
-            interactive.trace.usage_records.append(streaming_usage)
-            logger.debug(
-                "[POST_TOOL_REASONING] Recorded streaming usage: %s tokens from %s",
-                streaming_usage.get("total_tokens", 0),
-                streaming_usage.get("source", "unknown"),
-            )
-    else:
-        try:
-            observation = await _generate_observation_text(
-                articulation_llm_client,
-                articulation_system_prompt,
-                articulation_user_prompt,
-                interactive=interactive,
-                reasoning_effort=articulation_reasoning_effort,
-            )
-        except LLMRefusalError:
+        if isinstance(exc, PostToolReasoningError):
             raise
-        except LLMProviderError:
-            raise
-        except Exception as exc:
-            logger.error(
-                "[POST_TOOL_REASONING] Articulation generation failed: %s",
-                exc,
-            )
-            observation = _make_fallback_observation(interactive, decision_output)
-
-        metadata["observation_streamed"] = False
+        failure_detail = (
+            f"Route JSON parse failed: {exc}"
+            if isinstance(exc, json.JSONDecodeError)
+            else f"LLM call failed during post-tool route turn: {exc}"
+        )
+        raise PostToolReasoningError(failure_detail) from exc
 
     output = map_decision_output_to_post_tool_reasoning_output(
         decision_output,
@@ -929,7 +1034,11 @@ async def post_tool_reasoning(
     )
 
     # Handle retry suggestions (budgeted for both streaming and non-streaming)
-    retry_suggested = output.failure_detected and output.retry_suggested
+    retry_suggested = (
+        outcome_source == DIRECT_TOOL_OUTCOME_SOURCE
+        and output.failure_detected
+        and output.retry_suggested
+    )
     retry_attempt_number: Optional[int] = None
     if retry_suggested:
         if not _can_retry(interactive):
@@ -967,10 +1076,27 @@ async def post_tool_reasoning(
     # todos_terminal / repeated_no_progress). Runs after retry analysis so
     # post-retry state is visible, and before capability guardrails so the
     # single-step policy sees the coerced ``next_action``.
-    apply_direct_executor_policy(interactive, output)
+    if outcome_source == DIRECT_TOOL_OUTCOME_SOURCE:
+        apply_direct_executor_policy(interactive, output)
+
+    _apply_source_aware_decision_policy(
+        interactive,
+        output,
+        outcome_source=outcome_source,
+    )
 
     _enforce_simple_tool_single_step_policy(output, capability)
-    retry_suggested = output.failure_detected and output.retry_suggested
+    _record_par_decision_route(
+        task_id=facts.task_id,
+        outcome_source=outcome_source,
+        action=output.next_action,
+        user_goal_achieved=output.user_goal_achieved,
+    )
+    retry_suggested = (
+        outcome_source == DIRECT_TOOL_OUTCOME_SOURCE
+        and output.failure_detected
+        and output.retry_suggested
+    )
 
     # Apply progress updates from LLM output and capture changed-only deltas.
     todo_updates = _apply_progress_updates(interactive, output)
@@ -987,7 +1113,11 @@ async def post_tool_reasoning(
         )
 
     # Record observation (updates trace.observations, metadata, history)
-    _record_observation(interactive, output)
+    _record_observation(
+        interactive,
+        output,
+        write_synthesized_output=outcome_source == DIRECT_TOOL_OUTCOME_SOURCE,
+    )
 
     # Record decision (updates decision_history, decision_log, reasoning)
     _record_decision(interactive, output)
@@ -1046,7 +1176,7 @@ async def post_tool_reasoning(
         metadata.pop("tool_intent", None)
     
     # Store failure detection results for routing decisions
-    if output.failure_detected:
+    if outcome_source == DIRECT_TOOL_OUTCOME_SOURCE and output.failure_detected:
         metadata["failure_detected"] = True
         metadata["failure_category"] = output.failure_category
         metadata["retry_suggested"] = output.retry_suggested
@@ -1070,7 +1200,12 @@ async def post_tool_reasoning(
 
     execution_id = str(metadata.get("last_execution_id") or "").strip()
     compact_output = metadata.get("last_tool_result_compact")
-    if facts.task_id and execution_id and isinstance(compact_output, Mapping):
+    if (
+        facts.task_id
+        and execution_id
+        and isinstance(compact_output, Mapping)
+        and isinstance(decision_candidate_payload, Mapping)
+    ):
         try:
             from ...subgraphs.tool_execution import _enqueue_execution_ingestion
 
@@ -1079,11 +1214,7 @@ async def post_tool_reasoning(
                 execution_id=execution_id,
                 tool_name=str(facts.selected_tool or "unknown_tool"),
                 compact_output=dict(compact_output),
-                post_tool_candidate_payload=(
-                    dict(decision_candidate_payload)
-                    if isinstance(decision_candidate_payload, Mapping)
-                    else None
-                ),
+                post_tool_candidate_payload=dict(decision_candidate_payload),
                 post_tool_candidate_usage=(
                     dict(decision_candidate_usage)
                     if isinstance(decision_candidate_usage, Mapping)
@@ -1092,7 +1223,7 @@ async def post_tool_reasoning(
             )
         except Exception as exc:
             logger.warning(
-                "[KNOWLEDGE_INGESTION] Failed to trigger post-tool ingestion enqueue "
+                "[KNOWLEDGE_INGESTION] Failed to enqueue post-tool candidate enrichment "
                 "(task_id=%s execution_id=%s): %s",
                 facts.task_id,
                 execution_id,

@@ -27,19 +27,24 @@ from .last_tool import extract_last_tool_sections, iter_renderable_last_tool_sec
 from .sections import (
     extract_scope_hint,
     format_active_decision_hint,
+    format_active_handoff_runs_context,
     format_current_execution_context,
     format_environment_context,
+    format_handoff_batch_context,
+    format_handoff_coordination_contract,
     format_intent_contract,
     format_request_contract,
     is_tool_visible,
 )
 from .templates import (
-    ARTICULATION_SYSTEM_PROMPT,
     CVE_LOOKUP_GUIDANCE_TEXT,
     DIRECT_EXECUTOR_POLICY_TEXT,
     SYSTEM_PROMPT,
     TASK_INSTRUCTION_PROMPT,
 )
+
+DIRECT_TOOL_OUTCOME_SOURCE = "direct_tool"
+SUBAGENT_HANDOFF_BATCH_OUTCOME_SOURCE = "subagent_handoff_batch"
 
 
 class PostToolReasoningPromptBuilder:
@@ -67,6 +72,7 @@ class PostToolReasoningPromptBuilder:
         failure_context: Optional[Mapping[str, Any]] = None,
         environment_context: str = "",
         capability_surface: str = "",
+        outcome_source: str = DIRECT_TOOL_OUTCOME_SOURCE,
         turn_sequence: Optional[int] = None,
         current_ptr_phase_sequence: Optional[int] = None,
         latest_recorded_phase_sequence: Optional[int] = None,
@@ -92,12 +98,15 @@ class PostToolReasoningPromptBuilder:
                 in the ledger for the active turn. Supplied by the PTR node
                 via :func:`iteration_memory.latest_recorded_phase_sequence`;
                 the builder never computes it.
+            outcome_source: Deterministic source metadata resolved by the PTR/PAR
+                node. The default preserves direct-tool prompt compatibility.
 
         Returns:
             Formatted user prompt string.
         """
         facts = as_mapping(get_field(interactive, "facts", {}))
         metadata = as_mapping(get_field(facts, "metadata", {}))
+        is_handoff_batch = outcome_source == SUBAGENT_HANDOFF_BATCH_OUTCOME_SOURCE
 
         user_input, derived_user_goal = derive_user_input_and_goal(facts)
         current_goal = str(get_field(facts, "current_goal", "") or "")
@@ -142,6 +151,7 @@ class PostToolReasoningPromptBuilder:
             prompt_sections.append(
                 f"## Current Execution Context\n{execution_context_section}"
             )
+        prompt_sections.append(f"## Outcome Source\n{outcome_source}")
 
         phase_memory_section = _iteration_memory.render_phase_memory_section(
             dict(metadata),
@@ -163,7 +173,7 @@ class PostToolReasoningPromptBuilder:
                 f"## Agent Operational Capability Surface\n{capability_surface_text}"
             )
 
-        if raw_capability == "simple_tool_execution":
+        if raw_capability == "simple_tool_execution" and not is_handoff_batch:
             prompt_sections.append(
                 "## Direct Executor Policy\n"
                 f"{DIRECT_EXECUTOR_POLICY_TEXT}"
@@ -173,11 +183,27 @@ class PostToolReasoningPromptBuilder:
         if env_context:
             prompt_sections.append(f"## Container Environment\n{env_context}")
 
-        for heading, section_body in iter_renderable_last_tool_sections(
-            tool_sections,
-            keys=("tool_executed",),
-        ):
-            prompt_sections.append(f"## {heading}\n{section_body}")
+        if is_handoff_batch:
+            completed_handoffs = format_handoff_batch_context(metadata)
+            if completed_handoffs:
+                prompt_sections.append(
+                    f"## Completed Bounded Subagent Results\n{completed_handoffs}"
+                )
+            active_handoffs = format_active_handoff_runs_context(metadata)
+            if active_handoffs:
+                prompt_sections.append(
+                    f"## Relevant Active Subagent Assignments\n{active_handoffs}"
+                )
+            prompt_sections.append(
+                "## Parent Handoff Coordination Contract\n"
+                f"{format_handoff_coordination_contract()}"
+            )
+        else:
+            for heading, section_body in iter_renderable_last_tool_sections(
+                tool_sections,
+                keys=("tool_executed",),
+            ):
+                prompt_sections.append(f"## {heading}\n{section_body}")
 
         intent_contract = metadata.get("intent_contract_evaluation")
         intent_contract_section = format_intent_contract(intent_contract)
@@ -187,28 +213,29 @@ class PostToolReasoningPromptBuilder:
         if request_contract_section:
             prompt_sections.append(f"## Request Contract\n{request_contract_section}")
 
-        for heading, section_body in iter_renderable_last_tool_sections(
-            tool_sections,
-            keys=(
-                "tool_output_summary",
-                "batch_tool_results",
-                "key_findings",
-                "tool_errors",
-                "structured_signals",
-                "decision_evidence",
-                "compression_lossiness",
-                "artifact_refs",
-            ),
-        ):
-            prompt_sections.append(f"## {heading}\n{section_body}")
+        if not is_handoff_batch:
+            for heading, section_body in iter_renderable_last_tool_sections(
+                tool_sections,
+                keys=(
+                    "tool_output_summary",
+                    "batch_tool_results",
+                    "key_findings",
+                    "tool_errors",
+                    "structured_signals",
+                    "decision_evidence",
+                    "compression_lossiness",
+                    "artifact_refs",
+                ),
+            ):
+                prompt_sections.append(f"## {heading}\n{section_body}")
 
-        if is_tool_visible(metadata, "knowledge.cve_lookup"):
+        if not is_handoff_batch and is_tool_visible(metadata, "knowledge.cve_lookup"):
             prompt_sections.append(
                 "## Selective CVE Lookup Guidance\n"
                 f"{CVE_LOOKUP_GUIDANCE_TEXT}"
             )
 
-        if failure_detected:
+        if failure_detected and not is_handoff_batch:
             failure_section = "## Failure Detected\n"
             failure_section += f"Tool execution failed with category: {failure_category}\n"
             failure_section += f"Retry attempts: {retry_count} of {max_retries}\n"
@@ -218,11 +245,12 @@ class PostToolReasoningPromptBuilder:
                 failure_section += "Retry budget exhausted - consider reflect or finalize.\n"
             prompt_sections.append(failure_section)
 
-        for heading, section_body in iter_renderable_last_tool_sections(
-            tool_sections,
-            keys=("output_info",),
-        ):
-            prompt_sections.append(f"## {heading}\n{section_body}")
+        if not is_handoff_batch:
+            for heading, section_body in iter_renderable_last_tool_sections(
+                tool_sections,
+                keys=("output_info",),
+            ):
+                prompt_sections.append(f"## {heading}\n{section_body}")
 
         if plan_summary:
             prompt_sections.append(f"## Current Plan\n{plan_summary}")
@@ -238,105 +266,6 @@ class PostToolReasoningPromptBuilder:
             prompt_sections.append(f"## Scope Hints\n{scope_hint}")
 
         prompt_sections.append("## Your Task\n" + TASK_INSTRUCTION_PROMPT)
-        return "\n\n".join(section for section in prompt_sections if section.strip())
-
-    def build_articulation_system_prompt(self) -> str:
-        """Return the system prompt for articulation text generation."""
-        return ARTICULATION_SYSTEM_PROMPT
-
-    def build_articulation_user_prompt(
-        self,
-        interactive: Any,
-        synthesized: Mapping[str, Any],
-        decision_output: Mapping[str, Any],
-        *,
-        relevant_findings: Optional[List[Mapping[str, Any]]] = None,
-        environment_context: str = "",
-    ) -> str:
-        """Build user prompt for plain-text observation generation."""
-        facts = as_mapping(get_field(interactive, "facts", {}))
-        metadata = as_mapping(get_field(facts, "metadata", {}))
-
-        user_input, derived_user_goal = derive_user_input_and_goal(facts)
-        current_goal = str(get_field(facts, "current_goal", "") or "")
-        tool_sections = extract_last_tool_sections(
-            metadata,
-            facts,
-            synthesized,
-            prefer_runtime_evidence=True,
-        )
-
-        next_action = decision_output.get("next_action", "unknown")
-        action_reasoning = decision_output.get("action_reasoning", "No decision reasoning provided.")
-        effective_next_goal = decision_output.get("effective_next_goal")
-        user_goal_achieved = bool(decision_output.get("user_goal_achieved", False))
-        failure_detected = bool(decision_output.get("failure_detected", False))
-        retry_suggested = bool(decision_output.get("retry_suggested", False))
-        failure_category = str(decision_output.get("failure_category", "unknown") or "unknown")
-        tool_intent = as_mapping(decision_output.get("tool_intent"))
-        tool_intent_lines: List[str] = []
-        if tool_intent:
-            description = str(tool_intent.get("description") or "").strip()
-            target = tool_intent.get("target")
-            focus = tool_intent.get("focus")
-            if description:
-                tool_intent_lines.append(f"tool_intent.description: {description}")
-            if target not in (None, ""):
-                tool_intent_lines.append(f"tool_intent.target: {target}")
-            if focus not in (None, ""):
-                tool_intent_lines.append(f"tool_intent.focus: {focus}")
-
-        prompt_sections: List[str] = []
-        if user_input:
-            prompt_sections.append(f"## User Input\n{user_input}")
-        if derived_user_goal:
-            prompt_sections.append(f"## User Goal\n{derived_user_goal}")
-        if current_goal:
-            prompt_sections.append(f"## Current Focus\n{current_goal}")
-        relevant_findings_text = format_relevant_findings(relevant_findings)
-        if relevant_findings_text:
-            prompt_sections.append(f"## Relevant Prior Findings\n{relevant_findings_text}")
-
-        for heading, section_body in iter_renderable_last_tool_sections(
-            tool_sections,
-            keys=(
-                "tool_executed",
-                "tool_output_summary",
-                "batch_tool_results",
-                "key_findings",
-                "tool_errors",
-                "structured_signals",
-                "decision_evidence",
-                "compression_lossiness",
-                "artifact_refs",
-                "output_info",
-            ),
-        ):
-            prompt_sections.append(f"## {heading}\n{section_body}")
-
-        decision_context_lines = [
-            f"next_action: {next_action}",
-            f"action_reasoning: {action_reasoning}",
-            *tool_intent_lines,
-            f"user_goal_achieved: {user_goal_achieved}",
-            f"failure_detected: {failure_detected}",
-            f"failure_category: {failure_category}",
-            f"retry_suggested: {retry_suggested}",
-            f"effective_next_goal: {effective_next_goal or 'none'}",
-        ]
-        prompt_sections.append(
-            "## Decision Context\n" + "\n".join(decision_context_lines)
-        )
-
-        env_context = format_environment_context(environment_context)
-        if env_context:
-            prompt_sections.append(f"## Container Environment\n{env_context}")
-
-        prompt_sections.append(
-            "## Task\n"
-            "Generate a 2-4 sentence plain-text observation in first person.\n"
-            "It should summarize what was learned and connect it to the chosen action."
-        )
         return "\n\n".join(section for section in prompt_sections if section.strip())
 
     def _format_parameters(self, params: Mapping[str, Any]) -> str:

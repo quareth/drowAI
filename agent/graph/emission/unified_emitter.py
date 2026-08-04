@@ -41,6 +41,9 @@ from agent.graph.contracts.streaming_constants import (  # noqa: E402
     STEP_TOOL_START,
     TOOL_PHASE_INDEX,
 )
+from agent.graph.emission.agent_run_attribution import (  # noqa: E402
+    resolve_agent_run_attribution,
+)
 from agent.graph.utils.dr_iteration_state import (  # noqa: E402
     _advance_dr_iteration,
     _dr_iteration_metadata,
@@ -69,6 +72,7 @@ class EventMetadata:
     turn_sequence: Optional[int]
     streaming: bool
     sub_turn_index: Optional[int] = None
+    agent_run_attribution: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dict for event emission. Includes both snake and camel keys for compatibility."""
@@ -87,6 +91,8 @@ class EventMetadata:
             result["turn_sequence"] = self.turn_sequence
         if self.sub_turn_index is not None:
             result["sub_turn_index"] = self.sub_turn_index
+        if self.agent_run_attribution:
+            result.update(self.agent_run_attribution)
         return result
 
     def validate(self) -> bool:
@@ -127,6 +133,7 @@ class UnifiedEventEmitter:
         turn_sequence: Optional[int] = None,
         sequence: Optional[int] = None,
         sub_turn_index: Optional[int] = None,
+        agent_run_attribution: Optional[Dict[str, Any]] = None,
     ) -> None:
         self._writer = writer
         self._conversation_id = conversation_id
@@ -134,6 +141,7 @@ class UnifiedEventEmitter:
         self._turn_sequence = turn_sequence
         self._sequence = sequence
         self._sub_turn_index = sub_turn_index
+        self._agent_run_attribution = dict(agent_run_attribution or {})
         self._lock = threading.Lock()
 
     def _build_base_metadata(
@@ -149,6 +157,7 @@ class UnifiedEventEmitter:
             turn_sequence=self._turn_sequence,
             streaming=streaming,
             sub_turn_index=self._sub_turn_index,
+            agent_run_attribution=self._agent_run_attribution,
         )
 
     def _emit_event(self, event: Dict[str, Any]) -> None:
@@ -596,7 +605,16 @@ class SimpleEmitter(UnifiedEventEmitter):
         conversation_id, turn_id, turn_sequence = UnifiedEventEmitter.resolve_canonical_identity(
             state, config, context
         )
-        super().__init__(writer, conversation_id, turn_id, turn_sequence=turn_sequence)
+        super().__init__(
+            writer,
+            conversation_id,
+            turn_id,
+            turn_sequence=turn_sequence,
+            agent_run_attribution=resolve_agent_run_attribution(
+                state=state,
+                config=config,
+            ),
+        )
 
 
 class DeepReasoningEmitter(UnifiedEventEmitter):
@@ -623,6 +641,10 @@ class DeepReasoningEmitter(UnifiedEventEmitter):
             writer, conversation_id, turn_id,
             turn_sequence=turn_sequence,
             sub_turn_index=sub_turn_index,
+            agent_run_attribution=resolve_agent_run_attribution(
+                state=state,
+                config=config,
+            ),
         )
         # Internal iteration tracking (not exposed in event identity)
         self._state = state

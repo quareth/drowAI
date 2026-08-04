@@ -250,6 +250,30 @@ def test_tool_parameters_system_prompt_contains_native_builder_policy() -> None:
     assert "Turn Execution Brief above" not in system_prompt
 
 
+def test_shared_native_guidance_is_independent_of_planner_wrapper_prose(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from core.prompts.builders import tool_planning
+
+    original_render_latest = tool_planning._render_latest
+
+    def render_with_changed_wrapper(template_name: str, **context: Any) -> str:
+        if template_name == "tool_parameters_system.txt":
+            return "Changed main-planner framing around the shared component."
+        return original_render_latest(template_name, **context)
+
+    monkeypatch.setattr(tool_planning, "_render_latest", render_with_changed_wrapper)
+
+    guidance = ToolPlanningPromptBuilder().build_native_tool_call_shared_guidance(
+        max_committed_tools_per_batch=3,
+    )
+
+    assert guidance.startswith("When more evidence is required, call between 1 and 3")
+    assert "Changed main-planner framing" not in guidance
+    assert "Selector Decision" not in guidance
+    assert "<execution_strategy_guidance>" in guidance
+
+
 def test_tool_parameters_prompt_renders_selector_decision_and_multiple_targets() -> None:
     builder = ToolPlanningPromptBuilder()
 

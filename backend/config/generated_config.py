@@ -41,6 +41,7 @@ DATABASE_URL_ENV = "DATABASE_URL"
 JWT_SECRET_ENV = "JWT_SECRET"
 ENCRYPTION_KEY_ENV = "ENCRYPTION_KEY"
 MANAGEMENT_URL_ENV = "DROWAI_MANAGEMENT_URL"
+JWT_SECRET_MIN_BYTES = 32
 
 DEFAULT_POSTGRES_USER = "drowai_user"
 DEFAULT_POSTGRES_DB = "drowai"
@@ -465,6 +466,10 @@ def _validate_secret_config_value(name: str, value: str) -> str:
         return normalized
     if normalized.startswith("<") and normalized.endswith(">"):
         raise ValueError(f"{name} must not use a placeholder value")
+    if name == JWT_SECRET_ENV and len(normalized.encode("utf-8")) < JWT_SECRET_MIN_BYTES:
+        raise ValueError(
+            f"{JWT_SECRET_ENV} must be at least {JWT_SECRET_MIN_BYTES} bytes for HS256"
+        )
     if name == ENCRYPTION_KEY_ENV:
         validate_encryption_key(normalized)
     return normalized

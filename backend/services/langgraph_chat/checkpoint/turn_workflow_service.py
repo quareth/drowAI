@@ -590,12 +590,26 @@ class TurnWorkflowService:
             )
             .first()
         )
-        if existing is not None and existing.state in {
-            TurnWorkflowState.RESUMED.value,
-            TurnWorkflowState.COMPLETED.value,
-            TurnWorkflowState.FAILED.value,
-        }:
-            return existing
+        if existing is not None:
+            if existing.state in {
+                TurnWorkflowState.COMPLETED.value,
+                TurnWorkflowState.FAILED.value,
+            }:
+                return existing
+            if existing.state == TurnWorkflowState.RESUMED.value:
+                requested_identity = _normalize_str(resume_key) or _normalize_str(
+                    checkpoint_id
+                )
+                prior_identities = {
+                    value
+                    for value in (
+                        _normalize_str(existing.resume_key),
+                        _normalize_str(existing.checkpoint_id),
+                    )
+                    if value
+                }
+                if not requested_identity or requested_identity in prior_identities:
+                    return existing
         if existing is None:
             existing = TurnWorkflow(
                 task_id=task_id,
@@ -629,6 +643,7 @@ class TurnWorkflowService:
             conversation_id=existing.conversation_id,
         )
         existing.waiting_at = _utcnow()
+        existing.resumed_at = None
         self.db.commit()
         self.db.refresh(existing)
         return existing

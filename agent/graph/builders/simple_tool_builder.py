@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from langgraph.graph import END, StateGraph
+from langgraph.graph import StateGraph
 
 from backend.services.metrics.utils import safe_inc
 from agent.reasoning.tool_selection_sentinel import metadata_has_unavailable_capability
@@ -42,7 +42,6 @@ from ..state import InteractiveState
 from .common_edges import (
     build_router_action_map,
     wire_capability_gate,
-    with_interactive_state,
     wrap_with_context,
     wrap_with_context_async,
 )
@@ -50,6 +49,12 @@ from .diagnostics import (
     get_builder_diagnostic_logger,
     log_builder_graph_build,
     make_wrapper_log_callback,
+)
+from .post_action_wiring import (
+    add_direct_tool_action_nodes,
+    add_post_action_continuation_nodes,
+    wire_direct_tool_action_path,
+    wire_post_action_continuation,
 )
 
 
@@ -169,7 +174,10 @@ def build_simple_tool_graph(*, checkpointer=None, build_only: bool = False) -> A
     # builders. Diagnostic labels are preserved verbatim by passing
     # ``node_name`` plus the local ``_log_node_wrapper_context`` callback,
     # so observability decouples from the wrapped node's signature.
-    graph.add_node("classification", wrap_with_context(classify_turn))
+    graph.add_node(
+        "classification",
+        wrap_with_context(classify_turn),
+    )
     graph.add_node(
         "update_working_memory",
         wrap_with_context(update_working_memory_node),
@@ -178,99 +186,27 @@ def build_simple_tool_graph(*, checkpointer=None, build_only: bool = False) -> A
         "memory_retrieval",
         wrap_with_context_async(memory_retrieval_node),
     )
-    graph.add_node(
-        "select_tool_categories",
-        wrap_with_context_async(select_tool_categories_node),
+    add_direct_tool_action_nodes(
+        graph,
+        on_wrap_log=_log_node_wrapper_context,
+        select_tool_categories_node_fn=select_tool_categories_node,
+        articulate_tool_intent_fn=articulate_tool_intent,
+        prepare_tool_execution_plan_fn=prepare_tool_execution_plan,
+        approval_gate_node_fn=approval_gate_node,
+        dispatch_tool_execution_node_fn=dispatch_tool_execution_node,
+        synthesize_tool_output_fn=synthesize_tool_output,
     )
-    graph.add_node(
-        "articulation",
-        wrap_with_context_async(
-            articulate_tool_intent,
-            node_name="articulation",
-            on_wrap_log=_log_node_wrapper_context,
-        ),
+    add_post_action_continuation_nodes(
+        graph,
+        on_wrap_log=_log_node_wrapper_context,
+        reasoning_node=post_tool_reasoning,
+        decision_router_node=decision_router,
+        think_more_node_fn=think_more_node,
+        reflect_node_fn=reflect_node,
+        synthesis_node_fn=synthesis_node,
+        finalize_results_fn=finalize_results,
+        finalize_turn_fn=finalize_turn,
     )
-    graph.add_node(
-        "prepare_tool_plan",
-        wrap_with_context_async(
-            prepare_tool_execution_plan,
-            node_name="prepare_tool_plan",
-            on_wrap_log=_log_node_wrapper_context,
-        ),
-    )
-    graph.add_node(
-        "approval_gate",
-        wrap_with_context_async(
-            approval_gate_node,
-            node_name="approval_gate",
-            on_wrap_log=_log_node_wrapper_context,
-        ),
-    )
-    graph.add_node(
-        "dispatch_tool",
-        wrap_with_context_async(
-            dispatch_tool_execution_node,
-            node_name="dispatch_tool",
-            on_wrap_log=_log_node_wrapper_context,
-        ),
-    )
-    graph.add_node(
-        "tool_synthesizer",
-        wrap_with_context_async(
-            synthesize_tool_output,
-            node_name="synthesizer",
-            on_wrap_log=_log_node_wrapper_context,
-        ),
-    )
-    graph.add_node(
-        "post_tool_reasoning",
-        wrap_with_context_async(
-            post_tool_reasoning,
-            node_name="post_tool_reasoning",
-            on_wrap_log=_log_node_wrapper_context,
-        ),
-    )
-    graph.add_node(
-        "decision_router",
-        wrap_with_context_async(
-            decision_router,
-            node_name="decision_router",
-            on_wrap_log=_log_node_wrapper_context,
-        ),
-    )
-    graph.add_node(
-        "think_more",
-        wrap_with_context_async(
-            think_more_node,
-            node_name="think_more",
-            on_wrap_log=_log_node_wrapper_context,
-        ),
-    )
-    graph.add_node(
-        "reflect",
-        wrap_with_context_async(
-            reflect_node,
-            node_name="reflect",
-            on_wrap_log=_log_node_wrapper_context,
-        ),
-    )
-    graph.add_node(
-        "synthesis",
-        wrap_with_context_async(
-            synthesis_node,
-            node_name="synthesis",
-            on_wrap_log=_log_node_wrapper_context,
-        ),
-    )
-    graph.add_node(
-        "format_results",
-        wrap_with_context_async(
-            finalize_results,
-            node_name="format_results",
-            on_wrap_log=_log_node_wrapper_context,
-        ),
-    )
-    graph.add_node("finalize", wrap_with_context(finalize_turn))
 
     graph.set_entry_point("classification")
 
@@ -303,49 +239,26 @@ def build_simple_tool_graph(*, checkpointer=None, build_only: bool = False) -> A
     
     # Tool/params are selected in prepare_tool_plan; articulation runs after that decision.
     # Conditional: Skip articulation on retry to avoid confusing UI updates.
-    graph.add_edge("select_tool_categories", "prepare_tool_plan")
-    conditional(
-        "prepare_tool_plan",
-        with_interactive_state(_route_after_prepare_tool_plan),
-        {
-            "articulation": "articulation",
-            "approval_gate": "approval_gate",
-            "post_tool_reasoning": "post_tool_reasoning",
-        },
+    wire_direct_tool_action_path(
+        graph,
+        route_after_prepare_tool_plan=_route_after_prepare_tool_plan,
+        tool_synthesizer_target="post_tool_reasoning",
+        conditional=conditional,
     )
-    graph.add_edge("articulation", "approval_gate")
-    graph.add_edge("approval_gate", "dispatch_tool")
-    graph.add_edge("dispatch_tool", "tool_synthesizer")
-    graph.add_edge("tool_synthesizer", "post_tool_reasoning")
-    
-    # Post-tool decisions always return to deterministic router authority.
-    graph.add_edge("post_tool_reasoning", "decision_router")
 
-    # Router-authoritative action dispatch for simple-tool boundaries.
-    conditional(
-        "decision_router",
-        with_interactive_state(_route_after_router),
-        {
+    # Post-tool decisions always return to deterministic router authority.
+    wire_post_action_continuation(
+        graph,
+        route_after_router=_route_after_router,
+        router_targets={
             "select_tool_categories": "select_tool_categories",
             "think_more": "think_more",
             "reflect": "reflect",
             "synthesis": "synthesis",
             "format_results": "format_results",
         },
+        conditional=conditional,
     )
-
-    # think_more enriches context and returns to PTR for the next loop candidate.
-    graph.add_edge("think_more", "post_tool_reasoning")
-
-    # reflect emits a one-hop hint and re-enters router authority for consume+clear.
-    graph.add_edge("reflect", "decision_router")
-
-    # synthesis produces a final answer, then proceeds to terminal formatting (Task 1.7).
-    # synthesis.py is unchanged.
-    graph.add_edge("synthesis", "format_results")
-
-    graph.add_edge("format_results", "finalize")
-    graph.add_edge("finalize", END)
 
     if build_only:
         return graph

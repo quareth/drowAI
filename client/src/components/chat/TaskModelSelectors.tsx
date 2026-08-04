@@ -6,7 +6,7 @@
  * - show usage/context-window indicators for the selected task
  * - expose the current LLM model selection control without owning provider policy
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Download, Gauge } from "lucide-react";
 
@@ -57,6 +57,7 @@ interface TaskModelSelectorsProps {
   runStates?: Record<number, TaskRunStatus>;
   onDownloadTranscript?: () => void;
   isTranscriptDownloadPending?: boolean;
+  leadingSlot?: ReactNode;
 }
 
 // Use the new TokenUsage type from /api/tasks/{id}/usage endpoint
@@ -93,6 +94,7 @@ export function TaskModelSelectors({
   runStates = {},
   onDownloadTranscript,
   isTranscriptDownloadPending = false,
+  leadingSlot,
 }: TaskModelSelectorsProps) {
   const [showUsage, setShowUsage] = useState(false);
   const [showContextUsage, setShowContextUsage] = useState(false);
@@ -335,6 +337,7 @@ export function TaskModelSelectors({
   return (
     <div className="bg-slate-900/30 border-b border-slate-800/30 px-3 py-1.5 flex items-center justify-between shrink-0">
       <div className="flex items-center space-x-2">
+        {leadingSlot}
         <div className="w-6 h-6 flex items-center justify-center">
           <DrowLogo size={18} />
         </div>

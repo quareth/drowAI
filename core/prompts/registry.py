@@ -116,11 +116,6 @@ class PromptRegistry:
             filename="system.txt",
         )
         self.register_template_id(
-            "post_tool_articulation_system",
-            family="post_tool",
-            filename="articulation_system.txt",
-        )
-        self.register_template_id(
             "post_tool_task_instruction",
             family="post_tool",
             filename="task_instruction.txt",
@@ -143,6 +138,16 @@ class PromptRegistry:
         self.register_template_id(
             "engagement_report_section_user",
             family="engagement_report_section",
+            filename="user.txt",
+        )
+        self.register_template_id(
+            "subagent_runtime_system",
+            family="subagent_runtime",
+            filename="system.txt",
+        )
+        self.register_template_id(
+            "subagent_runtime_user",
+            family="subagent_runtime",
             filename="user.txt",
         )
 

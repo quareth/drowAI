@@ -26,6 +26,7 @@ from typing import Any, Callable, Dict, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from backend.services.langgraph_chat.runtime.state_container import ChatStateContainer
 
+from agent.graph.emission.agent_run_attribution import resolve_agent_run_attribution
 from agent.graph.utils.provider_model_resolution import resolve_graph_provider_model_ref
 from backend.database import SessionLocal
 from backend.core.time_utils import format_iso, utc_now
@@ -61,6 +62,14 @@ class GraphExecutionResult:
     @property
     def interrupted(self) -> bool:
         return self.interrupt is not None
+
+
+class GraphExecutionCancelled(RuntimeError):
+    """Signal semantic graph cancellation with the latest captured execution state."""
+
+    def __init__(self, execution_result: GraphExecutionResult) -> None:
+        self.execution_result = execution_result
+        super().__init__("run_cancelled")
 
 
 class LangGraphExecutor:
@@ -104,6 +113,7 @@ class LangGraphExecutor:
             GraphExecutionResult with the final state and optional interrupt payload.
             
         Raises:
+            GraphExecutionCancelled: If the cancellation callback requests stop.
             Exception: If streaming fails (caller should handle fallback)
         """
         logger.info(f"[STREAMING] Starting stream for task {task_id}")
@@ -159,6 +169,8 @@ class LangGraphExecutor:
 
             last_state = None  # Track the latest complete state from values events
             detected_interrupt = None  # Track interrupt data if detected
+            if should_cancel and should_cancel():
+                raise GraphExecutionCancelled(GraphExecutionResult(final_state=None))
             
             # ⚠️ CRITICAL: With multiple stream_mode, events come as (mode, data) tuples!
             async for mode, chunk in compiled_graph.astream(
@@ -168,7 +180,19 @@ class LangGraphExecutor:
             ):
                 if should_cancel and should_cancel():
                     logger.info("[EXECUTOR] Cancellation requested for task %s", task_id)
-                    raise RuntimeError("run_cancelled")
+                    cancellation_state = (
+                        chunk
+                        if mode == "values" and isinstance(chunk, dict)
+                        else last_state
+                    )
+                    raise GraphExecutionCancelled(
+                        GraphExecutionResult(
+                            final_state=cancellation_state,
+                            metadata=self._build_context_window_metadata_payload(
+                                checkpoint_context_window_metadata
+                            ),
+                        )
+                    )
                 logger.info(f"[EXECUTOR] Stream event: mode={mode}, chunk_type={type(chunk).__name__}")
                 event_count += 1
                 
@@ -198,6 +222,7 @@ class LangGraphExecutor:
                     
                     # Process CUSTOM event through adapter (validation, enrichment)
                     if isinstance(chunk, dict) and "type" in chunk:
+                        chunk = self._with_configured_agent_run_metadata(chunk, config)
                         if self._streaming_adapter:
                             processed_event = self._streaming_adapter.process_streaming_event(
                                 chunk, state_container=state_container
@@ -261,10 +286,27 @@ class LangGraphExecutor:
                 ),
             )
 
+        except GraphExecutionCancelled:
+            safe_inc("langgraph_streaming_sessions_cancelled")
+            raise
         except Exception as exc:
             logger.error(f"[STREAMING] Stream error for task {task_id}: {exc}", exc_info=True)
             safe_inc("langgraph_streaming_sessions_failed")
             raise
+
+    @staticmethod
+    def _with_configured_agent_run_metadata(
+        event: Dict[str, Any],
+        config: Mapping[str, Any],
+    ) -> Dict[str, Any]:
+        """Stamp configured subagent identity onto custom events that lack it."""
+        attribution = resolve_agent_run_attribution(config=config)
+        if not attribution.get("agent_run_id"):
+            return event
+
+        enriched = dict(event)
+        enriched.update(attribution)
+        return enriched
 
     async def _observe_context_window_checkpoint(
         self,

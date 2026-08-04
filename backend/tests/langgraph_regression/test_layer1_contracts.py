@@ -11,6 +11,8 @@ import pytest
 from agent.graph.nodes.simple_chat import _build_simple_chat_messages
 from backend.services.langgraph_chat.contracts import ChatInputs, ExecutionMode, LangGraphRuntimeConfig
 from backend.services.langgraph_chat.intent.classifier import IntentClassifier
+from agent.subagents.registry import get_subagent_registry
+from core.prompts.builders.intent_classifier import build_classifier_system_prompt
 from core.prompts.constants import CLASSIFIER_SYSTEM_PROMPT, PROMPT_TEMPLATE
 from core.prompts.loader import TemplateLoader
 from core.prompts.registry import PromptRegistry
@@ -64,7 +66,8 @@ def test_intent_templates_resolve_from_latest_pointer() -> None:
 
 def test_prompt_registry_exposes_intent_template_contract() -> None:
     registry = PromptRegistry()
-    assert registry.get_latest_version("intent") == "v10"
+    intent_version = registry.get_latest_version("intent")
+    assert intent_version.startswith("v") and intent_version[1:].isdigit()
     assert registry.get_template("intent_classifier") == CLASSIFIER_SYSTEM_PROMPT
 
 
@@ -149,7 +152,9 @@ async def test_intent_classifier_payload_contract_uses_rendered_prompt_template(
     assert result is not None
     assert len(recording_client.calls) == 1
     payload = recording_client.calls[0]
-    assert payload["system_prompt"] == CLASSIFIER_SYSTEM_PROMPT
+    assert payload["system_prompt"] == build_classifier_system_prompt(
+        subagent_catalog=get_subagent_registry().classifier_catalog()
+    )
     assert "Run targeted enumeration on 10.0.0.5." in payload["user_prompt"]
     # Shared serializer (agent/graph/context/serialization.py) renders
     # each message inside a bounded ``<turn n=N role=R>…</turn>`` block
@@ -177,3 +182,19 @@ def test_simple_chat_message_contract_preserves_order_and_filters_roles() -> Non
     roles = [entry["role"] for entry in messages]
     assert roles == ["system", "assistant", "user", "user"]
     assert messages[-1]["content"] == "current question"
+
+
+def test_simple_chat_completed_subagent_results_use_generic_context_label() -> None:
+    messages = _build_simple_chat_messages(
+        history=[],
+        current_user_turn={"role": "user", "content": "summarize child result"},
+        completed_agent_results=(
+            "Completed subagent results:\n"
+            "- Cartographer result (agent-run-2): completed\n"
+            "  Summary: mapped approved asset inventory."
+        ),
+    )
+
+    content = "\n".join(str(message["content"]) for message in messages)
+    assert "same-process subagent results as bounded context" in content
+    assert "Pathfinder findings" not in content

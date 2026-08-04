@@ -30,6 +30,7 @@ from backend.services.langgraph_chat.contracts import (
     LangGraphRuntimeConfig,
 )
 from backend.services.langgraph_chat.intent.classifier import IntentClassifier
+from backend.services.usage_tracking.models import UsageData
 from core.prompts.tests._golden import assert_golden
 
 
@@ -49,6 +50,27 @@ class _StreamingLLMStub:
         for chunk in self.chunks:
             yield chunk
 
+    async def stream_chat_messages_with_usage(
+        self,
+        messages: List[Dict[str, str]],
+        **kwargs: Any,
+    ) -> Any:
+        iterator = self.stream_chat_messages(messages, **kwargs)
+
+        class _StreamWithUsage:
+            content_iterator = iterator
+
+            def get_final_usage(self) -> UsageData:
+                return UsageData(
+                    prompt_tokens=10,
+                    completion_tokens=5,
+                    total_tokens=15,
+                    model="gpt-5.2",
+                    provider="openai",
+                    api_surface="responses",
+                )
+
+        return _StreamWithUsage()
 
 class _UsageLLMStub:
     """Non-streaming chat_with_usage stub that captures prompt payloads."""
