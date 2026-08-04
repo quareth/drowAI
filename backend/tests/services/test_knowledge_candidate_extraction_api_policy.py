@@ -209,7 +209,8 @@ def test_post_tool_candidate_policy_skips_unavailable_pricing(monkeypatch) -> No
             )
         ],
         deterministic_observations=[],
-        extraction_stats={},
+        fact_stats={},
+        compact_output_hint=None,
         post_tool_candidate_payload={
             "candidate_observations": [
                 {
@@ -272,7 +273,8 @@ def test_post_tool_candidate_payload_masks_durable_candidate_fields(monkeypatch)
             )
         ],
         deterministic_observations=[],
-        extraction_stats={},
+        fact_stats={},
+        compact_output_hint=None,
         post_tool_candidate_payload={
             "candidate_observations": [
                 {

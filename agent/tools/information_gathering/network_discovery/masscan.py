@@ -20,6 +20,12 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlsplit
 
 from pydantic import ConfigDict, Field, PrivateAttr, ValidationError, field_validator, model_validator
+from runtime_shared.semantic.canonical_keys import build_host_ip_key
+from runtime_shared.semantic.service_identity import (
+    build_service_socket_key,
+    normalize_port,
+    normalize_transport_protocol,
+)
 
 from ...base_tool import BaseTool
 from ...canonical_capture import CaptureFamily, CanonicalCaptureFormat, ToolCaptureContract
@@ -551,6 +557,7 @@ def parse_masscan_json(json_text: str) -> Dict[str, Any]:
                 continue
             metadata["open_ports"].append(
                 {
+                    "ip": data.get("ip"),
                     "port": port_info.get("port"),
                     "protocol": port_info.get("proto"),
                     "status": port_info.get("status"),
@@ -726,6 +733,73 @@ class MasscanTool(BaseTool):
 
         return metadata
 
+    def emit_semantic_observations(
+        self,
+        stdout: str,
+        stderr: str,
+        exit_code: int,
+        args: MasscanArgs,
+        metadata: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Emit canonical network facts from already parsed masscan metadata."""
+
+        _ = stdout, stderr, exit_code, args
+        if not isinstance(metadata, dict):
+            return []
+
+        observations: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        host_ips = _canonical_host_ips(metadata.get("hosts"))
+        open_ports = _masscan_open_port_rows(metadata.get("open_ports"), host_ips)
+
+        for ip in sorted(host_ips):
+            _append_masscan_observation(
+                observations,
+                seen,
+                {
+                    "observation_type": "network.host_discovered",
+                    "subject_type": "host.ip",
+                    "subject_key": build_host_ip_key(ip),
+                    "payload": {"source": "masscan"},
+                },
+            )
+
+        for row in open_ports:
+            service_key = row["subject_key"]
+            _append_masscan_observation(
+                observations,
+                seen,
+                {
+                    "observation_type": "network.open_port",
+                    "subject_type": "service.socket",
+                    "subject_key": service_key,
+                    "payload": {
+                        "ip": row["ip"],
+                        "protocol": row["protocol"],
+                        "port": row["port"],
+                        "source": "masscan",
+                    },
+                },
+            )
+
+            service_name = row["service_name"]
+            if service_name:
+                _append_masscan_observation(
+                    observations,
+                    seen,
+                    {
+                        "observation_type": "network.service_detected",
+                        "subject_type": "service.socket",
+                        "subject_key": service_key,
+                        "payload": {
+                            "service_name": service_name,
+                            "source": "masscan",
+                        },
+                    },
+                )
+
+        return observations
+
     def create_artifacts(
         self,
         stdout: str,
@@ -807,6 +881,73 @@ class MasscanTool(BaseTool):
             metadata=metadata,
             execution_time=time.time() - start,
         )
+
+
+def _canonical_host_ips(hosts_raw: Any) -> set[str]:
+    hosts: set[str] = set()
+    if not isinstance(hosts_raw, list):
+        return hosts
+    for host_row in hosts_raw:
+        if not isinstance(host_row, dict):
+            continue
+        try:
+            host_key = build_host_ip_key(host_row.get("ip"))
+        except ValueError:
+            continue
+        hosts.add(host_key.removeprefix("host.ip:"))
+    return hosts
+
+
+def _masscan_open_port_rows(open_ports_raw: Any, host_ips: set[str]) -> list[dict[str, Any]]:
+    if not isinstance(open_ports_raw, list):
+        return []
+
+    rows: list[dict[str, Any]] = []
+    single_host_ip = next(iter(host_ips)) if len(host_ips) == 1 else None
+    for item in open_ports_raw:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "").strip().lower()
+        if status and status != "open":
+            continue
+        ip = str(item.get("ip") or single_host_ip or "").strip().lower()
+        port = normalize_port(item.get("port"))
+        protocol = normalize_transport_protocol(item.get("protocol"), default=None)
+        if not ip or port is None or protocol is None:
+            continue
+        try:
+            service_key = build_service_socket_key(ip=ip, protocol=protocol, port=port)
+        except ValueError:
+            continue
+        rows.append(
+            {
+                "ip": service_key.removeprefix("service.socket:").split("/", 1)[0],
+                "protocol": protocol,
+                "port": port,
+                "service_name": _concrete_masscan_service_name(item.get("service")),
+                "subject_key": service_key,
+            }
+        )
+    return rows
+
+
+def _concrete_masscan_service_name(value: Any) -> str:
+    service_name = str(value or "").strip().lower()
+    if not service_name or service_name in {"unknown", "?"}:
+        return ""
+    return service_name
+
+
+def _append_masscan_observation(
+    observations: list[dict[str, Any]],
+    seen: set[str],
+    observation: dict[str, Any],
+) -> None:
+    marker = json.dumps(observation, sort_keys=True, default=str)
+    if marker in seen:
+        return
+    seen.add(marker)
+    observations.append(observation)
 
 
 # ---------------------------------------------------------------------------

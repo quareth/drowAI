@@ -4,6 +4,7 @@ import { AlertTriangle, Server, Waypoints } from "lucide-react";
 
 import { EngagementIndicatorBadge } from "@/components/engagements/engagement-indicator-badge";
 import { ServiceChip } from "@/components/engagements/territory/service-chip";
+import { WebSurfacePanel } from "@/components/engagements/territory/web-surface-panel";
 import {
   formatSeverity,
   severityIndicatorTone,
@@ -13,9 +14,12 @@ import type {
   TopologyFindingBadge,
   TopologyNode,
 } from "@/components/engagements/territory/topology-types";
+import type { GraphNode } from "@/types/engagement-knowledge";
 
 interface AssetInspectorPanelProps {
+  engagementId: string | number | null | undefined;
   selectedAsset: TopologyNode | null;
+  selectedService: GraphNode | null;
   onSelectService?: (serviceId: string) => void;
 }
 
@@ -51,7 +55,9 @@ function FindingRow({ finding }: { finding: TopologyFindingBadge }) {
 }
 
 export function AssetInspectorPanel({
+  engagementId,
   selectedAsset,
+  selectedService,
   onSelectService,
 }: AssetInspectorPanelProps) {
   if (!selectedAsset || selectedAsset.kind !== "asset") {
@@ -128,6 +134,7 @@ export function AssetInspectorPanel({
                   <ServiceChip
                     key={service.id}
                     chip={service}
+                    active={service.id === selectedService?.id}
                     onClick={() => onSelectService?.(service.id)}
                   />
                 ))
@@ -138,6 +145,12 @@ export function AssetInspectorPanel({
               )}
             </div>
           </section>
+
+          <WebSurfacePanel
+            engagementId={engagementId}
+            selectedNode={selectedService}
+            assetKey={selectedAsset.id}
+          />
         </div>
       </div>
     </aside>

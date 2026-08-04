@@ -12,13 +12,13 @@ from urllib.parse import urlsplit
 
 from core.prompts.constants import (
     COMPACT_DECISION_EVIDENCE_MAX_CHARS,
+    COMPACT_KEY_FINDINGS_MAX_ITEMS,
+    COMPACT_KEY_FINDINGS_TOTAL_MAX_CHARS,
     COMPACT_SUMMARY_MAX_CHARS,
 )
 
-from .contracts import CompressionInput, DeterministicCompressionResult
 from ..schema import TOOL_OUTPUT_COMPRESSOR_USAGE_SOURCE, normalize_structured_signals
 
-_NO_METADATA_COMPACT_REASON = "no_compact_metadata"
 _ARTIFACT_REF_ALLOWED_KEYS = frozenset(
     {
         "path",
@@ -89,6 +89,21 @@ def compact_evidence_line(value: Any) -> str:
     if len(text) <= COMPACT_DECISION_EVIDENCE_MAX_CHARS:
         return text
     return text[: max(COMPACT_DECISION_EVIDENCE_MAX_CHARS - 3, 0)].rstrip() + "..."
+
+
+def _budget_compact_key_findings(values: Iterable[Any]) -> List[str]:
+    """Return metadata compact findings bounded by the frozen secondary contract."""
+    result: List[str] = []
+    total_chars = 0
+    for text in dedupe_string_list(values, limit=COMPACT_KEY_FINDINGS_MAX_ITEMS):
+        projected_total = total_chars + len(text)
+        if result:
+            projected_total += 1
+        if projected_total > COMPACT_KEY_FINDINGS_TOTAL_MAX_CHARS:
+            break
+        result.append(text)
+        total_chars = projected_total
+    return result
 
 
 def extract_token_usage(usage: Optional[Dict[str, Any]]) -> Optional[Dict[str, int]]:
@@ -289,7 +304,9 @@ def _metadata_compact_summary(raw_result: Mapping[str, Any]) -> str:
     runtime_metadata = raw_result.get("metadata")
     if not isinstance(runtime_metadata, Mapping):
         return ""
-    return str(runtime_metadata.get("compact_summary") or "").strip()
+    return str(runtime_metadata.get("compact_summary") or "").strip()[
+        :COMPACT_SUMMARY_MAX_CHARS
+    ]
 
 
 def _metadata_compact_key_findings(raw_result: Mapping[str, Any]) -> List[str]:
@@ -300,7 +317,7 @@ def _metadata_compact_key_findings(raw_result: Mapping[str, Any]) -> List[str]:
     values = runtime_metadata.get("compact_key_findings")
     if not isinstance(values, Iterable) or isinstance(values, (str, bytes)):
         return []
-    return dedupe_string_list(values, limit=None)
+    return _budget_compact_key_findings(values)
 
 
 def _metadata_compact_decision_evidence(raw_result: Mapping[str, Any]) -> List[str]:
@@ -323,44 +340,3 @@ def _metadata_compact_structured_signals(raw_result: Mapping[str, Any]) -> List[
     if values is None:
         values = runtime_metadata.get("structured_signals")
     return normalize_structured_signals(values)
-
-
-def metadata_compact_adapter(
-    input_data: CompressionInput,
-) -> DeterministicCompressionResult:
-    """Project tool-authored compact metadata into a partial adapter result."""
-
-    summary = _metadata_compact_summary(input_data.raw_result) or None
-    key_findings = tuple(_metadata_compact_key_findings(input_data.raw_result))
-    structured_signals = tuple(
-        _metadata_compact_structured_signals(input_data.raw_result)
-    )
-    decision_evidence = tuple(
-        _metadata_compact_decision_evidence(input_data.raw_result)
-    )
-
-    if (
-        summary is None
-        and not key_findings
-        and not structured_signals
-        and not decision_evidence
-    ):
-        return DeterministicCompressionResult.none(
-            fallback_reason=_NO_METADATA_COMPACT_REASON,
-        )
-
-    return DeterministicCompressionResult(
-        summary=summary,
-        key_findings=key_findings,
-        structured_signals=structured_signals,
-        decision_evidence=decision_evidence,
-        completeness="partial",
-    )
-
-
-def register_metadata_compact_adapter(tool_id: str) -> None:
-    """Register the metadata compact adapter for an exact tool id or family."""
-
-    from .registry import register_adapter
-
-    register_adapter(tool_id, metadata_compact_adapter)

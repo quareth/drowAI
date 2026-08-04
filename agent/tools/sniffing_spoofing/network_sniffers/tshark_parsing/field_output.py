@@ -119,7 +119,9 @@ def parse_profile_field_output(
         result["credential_events"] = security_result["credential_events"]
     if security_result["auth_indicators"]:
         result["auth_indicators"] = security_result["auth_indicators"]
-    if mode == "extract_evidence" and security_result["secret_exposure"]:
+    if mode in {"extract_evidence", "find_security_relevant_artifacts"} and security_result[
+        "secret_exposure"
+    ]:
         result["secret_exposure"] = security_result["secret_exposure"]
     if security_result["auth_sequences"]:
         result["auth_sequences"] = security_result["auth_sequences"]

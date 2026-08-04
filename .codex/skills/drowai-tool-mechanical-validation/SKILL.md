@@ -1,6 +1,6 @@
 ---
 name: drowai-tool-mechanical-validation
-description: Mechanically validate one implemented DrowAI tool through its real Kali schema path and current web UI. Use after implementation review to verify parameters, execution/result states, deterministic compression, artifacts, knowledge, model/tool selection, and cleanup without judging prompt prose or answer quality.
+description: Mechanically validate one implemented DrowAI tool through its real Kali schema path and current web UI. Use after implementation review to verify parameters, execution/result states, semantic envelopes, canonical fact admission, compact projection, artifacts, Knowledge, model/tool selection, and cleanup without judging prompt prose or answer quality.
 ---
 
 # DrowAI Tool Mechanical Validation
@@ -85,13 +85,31 @@ For each, verify truthful success/status/exit classification, stable result
 shape, artifact behavior, semantic/knowledge behavior, and absence of
 false-positive success. Fixture-only cases must be labeled as such.
 
-### 4. Deterministic compression
+### 4. Canonical facts and compact projection
 
-Use small and over-budget representative results. Verify exact
-`total`, `shown`, and `omitted` values, including the omission marker inside
-the same item/character budget. Require reordered equivalent input to produce
-the same normalized compact result. The authority is
-`agent/graph/compression/deterministic/budget.py::budget_rendered_items`.
+For pentest catalog-role tools, inspect the persisted semantic envelope and
+prove that expected rows are accepted by
+`runtime_shared.semantic.pentest_facts.compile_facts()`. Verify expected
+accepted, duplicate, rejected, and diagnostic counts; invalid rows must not be
+recovered from raw output, artifacts, compact hints, or tool-id dispatch.
+
+Use small and over-budget representative compiled fact sets to verify
+deterministic selection, exact selected/omitted counts by family, evidence
+omissions, and resulting lossiness through
+`agent/graph/compression/pentest_facts/project_compact_facts()`. Reordered
+equivalent input must produce the same normalized compact result. Confirm the
+universal primary compact lane still reaches graph/stream consumers and the
+optional canonical-fact secondary lane reaches applicable batch/cache and
+post-tool-reasoning consumers.
+
+For Knowledge, verify the same semantic envelope independently enters
+`KnowledgeIngestionService`, the shared Knowledge fact bridge, the append-only
+observation ledger, and applicable read models with backend-owned lineage and
+archive-scoped evidence. Compact omissions must not reduce Knowledge facts.
+
+For non-pentest catalog roles without supported semantic facts, verify the
+intentional generic metadata compact behavior instead of requiring canonical
+fact projection.
 
 ### 5. Current GUI mechanics
 
@@ -108,7 +126,8 @@ Use the existing `playwright` skill and its snapshot-first rules.
 5. Use **Agent (Full Access)** only with the reserved/local target profile.
 6. Send bounded mechanical prompts for minimal and full parameters. Record the
    selected tool ID, transmitted parameters, rendered tool result, artifacts,
-   and knowledge updates.
+   persisted semantic envelope, applicable compact lanes, and Knowledge
+   updates.
 
 If the model selects another tool or never calls the selected tool, retry with
 an explicit tool-name/schema prompt at most twice. Then classify
@@ -132,8 +151,8 @@ current tool branch; do not review or modify another branch.
 ## Final statuses
 
 - `PASS`: all required mechanics pass.
-- `FAIL`: a tool/schema/runtime/result/compression/artifact/knowledge mechanic
-  fails.
+- `FAIL`: a tool/schema/runtime/result/canonical-fact/compact/artifact/Knowledge
+  mechanic fails.
 - `INCONCLUSIVE`: only bounded model-selection uncertainty remains.
 - `NEEDS_CLEANUP`: workflow-created runtime/task/stack state was not cleaned.
 - `NEEDS_CLARIFICATION`: a controlled fixture, verified connection, or required

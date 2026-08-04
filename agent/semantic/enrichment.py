@@ -9,14 +9,11 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping, Sequence
 
-from agent.semantic import evidence_vocabulary
-from agent.semantic.evidence_vocabulary import (
+from runtime_shared.semantic.pentest_facts import (
     SemanticEvidenceType,
-    _SEMANTIC_EVIDENCE_GLOBAL_LIMIT,
+    validate_semantic_evidence,
 )
 from runtime_shared.durable_secret_masking import mask_durable_secrets
-
-_SEMANTIC_SCALAR_TYPES = (str, int, float, bool, type(None))
 
 
 def build_runtime_semantic_metadata(
@@ -151,88 +148,18 @@ def extract_runtime_semantic_inputs_with_fallback(
 def validate_semantic_evidence_entries(
     entries: Sequence[Any] | None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Return (valid_entries, dropped_entries) without raising.
+    """Adapt shared evidence validation to the agent's mutable return contract."""
 
-    Valid entries are fully normalized: bounded, typed per SemanticEvidenceType,
-    canonicalized around top-level ``name``/``value``, detail-schema-conformant,
-    per-type capped, and globally capped. Downstream consumers must treat the
-    returned valid list as final and must not re-apply policy.
-    """
     if not entries:
         return [], []
 
-    evidence_detail_schema = evidence_vocabulary.EVIDENCE_DETAIL_SCHEMA
-    evidence_per_type_limit = evidence_vocabulary.EVIDENCE_PER_TYPE_LIMIT
-    semantic_evidence_limit = _SEMANTIC_EVIDENCE_GLOBAL_LIMIT
-    semantic_evidence_name_max_len = evidence_vocabulary.SEMANTIC_EVIDENCE_NAME_MAX_LEN
-    semantic_evidence_value_max_len = evidence_vocabulary.SEMANTIC_EVIDENCE_VALUE_MAX_LEN
-    semantic_evidence_detail_max_keys = (
-        evidence_vocabulary.SEMANTIC_EVIDENCE_DETAIL_MAX_KEYS
-    )
-    semantic_evidence_detail_value_max_len = (
-        evidence_vocabulary.SEMANTIC_EVIDENCE_DETAIL_VALUE_MAX_LEN
-    )
-
-    normalized_candidates: list[tuple[SemanticEvidenceType, dict[str, Any], dict[str, Any]]] = []
-    dropped_entries: list[dict[str, Any]] = []
-
-    for raw_entry in entries:
-        dropped_snapshot = _snapshot_dropped_entry(raw_entry)
-        if not isinstance(raw_entry, Mapping):
-            dropped_entries.append(dropped_snapshot)
-            continue
-
-        entry_type = _parse_semantic_evidence_type(raw_entry.get("type"))
-        if entry_type is None:
-            dropped_entries.append(dropped_snapshot)
-            continue
-
-        normalized_name = _normalize_evidence_name(
-            raw_entry.get("name"),
-            max_len=semantic_evidence_name_max_len,
-        )
-        if normalized_name is None:
-            dropped_entries.append(dropped_snapshot)
-            continue
-
-        normalized_entry: dict[str, Any] = {
-            "type": entry_type.value,
-            "name": normalized_name,
-            "value": _normalize_scalar_value(
-                raw_entry.get("value"),
-                max_len=semantic_evidence_value_max_len,
-                coerce_invalid_to_none=True,
-            ),
-            "detail": {},
-        }
-        if isinstance(raw_entry.get("detail"), Mapping):
-            normalized_entry["detail"] = _normalize_evidence_detail(
-                raw_entry["detail"],
-                allowed_keys=evidence_detail_schema[entry_type],
-                detail_max_keys=semantic_evidence_detail_max_keys,
-                detail_value_max_len=semantic_evidence_detail_value_max_len,
-            )
-
-        source = raw_entry.get("source")
-        if isinstance(source, str) and source.strip():
-            normalized_entry["source"] = source.strip()
-
-        normalized_candidates.append((entry_type, normalized_entry, dropped_snapshot))
-
-    per_type_counts = {evidence_type: 0 for evidence_type in SemanticEvidenceType}
-    valid_entries: list[dict[str, Any]] = []
-    for entry_type, normalized_entry, dropped_snapshot in normalized_candidates:
-        if per_type_counts[entry_type] >= evidence_per_type_limit[entry_type]:
-            dropped_entries.append(dropped_snapshot)
-            continue
-
-        if len(valid_entries) >= semantic_evidence_limit:
-            dropped_entries.append(dropped_snapshot)
-            continue
-
-        per_type_counts[entry_type] += 1
-        valid_entries.append(normalized_entry)
-
+    accepted, diagnostics = validate_semantic_evidence(entries)
+    valid_entries = [dict(entry) for entry in accepted]
+    dropped_entries = [
+        _snapshot_dropped_entry(entries[diagnostic.input_position])
+        for diagnostic in diagnostics
+        if diagnostic.input_position is not None
+    ]
     return valid_entries, dropped_entries
 
 
@@ -318,64 +245,6 @@ def _canonicalize_prompt_value(value: Any) -> Any:
     if isinstance(value, Sequence) and not isinstance(value, (str, bytes, bytearray)):
         return [_canonicalize_prompt_value(item) for item in value]
     return value
-
-
-def _parse_semantic_evidence_type(raw_type: Any) -> SemanticEvidenceType | None:
-    """Return enum member when raw type matches a known evidence type."""
-    if not isinstance(raw_type, str) or not raw_type.strip():
-        return None
-    try:
-        return SemanticEvidenceType(raw_type.strip())
-    except ValueError:
-        return None
-
-
-def _normalize_evidence_name(raw_name: Any, *, max_len: int) -> str | None:
-    """Return bounded name or None when missing/blank."""
-    if not isinstance(raw_name, str):
-        return None
-    name = raw_name.strip()
-    if not name:
-        return None
-    return name[:max_len]
-
-
-def _normalize_scalar_value(
-    raw_value: Any,
-    *,
-    max_len: int,
-    coerce_invalid_to_none: bool,
-) -> Any:
-    """Normalize scalar values and bound string lengths."""
-    if not isinstance(raw_value, _SEMANTIC_SCALAR_TYPES):
-        return None if coerce_invalid_to_none else raw_value
-    if isinstance(raw_value, str):
-        return raw_value[:max_len]
-    return raw_value
-
-
-def _normalize_evidence_detail(
-    raw_detail: Mapping[str, Any],
-    *,
-    allowed_keys: frozenset[str],
-    detail_max_keys: int,
-    detail_value_max_len: int,
-) -> dict[str, Any]:
-    """Return detail containing only allowed scalar keys and bounded values."""
-    normalized_detail: dict[str, Any] = {}
-    for key, value in raw_detail.items():
-        if len(normalized_detail) >= detail_max_keys:
-            break
-        if not isinstance(key, str) or key not in allowed_keys:
-            continue
-        if not isinstance(value, _SEMANTIC_SCALAR_TYPES):
-            continue
-        normalized_detail[key] = _normalize_scalar_value(
-            value,
-            max_len=detail_value_max_len,
-            coerce_invalid_to_none=False,
-        )
-    return normalized_detail
 
 
 def _snapshot_dropped_entry(raw_entry: Any) -> dict[str, Any]:

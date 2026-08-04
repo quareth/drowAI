@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from agent.graph.compression.deterministic.envelope import (
+    _extract_locator_evidence_from_metadata,
     derive_compact_errors,
     extract_artifact_refs,
     merge_decision_evidence,
@@ -36,6 +37,39 @@ def test_merge_decision_evidence_preserves_current_precedence() -> None:
         "metadata proof",
         "artifacts/service.txt:7:service=ssh",
         "processor proof",
+    ]
+
+
+def test_extract_locator_evidence_preserves_search_and_read_metadata() -> None:
+    """Locator evidence remains tool-neutral after filesystem adapter retirement."""
+    raw_result = {
+        "metadata": {
+            "fs_search_text": {
+                "matches": [
+                    {
+                        "path": "artifacts/service.txt",
+                        "line": "7",
+                        "snippet": "service=ssh",
+                    },
+                    {
+                        "path": "artifacts/service.txt",
+                        "line": 7,
+                        "snippet": "service=ssh",
+                    },
+                ]
+            },
+            "fs_read": {
+                "line_evidence": [
+                    "artifacts/config.yml:3:enabled=true",
+                    "artifacts/config.yml:3:enabled=true",
+                ]
+            },
+        }
+    }
+
+    assert _extract_locator_evidence_from_metadata(raw_result) == [
+        "artifacts/service.txt:7:service=ssh",
+        "artifacts/config.yml:3:enabled=true",
     ]
 
 

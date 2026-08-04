@@ -18,7 +18,7 @@ import type {
   FindingListItem,
   FindingsFilters,
   PaginatedResponse,
-  WebSurfaceOriginSummary,
+  WebSurfaceOriginsResponse,
   WebSurfacePathPage,
 } from "@/types/engagement-knowledge";
 
@@ -98,8 +98,9 @@ export const engagementKnowledgeKeys = {
   webSurfacePrefix: (engagementId: string) => ["engagement", engagementId, "web-surface"] as const,
   webSurfaceOrigins: (
     engagementId: string,
-    serviceKey: string,
+    serviceKey: string | null,
     includeNoisy: boolean | undefined = false,
+    assetKey: string | null = null,
   ) =>
     [
       "engagement",
@@ -107,11 +108,12 @@ export const engagementKnowledgeKeys = {
       "web-surface",
       "origins",
       serviceKey,
+      assetKey,
       { include_noisy: Boolean(includeNoisy) },
     ] as const,
   webSurfacePaths: (
     engagementId: string,
-    serviceKey: string,
+    serviceKey: string | null,
     filters?: QueryParamRecord,
   ) =>
     [
@@ -138,10 +140,12 @@ export function getEngagementInvalidationTargets(engagementId: string) {
 }
 
 export interface WebSurfaceOriginsFilters {
+  asset_key?: string;
   include_noisy?: boolean;
 }
 
 export interface WebSurfacePathFilters {
+  asset_key?: string;
   origin_key?: string;
   include_noisy?: boolean;
   limit?: number;
@@ -149,22 +153,26 @@ export interface WebSurfacePathFilters {
 }
 
 function normalizeWebSurfaceOriginsResponse(
-  payload: Partial<{ service_key: string; items: WebSurfaceOriginSummary[] }> | undefined,
-  serviceKey: string,
-): { service_key: string; items: WebSurfaceOriginSummary[] } {
+  payload: Partial<WebSurfaceOriginsResponse> | undefined,
+  serviceKey: string | null,
+  assetKey: string | null,
+): WebSurfaceOriginsResponse {
   return {
-    service_key: String(payload?.service_key ?? serviceKey),
+    service_key: payload?.service_key ?? serviceKey,
+    asset_key: payload?.asset_key ?? assetKey,
     items: Array.isArray(payload?.items) ? payload.items : [],
   };
 }
 
 function normalizeWebSurfacePathPageResponse(
   payload: Partial<WebSurfacePathPage> | undefined,
-  serviceKey: string,
+  serviceKey: string | null,
+  assetKey: string | null,
   normalizedFilters: QueryParamRecord,
 ): WebSurfacePathPage {
   return {
     service_key: payload?.service_key ?? serviceKey,
+    asset_key: payload?.asset_key ?? assetKey,
     origin_key: (payload?.origin_key as string | null | undefined) ?? null,
     items: Array.isArray(payload?.items) ? payload.items : [],
     total: Number(payload?.total ?? 0),
@@ -424,25 +432,28 @@ export function useEngagementWebSurfaceOrigins(
   const normalizedEngagementId = normalizeEngagementId(engagementId);
   const normalizedServiceKey = normalizeEngagementId(serviceKey);
   const normalizedFilters = normalizeFilterRecord(filters);
-  return useQuery<{ service_key: string; items: WebSurfaceOriginSummary[] }>({
+  const normalizedAssetKey = normalizeEngagementId(filters?.asset_key);
+  const hasScope = Boolean(normalizedServiceKey || normalizedAssetKey);
+  return useQuery<WebSurfaceOriginsResponse>({
     queryKey:
-      normalizedEngagementId && normalizedServiceKey
+      normalizedEngagementId && hasScope
         ? engagementKnowledgeKeys.webSurfaceOrigins(
             normalizedEngagementId,
             normalizedServiceKey,
             Boolean(normalizedFilters.include_noisy),
+            normalizedAssetKey,
           )
         : ["engagement", "__disabled__", "web-surface", "origins", "__disabled__"],
-    enabled: Boolean(normalizedEngagementId && normalizedServiceKey),
+    enabled: Boolean(normalizedEngagementId && hasScope),
     queryFn: async ({ signal }) => {
-      const payload = await fetchJson<Partial<{ service_key: string; items: WebSurfaceOriginSummary[] }>>(
+      const payload = await fetchJson<Partial<WebSurfaceOriginsResponse>>(
         `/api/engagements/${normalizedEngagementId}/web-surface${toQueryString({
-          service_key: normalizedServiceKey as string,
+          service_key: normalizedServiceKey,
           ...normalizedFilters,
         })}`,
         signal,
       );
-      return normalizeWebSurfaceOriginsResponse(payload, normalizedServiceKey as string);
+      return normalizeWebSurfaceOriginsResponse(payload, normalizedServiceKey, normalizedAssetKey);
     },
   });
 }
@@ -455,27 +466,30 @@ export function useEngagementWebSurfacePathPage(
   const normalizedEngagementId = normalizeEngagementId(engagementId);
   const normalizedServiceKey = normalizeEngagementId(serviceKey);
   const normalizedFilters = normalizeFilterRecord(filters);
+  const normalizedAssetKey = normalizeEngagementId(filters?.asset_key);
+  const hasScope = Boolean(normalizedServiceKey || normalizedAssetKey);
   return useQuery<WebSurfacePathPage>({
     queryKey:
-      normalizedEngagementId && normalizedServiceKey
+      normalizedEngagementId && hasScope
         ? engagementKnowledgeKeys.webSurfacePaths(
             normalizedEngagementId,
             normalizedServiceKey,
             normalizedFilters,
           )
         : ["engagement", "__disabled__", "web-surface", "paths", "__disabled__", normalizedFilters],
-    enabled: Boolean(normalizedEngagementId && normalizedServiceKey),
+    enabled: Boolean(normalizedEngagementId && hasScope),
     queryFn: async ({ signal }) => {
       const payload = await fetchJson<Partial<WebSurfacePathPage>>(
         `/api/engagements/${normalizedEngagementId}/web-surface/paths${toQueryString({
-          service_key: normalizedServiceKey as string,
+          service_key: normalizedServiceKey,
           ...normalizedFilters,
         })}`,
         signal,
       );
       return normalizeWebSurfacePathPageResponse(
         payload,
-        normalizedServiceKey as string,
+        normalizedServiceKey,
+        normalizedAssetKey,
         normalizedFilters,
       );
     },

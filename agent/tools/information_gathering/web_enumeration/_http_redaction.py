@@ -61,16 +61,27 @@ def redact_url_credentials(url: Optional[str]) -> Optional[str]:
         return url
     try:
         parts = urlsplit(url)
-    except Exception:
-        return url
+        username = parts.username
+        password = parts.password
+    except ValueError:
+        return REDACTED_VALUE
 
-    if parts.username is None and parts.password is None:
+    if username is None and password is None:
         return url
 
     host = parts.hostname or ""
-    if parts.port:
-        host = f"{host}:{parts.port}"
-    redacted_netloc = f"{REDACTED_VALUE}@{host}" if host else REDACTED_VALUE
+    serialized_host = f"[{host}]" if ":" in host else host
+    try:
+        port = parts.port
+    except ValueError:
+        return REDACTED_VALUE
+    if port is not None:
+        serialized_host = f"{serialized_host}:{port}"
+    redacted_netloc = (
+        f"{REDACTED_VALUE}@{serialized_host}"
+        if serialized_host
+        else REDACTED_VALUE
+    )
     return urlunsplit((parts.scheme, redacted_netloc, parts.path, parts.query, parts.fragment))
 
 

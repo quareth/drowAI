@@ -129,7 +129,11 @@ def test_no_single_tool_batch_synthesis():
     )
     assert "synthesize_legacy_batch" not in orchestrator_text
     assert "legacy_adapter" not in orchestrator_text
-    assert "requires planner_plan.tool_batch" in orchestrator_text
+    assert "_require_canonical_tool_batch" in orchestrator_text
+
+    batch_runner_text = _read("agent/graph/subgraphs/tool_execution_runtime/batch_runner.py")
+    assert "requires planner_plan.tool_batch" in batch_runner_text
+    assert "refusing old single-tool planner state" in batch_runner_text
 
 
 def test_no_action_orchestrator_imports():

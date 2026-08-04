@@ -4,6 +4,7 @@ This module provides `information_gathering.web_enumeration.http_request`.
 Responsibilities:
 - build safe argv-only curl commands using shared helper primitives,
 - parse response status/headers/body into deterministic metadata,
+- map confirmed responses through the shared canonical web-fact builder,
 - redact sensitive output by default,
 - persist optional artifacts for large response bodies and header snapshots.
 """
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import uuid4
 
+from runtime_shared.semantic.web_common import build_web_response_observations
 from ...base_tool import BaseTool
 from ...filesystem._helpers import resolve_workspace_path_safe, to_workspace_relative, workspace_root
 from ...schemas import ToolResult
@@ -475,6 +477,36 @@ class HttpRequestTool(BaseTool):
             "http_version_applied": self._http_version_applied,
             "curl_capabilities": dict(self._curl_capabilities),
         }
+
+    def emit_semantic_observations(
+        self,
+        stdout: str,
+        stderr: str,
+        exit_code: int,
+        args: HttpRequestArgs,
+        metadata: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Map a confirmed HTTP response through the shared web fact builder."""
+
+        _ = stdout, stderr, exit_code
+        status_code = metadata.get("status_code")
+        if isinstance(status_code, bool):
+            return []
+        try:
+            normalized_status = int(status_code)
+        except (TypeError, ValueError):
+            return []
+        if not 100 <= normalized_status <= 599:
+            return []
+
+        effective_url = metadata.get("effective_url") or args.target
+        return build_web_response_observations(
+            url=effective_url,
+            source="information_gathering.web_enumeration.http_request",
+            target_url=args.target,
+            status_code=normalized_status,
+            response_size=metadata.get("content_length"),
+        )
 
     def render_result_output(
         self,

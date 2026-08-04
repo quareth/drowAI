@@ -275,7 +275,8 @@ def maybe_run_candidate_extraction(
     execution_payload: dict[str, Any],
     archived_rows: list[KnowledgeEvidenceArchive],
     deterministic_observations: list,
-    extraction_stats: Mapping[str, Any],
+    fact_stats: Mapping[str, Any],
+    compact_output_hint: Mapping[str, Any] | None,
     post_tool_candidate_payload: Mapping[str, Any] | None,
     post_tool_candidate_usage: Mapping[str, Any] | None,
     candidate_extractor_family: str,
@@ -371,11 +372,12 @@ def maybe_run_candidate_extraction(
         extraction_mode=extraction_mode,
         tool_name=str(
             execution_dict.get("tool_name")
-            or extraction_stats.get("source_tool_name")
+            or fact_stats.get("source_tool_name")
             or ""
         ),
         capability_family=capability_family,
         evidence_archive_ids=tuple(str(row.id) for row in archived_rows),
+        compact_output_hint=compact_output_hint,
     )
     artifact_kinds = _artifact_kinds_from_archives(archived_rows)
     if usage_summary.total_tokens > 0 or usage_summary.input_tokens > 0:
@@ -392,6 +394,7 @@ def maybe_run_candidate_extraction(
                 estimated_cost_usd=float(usage_summary.estimated_cost_usd or 0.0),
                 max_cost_usd=get_knowledge_candidate_max_cost_usd(),
                 pricing_status=str(usage_summary.pricing_status or "available"),
+                compact_output_hint=compact_output_hint,
             )
         )
         if policy_decision.action == "skip":

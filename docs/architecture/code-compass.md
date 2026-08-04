@@ -33,6 +33,10 @@ not mean a person or GitHub team.
 | LangGraph state or graph behavior | `agent/graph/` | Backend routers |
 | Tool planning, admission, or transport selection | `agent/tool_runtime/` | Individual tool implementations |
 | A tool definition or tool-specific parser | The matching category under `agent/tools/` | Graph nodes and transport routing |
+| Tool semantic observations or evidence | The tool parser/emitter near its `agent/tools/` implementation | Backend Knowledge adapters or graph compressor branches |
+| Canonical pentest fact/evidence policy | `runtime_shared/semantic/pentest_facts/` | Tool-id dispatch and consumer-specific DTOs |
+| A canonical Knowledge fact projection | `backend/services/knowledge/pentest_facts/` and focused projectors | Raw tool parsing or compact-output DTOs |
+| A pentest compact fact-family projection | `agent/graph/compression/pentest_facts/` | Raw/artifact parsing or Knowledge DTOs |
 | A prompt or prompt builder | `core/prompts/` | Inline strings at call sites |
 | Shared LLM role/model policy | `core/llm/` | Provider UI and individual graph nodes |
 | LLM adapter implementation/profile | `agent/providers/llm/` | Backend credential persistence |
@@ -282,7 +286,7 @@ composed router.
 | `agent/interactive/` | Proposal storage/management for interactive execution |
 | `agent/providers/llm/` | Provider-neutral LLM client interface, capabilities, contracts, factory, and OpenAI/Anthropic profiles/adapters |
 | `agent/reasoning/` | Active enhanced planner, tool/parameter selection, batch envelopes/commit, and structured recovery |
-| `agent/semantic/` | Backend-free semantic metadata extraction/enrichment vocabulary |
+| `agent/semantic/` | Flat runtime semantic envelope assembly/extraction and prompt formatting; canonical evidence vocabulary and fact admission live in `runtime_shared/semantic/pentest_facts/` |
 | `agent/templates/` | Static report templates with no active production reference found; verify wiring before extending |
 | `agent/tool_runtime/` | Tool planning/execution coordination, admission policy, batching, transport choice, timeouts, runtime identity, and result enrichment |
 | `agent/tools/` | Tool framework, registry/catalog, schemas, validation, metadata, and concrete tool implementations |
@@ -305,7 +309,7 @@ composed router.
 | `agent/graph/persistence.py` | Resolve the graph checkpointer surface |
 | `agent/graph/emission/` | Build and emit graph events |
 | `agent/graph/streaming.py` | Convert execution state/results into stream-facing display data |
-| `agent/graph/compression/` | Compact graph/tool/context payloads, including deterministic compactors |
+| `agent/graph/compression/` | Universal compact graph/tool/context payloads plus canonical pentest fact projection; remaining `deterministic/` modules are shared metadata/envelope helpers |
 | `agent/graph/memory/` | Working memory, scratchpad, findings, and current-run memory rendering |
 | `agent/graph/config/` | Graph-specific limits and configuration |
 | `agent/graph/contracts/` | Graph-only shared constants/contracts |
@@ -320,6 +324,7 @@ composed router.
 | `agent/tools/catalog_*`, `agent/tools/capability_surface.py`, `agent/tools/categories.py`, `agent/tools/category_utils.py` | Model-visible catalog policy and category/capability exposure |
 | `agent/tools/parameter_*`, `agent/tools/tool_call_specs.py`, `agent/tools/execution_outcome.py` | Framework-wide parameter/call/result contracts |
 | `agent/tools/enhanced_metadata*`, `agent/tools/canonical_capture.py`, `agent/tools/utility_metadata.py` | Shared metadata and artifact-capture contracts |
+| Tool-local parser/semantic modules | Native output parsing plus final semantic observation/evidence emission; do not add downstream Knowledge or compact adapters for an existing fact family |
 | `agent/tools/filesystem/` | Workspace-safe filesystem tools and their common safety helpers |
 | `agent/tools/shell/` | Shell command tools, shell policy, PTY command preparation, and shell contracts |
 | `agent/tools/artifact/` | Artifact read/search tools, not artifact persistence |
@@ -360,7 +365,8 @@ framework root.
 | `runtime_shared/workspace_files.py` | Runtime file declarations/materialization | Bounded task-relative files only |
 | `runtime_shared/runtime_network.py` | Per-task network identity/specification | No Docker SDK calls |
 | `runtime_shared/docker_network_manager.py` | Shared backend-free task-network adapter | Owns Docker SDK network operations used by both local and runner providers |
-| `runtime_shared/semantic/` | Cross-runtime service/network/web semantic keys and normalization | No tool- or persistence-specific behavior |
+| `runtime_shared/semantic/pentest_facts/` | Backend-free semantic envelope/evidence contracts, canonical admission policy, compilation, masking, diagnostics, ordering, and dedupe | No I/O, tool dispatch, Knowledge DTOs, compact DTOs, or consumer bridges |
+| `runtime_shared/semantic/web_common.py` | Shared web URL/origin/path/finding identity used by tool emitters, canonical policy, and Knowledge projection/query grouping | No backend imports or persistence behavior |
 | `runtime_shared/terminal_*` | Terminal DTOs, identities, and manager port | No backend terminal implementation |
 | `runtime_shared/durable_secret_masking/` | Persistence-sink secret detection/masking | Shared durable-output safety boundary |
 | `runtime/image/` | Runtime Dockerfile and Python dependency layer | Only explicitly copied code enters the runtime image |

@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 
 from agent.semantic.enrichment import validate_semantic_evidence_entries
-from agent.semantic.evidence_vocabulary import SemanticEvidenceType
+from runtime_shared.semantic.pentest_facts import SemanticEvidenceType
 from agent.tools.information_gathering.dns.amass import AmassArgs, AmassTool
 from agent.tools.information_gathering.dns.amass_semantics import (
     AMASS_CAPABILITY_FAMILY,

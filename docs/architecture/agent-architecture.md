@@ -1,15 +1,15 @@
 # Agent Architecture
 
 Code-verified overview of the agent runtime packages used by LangGraph turns,
-tool planning, tool execution, provider-neutral LLM calls, and runtime
-transports.
+tool planning, tool execution, producer-owned semantic parsing, compact result
+projection, provider-neutral LLM calls, and runtime transports.
 
 ## Purpose
 
 The agent layer supplies the execution machinery behind task chat turns. It
 contains graph state, graph nodes, prompt-facing context, tool catalog
-discovery, tool planning, transport selection, result normalization, and LLM
-provider adapters.
+discovery, tool planning, transport selection, native result parsing, semantic
+envelope assembly, result normalization, and LLM provider adapters.
 
 The backend owns SaaS identity, tenant context, durable credentials, task
 lifecycle, and runtime placement. The agent layer receives already-normalized
@@ -24,6 +24,10 @@ Owned by the agent layer:
 - Tool catalog discovery and LLM-visible tool filtering.
 - Tool planning, parameter validation, approval/dispatch flow, and result
   projection.
+- Tool-specific native result parsing and semantic observation/evidence
+  emission.
+- Runtime semantic envelope assembly and extraction before independent
+  Knowledge and compact-output consumption.
 - Tool transport policy across local file-comm, PTY, direct backend/artifact
   execution, and runner-supported container tools.
 - Provider-neutral LLM client interfaces, profiles, capabilities, and concrete
@@ -36,6 +40,9 @@ Not owned by the agent layer:
 - Tenant membership and permission resolution.
 - Storage/decryption of provider credentials.
 - Task admission, runner assignment, or runtime provider selection.
+- Knowledge lineage, observation persistence, read-model projection, or replay.
+- Canonical fact/evidence admission policy, which lives in the backend-free
+  `runtime_shared.semantic.pentest_facts` boundary.
 - Cross-task workspace access.
 
 ## Wired Entrypoints
@@ -58,10 +65,16 @@ Not owned by the agent layer:
     generic child runtime graph used by process-local subagent runs.
 - `agent/tool_runtime/*`
   - Runtime tool coordination, transport routing, timeout policy, batch
-    execution, and lane policy.
+    execution, lane policy, and result enrichment.
+- `agent/semantic/*`
+  - Flat runtime semantic envelope assembly/extraction and prompt formatting;
+    canonical evidence and fact policy remain under `runtime_shared/semantic`.
 - `agent/tools/*`
   - Tool implementations, schemas, registry, catalog visibility, and
-    tool-specific command construction.
+    tool-specific command construction, parsing, and semantic emitters.
+- `runtime_shared/semantic/pentest_facts/*`
+  - Backend-free semantic envelope contracts, evidence validation, canonical
+    fact admission, compilation, masking, diagnostics, ordering, and dedupe.
 - `agent/providers/llm/*`
   - Provider-neutral LLM contracts, model profiles, factory, and adapters.
 
@@ -86,14 +99,26 @@ Not owned by the agent layer:
 - `agent/tool_runtime`
   - Owns tool execution policy after a tool plan exists: lane classification,
     timeout planning, transport routing, batch execution, PTY/file-comm/direct
-    dispatch, and compact result metadata.
+    dispatch, result enrichment, and compact result metadata.
 - `agent/tools`
-  - Owns concrete tool schemas and tool-specific command preparation. The tool
+  - Owns concrete tool schemas, tool-specific command preparation, native
+    result parsing, and final semantic observation/evidence emission. The tool
     registry discovers executable `BaseTool` subclasses and excludes helper
     modules from the callable catalog.
   - LLM-facing category routing uses visible tool IDs plus enhanced metadata
     categories. Service credential proof and single-file FTP transfer tools are
     exposed under the `service_access` category as normal cataloged tools.
+- `agent/semantic`
+  - Owns backend-free assembly and extraction of the four flat runtime semantic
+    fields: schema version, capability family, observations, and evidence. It
+    delegates evidence vocabulary/schema validation to
+    `runtime_shared.semantic.pentest_facts` and does not parse tool output.
+- `agent/graph/compression`
+  - Owns universal primary compact output and the optional secondary compact
+    lane. Pentest tools compile their runtime semantic envelope and project
+    fact families through `agent/graph/compression/pentest_facts`; remaining
+    `deterministic/` modules are shared metadata/envelope helpers, not per-tool
+    interpretation adapters.
 - `agent/communication`
   - Owns file-based command/result transport for local container execution.
 - `agent/providers/llm`
@@ -115,7 +140,13 @@ flowchart LR
     Local[File-comm or PTY]
     Direct[Backend/artifact direct]
     Runner[Runner command path]
-    Result[Compact result metadata]
+    Native["Native tool result"]
+    Enrichment["Tool parser + semantic emitters"]
+    Envelope["Flat semantic envelope"]
+    Primary["Universal primary compact output"]
+    Compiler["Canonical fact compiler"]
+    FactProjection["Pentest fact compact projection"]
+    Result["Graph result metadata"]
 
     Graph --> Planner
     Planner --> Coordinator
@@ -123,9 +154,16 @@ flowchart LR
     Policy --> Local
     Policy --> Direct
     Policy --> Runner
-    Local --> Result
-    Direct --> Result
-    Runner --> Result
+    Local --> Native
+    Direct --> Native
+    Runner --> Native
+    Native --> Enrichment
+    Enrichment --> Envelope
+    Enrichment --> Primary
+    Envelope --> Compiler
+    Compiler --> FactProjection
+    Primary --> Result
+    FactProjection -. "optional secondary lane" .-> Result
     Result --> Graph
 ```
 
@@ -137,6 +175,12 @@ Tool execution boundaries:
 - Artifact-scoped tools require active task context and remain task-bound.
 - Unknown tools default to container-scoped handling and do not silently become
   backend-direct tools.
+
+The semantic envelope is also preserved with execution results for downstream
+Knowledge ingestion. Knowledge builds and compiles its own envelope, attaches
+backend-owned lineage and archive-scoped evidence in its bridge, and persists
+observations independently. The agent compact consumer never passes its
+`CompiledFactSet` or compact DTOs into backend Knowledge.
 
 ## Tool Catalog And Visibility
 

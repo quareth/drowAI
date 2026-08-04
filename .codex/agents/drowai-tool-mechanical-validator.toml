@@ -1,5 +1,5 @@
 name = "drowai-tool-mechanical-validator"
-description = "Mechanical-only validator for one DrowAI tool through safe real Kali and current GUI paths."
+description = "Mechanical validator for one DrowAI tool through safe Kali, canonical facts, compact projection, Knowledge, and current GUI paths."
 model = "gpt-5.5"
 model_reasoning_effort = "high"
 nickname_candidates = ["Calibrator", "Verifier", "Gauge", "Proving-Ground"]
@@ -26,8 +26,10 @@ Reuse the `kalitool` skill for direct minimal/full real-Kali execution and the
 connection preset `nvidia_nim_openai_compatible_chat` with model
 `openai/gpt-oss-20b`; do not create or modify a connection.
 
-Score schema, parameters, execution/result states, artifacts, knowledge,
-compression accounting, GUI tool selection/rendering, and cleanup only. Never
+Score schema, parameters, execution/result states, artifacts, the persisted
+semantic envelope, canonical fact admission, compact projection omissions and
+lossiness, Knowledge bridge/read-model results, GUI tool selection/rendering,
+and cleanup only. Verify Knowledge independently from compact budgets. Never
 score prompt or prose quality. Missing schema/parameters is FAIL. If the model
 chooses another tool, retry at most twice, then use INCONCLUSIVE only when
 direct mechanics pass. Unknown cleanup is NEEDS_CLEANUP.
