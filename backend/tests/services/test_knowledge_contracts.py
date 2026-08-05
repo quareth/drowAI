@@ -19,6 +19,7 @@ from backend.services.knowledge.contracts import (
     parse_semantic_inputs_from_execution,
     validate_assertion_level,
     validate_observation_type,
+    validate_subject_key_matches_type,
     validate_subject_type,
 )
 
@@ -65,6 +66,13 @@ def test_subject_key_helper_preserves_case_sensitive_web_path() -> None:
         subject_type="web.path",
         raw_key="HTTPS://Example.Test:443/Admin",
     ) == "web.path:https://example.test/Admin"
+
+
+def test_subject_key_contract_normalizes_web_path_prefix_case() -> None:
+    assert validate_subject_key_matches_type(
+        subject_type="WEB.PATH",
+        subject_key="WEB.PATH:HTTPS://Example.Test:443/Admin",
+    ) == ("web.path", "web.path:https://example.test/Admin")
 
 
 def test_dedupe_key_helper_is_deterministic_for_same_inputs() -> None:

@@ -60,7 +60,7 @@ def test_subject_key_canonicalization_preserves_canonical_url_characters(
 
 
 def test_web_path_subject_key_canonicalization_preserves_path_case() -> None:
-    value = "web.path:HTTPS://Example.Test:443/Admin%2FPanel"
+    value = "WEB.PATH:HTTPS://Example.Test:443/Admin%2FPanel"
 
     assert validate_subject_key_characters(value) == value
     assert canonicalize_web_path_subject_key(value) == (

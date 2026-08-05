@@ -21,7 +21,8 @@ from runtime_shared.semantic.canonical_keys import (
 from runtime_shared.semantic.service_identity import build_service_socket_key
 
 _SAFE_TOKEN_RE = re.compile(r"[^a-z0-9._:/@#-]+")
-_WEB_PATH_PREFIX = "web.path:"
+_WEB_PATH_NAMESPACE = "web.path"
+_WEB_PATH_PREFIX = f"{_WEB_PATH_NAMESPACE}:"
 
 
 def sanitize_token(value: Any) -> str:
@@ -67,9 +68,10 @@ def canonicalize_web_path_subject_key(value: Any) -> str:
     """Return a canonical web-path key while preserving URL path case."""
 
     raw = validate_subject_key_characters(value)
-    if not raw.startswith(_WEB_PATH_PREFIX):
+    namespace, separator, raw_url = raw.partition(":")
+    if not separator or namespace.lower() != _WEB_PATH_NAMESPACE:
         raise ValueError("web.path subject_key must use web.path prefix")
-    canonical_url = normalize_url(raw.removeprefix(_WEB_PATH_PREFIX))
+    canonical_url = normalize_url(raw_url)
     if not canonical_url:
         raise ValueError("web.path subject_key must contain a valid URL")
     return validate_subject_key_characters(f"{_WEB_PATH_PREFIX}{canonical_url}")
