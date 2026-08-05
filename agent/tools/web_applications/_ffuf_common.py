@@ -24,6 +24,7 @@ from ..filesystem._helpers import (
     workspace_root,
 )
 from ..filesystem._reliability import atomic_write_text
+from .parsing_utils import clean_output
 
 DELAY_RE = re.compile(r"^\d+(?:\.\d+)?(?:-\d+(?:\.\d+)?)?$")
 WORDLIST_KEYWORD_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
@@ -324,7 +325,12 @@ def parse_ffuf_text(text_output: str, *, target_template: Optional[str] = None) 
         "stats": {},
         "raw_output": text_output,
     }
-    if not text_output.strip():
+    parseable_output = clean_output(
+        text_output,
+        strip_ansi=True,
+        strip_whitespace=False,
+    )
+    if not parseable_output.strip():
         return metadata
 
     result_re = re.compile(
@@ -335,7 +341,7 @@ def parse_ffuf_text(text_output: str, *, target_template: Optional[str] = None) 
         r"Size:\s*(?P<size>\d+),\s*Words:\s*(?P<words>\d+),\s*"
         r"Lines:\s*(?P<lines>\d+)"
     )
-    for raw_line in text_output.splitlines():
+    for raw_line in parseable_output.splitlines():
         line = raw_line.strip()
         if not line or line.startswith("::") or line.startswith("="):
             continue

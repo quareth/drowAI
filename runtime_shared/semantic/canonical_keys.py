@@ -1,7 +1,7 @@
-"""Canonical host, relationship, and finding identity key helpers.
+"""Canonical identity-key helpers shared by runtime and Knowledge consumers.
 
-This backend-free module owns host IP/DNS and relationship-edge keys alongside
-finding-key construction and token normalization for shared runtime imports.
+This backend-free module owns the common subject-key alphabet, host IP/DNS and
+relationship-edge keys, finding-key construction, and token normalization.
 """
 
 from __future__ import annotations
@@ -12,6 +12,22 @@ import re
 _DNS_LABEL_PATTERN = re.compile(r"^[a-z0-9-]{1,63}$")
 _RELATIONSHIP_TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
 _TOKEN_PATTERN = re.compile(r"[^a-z0-9._/-]+")
+_SUBJECT_KEY_PATTERN = re.compile(
+    r"^[a-z0-9._~:/@#%!$&'()*+,;=\[\]-]{1,512}$"
+)
+
+
+def canonicalize_subject_key(value: object) -> str:
+    """Return a bounded lowercase subject key using the canonical safe alphabet."""
+
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        raise ValueError("subject_key cannot be empty")
+    if any(character.isspace() for character in normalized):
+        raise ValueError("subject_key cannot contain spaces")
+    if not _SUBJECT_KEY_PATTERN.fullmatch(normalized):
+        raise ValueError("subject_key contains unsupported characters")
+    return normalized
 
 
 def _normalize_ip(value: object) -> str:

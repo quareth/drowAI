@@ -29,7 +29,10 @@ from agent.tools.web_applications.web_crawlers.ffuf import (
     FfufTool as CrawlerTool,
 )
 from runtime_shared.semantic.pentest_facts import SemanticFactEnvelope, compile_facts
-from runtime_shared.semantic.web_common import build_web_response_observations
+from runtime_shared.semantic.web_common import (
+    build_web_response_observations,
+    normalize_url,
+)
 
 class _EvidenceAwarePromptLLM:
     """Deterministic fake LLM that checks evidence presence in prompt bytes."""
@@ -222,6 +225,17 @@ def test_ffuf_semantic_target_strips_userinfo_and_preserves_ipv6() -> None:
     assert path_observation["payload"]["target_url"] == (
         "https://[2001:db8::1]:8443/FUZZ"
     )
+
+
+@pytest.mark.parametrize(
+    "url",
+    (
+        "https://example.test/\x00admin",
+        "https://example.test/\u200badmin",
+    ),
+)
+def test_shared_url_normalization_rejects_control_characters(url: str) -> None:
+    assert normalize_url(url) == ""
 
 
 def test_ffuf_ip_response_emits_complete_web_surface_fact_set() -> None:

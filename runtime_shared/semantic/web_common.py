@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import unicodedata
 from typing import Any, Mapping
 from urllib.parse import urlsplit, urlunsplit
 
@@ -30,6 +31,8 @@ def normalize_url(value: Any) -> str:
     """Normalize URL-like values into stable scheme://host[:port]/path form."""
     raw = str(value or "").strip()
     if not raw:
+        return ""
+    if any(unicodedata.category(character).startswith("C") for character in raw):
         return ""
     try:
         parts = urlsplit(raw)

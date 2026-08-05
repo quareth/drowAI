@@ -36,6 +36,9 @@ from backend.services.knowledge.contracts import (
 )
 from backend.services.knowledge import ingestion_service as ingestion_module
 from backend.services.knowledge.ingestion_service import KnowledgeIngestionService
+from agent.tools.web_applications._ffuf_common import parse_ffuf_text
+from agent.tools.web_applications._ffuf_semantics import build_ffuf_semantic_observations
+from agent.tools.web_applications.web_crawlers.ffuf import FfufArgs as CrawlerFfufArgs
 from agent.tools.sniffing_spoofing.network_sniffers.tshark_semantics import (
     build_tshark_semantic_observations,
 )
@@ -1383,6 +1386,83 @@ def test_delete_guard_upgrades_inline_excerpt_rows_to_materialized_archived_file
         )
         assert after.storage_mode == "inline_excerpt"
         assert after.inline_excerpt == "delete-safe durable text"
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_delete_guard_catchup_ingests_ansi_ffuf_output_without_blocking_deletion() -> None:
+    engine, db = _build_session()
+    raw_output = (
+        "\x1b[2Kadmin\x1b[0m "
+        "[Status: 200, Size: 321, Words: 12, Lines: 4]\n"
+    )
+    try:
+        _user, engagement, task = _seed_user_engagement_task(db)
+        args = CrawlerFfufArgs(
+            target="https://example.invalid/FUZZ",
+            inline_wordlist=["admin"],
+        )
+        metadata = parse_ffuf_text(raw_output, target_template=args.target)
+        metadata["ffuf_variant"] = "crawler"
+        observations = build_ffuf_semantic_observations(metadata, args)
+        clean_path = next(
+            row for row in observations if row["observation_type"] == "web.path_discovered"
+        )
+        malformed_url = "https://example.invalid/\x1b[2Kadmin\x1b[0m"
+        observations.append(
+            {
+                **clean_path,
+                "subject_key": f"web.path:{malformed_url}",
+                "payload": {
+                    **clean_path["payload"],
+                    "url": malformed_url,
+                    "path": "/\x1b[2Kadmin\x1b[0m",
+                },
+            }
+        )
+        execution_id = _seed_execution_with_artifact(
+            db,
+            task_id=task.id,
+            tool_name="web_applications.web_crawlers.ffuf",
+            artifact_kind="stdout",
+            content_text=raw_output,
+            is_text=True,
+            byte_size=len(raw_output.encode("utf-8")),
+            execution_metadata=_semantic_metadata(
+                observations,
+                capability_family="web_discovery",
+                schema_version="ffuf.v1",
+            ),
+        )
+
+        result = KnowledgeIngestionService(db).ensure_task_delete_safe(
+            task_id=task.id,
+            engagement_id=engagement.id,
+        )
+
+        assert result["safe"] is True
+        assert result["catchup_attempted"] is True
+        assert result["unsafe_execution_ids"] == []
+        run = (
+            db.query(KnowledgeIngestionRun)
+            .filter(
+                KnowledgeIngestionRun.source_execution_id == execution_id,
+                KnowledgeIngestionRun.status == IngestionRunStatus.SUCCEEDED.value,
+            )
+            .one()
+        )
+        stored_keys = {
+            row.subject_key
+            for row in db.query(KnowledgeObservation)
+            .filter(KnowledgeObservation.ingestion_run_id == run.id)
+            .all()
+        }
+        assert "web.path:https://example.invalid/admin" in stored_keys
+        assert all("\x1b" not in key for key in stored_keys)
+        fact_stats = dict((run.run_metadata or {}).get("fact_stats") or {})
+        assert fact_stats["fact_rejected_count"] == 1
+        assert fact_stats["fact_diagnostic_count_by_code"] == {"invalid_fact_row": 1}
     finally:
         db.close()
         engine.dispose()
