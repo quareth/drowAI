@@ -255,6 +255,39 @@ def test_generic_result_extraction_reads_definition_owned_result() -> None:
     ) == _result()
 
 
+def test_subagent_child_config_uses_agent_run_execution_owner() -> None:
+    assignment = _assignment()
+
+    config = prepare_subagent_child_config(
+        {
+            "configurable": {
+                "runtime_projection": {
+                    "tenant_id": 999,
+                    "turn_id": "stale-parent-turn",
+                    "turn_sequence": 99,
+                    "execution_owner_id": "main:stale-parent-turn",
+                    "credential_ref": {"credential_id": "must-not-cross"},
+                }
+            }
+        },
+        assignment=assignment,
+        graph_thread_id="child-thread-1",
+    )
+
+    configurable = config["configurable"]
+    graph_context = configurable["graph_runtime_context"]
+    assert graph_context["execution_owner_id"] == "subagent:run-1"
+    assert graph_context["turn_id"] == assignment.parent_turn_id
+    assert graph_context["turn_sequence"] == 4
+    assert graph_context["task_id"] == assignment.task_id
+    assert graph_context["tenant_id"] == assignment.tenant_id
+    assert graph_context["graph_thread_id"] == "child-thread-1"
+    assert "credential_ref" not in graph_context
+    assert configurable["canonical_turn_id"] == assignment.parent_turn_id
+    assert configurable["canonical_conversation_id"] == assignment.conversation_id
+    assert configurable["canonical_turn_sequence"] == 4
+
+
 @pytest.mark.asyncio
 async def test_generic_worker_failure_preserves_graph_usage_state(
     monkeypatch: pytest.MonkeyPatch,

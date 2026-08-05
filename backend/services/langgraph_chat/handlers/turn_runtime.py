@@ -71,6 +71,7 @@ def ensure_turn_identity(
     runtime_config.metadata.setdefault("turn_id", turn_id)
     runtime_config.metadata.setdefault("turn_number", turn_number)
     runtime_config.metadata.setdefault("turn_sequence", turn_number)
+    runtime_config.metadata["execution_owner_id"] = f"main:{turn_id}"
 
     return TurnIdentity(
         turn_id=turn_id,

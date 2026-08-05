@@ -27,6 +27,18 @@ from ...utils.tool_optimization import ToolExecution, get_scan_phase, record_too
 from runtime_shared.durable_secret_masking import mask_durable_secrets
 
 _CURRENT_TURN_RUNTIME_CONTROLS_KEY = "current_turn_runtime_controls"
+_SHELL_SESSION_TOOL_IDS = frozenset({"shell.exec", "shell.write_stdin"})
+_SHELL_SESSION_COMPACT_RESULT_KEYS = (
+    "process_status",
+    "session_id",
+    "exit_code",
+    "stdin_available",
+    "stdout",
+    "stderr",
+    "truncated",
+    "summary",
+    "error_code",
+)
 
 
 def _append_compression_usage_record(
@@ -72,6 +84,36 @@ def sanitize_tool_result_for_metadata(
     if tool_name and "tool" not in sanitized:
         sanitized["tool"] = tool_name
     return sanitized
+
+
+def preserve_shell_session_result_fields(
+    compact_result: Mapping[str, Any],
+    *,
+    raw_result: Mapping[str, Any],
+    tool_name: str,
+) -> Dict[str, Any]:
+    """Carry bounded shell-session continuation fields into compact projections."""
+    projected = dict(compact_result)
+    resolved_tool = str(raw_result.get("tool") or raw_result.get("tool_id") or tool_name)
+    if resolved_tool not in _SHELL_SESSION_TOOL_IDS:
+        return projected
+    if not any(key in raw_result for key in ("process_status", "stdin_available", "session_id")):
+        return projected
+
+    for key in _SHELL_SESSION_COMPACT_RESULT_KEYS:
+        if key in raw_result:
+            projected[key] = raw_result[key]
+
+    if bool(raw_result.get("truncated")):
+        summary = str(projected.get("summary") or "").strip()
+        if "omitted" not in summary.lower() and "truncated" not in summary.lower():
+            summary = (
+                f"{summary} Output was truncated; omitted middle content is not preserved."
+                if summary
+                else "Output was truncated; omitted middle content is not preserved."
+            )
+            projected["summary"] = summary
+    return projected
 
 
 def compact_observation_text(
@@ -598,9 +640,17 @@ async def project_result_state(
             compact_result.compression.fallback_reason or "unknown",
         )
 
-    compact_result_dict = compact_result.to_dict()
+    compact_result_dict = preserve_shell_session_result_fields(
+        compact_result.to_dict(),
+        raw_result=outcome.result,
+        tool_name=resolved_tool_id,
+    )
     deterministic_compact_result_dict = (
-        deterministic_compact_result.to_dict()
+        preserve_shell_session_result_fields(
+            deterministic_compact_result.to_dict(),
+            raw_result=outcome.result,
+            tool_name=resolved_tool_id,
+        )
         if deterministic_compact_result is not None
         else None
     )

@@ -31,7 +31,8 @@ def test_runner_placement_path_blocks_backend_local_file_comm_fallback() -> None
     get_executor_start = text.index("def _get_executor(")
     execute_tool_flow = text[execute_tool_start:get_executor_start]
 
-    assert 'dispatch_decision.authority != "container_runner_transport"' in execute_tool_flow
+    assert '"container_runner_transport",' in execute_tool_flow
+    assert '"runtime_session_control",' in execute_tool_flow
     assert "if requires_local_executor:" in execute_tool_flow
     assert "_ensure_local_executor()._last_action = action" in execute_tool_flow
 
@@ -57,7 +58,7 @@ def test_runner_container_lane_rejects_direct_execution_fallback() -> None:
     assert (
         "container-scoped tools cannot execute via direct runtime fallback" in text
     )
-    assert 'selected_authority == "container_runner_transport"' in text
+    assert "resolve_selected_authority(" in text
 
 
 def test_lane_policy_remains_centralized_in_backend_tool_policy() -> None:

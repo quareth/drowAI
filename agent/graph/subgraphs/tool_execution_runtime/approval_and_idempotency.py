@@ -22,6 +22,10 @@ from agent.tool_runtime.batch.types import (
     ToolCallResult,
     ToolCallStatus,
 )
+from agent.tool_runtime.backend_tool_policy import (
+    SHELL_EXEC_TOOL_ID,
+    SHELL_WRITE_STDIN_TOOL_ID,
+)
 from runtime_shared.durable_secret_masking import mask_durable_secrets
 
 from ...infrastructure.state_models import GraphRuntimeContext
@@ -51,8 +55,14 @@ _DISPATCH_CACHE_SENSITIVE_KEY_PARTS = frozenset(
         "private_key",
         "credential",
         "session_id",
+        "chars",
     }
 )
+_DISPATCH_CACHE_SHELL_TOOL_IDS = frozenset(
+    {SHELL_EXEC_TOOL_ID, SHELL_WRITE_STDIN_TOOL_ID}
+)
+_PUBLIC_SHELL_SESSION_ID_PREFIX = "shs_"
+_DISPATCH_CACHE_SECRET_PLACEHOLDER = "<DURABLE_SECRET_MASK:secret>"
 
 
 def get_tool_risk_level(
@@ -334,15 +344,202 @@ def store_dispatch_cache_result(
             "approval_metadata": dict(approval_metadata or {}),
         },
     }
-    secret_candidates = _collect_dispatch_cache_secret_candidates(cache_entry)
+    dispatch_cache[tool_call_id] = _mask_dispatch_cache_entry(cache_entry)
+    facts.metadata[tool_dispatch_cache_key] = dispatch_cache
+
+
+def _mask_dispatch_cache_entry(cache_entry: Mapping[str, Any]) -> Dict[str, Any]:
+    """Return a durable replay cache entry with shell public handles preserved."""
+    public_shell_session_ids = _collect_public_shell_session_result_ids(cache_entry)
+    secret_candidates = _collect_dispatch_cache_secret_candidates(
+        cache_entry,
+        public_shell_session_ids=public_shell_session_ids,
+    )
     masked_cache_entry = _replace_dispatch_cache_secret_candidates(
         mask_durable_secrets(cache_entry, source="tool_dispatch_cache"),
         secret_candidates,
     )
-    dispatch_cache[tool_call_id] = (
-        masked_cache_entry if isinstance(masked_cache_entry, dict) else {}
+    masked_cache_entry = _mask_dispatch_cache_sensitive_fields(
+        masked_cache_entry,
+        original=cache_entry,
     )
-    facts.metadata[tool_dispatch_cache_key] = dispatch_cache
+    masked_cache_entry = _restore_public_shell_session_result_ids(
+        masked_cache_entry,
+        original=cache_entry,
+    )
+    return masked_cache_entry if isinstance(masked_cache_entry, dict) else {}
+
+
+def _mask_dispatch_cache_sensitive_fields(value: Any, *, original: Any) -> Any:
+    """Mask cache fields whose values are sensitive by position, not pattern."""
+    return _mask_dispatch_cache_sensitive_fields_at_path(
+        value,
+        original=original,
+        path=(),
+    )
+
+
+def _mask_dispatch_cache_sensitive_fields_at_path(
+    value: Any,
+    *,
+    original: Any,
+    path: tuple[str, ...],
+) -> Any:
+    if isinstance(value, Mapping):
+        original_mapping = original if isinstance(original, Mapping) else {}
+        masked: Dict[str, Any] = {}
+        for key, child in value.items():
+            key_text = str(key)
+            masked[key_text] = _mask_dispatch_cache_sensitive_fields_at_path(
+                child,
+                original=original_mapping.get(key),
+                path=(*path, key_text),
+            )
+        return masked
+    if isinstance(value, list):
+        original_list = original if isinstance(original, list) else []
+        return [
+            _mask_dispatch_cache_sensitive_fields_at_path(
+                item,
+                original=original_list[index] if index < len(original_list) else None,
+                path=path,
+            )
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, tuple):
+        original_items = original if isinstance(original, tuple) else ()
+        return tuple(
+            _mask_dispatch_cache_sensitive_fields_at_path(
+                item,
+                original=original_items[index] if index < len(original_items) else None,
+                path=path,
+            )
+            for index, item in enumerate(value)
+        )
+    if isinstance(original, str) and _is_dispatch_cache_position_sensitive(path, original):
+        return _DISPATCH_CACHE_SECRET_PLACEHOLDER
+    return value
+
+
+def _restore_public_shell_session_result_ids(value: Any, *, original: Any) -> Any:
+    """Restore only public shell-session result handles after generic masking."""
+    return _restore_public_shell_session_result_ids_at_path(
+        value,
+        original=original,
+        path=(),
+        shell_result_context=False,
+    )
+
+
+def _restore_public_shell_session_result_ids_at_path(
+    value: Any,
+    *,
+    original: Any,
+    path: tuple[str, ...],
+    shell_result_context: bool,
+) -> Any:
+    if isinstance(value, Mapping):
+        original_mapping = original if isinstance(original, Mapping) else {}
+        next_shell_result_context = shell_result_context or _is_shell_session_result_mapping(
+            original_mapping
+        )
+        restored: Dict[str, Any] = {}
+        for key, child in value.items():
+            key_text = str(key)
+            original_child = original_mapping.get(key)
+            if (
+                next_shell_result_context
+                and _normalize_dispatch_cache_key(key_text) == "session_id"
+                and not _is_dispatch_cache_argument_path((*path, key_text))
+                and _is_public_shell_session_id(original_child)
+            ):
+                restored[key_text] = original_child
+                continue
+            restored[key_text] = _restore_public_shell_session_result_ids_at_path(
+                child,
+                original=original_child,
+                path=(*path, key_text),
+                shell_result_context=next_shell_result_context,
+            )
+        return restored
+    if isinstance(value, list):
+        original_list = original if isinstance(original, list) else []
+        return [
+            _restore_public_shell_session_result_ids_at_path(
+                item,
+                original=original_list[index] if index < len(original_list) else None,
+                path=path,
+                shell_result_context=shell_result_context,
+            )
+            for index, item in enumerate(value)
+        ]
+    if isinstance(value, tuple):
+        original_items = original if isinstance(original, tuple) else ()
+        return tuple(
+            _restore_public_shell_session_result_ids_at_path(
+                item,
+                original=original_items[index] if index < len(original_items) else None,
+                path=path,
+                shell_result_context=shell_result_context,
+            )
+            for index, item in enumerate(value)
+        )
+    return value
+
+
+def _collect_public_shell_session_result_ids(value: Any) -> frozenset[str]:
+    """Collect public shell result handles allowed to survive cache masking."""
+    return frozenset(
+        _collect_public_shell_session_result_ids_at_path(
+            value,
+            path=(),
+            shell_result_context=False,
+        )
+    )
+
+
+def _collect_public_shell_session_result_ids_at_path(
+    value: Any,
+    *,
+    path: tuple[str, ...],
+    shell_result_context: bool,
+) -> set[str]:
+    if isinstance(value, Mapping):
+        next_shell_result_context = shell_result_context or _is_shell_session_result_mapping(
+            value
+        )
+        public_ids: set[str] = set()
+        for key, child in value.items():
+            key_text = str(key)
+            child_path = (*path, key_text)
+            if (
+                next_shell_result_context
+                and _normalize_dispatch_cache_key(key_text) == "session_id"
+                and not _is_dispatch_cache_argument_path(child_path)
+                and _is_public_shell_session_id(child)
+            ):
+                public_ids.add(child)
+                continue
+            public_ids.update(
+                _collect_public_shell_session_result_ids_at_path(
+                    child,
+                    path=child_path,
+                    shell_result_context=next_shell_result_context,
+                )
+            )
+        return public_ids
+    if isinstance(value, (list, tuple)):
+        public_ids = set()
+        for item in value:
+            public_ids.update(
+                _collect_public_shell_session_result_ids_at_path(
+                    item,
+                    path=path,
+                    shell_result_context=shell_result_context,
+                )
+            )
+        return public_ids
+    return set()
 
 
 def _store_dispatch_cache_entry(
@@ -491,29 +688,100 @@ def _collect_dispatch_cache_secret_candidates(
     value: Any,
     *,
     parent_key: str = "",
+    path: tuple[str, ...] = (),
+    public_shell_session_ids: frozenset[str] = frozenset(),
 ) -> set[str]:
     """Collect explicit sensitive-field values for cache-local text masking."""
     if isinstance(value, Mapping):
         candidates: set[str] = set()
         for key, child in value.items():
             candidates.update(
-                _collect_dispatch_cache_secret_candidates(child, parent_key=str(key))
+                _collect_dispatch_cache_secret_candidates(
+                    child,
+                    parent_key=str(key),
+                    path=(*path, str(key)),
+                    public_shell_session_ids=public_shell_session_ids,
+                )
             )
         return candidates
     if isinstance(value, (list, tuple)):
         candidates = set()
         for item in value:
             candidates.update(
-                _collect_dispatch_cache_secret_candidates(item, parent_key=parent_key)
+                _collect_dispatch_cache_secret_candidates(
+                    item,
+                    parent_key=parent_key,
+                    path=path,
+                    public_shell_session_ids=public_shell_session_ids,
+                )
             )
         return candidates
     if (
         isinstance(value, str)
         and len(value) >= 4
-        and _is_dispatch_cache_sensitive_key(parent_key)
+        and _is_dispatch_cache_candidate_value(
+            value,
+            parent_key=parent_key,
+            path=path,
+            public_shell_session_ids=public_shell_session_ids,
+        )
     ):
         return {value}
     return set()
+
+
+def _is_dispatch_cache_candidate_value(
+    value: str,
+    *,
+    parent_key: str,
+    path: tuple[str, ...],
+    public_shell_session_ids: frozenset[str],
+) -> bool:
+    if value in public_shell_session_ids:
+        return False
+    return _is_dispatch_cache_sensitive_key(parent_key) or _is_dispatch_cache_position_sensitive(
+        path,
+        value,
+    )
+
+
+def _is_shell_session_result_mapping(value: Mapping[str, Any]) -> bool:
+    tool_id = str(value.get("tool") or value.get("tool_id") or "").strip()
+    if tool_id not in _DISPATCH_CACHE_SHELL_TOOL_IDS:
+        return False
+    return any(
+        key in value
+        for key in (
+            "process_status",
+            "stdin_available",
+            "exit_code",
+            "stdout",
+            "stderr",
+            "summary",
+        )
+    )
+
+
+def _is_dispatch_cache_position_sensitive(path: tuple[str, ...], value: str) -> bool:
+    if not value:
+        return False
+    normalized_path = tuple(_normalize_dispatch_cache_key(part) for part in path)
+    if "env" in normalized_path:
+        return True
+    return bool(normalized_path) and normalized_path[-1] == "chars"
+
+
+def _is_dispatch_cache_argument_path(path: tuple[str, ...]) -> bool:
+    normalized_path = tuple(_normalize_dispatch_cache_key(part) for part in path)
+    return any(part in {"args", "params", "parameters"} for part in normalized_path)
+
+
+def _is_public_shell_session_id(value: Any) -> bool:
+    return isinstance(value, str) and value.startswith(_PUBLIC_SHELL_SESSION_ID_PREFIX)
+
+
+def _normalize_dispatch_cache_key(value: Any) -> str:
+    return str(value or "").strip().lower()
 
 
 def _replace_dispatch_cache_secret_candidates(value: Any, candidates: set[str]) -> Any:

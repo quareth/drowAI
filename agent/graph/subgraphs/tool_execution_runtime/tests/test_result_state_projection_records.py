@@ -20,13 +20,16 @@ from agent.graph.subgraphs.tool_execution_runtime.batch_result_application impor
 )
 from agent.graph.subgraphs.tool_execution_runtime.approval_and_idempotency import (
     apply_cached_dispatch_result,
+    maybe_return_cached_dispatch_update,
     store_dispatch_cache_result,
 )
 from agent.graph.subgraphs.tool_execution_runtime.result_state_projection import (
     _append_tool_execution_record,
     _sanitize_artifact_refs_for_memory,
     apply_result_state_projection,
+    preserve_shell_session_result_fields,
     project_trace_history_and_outbound_events,
+    sanitize_tool_result_for_metadata,
 )
 from agent.tool_runtime.batch.types import (
     BatchResult,
@@ -450,6 +453,364 @@ def test_project_trace_history_masks_dispatch_cache_without_masking_runtime_even
     cache_entry = facts.metadata["tool_dispatch_cache"]["tc-cache-secret"]
     serialized_cache = str(cache_entry)
     assert sentinel not in serialized_cache
+    assert "<DURABLE_SECRET_MASK:" in serialized_cache
+
+
+def test_shell_session_projection_preserves_continuation_fields_and_nullable_exit_code() -> None:
+    public_session_id = "shs_projection_123"
+    raw_result = {
+        "tool": "shell.exec",
+        "status": "success",
+        "success": True,
+        "process_status": "running",
+        "session_id": public_session_id,
+        "stdout": "first\n[... shell output truncated ...]\nlast",
+        "stderr": "",
+        "exit_code": None,
+        "stdin_available": True,
+        "truncated": True,
+        "summary": f"Command is still running; poll session {public_session_id}.",
+        "error_code": None,
+    }
+    compact_result = preserve_shell_session_result_fields(
+        {
+            "tool": "shell.exec",
+            "status": "success",
+            "success": True,
+            "exit_code": 0,
+            "summary": "llm summary",
+        },
+        raw_result=raw_result,
+        tool_name="shell.exec",
+    )
+
+    assert compact_result["process_status"] == "running"
+    assert compact_result["session_id"] == public_session_id
+    assert compact_result["exit_code"] is None
+    assert compact_result["stdin_available"] is True
+    assert compact_result["stdout"] == raw_result["stdout"]
+    assert compact_result["stderr"] == ""
+    assert compact_result["truncated"] is True
+    assert "omitted middle content" in compact_result["summary"]
+
+
+def test_shell_session_result_sanitizer_keeps_continuation_fields() -> None:
+    public_session_id = "shs_sanitized_123"
+    sanitized = sanitize_tool_result_for_metadata(
+        {
+            "tool": "shell.write_stdin",
+            "status": "success",
+            "success": True,
+            "process_status": "running",
+            "session_id": public_session_id,
+            "stdout": "delta",
+            "stderr": "",
+            "exit_code": None,
+            "stdin_available": True,
+            "truncated": False,
+            "summary": "still running",
+            "error_code": None,
+            "metadata": {"provider_session_id": "terminal-private-123"},
+        },
+        compact_sanitized_result_keys=(
+            "tool",
+            "status",
+            "success",
+            "process_status",
+            "session_id",
+            "stdout",
+            "stderr",
+            "exit_code",
+            "stdin_available",
+            "truncated",
+            "summary",
+            "error_code",
+        ),
+        tool_name="shell.write_stdin",
+    )
+
+    assert sanitized == {
+        "tool": "shell.write_stdin",
+        "status": "success",
+        "success": True,
+        "process_status": "running",
+        "session_id": public_session_id,
+        "stdout": "delta",
+        "stderr": "",
+        "exit_code": None,
+        "stdin_available": True,
+        "truncated": False,
+        "summary": "still running",
+        "error_code": None,
+    }
+
+
+def test_compact_batch_metadata_preserves_shell_session_id_and_masks_arguments() -> None:
+    public_session_id = "shs_compact_batch_123"
+    private_session_id = "terminal-private-batch-123"
+    env_value = "compact-env-value-123"
+    chars_value = "yes\n"
+    facts = _Facts(metadata={})
+    batch = ToolBatch(
+        tool_batch_id="tb-shell-compact",
+        tool_calls=(
+            ToolCall(
+                tool_call_id="tc-shell-compact",
+                tool_id="shell.write_stdin",
+                parameters={
+                    "session_id": public_session_id,
+                    "chars": chars_value,
+                    "env": {"VISIBLE": env_value},
+                },
+            ),
+        ),
+        requested_execution_strategy=ExecutionStrategy.SEQUENTIAL,
+    )
+    result = BatchResult(
+        tool_batch_id=batch.tool_batch_id,
+        status=BatchStatus.COMPLETED,
+        call_results=(
+            ToolCallResult(
+                tool_call_id="tc-shell-compact",
+                tool_id="shell.write_stdin",
+                status=ToolCallStatus.SUCCESS,
+            ),
+        ),
+        effective_execution_strategy=ExecutionStrategy.SEQUENTIAL,
+        requested_execution_strategy=ExecutionStrategy.SEQUENTIAL,
+    )
+    compact = {
+        "tool": "shell.write_stdin",
+        "process_status": "running",
+        "session_id": public_session_id,
+        "provider_session_id": private_session_id,
+        "stdout": "delta",
+        "stderr": "",
+        "exit_code": None,
+        "stdin_available": True,
+        "truncated": False,
+        "summary": "still running",
+    }
+
+    write_compact_batch_metadata(
+        facts,
+        batch=batch,
+        result=result,
+        compact_by_call_id={"tc-shell-compact": compact},
+    )
+
+    assert facts.metadata["last_tool_result_compact"]["session_id"] == public_session_id
+    batch_compact = facts.metadata["last_tool_result_compact_batch"]["results"][0][
+        "compact_tool_result"
+    ]
+    assert batch_compact["session_id"] == public_session_id
+    serialized = str(facts.metadata)
+    assert private_session_id not in serialized
+    assert env_value not in serialized
+    assert chars_value not in serialized
+
+
+def test_dispatch_cache_preserves_public_shell_session_result_ids_only() -> None:
+    public_session_id = "shs_public_replay_123"
+    private_session_id = "terminal-private-123"
+    env_value = "cache-env-value-123"
+    facts = _Facts(metadata={})
+
+    store_dispatch_cache_result(
+        facts=facts,
+        tool_dispatch_cache_key="tool_dispatch_cache",
+        tool_call_id="tc-shell-session",
+        compact_result_dict={
+            "tool": "shell.exec",
+            "status": "success",
+            "success": True,
+            "process_status": "running",
+            "session_id": public_session_id,
+            "summary": f"poll {public_session_id}",
+        },
+        result_for_metadata={
+            "tool": "shell.exec",
+            "success": True,
+            "status": "success",
+            "process_status": "running",
+            "session_id": public_session_id,
+            "stdout": f"session {public_session_id} started",
+            "stderr": "",
+            "exit_code": None,
+            "stdin_available": True,
+            "metadata": {
+                "runtime_session": {
+                    "session_id": public_session_id,
+                    "provider_session_id": private_session_id,
+                }
+            },
+        },
+        graph_metadata={
+            "tool": "shell.exec",
+            "summary": f"session {public_session_id}",
+            "result": {
+                "tool": "shell.exec",
+                "process_status": "running",
+                "session_id": public_session_id,
+            },
+        },
+        action_record={
+            "tool_id": "shell.exec",
+            "params": {
+                "command": "sleep 10",
+                "env": {"VISIBLE": env_value},
+                "session_id": public_session_id,
+            },
+        },
+        observation_text=f"session {public_session_id} provider {private_session_id}",
+        reasoning_additions=[],
+        outcome_parameters={
+            "command": "sleep 10",
+            "env": {"VISIBLE": env_value},
+            "session_id": public_session_id,
+        },
+        outcome_success=True,
+        outcome_summary=f"session {public_session_id}",
+        approval_granted=True,
+        approval_reason="approve",
+        approval_metadata={},
+    )
+
+    cache_entry = facts.metadata["tool_dispatch_cache"]["tc-shell-session"]
+    assert cache_entry["last_tool_result_compact"]["session_id"] == public_session_id
+    assert cache_entry["last_tool_result"]["session_id"] == public_session_id
+    assert (
+        cache_entry["last_tool_result"]["metadata"]["runtime_session"]["session_id"]
+        == public_session_id
+    )
+    assert cache_entry["tool_history_entry"]["result"]["session_id"] == public_session_id
+    assert cache_entry["action_record"]["params"]["session_id"] != public_session_id
+    assert cache_entry["exec_record"]["args"]["session_id"] != public_session_id
+    assert public_session_id in cache_entry["last_tool_result_compact"]["summary"]
+
+    serialized_cache = str(cache_entry)
+    assert private_session_id not in serialized_cache
+    assert env_value not in serialized_cache
+    assert "<DURABLE_SECRET_MASK:" in serialized_cache
+
+    replay_facts = _Facts(metadata={})
+    replay_facts.metadata_copy = lambda: dict(replay_facts.metadata)  # type: ignore[attr-defined]
+    replay_interactive = SimpleNamespace(
+        facts=replay_facts,
+        trace=SimpleNamespace(reasoning=[], observations=[], executed_tools=[]),
+    )
+
+    apply_cached_dispatch_result(replay_interactive, cache_entry, "shell.exec")
+
+    replay_metadata = replay_interactive.facts.metadata
+    assert replay_metadata["last_tool_result_compact"]["session_id"] == public_session_id
+    assert replay_metadata["last_tool_result"]["session_id"] == public_session_id
+    assert (
+        replay_metadata["last_tool_result"]["metadata"]["runtime_session"]["session_id"]
+        == public_session_id
+    )
+
+
+def test_shell_dispatch_cache_hit_returns_update_without_new_dispatch() -> None:
+    public_session_id = "shs_cached_dispatch_789"
+    cache_entry = {
+        "last_tool_result_compact": {
+            "tool": "shell.write_stdin",
+            "process_status": "running",
+            "session_id": public_session_id,
+            "summary": "still running",
+        },
+        "last_tool_result": {
+            "tool": "shell.write_stdin",
+            "success": True,
+            "status": "success",
+            "process_status": "running",
+            "session_id": public_session_id,
+        },
+        "observation_text": "still running",
+        "exec_record": {
+            "args": {"session_id": "<DURABLE_SECRET_MASK:secret>"},
+            "status": "success",
+            "observation": "still running",
+            "reasoning": "still running",
+            "approval_granted": True,
+            "approval_reason": "approve",
+            "approval_metadata": {},
+        },
+    }
+    facts = _Facts(metadata={"tool_dispatch_cache": {"tc-cached": cache_entry}})
+    facts.metadata_copy = lambda: dict(facts.metadata)  # type: ignore[attr-defined]
+    interactive = SimpleNamespace(
+        facts=facts,
+        trace=SimpleNamespace(reasoning=[], observations=[], executed_tools=[]),
+        as_graph_update=lambda: {"metadata": facts.metadata},
+    )
+    applied: list[str] = []
+    cleared: list[str] = []
+
+    update = maybe_return_cached_dispatch_update(
+        interactive=interactive,
+        metadata=facts.metadata,
+        tool_call_id="tc-cached",
+        tool_name="shell.write_stdin",
+        tool_dispatch_cache_key="tool_dispatch_cache",
+        apply_cached_dispatch_result_fn=lambda state, cached, tool_name: (
+            applied.append(tool_name),
+            apply_cached_dispatch_result(state, cached, tool_name),
+        ),
+        clear_tool_plan_prepared_flag_fn=lambda _state: cleared.append("plan"),
+        clear_approval_gate_metadata_fn=lambda _state: cleared.append("approval"),
+        log_info_fn=lambda *_args: None,
+    )
+
+    assert update == {"metadata": facts.metadata}
+    assert applied == ["shell.write_stdin"]
+    assert cleared == ["plan", "approval"]
+    assert facts.metadata["last_tool_result"]["session_id"] == public_session_id
+    assert len(interactive.trace.executed_tools) == 1
+
+
+def test_dispatch_cache_masks_non_shell_session_ids_and_stdin_chars() -> None:
+    public_session_id = "shs_public_argument_456"
+    raw_chars = "yes please\n"
+    facts = _Facts(metadata={})
+
+    store_dispatch_cache_result(
+        facts=facts,
+        tool_dispatch_cache_key="tool_dispatch_cache",
+        tool_call_id="tc-shell-stdin",
+        compact_result_dict={
+            "tool": "information_gathering.network_discovery.nmap",
+            "status": "success",
+            "success": True,
+            "session_id": public_session_id,
+            "summary": f"non-shell {public_session_id}",
+        },
+        result_for_metadata={
+            "tool": "information_gathering.network_discovery.nmap",
+            "success": True,
+            "session_id": public_session_id,
+            "stdout": "",
+        },
+        graph_metadata={"summary": f"non-shell {public_session_id}"},
+        action_record={
+            "tool_id": "shell.write_stdin",
+            "params": {"session_id": public_session_id, "chars": raw_chars},
+        },
+        observation_text=f"sent {raw_chars} to {public_session_id}",
+        reasoning_additions=[],
+        outcome_parameters={"session_id": public_session_id, "chars": raw_chars},
+        outcome_success=True,
+        outcome_summary="stdin sent",
+        approval_granted=True,
+        approval_reason="approve",
+        approval_metadata={},
+    )
+
+    cache_entry = facts.metadata["tool_dispatch_cache"]["tc-shell-stdin"]
+    serialized_cache = str(cache_entry)
+    assert public_session_id not in serialized_cache
+    assert raw_chars not in serialized_cache
     assert "<DURABLE_SECRET_MASK:" in serialized_cache
 
 

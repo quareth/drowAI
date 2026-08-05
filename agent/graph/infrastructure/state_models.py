@@ -191,6 +191,7 @@ class GraphRuntimeContext(BaseModel):
     turn_id: Optional[str] = None
     turn_sequence: Optional[int] = None
     reserved_message_id: Optional[int] = None
+    execution_owner_id: Optional[str] = None
 
     def normalized_runtime_placement_mode(self) -> Optional[str]:
         """Return normalized runtime placement mode when present."""
@@ -219,6 +220,13 @@ class GraphRuntimeContext(BaseModel):
             missing.append("actor_id")
         if self.is_user_originated() and self.user_id is None:
             missing.append("user_id")
+        return missing
+
+    def missing_shell_session_runtime_identity_fields(self) -> List[str]:
+        """Return runtime identity fields required for shell-session operations."""
+        missing = self.missing_tool_runtime_identity_fields()
+        if not isinstance(self.execution_owner_id, str) or not self.execution_owner_id.strip():
+            missing.append("execution_owner_id")
         return missing
 
     def requires_local_workspace_path(self) -> bool:

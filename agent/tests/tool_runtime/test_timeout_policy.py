@@ -77,6 +77,7 @@ def _policy(default: float = 30, max_seconds: float = 60) -> ToolTimeoutPolicy:
         tool_timeout_default_seconds=default,
         tool_timeout_max_seconds=max_seconds,
         tool_timeout_grace_seconds=2,
+        shell_session_terminal_io_grace_sec=3,
     )
     return ToolTimeoutPolicy.from_runtime_config(config)
 
@@ -180,3 +181,59 @@ def test_canonical_env_overrides_default_agent_config_values(monkeypatch):
     assert plan.deadline_seconds == 12
     assert plan.default_timeout_seconds == 12
     assert plan.max_timeout_seconds == 60
+
+
+def test_shell_session_exec_timeout_uses_yield_wait_not_process_lifetime():
+    plan = _policy(default=25, max_seconds=300).resolve(
+        tool_id="shell.exec",
+        parameters={
+            "command": "sleep 120",
+            "yield_time_ms": 1500,
+            "max_runtime_sec": 180,
+        },
+    )
+
+    assert plan.deadline_seconds == 1.5
+    assert plan.grace_seconds == 3
+    assert plan.deadline_seconds + plan.grace_seconds == 4.5
+    assert plan.requested_timeout_field == "yield_time_ms"
+    assert plan.native_timeout_field is None
+    assert plan.normalized_parameters["max_runtime_sec"] == 180
+    assert plan.stripped_timeout_fields == ()
+
+
+def test_shell_session_write_timeout_uses_yield_wait():
+    plan = _policy(default=25, max_seconds=300).resolve(
+        tool_id="shell.write_stdin",
+        parameters={
+            "session_id": "shs_public",
+            "chars": "",
+            "yield_time_ms": 0,
+        },
+    )
+
+    assert plan.deadline_seconds == 0
+    assert plan.grace_seconds == 3
+    assert plan.deadline_seconds + plan.grace_seconds == 3
+    assert plan.requested_timeout_field == "yield_time_ms"
+    assert plan.native_timeout_field is None
+
+
+def test_shell_session_ignores_legacy_whole_operation_timeout_fields():
+    plan = _policy(default=25, max_seconds=300).resolve(
+        tool_id="shell.exec",
+        parameters={
+            "command": "sleep 120",
+            "yield_time_ms": 500,
+            "timeout_sec": 90,
+            "execution_timeout": 80,
+            "max_runtime_sec": 180,
+        },
+    )
+
+    assert plan.deadline_seconds == 0.5
+    assert plan.requested_timeout_field == "yield_time_ms"
+    assert plan.native_timeout_field is None
+    assert plan.normalized_parameters["timeout_sec"] == 90
+    assert plan.normalized_parameters["execution_timeout"] == 80
+    assert plan.normalized_parameters["max_runtime_sec"] == 180

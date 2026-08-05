@@ -146,7 +146,22 @@ MEDIUM_RISK_TOOL_PREFIXES = (
     "vulnerability_analysis.",
 )
 _COMPACT_SANITIZED_RESULT_KEYS = frozenset(
-    {"tool", "status", "success", "exit_code", "duration", "parameters"}
+    {
+        "tool",
+        "status",
+        "success",
+        "exit_code",
+        "duration",
+        "parameters",
+        "process_status",
+        "session_id",
+        "stdin_available",
+        "stdout",
+        "stderr",
+        "truncated",
+        "summary",
+        "error_code",
+    }
 )
 _APPROVAL_GATE_COMPLETED_KEY = "tool_approval_gate_completed"
 _APPROVAL_GATE_RESPONSE_KEY = "tool_approval_response"

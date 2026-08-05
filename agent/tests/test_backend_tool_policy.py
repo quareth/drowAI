@@ -38,7 +38,9 @@ def test_iter_backend_scoped_tools_filters_input_order() -> None:
 def test_resolve_execution_lane_is_explicit_and_fail_closed() -> None:
     assert resolve_execution_lane("knowledge.cve_lookup") == "backend_scoped"
     assert resolve_execution_lane("artifact.search") == "artifact_scoped"
-    assert resolve_execution_lane("shell.exec") == "container_scoped"
+    assert resolve_execution_lane("shell.exec") == "runtime_session_scoped"
+    assert resolve_execution_lane("shell.write_stdin") == "runtime_session_scoped"
+    assert resolve_execution_lane("unknown.custom.tool") == "container_scoped"
 
 
 def test_lane_transport_permissions_are_explicit() -> None:
@@ -53,6 +55,10 @@ def test_lane_transport_permissions_are_explicit() -> None:
     assert lane_allows_pty("artifact_scoped") is False
     assert lane_allows_file_comm("artifact_scoped") is False
     assert lane_allows_direct_execution("artifact_scoped") is True
+
+    assert lane_allows_pty("runtime_session_scoped") is False
+    assert lane_allows_file_comm("runtime_session_scoped") is False
+    assert lane_allows_direct_execution("runtime_session_scoped") is False
 
 
 def test_build_route_policy_metadata_is_deterministic() -> None:
@@ -103,6 +109,20 @@ def test_resolve_selected_authority_is_lane_and_placement_aware() -> None:
             runtime_placement_mode="runner",
         )
         == "artifact_direct"
+    )
+    assert (
+        resolve_selected_authority(
+            lane="runtime_session_scoped",
+            runtime_placement_mode="local",
+        )
+        == "runtime_session_control"
+    )
+    assert (
+        resolve_selected_authority(
+            lane="runtime_session_scoped",
+            runtime_placement_mode="runner",
+        )
+        == "runtime_session_control"
     )
 
 

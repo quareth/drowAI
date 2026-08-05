@@ -295,6 +295,7 @@ def _graph_runtime_context_from_projection(
     context["graph_thread_id"] = graph_thread_id
     context["tenant_id"] = assignment.tenant_id
     context["turn_id"] = assignment.parent_turn_id
+    context["execution_owner_id"] = f"subagent:{assignment.agent_run_id}"
     turn_sequence = assignment.relevant_context.get("turn_sequence")
     if isinstance(turn_sequence, int) and not isinstance(turn_sequence, bool):
         context["turn_sequence"] = turn_sequence

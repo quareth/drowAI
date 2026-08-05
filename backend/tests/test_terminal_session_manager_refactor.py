@@ -28,8 +28,10 @@ from backend.services.terminal.manager import (
     terminal_session_manager as extracted_terminal_session_manager,
 )
 from backend.services.terminal.models import TerminalSession as ExtractedTerminalSession
+from backend.services.terminal.shell_session_service import ShellSessionService
 from backend.services.terminal_session_manager import TerminalSessionManager, TerminalSession
 from backend.services.runtime_provider import RuntimeCallScope
+from runtime_shared.shell_session_port import get_shell_session_service
 
 
 def test_terminal_session_manager_facade_reexports_public_surface() -> None:
@@ -40,6 +42,12 @@ def test_terminal_session_manager_facade_reexports_public_surface() -> None:
         legacy_terminal_module.terminal_session_manager
         is extracted_terminal_session_manager
     )
+
+
+def test_terminal_session_manager_facade_binds_shell_session_service() -> None:
+    """Backend facade import should bind the process-local shell session port."""
+    assert isinstance(legacy_terminal_module.shell_session_service, ShellSessionService)
+    assert get_shell_session_service() is legacy_terminal_module.shell_session_service
 
 
 def test_terminal_contracts_preserve_prompt_and_session_id_values() -> None:
