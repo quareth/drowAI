@@ -28,7 +28,6 @@ from runtime_shared.semantic.canonical_keys import (
     canonicalize_subject_key as canonicalize_shared_subject_key,
 )
 from runtime_shared.semantic.service_identity import require_service_socket_key
-from runtime_shared.semantic.web_common import canonicalize_web_path_subject_key
 
 
 ASSERTION_LEVELS: tuple[str, ...] = ("candidate", "observed", "confirmed", "exploited")
@@ -133,11 +132,7 @@ def canonicalize_subject_key(value: str) -> str:
 def validate_subject_key_matches_type(*, subject_type: str, subject_key: str) -> tuple[str, str]:
     """Validate subject_type/subject_key pair alignment for canonical identities."""
     validated_type = validate_subject_type(subject_type)
-    normalized_key = (
-        canonicalize_web_path_subject_key(subject_key)
-        if validated_type == "web.path"
-        else canonicalize_subject_key(subject_key)
-    )
+    normalized_key = canonicalize_subject_key(subject_key)
     if not normalized_key.startswith(f"{validated_type}:"):
         raise ValueError("subject_key must be prefixed by subject_type (subject_type:<canonical-id>)")
     if validated_type == "service.socket":
@@ -152,10 +147,6 @@ def _validate_service_socket_key(value: str) -> None:
 
 def build_subject_key(*, subject_type: str, raw_key: str) -> str:
     validated_type = validate_subject_type(subject_type)
-    if validated_type == "web.path":
-        raw = str(raw_key or "").strip()
-        prefixed = raw if raw.startswith("web.path:") else f"web.path:{raw}"
-        return canonicalize_web_path_subject_key(prefixed)
     canonical_key = canonicalize_subject_key(raw_key)
     return f"{validated_type}:{canonical_key}"
 

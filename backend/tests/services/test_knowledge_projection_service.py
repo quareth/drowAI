@@ -721,64 +721,6 @@ def test_projection_service_web_path_projection_reports_counters() -> None:
         engine.dispose()
 
 
-def test_projection_service_preserves_case_distinct_web_paths_and_links() -> None:
-    engine, db = _build_session()
-    try:
-        engagement = _seed_engagement(db)
-        semantic_rows = tuple(
-            {
-                "observation_type": "web.path_discovered",
-                "subject_type": "web.path",
-                "subject_key": f"web.path:https://example.test/{path}",
-                "payload": {
-                    "url": f"https://example.test/{path}",
-                    "source": "ffuf",
-                    "path": f"/{path}",
-                    "target_url": "https://example.test/FUZZ",
-                },
-            }
-            for path in ("Admin", "admin")
-        )
-        bridge_result = build_knowledge_observations(
-            envelope=SemanticFactEnvelope(
-                semantic_schema_version="ffuf.v1",
-                capability_family="web_discovery",
-                observations=semantic_rows,
-                evidence=(),
-            ),
-            context=KnowledgeFactContext(
-                tenant_id=1,
-                user_id=int(engagement.user_id),
-                engagement_id=int(engagement.id),
-                task_id=None,
-                source_execution_id="exec-case-distinct-web-paths",
-                ingestion_run_id="run-case-distinct-web-paths",
-                observed_at=None,
-                artifact_summaries=(),
-                evidence_archives=(),
-            ),
-        )
-
-        result = KnowledgeProjectionService(db).project_observations(
-            engagement_id=engagement.id,
-            observations=bridge_result.observations,
-        )
-
-        assert result.web_path_upsert_count == 2
-        assert result.web_path_insert_count == 2
-        assert {
-            (row.canonical_url, row.path)
-            for row in db.query(KnowledgeWebPath).all()
-        } == {
-            ("https://example.test/Admin", "/Admin"),
-            ("https://example.test/admin", "/admin"),
-        }
-        assert db.query(EngagementWebPathLink).count() == 2
-    finally:
-        db.close()
-        engine.dispose()
-
-
 def test_projection_service_projects_ip_web_response_without_prior_network_scan() -> None:
     engine, db = _build_session()
     try:

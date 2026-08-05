@@ -20,7 +20,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.core.time_utils import to_utc
-from runtime_shared.semantic.web_common import canonicalize_web_path_subject_key
 from ...models import (
     Engagement,
     EngagementAssetLink,
@@ -287,11 +286,11 @@ class KnowledgeReadModelRebuildService:
         marker_set: set[str],
         impacted_web_path_subject_keys: set[str] | None = None,
     ) -> list[ObservationCreate]:
-        normalized_impacted_subject_keys = set()
-        for value in impacted_web_path_subject_keys or set():
-            canonical_key = self._canonical_web_path_subject_key_or_none(value)
-            if canonical_key is not None:
-                normalized_impacted_subject_keys.add(canonical_key)
+        normalized_impacted_subject_keys = {
+            str(value).strip().lower()
+            for value in (impacted_web_path_subject_keys or set())
+            if str(value).strip()
+        }
         if not marker_set and not normalized_impacted_subject_keys:
             return []
         selected: list[ObservationCreate] = []
@@ -316,15 +315,13 @@ class KnowledgeReadModelRebuildService:
     ) -> set[str]:
         impacted_subject_keys: set[str] = set()
         for observation in observations:
+            subject_key = str(observation.subject_key or "").strip().lower()
             if (
                 str(observation.observation_type or "").strip().lower() == "web.path_discovered"
                 and str(observation.subject_type or "").strip().lower() == "web.path"
+                and subject_key.startswith("web.path:")
             ):
-                subject_key = KnowledgeReadModelRebuildService._canonical_web_path_subject_key_or_none(
-                    observation.subject_key
-                )
-                if subject_key is not None:
-                    impacted_subject_keys.add(subject_key)
+                impacted_subject_keys.add(subject_key)
         return impacted_subject_keys
 
     @staticmethod
@@ -337,17 +334,8 @@ class KnowledgeReadModelRebuildService:
             return False
         if str(observation.subject_type or "").strip().lower() != "web.path":
             return False
-        subject_key = KnowledgeReadModelRebuildService._canonical_web_path_subject_key_or_none(
-            observation.subject_key
-        )
+        subject_key = str(observation.subject_key or "").strip().lower()
         return subject_key in impacted_web_path_subject_keys
-
-    @staticmethod
-    def _canonical_web_path_subject_key_or_none(value: Any) -> str | None:
-        try:
-            return canonicalize_web_path_subject_key(value)
-        except ValueError:
-            return None
 
     @staticmethod
     def _markers_by_domain(marker_set: set[str]) -> dict[str, set[str]]:
@@ -413,7 +401,7 @@ class KnowledgeReadModelRebuildService:
         web_path_urls = {
             str(subject_key).removeprefix("web.path:")
             for subject_key in (impacted_web_path_subject_keys or set())
-            if str(subject_key).startswith("web.path:")
+            if str(subject_key).strip().lower().startswith("web.path:")
         }
 
         if web_path_urls:

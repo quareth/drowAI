@@ -22,7 +22,6 @@ from sqlalchemy import select
 
 from backend.core.time_utils import to_utc
 from ...models import Engagement, KnowledgeAsset, KnowledgeService, KnowledgeWebPath
-from runtime_shared.semantic.web_common import canonicalize_web_path_subject_key
 from .identity.merge_rules import (
     merge_confidence_with_corroboration,
     merge_evidence_refs,
@@ -285,9 +284,8 @@ class KnowledgeProjectionService:
                 continue
             if str(observation.subject_type or "").strip().lower() != "web.path":
                 continue
-            try:
-                subject_key = canonicalize_web_path_subject_key(observation.subject_key)
-            except ValueError:
+            subject_key = str(observation.subject_key or "").strip().lower()
+            if not subject_key.startswith("web.path:"):
                 continue
             canonical_url = subject_key.removeprefix("web.path:")
             observed_at = self._coerce_datetime(observation.observed_at)
