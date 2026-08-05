@@ -24,6 +24,9 @@ import re
 from typing import Any, Mapping, Sequence
 
 from .evidence_refs import normalize_canonical_evidence_refs
+from runtime_shared.semantic.canonical_keys import (
+    canonicalize_subject_key as canonicalize_shared_subject_key,
+)
 from runtime_shared.semantic.service_identity import require_service_socket_key
 
 
@@ -38,7 +41,6 @@ OBSERVATION_METADATA_FIELDS: tuple[str, ...] = (
     "audit_summary",
 )
 _NAMESPACE_PATTERN = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z][a-z0-9_]*)+$")
-_SUBJECT_KEY_PATTERN = re.compile(r"^[a-z0-9._:/@#-]{1,512}$")
 SEMANTIC_INPUT_SNAPSHOT_VERSION = "1.0"
 _OBJECT_KEY_FIELD_NAMES: frozenset[str] = frozenset(
     {
@@ -122,14 +124,9 @@ def validate_subject_type(value: str) -> str:
 
 
 def canonicalize_subject_key(value: str) -> str:
-    normalized = str(value or "").strip().lower()
-    if not normalized:
-        raise ValueError("subject_key cannot be empty")
-    if " " in normalized:
-        raise ValueError("subject_key cannot contain spaces")
-    if not _SUBJECT_KEY_PATTERN.fullmatch(normalized):
-        raise ValueError("subject_key contains unsupported characters")
-    return normalized
+    """Delegate subject-key canonicalization to the backend-free shared contract."""
+
+    return canonicalize_shared_subject_key(value)
 
 
 def validate_subject_key_matches_type(*, subject_type: str, subject_key: str) -> tuple[str, str]:

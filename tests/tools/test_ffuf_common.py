@@ -122,6 +122,30 @@ def test_parse_ffuf_text_accepts_standard_terminal_rows():
     ]
 
 
+def test_parse_ffuf_text_strips_ansi_from_tokens_and_preserves_raw_output():
+    raw_output = (
+        "\x1b[2Kadmin\x1b[0m "
+        "[Status: 200, Size: 321, Words: 12, Lines: 4]\n"
+    )
+
+    parsed = parse_ffuf_text(
+        raw_output,
+        target_template="https://example.invalid/FUZZ",
+    )
+
+    assert parsed["raw_output"] == raw_output
+    assert parsed["results"] == [
+        {
+            "url": "https://example.invalid/admin",
+            "input": {"FUZZ": "admin"},
+            "status": 200,
+            "length": 321,
+            "words": 12,
+            "lines": 4,
+        }
+    ]
+
+
 def test_validate_input_cmd_accepts_single_line_command():
     assert validate_input_cmd("seq 0 200") == "seq 0 200"
 
