@@ -50,6 +50,7 @@ class _FakeRuntimeOperations:
     def context_for_internal_task(self, **kwargs: Any):
         self.context_calls.append(dict(kwargs))
         return SimpleNamespace(
+            tenant_id=17,
             task_id=kwargs["task_id"],
             runtime_placement_mode=self.__class__.context_runtime_placement_mode,
         )
@@ -77,12 +78,12 @@ async def test_retire_runtime_delegates_to_provider_with_wait_policy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_db = _FakeDb()
-    cleaned_task_ids: list[int] = []
+    cleaned_tasks: list[tuple[int, int]] = []
     _FakeRuntimeOperations.context_runtime_placement_mode = RuntimePlacementMode.LOCAL.value
     monkeypatch.setattr("backend.database.SessionLocal", lambda: fake_db)
 
-    async def fake_cleanup(*, task_id: int) -> None:
-        cleaned_task_ids.append(task_id)
+    async def fake_cleanup(*, tenant_id: int, task_id: int) -> None:
+        cleaned_tasks.append((tenant_id, task_id))
 
     monkeypatch.setattr(
         TaskRetirementService,
@@ -101,7 +102,7 @@ async def test_retire_runtime_delegates_to_provider_with_wait_policy(
     assert result.success is True
     assert result.message == "Runtime retired for task 41"
     assert fake_db.closed is True
-    assert cleaned_task_ids == [41]
+    assert cleaned_tasks == [(17, 41)]
     runtime_operations = _FakeRuntimeOperations.instances[0]
     assert runtime_operations.context_calls == [
         {

@@ -28,8 +28,9 @@ Owned by the agent layer:
   emission.
 - Runtime semantic envelope assembly and extraction before independent
   Knowledge and compact-output consumption.
-- Tool transport policy across local file-comm, PTY, direct backend/artifact
-  execution, and runner-supported container tools.
+- Tool transport policy across local file-comm, provider-backed runtime
+  sessions, direct backend/artifact execution, and runner-supported container
+  tools.
 - Provider-neutral LLM client interfaces, profiles, capabilities, and concrete
   provider adapters.
 - Workspace-safe command preparation and task-local runtime file preparation.
@@ -98,8 +99,9 @@ Not owned by the agent layer:
     completion stage.
 - `agent/tool_runtime`
   - Owns tool execution policy after a tool plan exists: lane classification,
-    timeout planning, transport routing, batch execution, PTY/file-comm/direct
-    dispatch, result enrichment, and compact result metadata.
+    timeout planning, transport routing, batch execution,
+    runtime-session/file-comm/direct dispatch, result enrichment, and compact
+    result metadata.
 - `agent/tools`
   - Owns concrete tool schemas, tool-specific command preparation, native
     result parsing, and final semantic observation/evidence emission. The tool
@@ -137,7 +139,11 @@ flowchart LR
     Planner[Tool planner]
     Coordinator[ToolExecutionCoordinator]
     Policy[Transport/lane policy]
-    Local[File-comm or PTY]
+    Local[File-comm container transport]
+    RuntimeSession[Runtime-session control]
+    ShellService["ShellSessionService port"]
+    TerminalManager["TerminalSessionManager"]
+    Provider["Runtime provider PTY"]
     Direct[Backend/artifact direct]
     Runner[Runner command path]
     Native["Native tool result"]
@@ -152,9 +158,14 @@ flowchart LR
     Planner --> Coordinator
     Coordinator --> Policy
     Policy --> Local
+    Policy --> RuntimeSession
     Policy --> Direct
     Policy --> Runner
     Local --> Native
+    RuntimeSession --> ShellService
+    ShellService --> TerminalManager
+    TerminalManager --> Provider
+    Provider --> Native
     Direct --> Native
     Runner --> Native
     Native --> Enrichment
@@ -170,6 +181,25 @@ flowchart LR
 Tool execution boundaries:
 
 - Container-scoped tools use file-comm or PTY for local placement.
+- `shell.exec` and `shell.write_stdin` are universal runtime-session-scoped
+  tools. Their adapters validate public schemas and fail closed for direct
+  adapter execution; the graph dispatcher routes them through
+  `runtime_session_control`.
+- Runtime-session shell tools use `ShellSessionService` through the
+  runtime-shared service port, then `TerminalSessionManager`, then the selected
+  runtime provider PTY implementation. `shell.exec` and `shell.write_stdin` do
+  not fall back to file-comm, host subprocess execution, or runner command
+  transport.
+- `shell.exec` starts a new provider-backed PTY session and may return a public
+  `shs_` continuation handle when the process is still running.
+  `shell.write_stdin` uses that handle to poll, send exact input, or request
+  interruption.
+- Shell-session result projection keeps only bounded public continuation fields
+  needed by the next model turn: `process_status`, public `session_id`,
+  nullable `exit_code`, `stdin_available`, bounded `stdout`/`stderr`,
+  `truncated`, `summary`, and stable `error_code`.
+- `shell.script` remains on its existing compatibility execution path and is
+  not migrated by the shell-session foundation.
 - Runner placement supports only tools allowed by runner runtime policy.
 - Backend-scoped tools execute directly only when lane policy allows it.
 - Artifact-scoped tools require active task context and remain task-bound.
@@ -190,6 +220,9 @@ observations independently. The agent compact consumer never passes its
   from the executable catalog.
 - `agent/tools/catalog_visibility.py` controls which registered tools are
   visible to the model-facing catalog.
+- `agent/tools/universal_agent_tools.py` defines universal utilities appended
+  to main-agent and subagent catalogs when the registered tool metadata is
+  visible. The current universal set is `shell.exec` and `shell.write_stdin`.
 - Hidden tools may still be callable by internal runtime paths when policy
   allows them.
 - Catalog metadata can be warmed and cached for graph execution.
@@ -255,6 +288,9 @@ parent's wait/delegate/finalize policy.
   workspace helpers.
 - Tool lane policy is fail-closed: direct execution is explicit, not a fallback
   for unknown tools.
+- Runtime-session shell calls require backend-projected tenant, task, execution
+  owner, workspace, and runtime placement identity. Model-provided ids and
+  host paths are not authority for session continuation or cleanup.
 - Runtime metadata sanitization removes raw LLM secret keys from tool execution
   request metadata.
 - Provider adapters receive plaintext credentials only through backend-owned
@@ -272,5 +308,11 @@ parent's wait/delegate/finalize policy.
   entrypoints and delegates transport internals to `agent/tool_runtime`.
 - File-comm uses `commands.jsonl`, `results.jsonl`, and lock files in the active
   workspace.
-- PTY use is policy- and capability-gated; parallel PTY calls use named internal
+- `shell.exec` and `shell.write_stdin` use provider-backed PTY sessions through
+  the runtime provider boundary. The process-local shell-session service owns
+  public handles, idle/deadline cleanup, owner cleanup for terminal main and
+  subagent runs, task retirement cleanup, and managed-runner disconnect handle
+  expiry.
+- Legacy PTY use outside the shell-session tools remains policy- and
+  capability-gated; parallel compatibility PTY calls use named internal
   sessions when enabled.

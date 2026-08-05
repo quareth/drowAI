@@ -37,67 +37,69 @@ class TestPtyRouting:
     
     @pytest.mark.asyncio
     @patch.dict(os.environ, {"ENABLE_PTY_EXECUTION": "true"})
-    async def test_pty_routing_success(self, executor):
-        """Test successful PTY routing when flag enabled"""
-        # Mock PTY execution
-        with patch.object(executor, '_execute_via_pty') as mock_pty:
-            mock_pty.return_value = ExecutionResult(
-                success=True,
-                stdout="PTY output",
-                stderr="",
-                exit_code=0
-            )
-            
+    async def test_shell_exec_uses_runtime_session_lane_without_legacy_pty(self, executor):
+        """Public shell.exec no longer enters legacy PTY routing."""
+        with patch.object(executor, '_execute_via_pty') as mock_pty, patch.object(
+            executor, "_execute_tool_via_comm"
+        ) as mock_comm, patch("agent.executor.run_tool_by_name") as mock_direct:
             result = await executor._execute_single_tool_internal(
                 "shell.exec",
-                {"command": "echo hello", "transport": "pty"}
+                {"command": "echo hello"},
             )
-            
-            # Should use PTY
-            mock_pty.assert_called_once()
-            assert result.success
-            assert result.stdout == "PTY output"
+
+        metadata = getattr(result, "metadata", {})
+        route_policy = metadata.get("route_policy", {}) if isinstance(metadata, dict) else {}
+        assert result.success is False
+        assert result.exit_code == 3
+        assert route_policy.get("selected_lane") == "runtime_session_scoped"
+        assert route_policy.get("selected_authority") == "runtime_session_control"
+        assert route_policy.get("selected_transport") == "blocked-direct"
+        mock_pty.assert_not_called()
+        mock_comm.assert_not_called()
+        mock_direct.assert_not_called()
     
     @pytest.mark.asyncio
     @patch.dict(os.environ, {"ENABLE_PTY_EXECUTION": "false"})
-    async def test_pty_disabled_by_flag_fails_closed_without_file_comm(self, executor):
-        """Container lane fails closed when PTY is disabled and file-comm is unavailable."""
-        # Reset cached flag
-        executor._pty_enabled_cached = None
-        executor._file_comm = None
-
-        with patch("agent.executor.run_tool_by_name") as mock_direct:
+    async def test_shell_exec_rejects_legacy_transport_before_routing(self, executor):
+        """Public shell.exec rejects removed transport selection."""
+        with patch.object(executor, '_execute_via_pty') as mock_pty, patch.object(
+            executor, "_execute_tool_via_comm"
+        ) as mock_comm, patch("agent.executor.run_tool_by_name") as mock_direct:
             result = await executor._execute_single_tool_internal(
                 "shell.exec",
                 {"command": "echo hello", "transport": "pty"},
             )
 
         assert result.success is False
-        assert result.exit_code == 3
-        assert "Route policy violation" in result.stderr
+        assert result.exit_code == -1
+        assert "transport: Extra inputs are not permitted" in result.stderr
+        mock_pty.assert_not_called()
+        mock_comm.assert_not_called()
         mock_direct.assert_not_called()
     
     @pytest.mark.asyncio
     @patch.dict(os.environ, {"ENABLE_PTY_EXECUTION": "true"})
-    async def test_pty_fallback_fails_closed_without_file_comm(self, executor):
-        """Container lane fails closed when PTY fails and file-comm is unavailable."""
+    async def test_shell_exec_has_no_legacy_pty_or_file_comm_fallback(self, executor):
+        """Runtime-session shell.exec cannot fall back to old container transports."""
         executor._should_use_pty = MagicMock(return_value=True)
         executor._file_comm = None
-        # Mock PTY execution failure
         with patch.object(executor, '_execute_via_pty') as mock_pty:
             mock_pty.side_effect = Exception("PTY unavailable")
 
-            with patch("agent.executor.run_tool_by_name") as mock_direct:
+            with patch.object(executor, "_execute_tool_via_comm") as mock_comm, patch(
+                "agent.executor.run_tool_by_name"
+            ) as mock_direct:
                 result = await executor._execute_single_tool_internal(
                     "shell.exec",
-                    {"command": "echo hello", "transport": "pty"},
+                    {"command": "echo hello"},
                 )
 
-                mock_pty.assert_called_once()
-                mock_direct.assert_not_called()
-                assert result.success is False
-                assert result.exit_code == 3
-                assert "Route policy violation" in result.stderr
+        mock_pty.assert_not_called()
+        mock_comm.assert_not_called()
+        mock_direct.assert_not_called()
+        assert result.success is False
+        assert result.exit_code == 3
+        assert "Route policy violation" in result.stderr
     
     @pytest.mark.asyncio
     @patch.dict(os.environ, {"ENABLE_PTY_EXECUTION": "true"})
@@ -461,9 +463,8 @@ class TestMetricsInstrumentation:
     @pytest.mark.asyncio
     @patch.dict(os.environ, {"ENABLE_PTY_EXECUTION": "true"})
     @patch('backend.services.metrics.utils.safe_inc')
-    async def test_metrics_tracked_on_success(self, mock_safe_inc, executor):
-        """Test metrics tracked on successful PTY execution"""
-        # Mock PTY execution
+    async def test_shell_exec_runtime_session_violation_metric(self, mock_safe_inc, executor):
+        """Legacy executor shell.exec path records route-policy violation metrics."""
         with patch.object(executor, '_execute_via_pty') as mock_pty:
             mock_pty.return_value = ExecutionResult(
                 success=True,
@@ -474,21 +475,21 @@ class TestMetricsInstrumentation:
             
             await executor._execute_single_tool_internal(
                 "shell.exec",
-                {"command": "echo hello", "transport": "pty"}
+                {"command": "echo hello"},
             )
             
-            # Should increment attempts and success metrics
             calls = [call[0][0] for call in mock_safe_inc.call_args_list]
-            assert "executor_pty_attempts" in calls
-            assert "executor_pty_success" in calls
+            assert "executor_route_policy_violation" in calls
+            assert "executor_pty_attempts" not in calls
+            assert "executor_pty_success" not in calls
+            mock_pty.assert_not_called()
     
     @pytest.mark.asyncio
     @patch.dict(os.environ, {"ENABLE_PTY_EXECUTION": "true"})
     @patch('backend.services.metrics.utils.safe_inc')
-    async def test_metrics_tracked_on_fallback(self, mock_safe_inc, executor):
-        """Test metrics tracked on PTY fallback"""
+    async def test_shell_exec_transport_validation_metric(self, mock_safe_inc, executor):
+        """Removed shell.exec transport selectors fail validation before routing."""
         executor._file_comm = None
-        # Mock PTY execution failure
         with patch.object(executor, '_execute_via_pty') as mock_pty:
             mock_pty.side_effect = Exception("PTY failed")
             await executor._execute_single_tool_internal(
@@ -496,10 +497,11 @@ class TestMetricsInstrumentation:
                 {"command": "echo hello", "transport": "pty"}
             )
 
-            # Should increment attempts and fallback metrics
             calls = [call[0][0] for call in mock_safe_inc.call_args_list]
-            assert "executor_pty_attempts" in calls
-            assert "executor_pty_fallback" in calls
+            assert "executor_param_validation_failures" in calls
+            assert "executor_pty_attempts" not in calls
+            assert "executor_pty_fallback" not in calls
+            mock_pty.assert_not_called()
 
 
 class TestRoutingPriority:
@@ -521,9 +523,8 @@ class TestRoutingPriority:
     
     @pytest.mark.asyncio
     @patch.dict(os.environ, {"ENABLE_PTY_EXECUTION": "true"})
-    async def test_pty_takes_priority_over_filecomm(self, executor):
-        """Test PTY is tried before file-comm when requested"""
-        # Mock PTY execution
+    async def test_shell_exec_does_not_route_to_legacy_pty_or_filecomm(self, executor):
+        """Public shell.exec is runtime-session scoped in the legacy executor wrapper."""
         with patch.object(executor, '_execute_via_pty') as mock_pty:
             mock_pty.return_value = ExecutionResult(
                 success=True,
@@ -531,8 +532,6 @@ class TestRoutingPriority:
                 stderr="",
                 exit_code=0
             )
-            
-            # Mock file-comm (should not be called)
             with patch.object(executor, '_execute_tool_via_comm') as mock_comm:
                 mock_comm.return_value = ExecutionResult(
                     success=True,
@@ -543,18 +542,18 @@ class TestRoutingPriority:
                 
                 result = await executor._execute_single_tool_internal(
                     "shell.exec",
-                    {"command": "echo hello", "transport": "pty"}
+                    {"command": "echo hello"},
                 )
-                
-                # Should use PTY, not file-comm
-                mock_pty.assert_called_once()
+
+                mock_pty.assert_not_called()
                 mock_comm.assert_not_called()
-                assert result.stdout == "PTY output"
+                assert result.success is False
+                assert result.exit_code == 3
 
     @pytest.mark.asyncio
     @patch.dict(os.environ, {"ENABLE_PTY_EXECUTION": "true"})
     async def test_pty_forwards_hitl_correlation_ids(self, executor):
-        """PTY path forwards interrupt/tool-call correlation IDs."""
+        """Legacy shell.script PTY path forwards interrupt/tool-call correlation IDs."""
         with patch.object(executor, "_execute_via_pty") as mock_pty:
             mock_pty.return_value = ExecutionResult(
                 success=True,
@@ -563,16 +562,16 @@ class TestRoutingPriority:
                 exit_code=0,
             )
             await executor._execute_single_tool_internal(
-                "shell.exec",
-                {"command": "echo hello", "transport": "pty"},
+                "shell.script",
+                {"script": "echo hello", "transport": "pty"},
                 interrupt_id="it-123",
                 tool_call_id="tc-456",
             )
 
             mock_pty.assert_called_once()
             call_args, call_kwargs = mock_pty.call_args
-            assert call_args[0] == "shell.exec"
-            assert call_args[1]["command"] == "echo hello"
+            assert call_args[0] == "shell.script"
+            assert call_args[1]["script"] == "echo hello"
             assert call_args[1]["transport"] == "pty"
             assert call_kwargs["interrupt_id"] == "it-123"
             assert call_kwargs["tool_call_id"] == "tc-456"
@@ -580,8 +579,7 @@ class TestRoutingPriority:
     
     @pytest.mark.asyncio
     async def test_filecomm_used_when_no_pty_requested(self, executor):
-        """Test file-comm is used when PTY not requested"""
-        # Mock file-comm
+        """Legacy shell.script uses file-comm when PTY is not selected."""
         with patch.object(executor, '_execute_tool_via_comm') as mock_comm:
             mock_comm.return_value = ExecutionResult(
                 success=True,
@@ -591,18 +589,17 @@ class TestRoutingPriority:
             )
             
             result = await executor._execute_single_tool_internal(
-                "shell.exec",
-                {"command": "echo hello"}  # No transport param
+                "shell.script",
+                {"script": "echo hello"}  # No transport param
             )
-            
-            # Should use file-comm
+
             mock_comm.assert_called_once()
             assert result.stdout == "Comm output"
 
     @pytest.mark.asyncio
     @patch.dict(os.environ, {"ENABLE_PTY_EXECUTION": "true"})
     async def test_parallel_execution_without_identity_skips_pty_for_filecomm(self, executor):
-        """Parallel calls without isolated PTY identity keep the safe fallback path."""
+        """Legacy shell.script calls without isolated PTY identity keep file-comm fallback."""
         with patch.object(executor, "_execute_via_pty") as mock_pty, patch.object(
             executor,
             "_execute_tool_via_comm",
@@ -615,8 +612,8 @@ class TestRoutingPriority:
             )
 
             result = await executor._execute_single_tool_internal(
-                "shell.exec",
-                {"command": "echo hello"},
+                "shell.script",
+                {"script": "echo hello"},
                 allow_pty=False,
             )
 
@@ -627,7 +624,7 @@ class TestRoutingPriority:
     @pytest.mark.asyncio
     @patch.dict(os.environ, {"ENABLE_PTY_EXECUTION": "true"})
     async def test_parallel_execution_with_named_identity_routes_to_pty(self, executor):
-        """Parallel calls with a named PTY session can use PTY transport."""
+        """Legacy shell.script calls with a named PTY session can use PTY transport."""
         executor._pty_enabled_cached = None
         with patch.object(executor, "_execute_via_pty") as mock_pty, patch.object(
             executor,
@@ -641,8 +638,8 @@ class TestRoutingPriority:
             )
 
             result = await executor._execute_single_tool_internal(
-                "shell.exec",
-                {"command": "echo hello", "transport": "pty"},
+                "shell.script",
+                {"script": "echo hello", "transport": "pty"},
                 allow_pty=True,
                 tool_call_id="tc_one",
                 tool_batch_id="tb_one",
@@ -698,12 +695,9 @@ class TestRoutingPriority:
     @pytest.mark.asyncio
     @patch.dict(os.environ, {"ENABLE_PTY_EXECUTION": "true"})
     async def test_filecomm_fallback_after_pty_failure(self, executor):
-        """Test file-comm is tried after PTY failure"""
-        # Mock PTY execution failure
+        """Legacy shell.script tries file-comm after PTY failure."""
         with patch.object(executor, '_execute_via_pty') as mock_pty:
             mock_pty.side_effect = Exception("PTY failed")
-            
-            # Mock file-comm
             with patch.object(executor, '_execute_tool_via_comm') as mock_comm:
                 mock_comm.return_value = ExecutionResult(
                     success=True,
@@ -713,11 +707,10 @@ class TestRoutingPriority:
                 )
                 
                 result = await executor._execute_single_tool_internal(
-                    "shell.exec",
-                    {"command": "echo hello", "transport": "pty"}
+                    "shell.script",
+                    {"script": "echo hello", "transport": "pty"}
                 )
-                
-                # Should try PTY, then fall back to file-comm
+
                 mock_pty.assert_called_once()
                 mock_comm.assert_called_once()
                 assert result.stdout == "Comm output"
@@ -725,18 +718,16 @@ class TestRoutingPriority:
     @pytest.mark.asyncio
     @patch.dict(os.environ, {"ENABLE_PTY_EXECUTION": "true"})
     async def test_fail_closed_when_pty_and_filecomm_unavailable(self, executor):
-        """Container lane must fail closed when allowed transports are unavailable."""
-        # Remove file-comm
+        """Legacy shell.script container lane fails closed when transports are unavailable."""
         executor._file_comm = None
 
-        # Mock PTY execution failure
         with patch.object(executor, '_execute_via_pty') as mock_pty:
             mock_pty.side_effect = Exception("PTY failed")
 
             with patch("agent.executor.run_tool_by_name") as mock_direct:
                 result = await executor._execute_single_tool_internal(
-                    "shell.exec",
-                    {"command": "echo hello", "transport": "pty"},
+                    "shell.script",
+                    {"script": "echo hello", "transport": "pty"},
                 )
 
                 mock_pty.assert_called_once()
@@ -761,8 +752,8 @@ class TestRoutingPriority:
         route_policy = metadata.get("route_policy", {}) if isinstance(metadata, dict) else {}
         assert result.success is False
         assert result.exit_code == 3
-        assert route_policy.get("selected_lane") == "container_scoped"
-        assert route_policy.get("selected_authority") == "container_local_transport"
+        assert route_policy.get("selected_lane") == "runtime_session_scoped"
+        assert route_policy.get("selected_authority") == "runtime_session_control"
         assert route_policy.get("selected_transport") == "blocked-direct"
         assert route_policy.get("event") == "route_policy_violation"
         assert route_policy.get("fallback_reason")
@@ -1045,19 +1036,19 @@ class TestShellValidationGate:
         mock_direct.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_shell_exec_over_length_rejected_before_transport(self, executor):
+    async def test_shell_exec_over_length_reaches_runtime_session_guard(self, executor):
         over_limit_command = "echo " + ("a" * 316)  # 321 chars total
         with patch.object(executor, "_execute_via_pty") as mock_pty, patch.object(
             executor, "_execute_tool_via_comm"
         ) as mock_comm, patch("agent.executor.run_tool_by_name") as mock_direct:
             result = await executor._execute_single_tool_internal(
                 "shell.exec",
-                {"transport": "pty", "command": over_limit_command},
+                {"command": over_limit_command},
             )
 
         assert result.success is False
-        assert result.exit_code == -1
-        assert "exceeds max length" in result.stderr
+        assert result.exit_code == 3
+        assert not getattr(result, "validation_errors", None)
         mock_pty.assert_not_called()
         mock_comm.assert_not_called()
         mock_direct.assert_not_called()
@@ -1076,11 +1067,13 @@ class TestShellValidationGate:
             )
             result = await executor._execute_single_tool_internal(
                 "shell.exec",
-                {"transport": "pty", "command": boundary_command},
+                {"command": boundary_command},
             )
 
-        assert result.success is True
-        mock_pty.assert_called_once()
+        assert result.success is False
+        assert result.exit_code == 3
+        assert not getattr(result, "validation_errors", None)
+        mock_pty.assert_not_called()
         mock_comm.assert_not_called()
         mock_direct.assert_not_called()
 
@@ -1091,7 +1084,7 @@ class TestShellValidationGate:
         ) as mock_comm, patch("agent.executor.run_tool_by_name") as mock_direct:
             result = await executor._execute_single_tool_internal(
                 "shell.exec",
-                {"transport": "pty", "command": "echo safe\nrm -rf /"},
+                {"command": "echo safe\nrm -rf /"},
             )
 
         assert result.success is False
@@ -1108,7 +1101,7 @@ class TestShellValidationGate:
         ) as mock_comm, patch("agent.executor.run_tool_by_name") as mock_direct:
             result = await executor._execute_single_tool_internal(
                 "shell.exec",
-                {"transport": "pty", "command": "bash -lc 'rm -rf /'"},
+                {"command": "bash -lc 'rm -rf /'"},
             )
 
         assert result.success is False
@@ -1125,7 +1118,7 @@ class TestShellValidationGate:
         ) as mock_comm, patch("agent.executor.run_tool_by_name") as mock_direct:
             result = await executor._execute_single_tool_internal(
                 "shell.exec",
-                {"transport": "pty", "command": "echo safe; rm -rf /"},
+                {"command": "echo safe; rm -rf /"},
             )
 
         assert result.success is False
@@ -1142,7 +1135,7 @@ class TestShellValidationGate:
         ) as mock_comm, patch("agent.executor.run_tool_by_name") as mock_direct:
             result = await executor._execute_single_tool_internal(
                 "shell.exec",
-                {"transport": "pty", "command": "bash -lc 'echo safe; rm -rf /'"},
+                {"command": "bash -lc 'echo safe; rm -rf /'"},
             )
 
         assert result.success is False
@@ -1159,7 +1152,7 @@ class TestShellValidationGate:
         ) as mock_comm, patch("agent.executor.run_tool_by_name") as mock_direct:
             result = await executor._execute_single_tool_internal(
                 "shell.exec",
-                {"transport": "pty", "command": "/bin/bash -lc 'rm -rf /'"},
+                {"command": "/bin/bash -lc 'rm -rf /'"},
             )
 
         assert result.success is False
@@ -1226,7 +1219,7 @@ class TestGenericValidationGate:
 
     @pytest.mark.asyncio
     @patch.dict(os.environ, {"SHELL_POLICY_ENFORCEMENT": "permissive"})
-    async def test_shell_exec_standalone_removal_still_allowed(self, executor):
+    async def test_shell_exec_permissive_policy_still_uses_runtime_session_lane(self, executor):
         with patch.object(executor, "_execute_via_pty") as mock_pty, patch.object(
             executor, "_execute_tool_via_comm"
         ) as mock_comm, patch("agent.executor.run_tool_by_name") as mock_direct:
@@ -1238,10 +1231,12 @@ class TestGenericValidationGate:
             )
             result = await executor._execute_single_tool_internal(
                 "shell.exec",
-                {"transport": "pty", "command": "rm -f /workspace/tmp.txt"},
+                {"command": "rm -f /workspace/tmp.txt"},
             )
 
-        assert result.success is True
-        mock_pty.assert_called_once()
+        assert result.success is False
+        assert result.exit_code == 3
+        assert not getattr(result, "validation_errors", None)
+        mock_pty.assert_not_called()
         mock_comm.assert_not_called()
         mock_direct.assert_not_called()

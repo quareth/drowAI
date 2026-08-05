@@ -33,15 +33,37 @@ class _AsyncServiceStub:
 
 
 class _TerminalManagerStub:
-    def __init__(self) -> None:
+    def __init__(self, order: list[str] | None = None) -> None:
         self.start_calls = 0
         self.cleanup_calls = 0
+        self.order = order
 
     def start(self) -> None:
         self.start_calls += 1
+        if self.order is not None:
+            self.order.append("terminal_start")
 
     async def cleanup_all_sessions(self) -> None:
         self.cleanup_calls += 1
+        if self.order is not None:
+            self.order.append("terminal_cleanup")
+
+
+class _ShellSessionServiceStub:
+    def __init__(self, order: list[str] | None = None) -> None:
+        self.start_calls = 0
+        self.stop_calls = 0
+        self.order = order
+
+    def start(self) -> None:
+        self.start_calls += 1
+        if self.order is not None:
+            self.order.append("shell_start")
+
+    async def stop(self) -> None:
+        self.stop_calls += 1
+        if self.order is not None:
+            self.order.append("shell_stop")
 
 
 class _WebsocketManagerStub:
@@ -136,6 +158,7 @@ def _patch_background_services(
     terminal_manager: _TerminalManagerStub,
     websocket_manager: _WebsocketManagerStub,
     report_scheduler: _AsyncServiceStub | None = None,
+    shell_session_service: _ShellSessionServiceStub | None = None,
 ) -> None:
     monkeypatch.setattr(background_services_module, "cve_sync_scheduler", scheduler)
     monkeypatch.setattr(
@@ -146,6 +169,11 @@ def _patch_background_services(
     monkeypatch.setattr(background_services_module, "metrics", metrics)
     monkeypatch.setattr(
         background_services_module, "terminal_session_manager", terminal_manager
+    )
+    monkeypatch.setattr(
+        background_services_module,
+        "shell_session_service",
+        shell_session_service or _ShellSessionServiceStub(),
     )
     monkeypatch.setattr(
         websocket_manager_module, "websocket_manager", websocket_manager
@@ -187,6 +215,7 @@ async def test_background_service_start_is_concurrently_idempotent(
     report_scheduler = _AsyncServiceStub()
     metrics = _AsyncServiceStub()
     terminal_manager = _TerminalManagerStub()
+    shell_session_service = _ShellSessionServiceStub()
     websocket_manager = _WebsocketManagerStub()
     _patch_background_services(
         monkeypatch,
@@ -194,6 +223,7 @@ async def test_background_service_start_is_concurrently_idempotent(
         report_scheduler=report_scheduler,
         metrics=metrics,
         terminal_manager=terminal_manager,
+        shell_session_service=shell_session_service,
         websocket_manager=websocket_manager,
     )
 
@@ -206,7 +236,54 @@ async def test_background_service_start_is_concurrently_idempotent(
     assert report_scheduler.start_calls == 1
     assert scheduler.start_calls == 1
     assert metrics.start_calls == 1
+    assert shell_session_service.start_calls == 1
     await background_services_module.stop_background_services()
+
+
+@pytest.mark.asyncio
+async def test_background_services_manage_shell_stale_sweep_before_terminal_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    order: list[str] = []
+    scheduler = _AsyncServiceStub()
+    report_scheduler = _AsyncServiceStub()
+    metrics = _AsyncServiceStub()
+    terminal_manager = _TerminalManagerStub(order)
+    shell_session_service = _ShellSessionServiceStub(order)
+    websocket_manager = _WebsocketManagerStub()
+    _patch_background_services(
+        monkeypatch,
+        scheduler=scheduler,
+        report_scheduler=report_scheduler,
+        metrics=metrics,
+        terminal_manager=terminal_manager,
+        shell_session_service=shell_session_service,
+        websocket_manager=websocket_manager,
+    )
+
+    started = await background_services_module.start_background_services()
+    stopped = await background_services_module.stop_background_services()
+
+    assert started is True
+    assert stopped is True
+    assert shell_session_service.start_calls == 1
+    assert shell_session_service.stop_calls == 1
+    assert terminal_manager.start_calls == 1
+    assert terminal_manager.cleanup_calls == 1
+    assert order == [
+        "terminal_start",
+        "shell_start",
+        "shell_stop",
+        "terminal_cleanup",
+    ]
+
+
+def test_background_service_status_is_boolean_only() -> None:
+    status = background_services_module.background_service_status()
+
+    assert status
+    assert all(isinstance(value, bool) for value in status.values())
+    assert not any("session" in key.lower() for key in status)
 
 
 @pytest.mark.asyncio

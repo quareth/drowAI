@@ -104,7 +104,10 @@ class TaskRetirementService:
                 message=f"Unexpected runtime retirement error for task {task_id}: {exc}",
             )
 
-        await self.cleanup_runtime_stream_state(task_id=task_id)
+        await self.cleanup_runtime_stream_state(
+            tenant_id=int(context.tenant_id),
+            task_id=task_id,
+        )
 
         return RuntimeRetirementResult(
             success=True,
@@ -146,8 +149,22 @@ class TaskRetirementService:
         return None
 
     @staticmethod
-    async def cleanup_runtime_stream_state(*, task_id: int) -> None:
+    async def cleanup_runtime_stream_state(*, tenant_id: int, task_id: int) -> None:
         """Remove in-memory stream state for one task after runtime retirement."""
+        try:
+            from runtime_shared.shell_session_port import get_shell_session_service
+
+            await get_shell_session_service().close_task_sessions(
+                tenant_id=tenant_id,
+                task_id=task_id,
+            )
+        except Exception:
+            logger.debug(
+                "Failed to cleanup shell sessions during runtime retirement for tenant %s task %s",
+                tenant_id,
+                task_id,
+                exc_info=True,
+            )
         try:
             from backend.services.terminal.manager import terminal_session_manager
 

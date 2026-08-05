@@ -251,6 +251,7 @@ class RuntimeEventService:
         )
 
         task_status = self._transition_task_for_event(
+            tenant_id=tenant_id,
             task_id=task_id,
             runtime_job=runtime_job,
             envelope=envelope,
@@ -595,6 +596,7 @@ class RuntimeEventService:
     def _transition_task_for_event(
         self,
         *,
+        tenant_id: int,
         task_id: int | None,
         runtime_job: RuntimeJob | None,
         envelope: RunnerEnvelope,
@@ -619,7 +621,7 @@ class RuntimeEventService:
             reason = "Runner lifecycle cancellation completed"
         elif envelope.message_type is RunnerMessageType.RUNTIME_RETIRED:
             reason = "Runner lifecycle retirement completed"
-            self._schedule_retirement_cleanup(task_id=task_id)
+            self._schedule_retirement_cleanup(tenant_id=tenant_id, task_id=task_id)
 
         success, _, _ = TaskStateService(self._db).change_task_status(
             task_id=task_id,
@@ -634,13 +636,23 @@ class RuntimeEventService:
         return target_status
 
     @staticmethod
-    def _schedule_retirement_cleanup(*, task_id: int) -> None:
+    def _schedule_retirement_cleanup(*, tenant_id: int, task_id: int) -> None:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            asyncio.run(TaskRetirementService.cleanup_runtime_stream_state(task_id=task_id))
+            asyncio.run(
+                TaskRetirementService.cleanup_runtime_stream_state(
+                    tenant_id=tenant_id,
+                    task_id=task_id,
+                )
+            )
             return
-        loop.create_task(TaskRetirementService.cleanup_runtime_stream_state(task_id=task_id))
+        loop.create_task(
+            TaskRetirementService.cleanup_runtime_stream_state(
+                tenant_id=tenant_id,
+                task_id=task_id,
+            )
+        )
 
     def _publish_runtime_event(
         self,

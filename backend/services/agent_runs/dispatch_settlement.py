@@ -13,6 +13,8 @@ import logging
 from collections.abc import Awaitable
 from typing import Any
 
+from runtime_shared.shell_session_port import get_shell_session_service
+
 from .completion import (
     AgentRunCompletion,
     build_agent_run_completion,
@@ -31,6 +33,15 @@ from .registry import ProcessLocalAgentRunRegistry
 from .result_projection import CompletedAgentResultHandoff
 
 logger = logging.getLogger(__name__)
+_SHELL_OWNER_CLEANUP_STATUSES = frozenset({"completed", "failed", "cancelled"})
+
+
+def _subagent_execution_owner_id(agent_run_id: str) -> str | None:
+    """Return the shell-session owner id for a concrete subagent run."""
+    normalized = agent_run_id.strip()
+    if not normalized:
+        return None
+    return f"subagent:{normalized}"
 
 
 class DispatchSettlement:
@@ -124,7 +135,12 @@ class DispatchSettlement:
     ) -> DispatchChildSettlement:
         """Translate one gathered child result into a typed dispatch fact."""
         if isinstance(result, AgentRunCompletion):
-            return DispatchChildSettlement(item, completion=result)
+            settlement = DispatchChildSettlement(item, completion=result)
+            await self._close_subagent_owner_shell_sessions_for_settlement(
+                item=item,
+                status=result.result.outcome,
+            )
+            return settlement
         if isinstance(result, SubagentRunPaused):
             return DispatchChildSettlement(item, paused=True)
         terminal_completion = await self.completion_for_terminal_exception(
@@ -132,16 +148,53 @@ class DispatchSettlement:
             item=item,
         )
         if terminal_completion is not None:
-            return DispatchChildSettlement(item, completion=terminal_completion)
-        return DispatchChildSettlement(
-            item,
-            stop=self.stop_for_child_exception(
-                result,
+            settlement = DispatchChildSettlement(item, completion=terminal_completion)
+            await self._close_subagent_owner_shell_sessions_for_settlement(
                 item=item,
-                task_id=task_id,
-                turn_index=turn_index,
-            ),
+                status=terminal_completion.result.outcome,
+            )
+            return settlement
+        stop = self.stop_for_child_exception(
+            result,
+            item=item,
+            task_id=task_id,
+            turn_index=turn_index,
         )
+        settlement = DispatchChildSettlement(item, stop=stop)
+        await self._close_subagent_owner_shell_sessions_for_settlement(
+            item=item,
+            status=stop.status,
+        )
+        return settlement
+
+    async def _close_subagent_owner_shell_sessions_for_settlement(
+        self,
+        *,
+        item: PlannedAgentInvocation,
+        status: str,
+    ) -> None:
+        """Close subagent-owner shell sessions at terminal settlement boundaries."""
+        if status not in _SHELL_OWNER_CLEANUP_STATUSES:
+            return
+        assignment = item.assignment
+        execution_owner_id = _subagent_execution_owner_id(assignment.agent_run_id)
+        if execution_owner_id is None:
+            return
+        try:
+            await get_shell_session_service().close_owner_sessions(
+                tenant_id=assignment.tenant_id,
+                task_id=assignment.task_id,
+                execution_owner_id=execution_owner_id,
+            )
+        except Exception:
+            logger.warning(
+                "shell_session.subagent_owner_cleanup_failed "
+                "task_id=%s owner=%s status=%s",
+                assignment.task_id,
+                execution_owner_id,
+                status,
+                exc_info=True,
+            )
 
     def stop_for_child_exception(
         self,
@@ -222,11 +275,15 @@ class DispatchSettlement:
             assignment = item.assignment
             if isinstance(result, AgentRunCompletion):
                 completions.append(result)
+                await self._close_subagent_owner_shell_sessions_for_settlement(
+                    item=item,
+                    status=result.result.outcome,
+                )
                 continue
 
             if isinstance(
                 result,
-                (SubagentRunCancelled, SubagentRunPaused, SubagentRunFailed),
+                (SubagentRunCancelled, SubagentRunFailed),
             ):
                 terminal = await self._registry.get(
                     tenant_id=assignment.tenant_id,
@@ -239,13 +296,18 @@ class DispatchSettlement:
                         assignment=assignment,
                         graph_thread_id=item.graph_thread_id,
                     )
-                    completions.append(
-                        AgentRunCompletion(
-                            result=terminal.result,
-                            usage_records=usage_records,
-                            graph_thread_id=item.graph_thread_id,
-                        )
+                    completion = AgentRunCompletion(
+                        result=terminal.result,
+                        usage_records=usage_records,
+                        graph_thread_id=item.graph_thread_id,
                     )
+                    completions.append(completion)
+                    await self._close_subagent_owner_shell_sessions_for_settlement(
+                        item=item,
+                        status=completion.result.outcome,
+                    )
+                continue
+            if isinstance(result, SubagentRunPaused):
                 continue
             terminal = await self._registry.get(
                 tenant_id=assignment.tenant_id,
@@ -253,12 +315,15 @@ class DispatchSettlement:
                 agent_run_id=assignment.agent_run_id,
             )
             if terminal is not None and terminal.result is not None:
-                completions.append(
-                    AgentRunCompletion(
-                        result=terminal.result,
-                        usage_records=(),
-                        graph_thread_id=item.graph_thread_id,
-                    )
+                completion = AgentRunCompletion(
+                    result=terminal.result,
+                    usage_records=(),
+                    graph_thread_id=item.graph_thread_id,
+                )
+                completions.append(completion)
+                await self._close_subagent_owner_shell_sessions_for_settlement(
+                    item=item,
+                    status=completion.result.outcome,
                 )
         return tuple(completions)
 

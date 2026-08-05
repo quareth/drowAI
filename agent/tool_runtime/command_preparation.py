@@ -139,6 +139,16 @@ def _set_transport(args: Any, transport: str) -> None:
         pass
 
 
+def _without_shell_exec_transport_metadata(
+    tool_id: str,
+    parameters: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Drop legacy internal transport metadata from shell.exec preparation."""
+    if tool_id != "shell.exec" or "transport" not in parameters:
+        return dict(parameters)
+    return {key: value for key, value in parameters.items() if key != "transport"}
+
+
 async def prepare_tool_command(
     *,
     tool_id: str,
@@ -171,6 +181,10 @@ async def prepare_tool_command(
             config=config,
         )
     normalized_parameters = dict(timeout_plan.normalized_parameters)
+    normalized_parameters = _without_shell_exec_transport_metadata(
+        str(tool_id),
+        normalized_parameters,
+    )
 
     task_id = getattr(config, "task_id", normalized_parameters.get("task_id"))
     if not task_id:

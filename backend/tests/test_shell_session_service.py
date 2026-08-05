@@ -7,14 +7,21 @@ limits, and PTY result mapping without opening a real provider terminal.
 from __future__ import annotations
 
 import asyncio
+import logging
 from types import SimpleNamespace
 
 import pytest
 
 from backend import config as backend_config
+from backend.services.metrics import metrics
+from backend.services.runtime_provider import RuntimeCallScope
+from backend.services.terminal.manager import TerminalSession, TerminalSessionManager
 from backend.services.terminal.shell_session_service import (
     ShellSessionService,
     ShellSessionServiceConfig,
+)
+from agent.graph.subgraphs.tool_execution_runtime.result_state_projection import (
+    preserve_shell_session_result_fields,
 )
 from runtime_shared.shell_session_contracts import (
     ShellExecRequest,
@@ -126,6 +133,134 @@ class GatedPrepareTerminalManager(FakeTerminalManager):
         session_id = f"terminal-{self.session_counter}"
         self.queues[session_id] = []
         return SimpleNamespace(session_id=session_id)
+
+
+class ProviderBoundaryTerminal:
+    """Provider-operation fake used behind a real TerminalSessionManager."""
+
+    def __init__(self) -> None:
+        self.sent_inputs: list[tuple[str, bytes]] = []
+        self.closed_sessions: list[str] = []
+        self.queues: dict[str, list[bytes]] = {}
+        self.cursor = 0
+
+    async def run(self, *, session, operation: str, payload=None, **_kwargs):
+        payload = dict(payload or {})
+        if operation == "get_runtime_status":
+            return SimpleNamespace(ok=True, metadata={"delegate_result": "running"})
+        if operation == "open_terminal_session":
+            provider_session_id = f"provider-{session.task_id}-{len(self.queues) + 1}"
+            self.queues[provider_session_id] = [b"__DROWAI_PROMPT__> "]
+            return SimpleNamespace(
+                ok=True,
+                error_message=None,
+                metadata={
+                    "delegate_result": {
+                        "session_id": provider_session_id,
+                        "runtime_job_id": "task-runtime-job",
+                    }
+                },
+            )
+        if operation == "send_terminal_input":
+            provider_session_id = str(payload.get("session_id") or session.exec_id)
+            raw = payload.get("data", b"")
+            data = raw.encode() if isinstance(raw, str) else bytes(raw)
+            self.sent_inputs.append((provider_session_id, data))
+            self._enqueue_shell_output(provider_session_id, data)
+            return SimpleNamespace(ok=True, metadata={"delegate_result": {}})
+        if operation == "read_terminal_output":
+            provider_session_id = str(payload.get("session_id") or session.exec_id)
+            queue = self.queues.setdefault(provider_session_id, [])
+            data = queue.pop(0) if queue else b""
+            self.cursor += 1
+            return SimpleNamespace(
+                ok=True,
+                metadata={
+                    "delegate_result": {
+                        "data": data,
+                        "next_cursor": self.cursor,
+                    }
+                },
+            )
+        if operation == "close_terminal_session":
+            provider_session_id = str(payload.get("session_id") or session.exec_id)
+            self.closed_sessions.append(provider_session_id)
+            return SimpleNamespace(ok=True, metadata={"delegate_result": {}})
+        raise AssertionError(operation)
+
+    def _enqueue_shell_output(self, provider_session_id: str, data: bytes) -> None:
+        text = data.decode("utf-8", errors="replace")
+        if "__DROWAI_CMD_START_" not in text:
+            return
+        start = text.split("printf '", 1)[1].split("\\n';", 1)[0]
+        end = text.split("\\n__DROWAI_CMD_END_", 1)[1].split("=", 1)[0]
+        end = f"__DROWAI_CMD_END_{end}"
+        if "printf quick" in text:
+            self.queues[provider_session_id].append(
+                f"{start}\nquick\n{end}={PTY_EXIT_CODE_MARKER}0\n".encode()
+            )
+        elif "delayed-provider" in text:
+            self.queues[provider_session_id].append(f"{start}\nstarted\n".encode())
+            self.queues[provider_session_id].append(
+                f"done\n{end}={PTY_EXIT_CODE_MARKER}0\n".encode()
+            )
+        elif "oversized-provider" in text:
+            self.queues[provider_session_id].append(
+                (f"{start}\n" + ("x" * 5000)).encode()
+            )
+
+
+def _provider_bound_service(monkeypatch: pytest.MonkeyPatch):
+    manager = TerminalSessionManager()
+    provider = ProviderBoundaryTerminal()
+    monkeypatch.setattr(
+        manager,
+        "_resolve_internal_runtime_context",
+        lambda *, task_id, session_name: SimpleNamespace(
+            task_id=task_id,
+            tenant_id=7,
+            user_id=3,
+            runtime_placement_mode="local",
+            workspace_id=f"task-{task_id}",
+            workspace_path="/workspace",
+            runner_id=None,
+            execution_site_id=None,
+            runtime_call_scope=RuntimeCallScope.PRODUCT_TASK,
+        ),
+    )
+    async def _create_agent_session(task_id: int, cols: int, rows: int, session_name=None):
+        del cols, rows
+        provider_session_id = f"provider-{task_id}-1"
+        provider.queues[provider_session_id] = [b"__DROWAI_PROMPT__> "]
+        session = TerminalSession(
+            session_id=manager._build_agent_session_id(
+                task_id,
+                session_name=session_name,
+            ),
+            task_id=task_id,
+            user_id=3,
+            container_name=f"drowai-task-{task_id}",
+            connection_type="docker_exec",
+            exec_id=provider_session_id,
+            runtime_job_id="task-runtime-job",
+            runtime_call_scope=RuntimeCallScope.PRODUCT_TASK.value,
+            session_type="agent",
+        )
+        manager.sessions[session.session_id] = session
+        return session
+
+    monkeypatch.setattr(manager, "_create_agent_session", _create_agent_session)
+    monkeypatch.setattr(manager, "_run_session_provider_operation", provider.run)
+    service = ShellSessionService(
+        terminal_manager=manager,
+        config=_config(terminal_io_grace_sec=0),
+        runtime_context_resolver=lambda _identity: _context(
+            runtime_placement_mode="local",
+            runner_id=None,
+            execution_site_id=None,
+        ),
+    )
+    return service, provider
 
 
 def _identity(**overrides: object) -> ShellSessionIdentity:
@@ -285,6 +420,107 @@ async def test_delayed_command_yields_public_session_id_and_later_completes() ->
     assert second.exit_code == 0
     assert second.stdout == "done"
     assert first.session_id not in service._records
+
+
+@pytest.mark.asyncio
+async def test_local_provider_bound_quick_command_completes_without_session_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, provider = _provider_bound_service(monkeypatch)
+
+    update = await service.execute(
+        identity=_identity(
+            runtime_placement_mode="local",
+            runner_id=None,
+            execution_site_id=None,
+        ),
+        request=ShellExecRequest(command="printf quick", yield_time_ms=0),
+    )
+
+    assert update.process_status is ShellProcessStatus.COMPLETED
+    assert update.success is True
+    assert update.exit_code == 0
+    assert update.session_id is None
+    assert update.stdout == "quick"
+    assert provider.closed_sessions == ["provider-11-1"]
+
+
+@pytest.mark.asyncio
+async def test_local_provider_bound_delayed_command_yields_then_polls_bounded_delta(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, provider = _provider_bound_service(monkeypatch)
+    identity = _identity(
+        runtime_placement_mode="local",
+        runner_id=None,
+        execution_site_id=None,
+    )
+
+    first = await service.execute(
+        identity=identity,
+        request=ShellExecRequest(
+            command="delayed-provider",
+            yield_time_ms=0,
+            max_output_chars=1024,
+        ),
+    )
+    assert first.process_status is ShellProcessStatus.RUNNING
+    assert first.session_id is not None
+    assert first.stdout == "started"
+    assert len(first.stdout) <= 1024
+
+    second = await service.write_stdin(
+        identity=identity,
+        request=ShellWriteRequest(
+            session_id=first.session_id,
+            yield_time_ms=0,
+            max_output_chars=1024,
+        ),
+    )
+
+    assert second.process_status is ShellProcessStatus.COMPLETED
+    assert second.session_id is None
+    assert second.stdout == "done"
+    assert provider.closed_sessions == ["provider-11-1"]
+
+
+@pytest.mark.asyncio
+async def test_local_provider_bound_oversized_delayed_output_has_no_hidden_transcript(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service, _provider = _provider_bound_service(monkeypatch)
+    identity = _identity(
+        runtime_placement_mode="local",
+        runner_id=None,
+        execution_site_id=None,
+    )
+
+    update = await service.execute(
+        identity=identity,
+        request=ShellExecRequest(
+            command="oversized-provider",
+            yield_time_ms=0,
+            max_output_chars=1024,
+        ),
+    )
+
+    assert update.process_status is ShellProcessStatus.RUNNING
+    assert update.session_id is not None
+    assert update.truncated is True
+    assert len(update.stdout) <= 1024
+    assert "x" * 1100 not in update.stdout
+    record = service._records[update.session_id]
+    assert not hasattr(record, "transcript")
+    assert not hasattr(record, "raw_output")
+    assert "x" * 1100 not in repr(record)
+
+    projected = preserve_shell_session_result_fields(
+        {"tool": "shell.exec", "status": "success", "success": True},
+        raw_result=update.model_dump() | {"tool": "shell.exec"},
+        tool_name="shell.exec",
+    )
+    assert projected["truncated"] is True
+    assert "omitted middle content is not preserved" in projected["summary"]
 
 
 @pytest.mark.asyncio
@@ -606,6 +842,62 @@ async def test_deadline_expiry_poll_returns_timed_out_and_closes() -> None:
     assert manager.closed_sessions == ["terminal-1"]
 
 
+@pytest.mark.asyncio
+async def test_stale_cleanup_uses_monotonic_idle_expiry() -> None:
+    manager = FakeTerminalManager()
+    clock = MutableClock()
+    service = ShellSessionService(
+        terminal_manager=manager,
+        config=_config(idle_timeout_sec=1, termination_grace_sec=0),
+        runtime_context_resolver=lambda _identity: _context(),
+        clock=clock,
+    )
+    first = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(
+            command="delayed",
+            yield_time_ms=0,
+            max_runtime_sec=300,
+        ),
+    )
+
+    assert first.session_id is not None
+    clock.advance(2)
+    await service.cleanup_stale_sessions()
+
+    assert first.session_id not in service._records
+    assert b"\x03" in [payload for _session, payload in manager.sent_inputs]
+    assert manager.closed_sessions == ["terminal-1"]
+
+
+@pytest.mark.asyncio
+async def test_stale_cleanup_uses_monotonic_hard_runtime_expiry() -> None:
+    manager = FakeTerminalManager()
+    clock = MutableClock()
+    service = ShellSessionService(
+        terminal_manager=manager,
+        config=_config(idle_timeout_sec=300, termination_grace_sec=0),
+        runtime_context_resolver=lambda _identity: _context(),
+        clock=clock,
+    )
+    first = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(
+            command="delayed",
+            yield_time_ms=0,
+            max_runtime_sec=1,
+        ),
+    )
+
+    assert first.session_id is not None
+    clock.advance(2)
+    await service.cleanup_stale_sessions()
+
+    assert first.session_id not in service._records
+    assert b"\x03" in [payload for _session, payload in manager.sent_inputs]
+    assert manager.closed_sessions == ["terminal-1"]
+
+
 def test_backend_config_defaults_feed_service_config() -> None:
     service_config = ShellSessionServiceConfig.from_backend_config()
 
@@ -627,3 +919,123 @@ def test_backend_config_defaults_feed_service_config() -> None:
     assert service_config.terminal_io_grace_sec == (
         backend_config.SHELL_SESSION_TERMINAL_IO_GRACE_SEC
     )
+
+
+@pytest.mark.asyncio
+async def test_lifecycle_observability_uses_redacted_events_and_baseline_metrics(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = FakeTerminalManager()
+    service = _service(manager)
+    metrics.counters.clear()
+    metrics.gauges.clear()
+    monkeypatch.setattr(metrics, "enabled", True)
+
+    with caplog.at_level(
+        logging.INFO,
+        logger="backend.services.terminal.shell_session_service",
+    ):
+        update = await service.execute(
+            identity=_identity(),
+            request=ShellExecRequest(
+                command="echo quick",
+                cwd="/workspace/host-path-should-not-log",
+                env={"TOKEN": "env-secret-should-not-log"},
+                yield_time_ms=0,
+            ),
+        )
+
+    assert update.process_status is ShellProcessStatus.COMPLETED
+    log_text = caplog.text
+    assert "event=session_opened" in log_text
+    assert "event=process_completed" in log_text
+    assert "event=session_closed" in log_text
+    assert "tenant_id=7" in log_text
+    assert "task_id=11" in log_text
+    assert "placement=runner" in log_text
+    assert "process_status=completed" in log_text
+    assert "close_reason=process_completed" in log_text
+    assert "main:turn-123" not in log_text
+    assert "shs_" not in log_text
+    assert "echo quick" not in log_text
+    assert "quick" not in log_text
+    assert "env-secret-should-not-log" not in log_text
+    assert "host-path-should-not-log" not in log_text
+
+    assert metrics.counters["shell_session_starts"] == 1
+    assert metrics.counters["shell_session_terminal_outcomes.completed"] == 1
+    assert metrics.gauges["shell_session_active_sessions.runner"] == 0.0
+
+
+@pytest.mark.asyncio
+async def test_operation_failure_observability_uses_stable_error_code_only(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = FakeTerminalManager()
+    service = _service(manager, context=_context(workspace_path="/workspace/other"))
+    metrics.counters.clear()
+    metrics.gauges.clear()
+    monkeypatch.setattr(metrics, "enabled", True)
+
+    with caplog.at_level(
+        logging.INFO,
+        logger="backend.services.terminal.shell_session_service",
+    ):
+        update = await service.execute(
+            identity=_identity(),
+            request=ShellExecRequest(
+                command="leaky-command-should-not-log",
+                env={"SECRET": "secret-value-should-not-log"},
+                yield_time_ms=0,
+            ),
+        )
+
+    assert update.error_code is ShellSessionErrorCode.COMMAND_START_FAILED
+    log_text = caplog.text
+    assert "event=operation_failed" in log_text
+    assert "error_code=command_start_failed" in log_text
+    assert "placement=runner" in log_text
+    assert "leaky-command-should-not-log" not in log_text
+    assert "secret-value-should-not-log" not in log_text
+    assert "workspace/other" not in log_text
+    assert metrics.counters["shell_session_operation_failures.command_start_failed"] == 1
+
+
+@pytest.mark.asyncio
+async def test_write_input_observability_does_not_log_input_contents(
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = FakeTerminalManager()
+    service = _service(manager)
+    metrics.counters.clear()
+    metrics.gauges.clear()
+    monkeypatch.setattr(metrics, "enabled", True)
+    first = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(command="interactive", yield_time_ms=0),
+    )
+    assert first.session_id is not None
+    caplog.clear()
+
+    with caplog.at_level(
+        logging.INFO,
+        logger="backend.services.terminal.shell_session_service",
+    ):
+        update = await service.write_stdin(
+            identity=_identity(),
+            request=ShellWriteRequest(
+                session_id=first.session_id,
+                chars="input-secret-should-not-log\n",
+                yield_time_ms=0,
+            ),
+        )
+
+    assert update.process_status is ShellProcessStatus.COMPLETED
+    log_text = caplog.text
+    assert "event=process_completed" in log_text
+    assert "event=session_closed" in log_text
+    assert "input-secret-should-not-log" not in log_text
+    assert first.session_id not in log_text

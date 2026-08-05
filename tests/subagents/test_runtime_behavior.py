@@ -787,6 +787,67 @@ async def test_runtime_model_exposes_and_commits_universal_shell_utilities() -> 
 
 
 @pytest.mark.asyncio
+async def test_runtime_model_commits_shell_write_stdin_for_running_shell_result() -> None:
+    public_session_id = "shs_subagent_continuation_123"
+    state = _generic_state_with_universal_shell_tools()
+    metadata = state["facts"]["metadata"]
+    metadata["last_tool_result"] = {
+        "tool": SHELL_EXEC_TOOL_ID,
+        "success": True,
+        "status": "success",
+        "process_status": "running",
+        "session_id": public_session_id,
+        "stdout": "started",
+        "stderr": "",
+        "exit_code": None,
+        "stdin_available": True,
+        "truncated": False,
+        "summary": f"Command is still running; poll session {public_session_id}.",
+        "parameters": {"command": "sleep 1; printf done"},
+    }
+    metadata["last_tool_result_compact"] = {
+        "tool": SHELL_EXEC_TOOL_ID,
+        "success": True,
+        "status": "success",
+        "process_status": "running",
+        "session_id": public_session_id,
+        "summary": f"Command is still running; poll session {public_session_id}.",
+    }
+    calls = [
+        _native_call(
+            SHELL_WRITE_STDIN_TOOL_ID,
+            parameters={
+                "session_id": public_session_id,
+                "chars": "",
+                "yield_time_ms": 1000,
+                "max_output_chars": 32000,
+            },
+            strategy="sequential",
+            intent="Poll the running shell session.",
+        )
+    ]
+    llm = _FakeBuilderLLM(calls)
+
+    update = await run_subagent_model_turn(
+        _pathfinder_definition(),
+        state,
+        llm_resolver=lambda *_args, **_kwargs: llm,
+    )
+
+    request = _request_projection(llm.requests[0])
+    assert SHELL_WRITE_STDIN_TOOL_ID in request["tool_ids"]
+    assert public_session_id in request["user_prompt"]
+    tool_call = update["facts"]["metadata"]["planner_plan"]["tool_batch"]["tool_calls"][0]
+    assert tool_call["tool_id"] == SHELL_WRITE_STDIN_TOOL_ID
+    assert tool_call["parameters"] == {
+        "session_id": public_session_id,
+        "chars": "",
+        "yield_time_ms": 1000,
+        "max_output_chars": 32000,
+    }
+
+
+@pytest.mark.asyncio
 async def test_runtime_model_reconstructs_full_profile_after_committed_batch() -> None:
     first_llm = _FakeBuilderLLM(
         [

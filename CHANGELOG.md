@@ -8,6 +8,12 @@ The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Main agents and subagents can run provider-backed interactive shell commands,
+  continue yielded sessions with exact input or polling, and receive bounded,
+  task-isolated output with lifecycle cleanup.
+
 ### Security
 
 - Updated cryptography, Undici, and PostCSS to patched releases that address

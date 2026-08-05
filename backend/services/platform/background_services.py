@@ -19,7 +19,10 @@ from backend.services.cve_indexing.runtime import cve_sync_scheduler
 from backend.services.metrics import metrics
 from backend.services.retention import cleanup_agent_logs
 from backend.services.reporting.report_scheduler import report_scheduler
-from backend.services.terminal_session_manager import terminal_session_manager
+from backend.services.terminal_session_manager import (
+    shell_session_service,
+    terminal_session_manager,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +53,7 @@ async def start_background_services() -> bool:
             await cve_sync_scheduler.start()
             await report_scheduler.start()
             terminal_session_manager.start()
+            shell_session_service.start()
 
             from backend.services.websocket.connection_manager import websocket_manager
 
@@ -96,6 +100,7 @@ async def stop_background_services(*, force: bool = False) -> bool:
     await metrics.stop()
     await cve_sync_scheduler.stop()
     await report_scheduler.stop()
+    await shell_session_service.stop()
     await terminal_session_manager.cleanup_all_sessions()
 
     from backend.services.websocket.connection_manager import websocket_manager
