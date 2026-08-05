@@ -26,6 +26,7 @@ from ..runtime_provider import (
     RuntimeProviderContextResolver,
 )
 from ..runtime_provider.terminal_stream_contract import is_push_terminal_stream
+from runtime_shared.terminal_contracts import TerminalReadResult
 from .contracts import (
     AGENT_PROMPT_ENV,
     AGENT_PROMPT_MARKER,
@@ -943,10 +944,20 @@ class TerminalSessionManager:
         timeout: float | None = None,
     ) -> bytes:
         """Read bytes from an active terminal session through provider I/O."""
+        return (await self.read_output_result(session_id, size, timeout=timeout)).data
+
+    async def read_output_result(
+        self,
+        session_id: str,
+        size: int = 4096,
+        *,
+        timeout: float | None = None,
+    ) -> TerminalReadResult:
+        """Read terminal output with provider success/failure details."""
         session = self._registry.get(session_id)
         provider_ref = self._session_provider_ref(session) if session else None
         if not session or not session.is_active or provider_ref is None:
-            return b""
+            return TerminalReadResult(ok=False, error_code="terminal_session_unavailable")
         payload: dict[str, Any] = {"size": size, "timeout": timeout}
         if session.socket is not None:
             payload["socket"] = session.socket
@@ -962,7 +973,10 @@ class TerminalSessionManager:
             payload=payload,
         )
         if not result.ok:
-            return b""
+            return TerminalReadResult(
+                ok=False,
+                error_code=result.error_code or "runtime_transport_failed",
+            )
         delegate = result.metadata.get("delegate_result")
         if isinstance(delegate, dict):
             next_cursor = delegate.get("next_cursor", delegate.get("cursor"))
@@ -974,11 +988,11 @@ class TerminalSessionManager:
             data = delegate.get("data", b"")
             if isinstance(data, bytes):
                 session.update_activity()
-                return data
+                return TerminalReadResult(ok=True, data=data)
             if isinstance(data, str):
                 session.update_activity()
-                return data.encode()
-        return b""
+                return TerminalReadResult(ok=True, data=data.encode())
+        return TerminalReadResult(ok=True, data=b"")
 
     async def _run_session_provider_operation(
         self,

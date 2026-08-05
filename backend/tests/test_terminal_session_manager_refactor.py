@@ -7,6 +7,7 @@ agent bootstrap behavior that must remain stable across the extraction.
 from __future__ import annotations
 
 import asyncio
+import socket
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 from types import SimpleNamespace
@@ -64,6 +65,163 @@ async def test_terminal_session_active_io_methods_are_disabled() -> None:
         await session.write(b"x")
     with pytest.raises(RuntimeError, match="TerminalSessionManager"):
         await session.read(1)
+
+
+@pytest.mark.asyncio
+async def test_read_output_result_returns_success_for_empty_provider_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Typed terminal reads distinguish empty successful reads from failures."""
+    manager = TerminalSessionManager()
+    session = TerminalSession(
+        session_id="session-empty",
+        task_id=1,
+        user_id=0,
+        container_name="task-1",
+        connection_type="docker_exec",
+        exec_id="provider-session-empty",
+    )
+    manager.sessions[session.session_id] = session
+
+    monkeypatch.setattr(
+        manager,
+        "_run_session_provider_operation",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                ok=True,
+                metadata={"delegate_result": {"data": b"", "next_cursor": 7}},
+            )
+        ),
+    )
+
+    result = await manager.read_output_result(session.session_id)
+
+    assert result.ok is True
+    assert result.data == b""
+    assert result.error_code is None
+    assert session.output_cursor == 7
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeout", [0.0, 0.01])
+async def test_read_output_result_preserves_idle_local_read_success(
+    monkeypatch: pytest.MonkeyPatch,
+    timeout: float,
+) -> None:
+    """Idle local socket reads should remain successful typed empty reads."""
+    manager = TerminalSessionManager()
+    reader, writer = socket.socketpair()
+    session = TerminalSession(
+        session_id="session-idle",
+        task_id=1,
+        user_id=0,
+        container_name="task-1",
+        connection_type="docker_exec",
+        socket=reader,
+    )
+    manager.sessions[session.session_id] = session
+    payloads: list[dict[str, object] | None] = []
+
+    async def _fake_run_session_provider_operation(
+        *,
+        session: TerminalSession,
+        operation: str,
+        call,
+        payload: dict[str, object] | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> SimpleNamespace:
+        del session, operation, call, metadata
+        payloads.append(payload)
+        return SimpleNamespace(
+            ok=True,
+            metadata={"delegate_result": {"data": b""}},
+        )
+
+    monkeypatch.setattr(
+        manager,
+        "_run_session_provider_operation",
+        _fake_run_session_provider_operation,
+    )
+    try:
+        result = await manager.read_output_result(session.session_id, timeout=timeout)
+    finally:
+        reader.close()
+        writer.close()
+
+    assert result.ok is True
+    assert result.data == b""
+    assert result.error_code is None
+    assert payloads == [{"size": 4096, "timeout": timeout, "socket": reader}]
+
+
+@pytest.mark.asyncio
+async def test_read_output_result_reports_provider_failure_without_cursor_advance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Failed provider reads should not look like idle sessions or move cursors."""
+    manager = TerminalSessionManager()
+    session = TerminalSession(
+        session_id="session-failure",
+        task_id=1,
+        user_id=0,
+        container_name="task-1",
+        connection_type="docker_exec",
+        exec_id="provider-session-failure",
+        output_cursor=4,
+    )
+    manager.sessions[session.session_id] = session
+
+    monkeypatch.setattr(
+        manager,
+        "_run_session_provider_operation",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                ok=False,
+                error_code=None,
+                metadata={"delegate_result": {"data": b"lost", "next_cursor": 99}},
+            )
+        ),
+    )
+
+    result = await manager.read_output_result(session.session_id)
+
+    assert result.ok is False
+    assert result.data == b""
+    assert result.error_code == "runtime_transport_failed"
+    assert session.output_cursor == 4
+
+
+@pytest.mark.asyncio
+async def test_read_output_remains_byte_compatible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The legacy read_output facade must keep returning only bytes."""
+    manager = TerminalSessionManager()
+    session = TerminalSession(
+        session_id="session-bytes",
+        task_id=1,
+        user_id=0,
+        container_name="task-1",
+        connection_type="docker_exec",
+        exec_id="provider-session-bytes",
+    )
+    manager.sessions[session.session_id] = session
+
+    monkeypatch.setattr(
+        manager,
+        "_run_session_provider_operation",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                ok=True,
+                metadata={"delegate_result": {"data": "hello", "cursor": 3}},
+            )
+        ),
+    )
+
+    data = await manager.read_output(session.session_id)
+
+    assert data == b"hello"
+    assert session.output_cursor == 3
 
 
 @pytest.mark.asyncio
