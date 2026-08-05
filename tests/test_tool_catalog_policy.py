@@ -32,6 +32,7 @@ def test_known_utility_tools_are_not_user_configurable() -> None:
         "service_access.ftp_download",
         "service_access.ssh_login",
         "shell.exec",
+        "shell.write_stdin",
     ]
 
     for tool_id in utility_tool_ids:

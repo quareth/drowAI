@@ -412,19 +412,7 @@ def validate_shell_exec_command(
     """Validate shell command text and return error descriptors."""
     validation_errors: List[Dict[str, str]] = []
     command_text = str(command or "")
-    max_chars = int(max_command_chars or 320)
-
-    if len(command_text) > max_chars:
-        validation_errors.append(
-            {
-                "field": "command",
-                "error": f"Command too long ({len(command_text)} > {max_chars} characters)",
-                "message": f"Command exceeds max length of {max_chars} characters (received {len(command_text)}).",
-                "suggested_fix": "Use a shorter command for the immediate objective, then continue in a follow-up tool call.",
-            }
-        )
-        if metric_hook:
-            metric_hook("executor_shell_exec_length_rejected")
+    _ = max_command_chars
 
     if policy is None:
         policy = CommandPolicy()
@@ -536,16 +524,15 @@ def validate_shell_tool_parameters(
             return []
 
         command = str(getattr(args, "command", "") or "")
-        max_chars = int(max_command_chars or 320)
         validation_errors = validate_shell_exec_command(
             command,
-            max_command_chars=max_chars,
+            max_command_chars=max_command_chars,
             metric_hook=metric_hook,
         )
         if validation_errors and logger and hasattr(logger, "log_operation"):
             logger.log_operation(
                 "WARNING",
-                "EnhancedExecutor: shell.exec quality gate rejected command",
+                "EnhancedExecutor: shell.exec policy gate rejected command",
                 metadata={
                     "tool_id": tool_id,
                     "error_count": len(validation_errors),
@@ -584,4 +571,3 @@ __all__ = [
     "validate_shell_exec_command",
     "validate_shell_tool_parameters",
 ]
-

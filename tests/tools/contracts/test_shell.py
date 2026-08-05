@@ -1,13 +1,14 @@
+"""Contract tests for shell tools and their public argument surfaces."""
+
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from agent.tools.tool_registry import get_tool
 from agent.tools.shell.policy import CommandPolicy, PolicyEnforcement
-
-from tests.tools.fixtures.parameter_fixtures import load_param_fixture
 
 from .base_contract import BaseToolContract
 
@@ -189,6 +190,27 @@ class TestShellExecSecurity:
         assert metadata["shell_exec"]["exit_code"] == 127
         assert metadata["shell_exec"]["has_errors"] is True
 
+    @pytest.mark.parametrize(
+        "removed_field,value",
+        [
+            ("transport", "pty"),
+            ("timeout_sec", 60),
+            ("idempotent", True),
+            ("redact_output", False),
+        ],
+    )
+    def test_shell_exec_rejects_removed_phase3_fields(
+        self,
+        removed_field: str,
+        value: object,
+    ) -> None:
+        """Verify shell.exec rejects fields removed from the Phase 3 contract."""
+        tool_cls = get_tool("shell.exec")
+        args_class = tool_cls.args_model
+
+        with pytest.raises(ValidationError):
+            args_class(command="whoami", **{removed_field: value})
+
 
 class TestShellScriptSecurity:
     """Security tests for shell.script tool."""
@@ -292,38 +314,19 @@ class TestShellScriptSecurity:
 class TestShellArtifactCreation:
     """Tests for artifact creation in shell tools."""
 
-    def test_shell_exec_create_artifacts_large_output(self) -> None:
-        """Verify large outputs are saved as artifacts."""
+    def test_shell_exec_does_not_create_host_artifacts(self) -> None:
+        """Verify shell.exec no longer owns relative host artifact creation."""
         tool_cls = get_tool("shell.exec")
         args_class = tool_cls.args_model
         tool = tool_cls()
         
         args = args_class(command="cat large_file")
-        # Simulate large output (>10KB)
         large_output = "x" * 15000
         
-        # create_artifacts should return list of artifact paths
         artifacts = tool.create_artifacts(
             stdout=large_output,
             args=args,
             timestamp=1234567890,
         )
         
-        assert isinstance(artifacts, list)
-
-    def test_shell_exec_create_artifacts_with_stderr(self) -> None:
-        """Verify stderr is saved as separate artifact."""
-        tool_cls = get_tool("shell.exec")
-        args_class = tool_cls.args_model
-        tool = tool_cls()
-        
-        args = args_class(command="failing_command")
-        
-        artifacts = tool.create_artifacts(
-            stdout="",
-            args=args,
-            timestamp=1234567890,
-            stderr="Error: command failed",
-        )
-        
-        assert isinstance(artifacts, list)
+        assert artifacts == []

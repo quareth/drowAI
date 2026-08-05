@@ -21,6 +21,7 @@ from agent.tool_runtime.batch.plan_view import (
 from agent.tool_runtime.artifact_file_metadata import (
     collect_artifact_file_ref_candidates,
 )
+from agent.tools.catalog_builder import limit_catalog_preserving_universal_tools
 
 
 def _serialize_tool_batch(batch: _ToolBatch) -> Dict[str, Any]:
@@ -707,7 +708,10 @@ def get_full_tool_catalog_for_planner(
         except (TypeError, ValueError, AttributeError):
             pass
 
-    limited_catalog = valid_tools[:max_tools_limit] if max_tools_limit > 0 else valid_tools
+    limited_catalog = limit_catalog_preserving_universal_tools(
+        valid_tools,
+        max_tools_limit,
+    )
     logger.info(
         f"[PLANNER_CONTEXT] Providing {len(limited_catalog)} tools to planner "
         f"(from {len(all_tools)} available, limit={max_tools_limit})"

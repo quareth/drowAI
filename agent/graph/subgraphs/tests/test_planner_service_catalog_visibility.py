@@ -28,6 +28,30 @@ def test_full_planner_catalog_uses_mvp_allowlist(monkeypatch) -> None:
     assert catalog == ["filesystem.read_file", "filesystem.grep", "filesystem.search_text"]
 
 
+def test_full_planner_catalog_preserves_universal_shell_tools_under_default_cap(monkeypatch) -> None:
+    """Universal shell utilities survive the bounded runtime planner catalog."""
+    monkeypatch.setattr(
+        "agent.tools.tool_registry.available_tools",
+        lambda: [
+            "filesystem.read_file",
+            "filesystem.grep",
+            "filesystem.search_text",
+            "shell.script",
+            "web_applications.web_crawlers.ffuf",
+            "shell.exec",
+            "shell.write_stdin",
+        ],
+    )
+
+    catalog = planner_service.get_full_tool_catalog_for_planner(
+        SimpleNamespace(max_tools_exposed=3),
+        logger=logging.getLogger(__name__),
+    )
+
+    assert catalog == ["filesystem.read_file", "shell.exec", "shell.write_stdin"]
+    assert "shell.script" not in catalog
+
+
 def test_category_planner_catalog_uses_mvp_allowlist(monkeypatch) -> None:
     """Category-filtered runtime planner catalogs also apply MVP visibility."""
     monkeypatch.setattr(
@@ -76,5 +100,5 @@ def test_category_planner_catalog_includes_networking_utilities(monkeypatch) -> 
 
     assert "networking_utilities" in captured_categories
     assert "networking_utilities.network" in catalog
-    assert "shell.exec" not in catalog
+    assert "shell.exec" in catalog
     assert "information_gathering.osint.whois" not in catalog

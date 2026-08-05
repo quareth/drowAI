@@ -13,8 +13,11 @@ from __future__ import annotations
 
 from typing import Any, Iterable, List
 
+from .universal_agent_tools import UNIVERSAL_AGENT_TOOL_IDS
+
 _VISIBLE_TOOL_IDS: frozenset[str] = frozenset(
     {
+        *UNIVERSAL_AGENT_TOOL_IDS,
         "filesystem.append_file",
         "filesystem.copy_path",
         "filesystem.delete_path",
@@ -31,6 +34,7 @@ _VISIBLE_TOOL_IDS: frozenset[str] = frozenset(
         "filesystem.stat_path",
         "filesystem.write_file",
         "exploitation_tools.metasploit.inspect_module",
+        "exploitation_tools.metasploit.run_exploit",
         "exploitation_tools.metasploit.search_modules",
         "information_gathering.dns.amass",
         "information_gathering.network_discovery.fping",

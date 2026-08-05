@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import agent.subagents.runtime.profile as profile_module
 from agent.config import AgentConfig
 from agent.subagents.definition import (
     SubagentDefinition,
@@ -16,7 +17,12 @@ from agent.subagents.runtime.profile import (
 )
 from agent.subagents.registry import get_subagent_registry
 from agent.tools.categories import ToolCategory
-from agent.tools.enhanced_metadata import EnhancedToolMetadata, ToolCapability
+from agent.tools.enhanced_metadata import (
+    EnhancedToolMetadata,
+    ToolCapability,
+    ToolCatalogRole,
+)
+from agent.tools.universal_agent_tools import UNIVERSAL_AGENT_TOOL_IDS
 
 
 _SUPPORTED_CATEGORY_TO_PROFILE_CAPABILITY = {
@@ -96,19 +102,20 @@ def test_pathfinder_definition_preserves_the_existing_capability_vocabulary() ->
         assert resolve_definition_capability(definition, alias) == category
 
 
-def test_platform_shell_restriction_remains_definition_independent() -> None:
+def test_utility_shell_metadata_does_not_become_mission_capability() -> None:
     definition = replace(
         _pathfinder_definition(),
         id="command_runner",
         kind="automation",
         supported_task_categories=("command_execution",),
-        tool_ids=("shell.execute",),
+        tool_ids=("shell.exec",),
         capability_aliases=(),
     )
     metadata = EnhancedToolMetadata(
-        tool_id="shell.execute",
+        tool_id="shell.exec",
         display_name="Execute shell command",
         category=ToolCategory.SHELL,
+        catalog_role=ToolCatalogRole.UTILITY,
         capabilities=[
             ToolCapability(
                 name="command_execution",
@@ -119,9 +126,71 @@ def test_platform_shell_restriction_remains_definition_independent() -> None:
 
     assert subagent_capabilities_from_metadata(
         definition,
-        "shell.execute",
+        "shell.exec",
         metadata,
     ) == ()
+
+
+def test_pathfinder_profile_appends_visible_registered_universal_utilities() -> None:
+    definition = _pathfinder_definition()
+
+    profile = resolve_subagent_tool_profile(
+        definition,
+        (*definition.tool_ids, *UNIVERSAL_AGENT_TOOL_IDS),
+    )
+
+    assert profile.tool_ids == (*definition.tool_ids, *UNIVERSAL_AGENT_TOOL_IDS)
+    assert profile.capabilities_for_tool("shell.exec") == ()
+    assert profile.capabilities_for_tool("shell.write_stdin") == ()
+    assert profile.capabilities_for_tool(
+        "information_gathering.network_discovery.fping"
+    ) == ("host_discovery",)
+    assert profile.capabilities_for_tool(
+        "information_gathering.network_discovery.nmap"
+    ) == ("port_scanning", "service_enumeration")
+
+
+def test_universal_utilities_still_require_catalog_visibility(monkeypatch) -> None:
+    definition = _pathfinder_definition()
+
+    monkeypatch.setattr(
+        profile_module,
+        "is_tool_visible_in_catalog",
+        lambda tool_id: tool_id != "shell.write_stdin",
+    )
+    profile = resolve_subagent_tool_profile(
+        definition,
+        (*definition.tool_ids, *UNIVERSAL_AGENT_TOOL_IDS),
+    )
+
+    assert "shell.exec" in profile.tool_ids
+    assert "shell.write_stdin" not in profile.tool_ids
+
+
+def test_universal_utilities_still_require_tool_registration(monkeypatch) -> None:
+    from agent.tools import tool_registry
+
+    definition = _pathfinder_definition()
+
+    monkeypatch.setattr(
+        tool_registry,
+        "tool_exists",
+        lambda tool_id: tool_id != "shell.exec",
+    )
+    profile = resolve_subagent_tool_profile(
+        definition,
+        (*definition.tool_ids, *UNIVERSAL_AGENT_TOOL_IDS),
+    )
+
+    assert "shell.exec" not in profile.tool_ids
+    assert "shell.write_stdin" in profile.tool_ids
+
+
+def test_subagent_definitions_do_not_repeat_universal_utilities() -> None:
+    universal_tool_ids = set(UNIVERSAL_AGENT_TOOL_IDS)
+
+    for definition in load_subagent_definitions():
+        assert universal_tool_ids.isdisjoint(definition.tool_ids)
 
 
 def test_pathfinder_definition_matches_current_runtime_limits() -> None:
@@ -149,6 +218,6 @@ def test_pathfinder_definition_owns_runtime_prompt_sections() -> None:
     assert definition.runtime_boundary_rules == (
         "Use only the targets, objective, scope, and constraints in the "
         "assignment context.",
-        "Do not exploit, authenticate, mutate files, run shells, manage "
-        "agents, or request credentials.",
+        "Do not exploit, authenticate, mutate files unless explicitly allowed by "
+        "assignment and tool scope, manage agents, or request credentials.",
     )

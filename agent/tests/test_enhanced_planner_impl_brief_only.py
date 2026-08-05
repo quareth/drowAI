@@ -346,7 +346,7 @@ def test_try_llm_action_plan_tolerates_missing_intent_brief(monkeypatch) -> None
 
 
 def test_llm_catalog_filters_hidden_tools() -> None:
-    """LLM-facing planner catalog must not expose hidden tools."""
+    """LLM-facing planner catalog exposes universal tools but not hidden tools."""
     planner = EnhancedActionPlanner(_BriefOnlyDummyConfig(), llm_client=_BriefOnlyFakeLLM("shell.exec"))
     context: Dict[str, Any] = {
         "resolved_tools": [
@@ -373,19 +373,22 @@ def test_llm_catalog_filters_hidden_tools() -> None:
 
     assert "artifact.search" not in visible
     assert "information_gathering.network_discovery.netdiscover" not in visible
-    assert "shell.exec" not in visible
+    assert "shell.exec" in visible
     assert "shell.script" not in visible
     assert "filesystem.read_file" in visible
 
 
-def test_llm_catalog_hides_artifact_overlay_tools_even_when_exposure_allows_them() -> None:
-    """Artifact tools do not survive the final visibility guard."""
+def test_llm_catalog_preserves_universal_tools_through_final_cap() -> None:
+    """Universal shell tools survive the direct planner's final LLM cap."""
     planner = EnhancedActionPlanner(_BriefOnlyDummyConfig(), llm_client=_BriefOnlyFakeLLM("artifact.search"))
     context: Dict[str, Any] = {
         "resolved_tools": [
-            "shell.exec",
-            "artifact.search",
             "filesystem.read_file",
+            "filesystem.grep",
+            "artifact.search",
+            "shell.script",
+            "shell.exec",
+            "shell.write_stdin",
         ],
         "artifact_tool_exposure": {
             "allow_search": True,
@@ -401,9 +404,9 @@ def test_llm_catalog_hides_artifact_overlay_tools_even_when_exposure_allows_them
         user_message="search prior outputs",
     )
 
+    assert visible == ["shell.exec", "shell.write_stdin"]
     assert "artifact.search" not in visible
-    assert "filesystem.read_file" in visible
-    assert "shell.exec" not in visible
+    assert "shell.script" not in visible
 
 
 def test_llm_catalog_does_not_fallback_to_raw_registry_tools(monkeypatch) -> None:
@@ -467,7 +470,7 @@ def test_llm_catalog_excludes_current_turn_tool_unavailable_from_runtime_signal(
 
     assert "information_gathering.network_discovery.netdiscover" not in visible
     assert "information_gathering.network_discovery.nmap" in visible
-    assert "shell.exec" not in visible
+    assert "shell.exec" in visible
 
 
 # ---------------------------------------------------------------------------

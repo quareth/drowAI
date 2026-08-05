@@ -28,7 +28,7 @@ def test_subagent_runtime_system_prompt_uses_versioned_canonical_guidance() -> N
         ),
         boundary_rules=(
             "Use only the targets, objective, scope, and constraints in the assignment context.",
-            "Do not exploit, authenticate, mutate files, run shells, manage agents, or request credentials.",
+            "Do not exploit, authenticate, mutate files unless explicitly allowed by assignment and tool scope, manage agents, or request credentials.",
         ),
         max_committed_tools_per_batch=3,
     )

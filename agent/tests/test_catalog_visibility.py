@@ -5,8 +5,11 @@ from __future__ import annotations
 from agent.tools import catalog_visibility
 from agent.tools.catalog_policy import get_tool_catalog_role, is_user_configurable_tool
 from agent.tools.enhanced_metadata import ToolCatalogRole
+from agent.tools.universal_agent_tools import UNIVERSAL_AGENT_TOOL_IDS
 
 MVP_VISIBLE_TOOLS = [
+    "shell.exec",
+    "shell.write_stdin",
     "networking_utilities.network",
     "service_access.ftp_login",
     "service_access.ftp_list",
@@ -44,8 +47,12 @@ def test_hidden_and_visible_predicates_match_mvp_allowlist_policy() -> None:
     assert catalog_visibility.is_tool_visible_in_catalog("") is False
     assert catalog_visibility.is_tool_visible_in_catalog(None) is False
 
-    assert catalog_visibility.is_tool_hidden_from_catalog("shell.exec") is True
-    assert catalog_visibility.is_tool_visible_in_catalog("shell.exec") is False
+    for tool_id in UNIVERSAL_AGENT_TOOL_IDS:
+        assert catalog_visibility.is_tool_hidden_from_catalog(tool_id) is False
+        assert catalog_visibility.is_tool_visible_in_catalog(tool_id) is True
+
+    assert catalog_visibility.is_tool_hidden_from_catalog("shell.script") is True
+    assert catalog_visibility.is_tool_visible_in_catalog("shell.script") is False
 
     assert catalog_visibility.is_tool_hidden_from_catalog("filesystem.grep") is False
     assert catalog_visibility.is_tool_visible_in_catalog("filesystem.grep") is True
@@ -131,6 +138,7 @@ def test_filter_visible_tool_ids_is_stable_deduped_and_stripped() -> None:
     result = catalog_visibility.filter_visible_tool_ids(
         [
             " shell.exec ",
+            "shell.write_stdin",
             "filesystem.read_file",
             "filesystem.grep",
             "",
@@ -147,6 +155,8 @@ def test_filter_visible_tool_ids_is_stable_deduped_and_stripped() -> None:
     )
 
     assert result == [
+        "shell.exec",
+        "shell.write_stdin",
         "filesystem.read_file",
         "filesystem.grep",
         "service_access.ftp_login",
@@ -161,6 +171,7 @@ def test_visible_available_tools_delegates_to_registry_and_visibility(monkeypatc
         "agent.tools.tool_registry.available_tools",
         lambda: [
             "shell.exec",
+            "shell.write_stdin",
             "filesystem.read_file",
             "service_access.ftp_login",
             "information_gathering.dns.amass",
@@ -171,6 +182,8 @@ def test_visible_available_tools_delegates_to_registry_and_visibility(monkeypatc
     )
 
     assert catalog_visibility.visible_available_tools() == [
+        "shell.exec",
+        "shell.write_stdin",
         "filesystem.read_file",
         "service_access.ftp_login",
         "information_gathering.dns.amass",
@@ -192,9 +205,9 @@ def test_artifact_tools_stay_hidden_even_when_legacy_overlay_flag_is_set() -> No
         is False
     )
     assert catalog_visibility.filter_visible_tool_ids(
-        ["artifact.search", "filesystem.read_file"],
+        ["artifact.search", "filesystem.read_file", "shell.write_stdin"],
         include_artifact_tools=True,
-    ) == ["filesystem.read_file"]
+    ) == ["filesystem.read_file", "shell.write_stdin"]
 
 
 def test_http_download_is_visible_utility_not_user_configurable_pentest() -> None:

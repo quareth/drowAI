@@ -1,3 +1,5 @@
+"""Tests for tool registry discovery and catalog metadata helpers."""
+
 import subprocess
 from types import SimpleNamespace
 
@@ -112,8 +114,19 @@ def test_tool_catalog_entries_shell_exec_runbook_shape():
     entries = build_tool_catalog_entries(["shell.exec"])
 
     description = entries[0]["description"]
-    assert "Execute one guarded shell command" in description
-    assert "stdout" in description
+    assert "Start one guarded provider-backed PTY shell session" in description
+    assert "process status" in description
+    assert len(description) <= 200
+
+
+def test_tool_catalog_entries_shell_write_stdin_runbook_shape():
+    from agent.tools.enhanced_tool_metadata import build_tool_catalog_entries
+
+    entries = build_tool_catalog_entries(["shell.write_stdin"])
+
+    description = entries[0]["description"]
+    assert "Poll, send exact input to, or interrupt" in description
+    assert "process status" in description
     assert len(description) <= 200
 
 
@@ -164,11 +177,12 @@ def test_tool_catalog_entries_tcpdump_runbook_shape():
 
 
 def test_tool_catalog_entries_hides_tools_removed_from_llm_catalogs():
-    from agent.tools.catalog_visibility import is_tool_hidden_from_catalog
+    from agent.tools.catalog_visibility import (
+        is_tool_hidden_from_catalog,
+        is_tool_visible_in_catalog,
+    )
 
     for tool_id in [
-        "shell.exec",
-        "exploitation_tools.metasploit.run_exploit",
         "information_gathering.osint.whois",
         "information_gathering.network_discovery.netdiscover",
         "reverse_engineering.debuggers.immunity_debugger",
@@ -179,6 +193,10 @@ def test_tool_catalog_entries_hides_tools_removed_from_llm_catalogs():
     ]:
         assert is_tool_hidden_from_catalog(tool_id), tool_id
 
+    assert is_tool_visible_in_catalog("shell.exec")
+    assert is_tool_visible_in_catalog("shell.write_stdin")
+    assert is_tool_visible_in_catalog("exploitation_tools.metasploit.run_exploit")
+    assert is_tool_hidden_from_catalog("shell.script")
     assert not is_tool_hidden_from_catalog("filesystem.grep")
 
 
