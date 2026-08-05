@@ -9,7 +9,9 @@ from runtime_shared.semantic.canonical_keys import (
     build_host_ip_key,
     build_relationship_edge_key,
     canonicalize_subject_key,
+    validate_subject_key_characters,
 )
+from runtime_shared.semantic.web_common import canonicalize_web_path_subject_key
 
 
 def test_host_dns_key_normalizes_case_trailing_dot_and_idna() -> None:
@@ -55,6 +57,15 @@ def test_subject_key_canonicalization_preserves_canonical_url_characters(
     expected: str,
 ) -> None:
     assert canonicalize_subject_key(value) == expected
+
+
+def test_web_path_subject_key_canonicalization_preserves_path_case() -> None:
+    value = "web.path:HTTPS://Example.Test:443/Admin%2FPanel"
+
+    assert validate_subject_key_characters(value) == value
+    assert canonicalize_web_path_subject_key(value) == (
+        "web.path:https://example.test/Admin%2FPanel"
+    )
 
 
 @pytest.mark.parametrize(

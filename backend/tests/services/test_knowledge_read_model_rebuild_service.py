@@ -931,6 +931,61 @@ def test_rebuild_source_execution_restores_impacted_web_paths_only() -> None:
         engine.dispose()
 
 
+def test_rebuild_source_execution_preserves_case_distinct_web_paths() -> None:
+    engine, db = _build_session()
+    try:
+        engagement = _seed_engagement(
+            db,
+            username_suffix="web-path-case",
+            engagement_name="Rebuild Case-Distinct Web Paths",
+        )
+        now = datetime.now(timezone.utc)
+        source_execution_id = str(uuid_lib.uuid4())
+        _seed_observation_ledger_for_engagement(
+            db,
+            user_id=engagement.user_id,
+            engagement_id=engagement.id,
+            execution_observations={
+                source_execution_id: [
+                    *_web_path_observation_rows(
+                        user_id=engagement.user_id,
+                        engagement_id=engagement.id,
+                        source_execution_id=source_execution_id,
+                        canonical_url="https://example.test/Admin",
+                        base_time=now,
+                    ),
+                    *_web_path_observation_rows(
+                        user_id=engagement.user_id,
+                        engagement_id=engagement.id,
+                        source_execution_id=source_execution_id,
+                        canonical_url="https://example.test/admin",
+                        base_time=now + timedelta(seconds=1),
+                    ),
+                ]
+            },
+        )
+
+        result = KnowledgeReadModelRebuildService(db).rebuild_source_execution(
+            source_execution_id=source_execution_id,
+            engagement_id=engagement.id,
+        )
+
+        assert result["web_path_upsert_count"] == 2
+        assert result["web_path_insert_count"] == 2
+        assert {
+            row.canonical_url
+            for row in db.query(KnowledgeWebPath).filter(
+                KnowledgeWebPath.user_id == engagement.user_id
+            )
+        } == {
+            "https://example.test/Admin",
+            "https://example.test/admin",
+        }
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_rebuild_engagement_scope_does_not_touch_other_engagement() -> None:
     engine, db = _build_session()
     try:

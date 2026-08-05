@@ -13,14 +13,14 @@ _DNS_LABEL_PATTERN = re.compile(r"^[a-z0-9-]{1,63}$")
 _RELATIONSHIP_TYPE_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
 _TOKEN_PATTERN = re.compile(r"[^a-z0-9._/-]+")
 _SUBJECT_KEY_PATTERN = re.compile(
-    r"^[a-z0-9._~:/@#%!$&'()*+,;=\[\]-]{1,512}$"
+    r"^[A-Za-z0-9._~:/@#%!$&'()*+,;=\[\]-]{1,512}$"
 )
 
 
-def canonicalize_subject_key(value: object) -> str:
-    """Return a bounded lowercase subject key using the canonical safe alphabet."""
+def validate_subject_key_characters(value: object) -> str:
+    """Return a bounded subject key without changing identity-significant case."""
 
-    normalized = str(value or "").strip().lower()
+    normalized = str(value or "").strip()
     if not normalized:
         raise ValueError("subject_key cannot be empty")
     if any(character.isspace() for character in normalized):
@@ -28,6 +28,12 @@ def canonicalize_subject_key(value: object) -> str:
     if not _SUBJECT_KEY_PATTERN.fullmatch(normalized):
         raise ValueError("subject_key contains unsupported characters")
     return normalized
+
+
+def canonicalize_subject_key(value: object) -> str:
+    """Return a bounded lowercase subject key for case-insensitive identities."""
+
+    return validate_subject_key_characters(value).lower()
 
 
 def _normalize_ip(value: object) -> str:

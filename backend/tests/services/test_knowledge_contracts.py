@@ -60,6 +60,13 @@ def test_subject_key_helper_is_deterministic() -> None:
     assert first == second == "host.ip:10.0.0.1"
 
 
+def test_subject_key_helper_preserves_case_sensitive_web_path() -> None:
+    assert build_subject_key(
+        subject_type="web.path",
+        raw_key="HTTPS://Example.Test:443/Admin",
+    ) == "web.path:https://example.test/Admin"
+
+
 def test_dedupe_key_helper_is_deterministic_for_same_inputs() -> None:
     key_one = build_dedupe_key(
         observation_type="network.open_port",

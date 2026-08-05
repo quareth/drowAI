@@ -15,7 +15,10 @@ from sqlalchemy.orm import Session
 
 from ....models import KnowledgeAsset, KnowledgeService, KnowledgeWebPath
 from runtime_shared.semantic.service_identity import build_service_socket_key
-from runtime_shared.semantic.web_common import build_web_origin_key
+from runtime_shared.semantic.web_common import (
+    build_web_origin_key,
+    canonicalize_web_path_subject_key,
+)
 from ..contracts import ObservationCreate
 from ..evidence_refs import normalize_canonical_evidence_refs
 
@@ -213,8 +216,9 @@ class WebPathProjector:
             return None
         if str(observation.subject_type or "").strip().lower() != "web.path":
             return None
-        subject_key = str(observation.subject_key or "").strip().lower()
-        if not subject_key.startswith("web.path:"):
+        try:
+            subject_key = canonicalize_web_path_subject_key(observation.subject_key)
+        except ValueError:
             return None
 
         canonical_url = subject_key.removeprefix("web.path:")
