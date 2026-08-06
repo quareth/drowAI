@@ -289,6 +289,45 @@ describe("ToolBatchCard", () => {
     expect(screen.queryByText("Running")).toBeNull();
   });
 
+  it("presents shell process states independently from generic tool success", () => {
+    const messages: ChatMessage[] = [
+      makeMsg({
+        id: "batch-start",
+        metadata: {
+          step_type: "tool_batch_start",
+          tool_batch_id: "tb_shell_states",
+          tool_calls: [
+            { tool_call_id: "tc_running", tool_id: "shell.exec" },
+            { tool_call_id: "tc_completed", tool_id: "shell.write_stdin" },
+            { tool_call_id: "tc_timeout", tool_id: "shell.exec" },
+          ],
+        },
+      }),
+      ...[
+        ["tc_running", "success", "running"],
+        ["tc_completed", "success", "completed"],
+        ["tc_timeout", "error", "timed_out"],
+      ].map(([toolCallId, status, processStatus]) =>
+        makeMsg({
+          id: `end-${toolCallId}`,
+          metadata: {
+            step_type: "tool_end",
+            tool_call_id: toolCallId,
+            tool_name: "shell.exec",
+            status,
+            process_status: processStatus,
+          },
+        }),
+      ),
+    ];
+
+    render(<ToolBatchCard messages={messages} groupKey="shell-states" />);
+
+    expect(screen.getAllByText("Running").length).toBeGreaterThan(0);
+    expect(screen.getByText("Completed")).toBeTruthy();
+    expect(screen.getByText("Timed out")).toBeTruthy();
+  });
+
   it("renders terminal batch rows when no per-tool events were emitted", () => {
     const messages: ChatMessage[] = [
       makeMsg({

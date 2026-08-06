@@ -705,6 +705,7 @@ class TestToolEventProcessing:
             "conversation_id": "conv-1",
             "turn_id": "turn-1",
             "status": "success",
+            "process_status": "running",
             "duration": 2.0,
         }
         
@@ -713,6 +714,7 @@ class TestToolEventProcessing:
             
             # Verify metric was incremented
             mock_inc.assert_called_with("langgraph_tool_ends_processed")
+            assert result["metadata"]["process_status"] == "running"
 
     def test_build_tool_event_sequence_has_contract_metadata(self):
         """Synthetic tool events should carry step_type/ind like live events."""
@@ -731,6 +733,35 @@ class TestToolEventProcessing:
         assert delta_event["metadata"]["ind"] == stream_consts.TOOL_PHASE_INDEX
         assert end_event["metadata"]["step_type"] == stream_consts.STEP_TOOL_END
         assert end_event["metadata"]["ind"] == stream_consts.TOOL_PHASE_INDEX
+
+    @pytest.mark.parametrize(
+        ("process_status", "expected_status"),
+        [
+            ("running", "running"),
+            ("completed", "success"),
+            ("timed_out", "timed_out"),
+            ("terminated", "terminated"),
+        ],
+    )
+    def test_build_tool_event_sequence_preserves_shell_process_status(
+        self,
+        process_status: str,
+        expected_status: str,
+    ) -> None:
+        events = build_tool_event_sequence(
+            "shell.exec",
+            {
+                "status": "success",
+                "success": True,
+                "process_status": process_status,
+                "summary": "shell update",
+            },
+            conversation_id="conv-1",
+            turn_id="turn-1",
+        )
+
+        assert events[-1]["metadata"]["process_status"] == process_status
+        assert events[-1]["metadata"]["status"] == expected_status
 
 
 class TestEventSchemaCompatibility:

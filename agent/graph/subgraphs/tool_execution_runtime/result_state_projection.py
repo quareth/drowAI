@@ -1015,7 +1015,18 @@ def project_trace_history_and_outbound_events(
     )
 
     if has_writer and writer is not None:
+        process_status = str(
+            outcome.result.get("process_status")
+            or compact_result_dict.get("process_status")
+            or ""
+        ).strip().lower()
         execution_status = "success" if outcome.result.get("success") else "error"
+        if process_status == "running":
+            execution_status = "running"
+        elif process_status == "timed_out":
+            execution_status = "timed_out"
+        elif process_status == "terminated":
+            execution_status = "terminated"
         execution_duration = outcome.result.get("duration", 0)
         exit_code = outcome.result.get("exit_code")
 
@@ -1028,6 +1039,7 @@ def project_trace_history_and_outbound_events(
                 "conversation_id": conversation_id,
                 "turn_id": turn_id,
                 "status": execution_status,
+                "process_status": process_status or None,
                 "duration": execution_duration,
                 "exit_code": exit_code,
                 "summary": {

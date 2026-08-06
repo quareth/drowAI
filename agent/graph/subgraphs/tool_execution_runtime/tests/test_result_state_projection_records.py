@@ -406,13 +406,14 @@ def test_project_trace_history_masks_dispatch_cache_without_masking_runtime_even
         "tool": "shell.exec",
         "status": "success",
         "success": True,
+        "process_status": "running",
         "summary": f"captured password={sentinel}",
         "key_findings": [f"Authorization: Bearer {sentinel}"],
     }
     outcome = SimpleNamespace(
         tool_id="shell.exec",
         parameters={"password": sentinel},
-        result={"success": True, "exit_code": 0},
+        result={"success": True, "exit_code": None, "process_status": "running"},
         summary=f"captured password={sentinel}",
         reasoning=[f"reasoned over {sentinel}"],
     )
@@ -449,6 +450,8 @@ def test_project_trace_history_masks_dispatch_cache_without_masking_runtime_even
     assert sentinel in observation_text
     assert sentinel in interactive.trace.observations[0]
     assert sentinel in str(emitted_events[0]["compact_tool_result"])
+    assert emitted_events[0]["status"] == "running"
+    assert emitted_events[0]["process_status"] == "running"
 
     cache_entry = facts.metadata["tool_dispatch_cache"]["tc-cache-secret"]
     serialized_cache = str(cache_entry)

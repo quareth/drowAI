@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 
 interface ExecutingToolCardProps {
   toolName: string;
-  status?: "executing" | "completed" | "failed" | "cancelled";
+  status?: "executing" | "completed" | "failed" | "cancelled" | "terminated" | "timed_out";
   taskId?: number | string;
   toolCallId?: string;
   /** Stable identifier so collapse/expand state persists across remounts. */
@@ -68,19 +68,23 @@ export function ExecutingToolCard({
   const isCompleted = status === "completed";
   const isFailed = status === "failed";
   const isCancelled = status === "cancelled";
+  const isTerminated = status === "terminated";
+  const isTimedOut = status === "timed_out";
 
   const statusLabel = isExecuting
     ? "Running"
     : isCompleted
       ? "Completed"
-      : isCancelled
+      : isTimedOut
+        ? "Timed out"
+        : isCancelled || isTerminated
         ? "Stopped"
         : "Failed";
   const statusColor = isExecuting
     ? "text-slate-400"
     : isCompleted
       ? "text-emerald-400"
-      : isCancelled
+      : isCancelled || isTerminated
         ? "text-slate-400"
         : "text-rose-400";
 
@@ -133,7 +137,7 @@ export function ExecutingToolCard({
           ) : (
             <Wrench
               className={`w-3 h-3 shrink-0 ${
-                isCompleted ? "text-emerald-500" : isFailed ? "text-rose-500" : "text-slate-500"
+                isCompleted ? "text-emerald-500" : isFailed || isTimedOut ? "text-rose-500" : "text-slate-500"
               }`}
             />
           )}

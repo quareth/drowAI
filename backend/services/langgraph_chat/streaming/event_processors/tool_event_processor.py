@@ -179,6 +179,9 @@ class ToolEventProcessor:
         exit_code = event.get("exit_code")
         summary = event.get("summary", {})
         compact_tool_result = event.get("compact_tool_result")
+        process_status = event.get("process_status")
+        if process_status is None and isinstance(compact_tool_result, Mapping):
+            process_status = compact_tool_result.get("process_status")
         error = event.get("error")
         ind = event.get("ind")
         tool_batch_id = event.get("tool_batch_id")
@@ -270,6 +273,7 @@ class ToolEventProcessor:
                 "tool_call_id": tool_call_id,
                 "tool_batch_id": tool_batch_id,
                 "status": status,
+                "process_status": process_status,
                 "duration": duration,
                 "exit_code": exit_code,
                 "summary": summary,

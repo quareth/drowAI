@@ -31,7 +31,7 @@ interface ToolBatchCardProps {
 interface BatchRowState {
   toolCallId: string;
   toolName: string;
-  status: "executing" | "completed" | "failed" | "cancelled";
+  status: "executing" | "completed" | "failed" | "cancelled" | "terminated" | "timed_out";
   retryAttempt?: number;
   retryMaxAttempts?: number;
   /** First-seen index in the message stream — used as a stable order key when
@@ -68,11 +68,24 @@ function readNumber(metadata: Record<string, unknown> | undefined, key: string):
   return undefined;
 }
 
-function deriveStatus(rawStatus: string | undefined): BatchRowState["status"] {
+function deriveStatus(
+  rawStatus: string | undefined,
+  processStatus?: string,
+): BatchRowState["status"] {
   const lowered = (rawStatus ?? "").toLowerCase();
+  const process = (processStatus ?? "").toLowerCase();
+  if (process === "running") return "executing";
+  if (process === "timed_out") return "timed_out";
+  if (process === "terminated") return "terminated";
+  if (process === "completed" && !["success", "ok", "completed"].includes(lowered)) {
+    return "failed";
+  }
   if (lowered === "success" || lowered === "ok" || lowered === "completed") {
     return "completed";
   }
+  if (lowered === "running" || lowered === "in_progress") return "executing";
+  if (lowered === "timed_out" || lowered === "timeout") return "timed_out";
+  if (lowered === "terminated") return "terminated";
   if (
     lowered === "cancelled" ||
     lowered === "canceled" ||
@@ -160,7 +173,10 @@ function buildRows(messages: ChatMessage[], manifest: Map<string, number>): Batc
             };
             rows.set(callId, row);
           }
-          row.status = deriveStatus(typeof item.status === "string" ? item.status : undefined);
+          row.status = deriveStatus(
+            typeof item.status === "string" ? item.status : undefined,
+            typeof item.process_status === "string" ? item.process_status : undefined,
+          );
         });
       }
       return;
@@ -196,7 +212,10 @@ function buildRows(messages: ChatMessage[], manifest: Map<string, number>): Batc
     }
 
     if (stepType === "tool_end") {
-      row.status = deriveStatus(readString(metadata, "status"));
+      row.status = deriveStatus(
+        readString(metadata, "status"),
+        readString(metadata, "process_status"),
+      );
     }
   });
 
@@ -242,8 +261,8 @@ function deriveBatchAggregate(messages: ChatMessage[], rows: BatchRowState[]): B
   if (rows.length === 0) return { status: "executing", strategy };
   const allTerminal = rows.every((r) => r.status !== "executing");
   if (!allTerminal) return { status: "executing", strategy };
-  const anyFailed = rows.some((r) => r.status === "failed");
-  const anyCancelled = rows.some((r) => r.status === "cancelled");
+  const anyFailed = rows.some((r) => r.status === "failed" || r.status === "timed_out");
+  const anyCancelled = rows.some((r) => r.status === "cancelled" || r.status === "terminated");
   const anyCompleted = rows.some((r) => r.status === "completed");
   if (anyCancelled && !anyCompleted && !anyFailed) {
     return { status: "cancelled", strategy };
