@@ -30,17 +30,39 @@ from runtime_shared.shell_session_contracts import (
     ShellWriteRequest,
 )
 from runtime_shared.shell_session_framing import (
-    PTY_EXIT_CODE_MARKER,
     PtyCommandFrame,
-    ShellSessionFramingError,
+    StreamingPtyFramingParser,
     create_pty_command_frame,
-    normalize_pty_output,
-    parse_marked_command_output,
-    strip_pty_artifacts,
 )
 from runtime_shared.terminal_contracts import TerminalReadResult
+from .shell_session_output import ShellSessionOutputAccumulator
 
 logger = logging.getLogger(__name__)
+
+_SHELL_SESSION_ERROR_MESSAGES = {
+    ShellSessionErrorCode.SHELL_RUNTIME_UNAVAILABLE: (
+        "Shell runtime is unavailable for this task."
+    ),
+    ShellSessionErrorCode.SESSION_LIMIT_REACHED: (
+        "Shell session limit reached; close an active session before retrying."
+    ),
+    ShellSessionErrorCode.SESSION_UNAVAILABLE: (
+        "Shell session is unavailable or does not belong to this execution."
+    ),
+    ShellSessionErrorCode.SESSION_BUSY: (
+        "Shell session already has an operation in progress."
+    ),
+    ShellSessionErrorCode.COMMAND_START_FAILED: "Shell command could not be started.",
+    ShellSessionErrorCode.COMMAND_OUTPUT_INVALID: (
+        "Shell command output did not match the session framing protocol."
+    ),
+    ShellSessionErrorCode.COMMAND_TIMED_OUT: (
+        "Command exceeded its configured maximum runtime."
+    ),
+    ShellSessionErrorCode.RUNTIME_TRANSPORT_FAILED: (
+        "Shell runtime transport failed while processing the session."
+    ),
+}
 
 ContextResolver = Callable[[ShellSessionIdentity], Awaitable[Any] | Any]
 
@@ -83,7 +105,7 @@ class ShellSessionRecord:
     terminal_session_id: str
     identity: ShellSessionIdentity
     frame: PtyCommandFrame
-    command: str
+    framing_parser: StreamingPtyFramingParser
     process_status: ShellProcessStatus
     created_at: float
     last_activity_at: float
@@ -128,7 +150,7 @@ class ShellSessionService:
         if context_error is not None:
             self._emit_operation_failed(identity, context_error)
             return self._error_update(
-                error_code=ShellSessionErrorCode.COMMAND_START_FAILED,
+                error_code=context_error,
                 duration_ms=self._duration_ms(started_at),
             )
 
@@ -158,6 +180,7 @@ class ShellSessionService:
         task_key: tuple[int, int] | None = None
         terminal_session_id: str | None = None
         registered = False
+        start_error_code = ShellSessionErrorCode.COMMAND_START_FAILED
 
         async with self._lock:
             owner_key, task_key = self._reserve_start_capacity_locked(identity)
@@ -188,6 +211,7 @@ class ShellSessionService:
             if not await self._terminal_manager.send_input(
                 terminal_session_id, frame.wrapped_command.encode()
             ):
+                start_error_code = ShellSessionErrorCode.RUNTIME_TRANSPORT_FAILED
                 raise RuntimeError("send_terminal_input failed")
 
             return await self._read_update(
@@ -211,7 +235,7 @@ class ShellSessionService:
         except Exception:
             self._emit_operation_failed(
                 identity,
-                ShellSessionErrorCode.COMMAND_START_FAILED,
+                start_error_code,
                 public_session_id=public_session_id,
             )
             if registered:
@@ -225,7 +249,7 @@ class ShellSessionService:
             elif owner_key is not None and task_key is not None:
                 await self._release_start_capacity(owner_key, task_key)
             return self._error_update(
-                error_code=ShellSessionErrorCode.COMMAND_START_FAILED,
+                error_code=start_error_code,
                 duration_ms=self._duration_ms(started_at),
             )
 
@@ -265,26 +289,12 @@ class ShellSessionService:
                         ShellSessionErrorCode.RUNTIME_TRANSPORT_FAILED,
                         started_at,
                     )
-                await asyncio.sleep(self._config.termination_grace_sec)
-                self._emit_process_completed(record, ShellProcessStatus.TERMINATED)
-                await self._remove_and_close_record(
-                    record.public_session_id,
-                    interrupt=False,
-                    expected_record=record,
-                    close_reason="interrupted",
-                )
-                return ShellSessionUpdate(
-                    success=True,
-                    status="success",
-                    process_status=ShellProcessStatus.TERMINATED,
-                    session_id=None,
-                    stdout="",
-                    stderr="",
-                    exit_code=None,
-                    stdin_available=False,
-                    truncated=False,
-                    duration_ms=self._duration_ms(started_at),
-                    summary="Command was interrupted.",
+                return await self._read_update(
+                    record=record,
+                    yield_time_ms=int(self._config.termination_grace_sec * 1000),
+                    max_output_chars=request.max_output_chars,
+                    started_at=started_at,
+                    terminate_after_window=True,
                 )
 
             if request.chars:
@@ -402,9 +412,13 @@ class ShellSessionService:
         yield_time_ms: int,
         max_output_chars: int,
         started_at: float,
+        terminate_after_window: bool = False,
     ) -> ShellSessionUpdate:
         deadline = self._clock() + (float(yield_time_ms) / 1000.0)
-        raw_parts: list[str] = []
+        output = ShellSessionOutputAccumulator(
+            parser=record.framing_parser,
+            max_output_chars=max_output_chars,
+        )
         while True:
             now = self._clock()
             if self._is_deadline_expired(record, now):
@@ -420,10 +434,7 @@ class ShellSessionService:
                     expected_record=record,
                     close_reason="deadline_expired",
                 )
-                stdout, truncated = self._bounded_text(
-                    "".join(raw_parts),
-                    max_output_chars,
-                )
+                stdout, truncated = output.stdout()
                 return self._timeout_update(
                     stdout=stdout,
                     truncated=truncated,
@@ -431,8 +442,6 @@ class ShellSessionService:
                 )
 
             remaining = max(0.0, deadline - now)
-            if yield_time_ms == 0 and raw_parts:
-                break
             if remaining <= 0.0 and yield_time_ms > 0:
                 break
 
@@ -457,10 +466,8 @@ class ShellSessionService:
                     break
                 continue
             record.last_activity_at = self._clock()
-            raw_parts.append(self._decode_bytes(record, result.data))
-            combined = "".join(raw_parts)
             try:
-                completion = self._extract_completion(record, combined, max_output_chars)
+                completion = output.ingest(self._decode_bytes(record, result.data))
             except ValueError:
                 return await self._fail_claimed_record(
                     record,
@@ -468,7 +475,29 @@ class ShellSessionService:
                     started_at,
                 )
             if completion is not None:
-                stdout, exit_code, truncated = completion
+                stdout, truncated = output.stdout()
+                if terminate_after_window:
+                    self._emit_process_completed(record, ShellProcessStatus.TERMINATED)
+                    await self._remove_and_close_record(
+                        record.public_session_id,
+                        interrupt=False,
+                        expected_record=record,
+                        close_reason="interrupted",
+                    )
+                    return ShellSessionUpdate(
+                        success=True,
+                        status="success",
+                        process_status=ShellProcessStatus.TERMINATED,
+                        session_id=None,
+                        stdout=stdout,
+                        stderr="",
+                        exit_code=None,
+                        stdin_available=False,
+                        truncated=truncated,
+                        duration_ms=self._duration_ms(started_at),
+                        summary="Command was interrupted.",
+                    )
+                exit_code = completion.exit_code
                 self._emit_process_completed(record, ShellProcessStatus.COMPLETED)
                 await self._remove_and_close_record(
                     record.public_session_id,
@@ -482,7 +511,11 @@ class ShellSessionService:
                     process_status=ShellProcessStatus.COMPLETED,
                     session_id=None,
                     stdout=stdout,
-                    stderr="",
+                    stderr=(
+                        ""
+                        if exit_code == 0 or stdout
+                        else f"Command exited with code {exit_code}."
+                    ),
                     exit_code=exit_code,
                     stdin_available=False,
                     truncated=truncated,
@@ -493,13 +526,29 @@ class ShellSessionService:
                         else f"Command completed with exit code {exit_code}."
                     ),
                 )
-            if len(combined) >= max_output_chars:
-                break
 
-        stdout, truncated = self._bounded_text(
-            self._visible_output(record, "".join(raw_parts)),
-            max_output_chars,
-        )
+        stdout, truncated = output.stdout()
+        if terminate_after_window:
+            self._emit_process_completed(record, ShellProcessStatus.TERMINATED)
+            await self._remove_and_close_record(
+                record.public_session_id,
+                interrupt=False,
+                expected_record=record,
+                close_reason="interrupted",
+            )
+            return ShellSessionUpdate(
+                success=True,
+                status="success",
+                process_status=ShellProcessStatus.TERMINATED,
+                session_id=None,
+                stdout=stdout,
+                stderr="",
+                exit_code=None,
+                stdin_available=False,
+                truncated=truncated,
+                duration_ms=self._duration_ms(started_at),
+                summary="Command was interrupted.",
+            )
         await self._release_record(record)
         return ShellSessionUpdate(
             success=True,
@@ -513,42 +562,6 @@ class ShellSessionService:
             truncated=truncated,
             duration_ms=self._duration_ms(started_at),
         )
-
-    def _extract_completion(
-        self,
-        record: ShellSessionRecord,
-        raw_output: str,
-        max_output_chars: int,
-    ) -> tuple[str, int, bool] | None:
-        normalized = normalize_pty_output(raw_output)
-        if record.frame.end_marker not in normalized:
-            return None
-        parser_input = raw_output
-        if record.frame.start_marker not in normalized:
-            parser_input = f"{record.frame.start_marker}\n{raw_output}"
-        try:
-            visible, exit_code = parse_marked_command_output(
-                parser_input,
-                record.frame.start_marker,
-                record.frame.end_marker,
-            )
-        except ShellSessionFramingError as exc:
-            raise ValueError(str(exc)) from exc
-        stdout, truncated = self._bounded_text(visible, max_output_chars)
-        return stdout, exit_code, truncated
-
-    def _visible_output(self, record: ShellSessionRecord, raw_output: str) -> str:
-        visible = strip_pty_artifacts(raw_output, record.frame.wrapped_command)
-        visible = visible.replace(record.frame.start_marker, "")
-        visible = visible.replace(record.frame.end_marker, "")
-        lines = []
-        for line in visible.split("\n"):
-            if PTY_EXIT_CODE_MARKER in line:
-                continue
-            if not line.strip() and not lines:
-                continue
-            lines.append(line)
-        return "\n".join(lines).strip()
 
     async def _claim_existing_record(
         self,
@@ -615,7 +628,7 @@ class ShellSessionService:
                 terminal_session_id=terminal_session_id,
                 identity=identity,
                 frame=frame,
-                command=request.command,
+                framing_parser=StreamingPtyFramingParser(frame),
                 process_status=ShellProcessStatus.RUNNING,
                 created_at=now,
                 last_activity_at=now,
@@ -772,7 +785,7 @@ class ShellSessionService:
             if inspect.isawaitable(context):
                 context = await context
         except Exception:
-            return ShellSessionErrorCode.COMMAND_START_FAILED, None
+            return ShellSessionErrorCode.SHELL_RUNTIME_UNAVAILABLE, None
 
         context_workspace_path = getattr(context, "workspace_path", None)
         checks = [
@@ -1047,33 +1060,24 @@ class ShellSessionService:
         return normalized or "unknown"
 
     @staticmethod
-    def _bounded_text(value: str, limit: int) -> tuple[str, bool]:
-        if len(value) <= limit:
-            return value, False
-        marker = "\n[... shell output truncated ...]\n"
-        if limit <= len(marker):
-            return value[:limit], True
-        head_len = max(0, (limit - len(marker)) // 2)
-        tail_len = max(0, limit - len(marker) - head_len)
-        return f"{value[:head_len]}{marker}{value[-tail_len:]}", True
-
-    @staticmethod
     def _error_update(
         *,
         error_code: ShellSessionErrorCode,
         duration_ms: int,
     ) -> ShellSessionUpdate:
+        message = _SHELL_SESSION_ERROR_MESSAGES[error_code]
         return ShellSessionUpdate(
             success=False,
             status="error",
             process_status=None,
             session_id=None,
             stdout="",
-            stderr="",
+            stderr=message,
             exit_code=None,
             stdin_available=False,
             truncated=False,
             duration_ms=duration_ms,
+            summary=message,
             error_code=error_code,
         )
 
@@ -1084,17 +1088,20 @@ class ShellSessionService:
         truncated: bool,
         duration_ms: int,
     ) -> ShellSessionUpdate:
+        message = _SHELL_SESSION_ERROR_MESSAGES[
+            ShellSessionErrorCode.COMMAND_TIMED_OUT
+        ]
         return ShellSessionUpdate(
             success=False,
             status="error",
             process_status=ShellProcessStatus.TIMED_OUT,
             session_id=None,
             stdout=stdout,
-            stderr="",
+            stderr=message,
             exit_code=None,
             stdin_available=False,
             truncated=truncated,
             duration_ms=duration_ms,
             error_code=ShellSessionErrorCode.COMMAND_TIMED_OUT,
-            summary="Command exceeded its configured maximum runtime.",
+            summary=message,
         )
