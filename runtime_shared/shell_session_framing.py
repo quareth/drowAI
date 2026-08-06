@@ -63,6 +63,185 @@ def create_pty_command_frame(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class PtyFramingCompletion:
+    """Parsed completion record for a PTY command frame."""
+
+    exit_code: int
+
+
+@dataclass(frozen=True, slots=True)
+class PtyFramingIngestResult:
+    """Visible output and optional completion from one parser ingest."""
+
+    stdout: str
+    completion: PtyFramingCompletion | None = None
+
+
+class StreamingPtyFramingParser:
+    """Incrementally parse PTY command protocol records without transcripts."""
+
+    _WAITING_FOR_START = "waiting_for_start"
+    _COLLECTING_OUTPUT = "collecting_output"
+    _COMPLETE = "complete"
+
+    def __init__(self, frame: PtyCommandFrame) -> None:
+        self._frame = frame
+        self._state = self._WAITING_FOR_START
+        self._pending_line = ""
+        self._pending_carriage_return = False
+        self._pending_visible_newline = False
+        self._exit_record_prefix = f"{frame.end_marker}={PTY_EXIT_CODE_MARKER}"
+        self._line_limit = max(
+            len(frame.start_marker),
+            len(self._exit_record_prefix) + 3,
+        ) + 16
+
+    @property
+    def state(self) -> str:
+        """Return the parser state for focused protocol tests."""
+        return self._state
+
+    @property
+    def retained_state_chars(self) -> int:
+        """Return retained parser-owned characters."""
+        return (
+            len(self._pending_line)
+            + int(self._pending_carriage_return)
+            + int(self._pending_visible_newline)
+        )
+
+    @property
+    def retained_state_limit_chars(self) -> int:
+        """Return the parser-owned retention bound."""
+        return self._line_limit + 2
+
+    def begin_output_window(self) -> None:
+        """Start a public read window without carrying a separator into its delta."""
+        self._pending_visible_newline = False
+
+    def ingest(self, raw_output: str) -> PtyFramingIngestResult:
+        """Consume provider output and return visible output or completion."""
+        if not raw_output or self._state == self._COMPLETE:
+            return PtyFramingIngestResult(stdout="")
+
+        produced: list[str] = []
+        self._pending_line += self._normalize_chunk(raw_output)
+
+        while True:
+            newline_index = self._pending_line.find("\n")
+            if newline_index == -1:
+                break
+            line = self._pending_line[:newline_index]
+            self._pending_line = self._pending_line[newline_index + 1 :]
+            completion = self._consume_complete_line(line, produced)
+            if completion is not None:
+                return PtyFramingIngestResult(
+                    stdout="".join(produced),
+                    completion=completion,
+                )
+
+        self._flush_pending_output(produced)
+        return PtyFramingIngestResult(stdout="".join(produced))
+
+    def _consume_complete_line(
+        self,
+        line: str,
+        produced: list[str],
+    ) -> PtyFramingCompletion | None:
+        if self._state == self._WAITING_FOR_START:
+            if line == self._frame.start_marker:
+                self._state = self._COLLECTING_OUTPUT
+            return None
+
+        if self._state != self._COLLECTING_OUTPUT:
+            return None
+
+        if line.startswith(self._frame.end_marker):
+            completion = self._parse_exit_record(line)
+            self._state = self._COMPLETE
+            self._pending_line = ""
+            self._pending_visible_newline = False
+            return completion
+
+        visible = self._visible_output(line)
+        if visible is not None:
+            if self._pending_visible_newline:
+                produced.append("\n")
+            produced.append(visible)
+            self._pending_visible_newline = True
+        return None
+
+    def _flush_pending_output(self, produced: list[str]) -> None:
+        if not self._pending_line:
+            return
+
+        if self._state == self._WAITING_FOR_START:
+            if self._frame.start_marker.startswith(self._pending_line):
+                return
+            self._pending_line = ""
+            return
+
+        if self._state != self._COLLECTING_OUTPUT:
+            self._pending_line = ""
+            return
+
+        if self._is_exit_record_prefix(self._pending_line):
+            if len(self._pending_line) > self._line_limit:
+                self._pending_line = self._pending_line[: self._line_limit]
+            return
+
+        visible = self._visible_output(self._pending_line)
+        self._pending_line = ""
+        if visible is not None:
+            if self._pending_visible_newline:
+                produced.append("\n")
+                self._pending_visible_newline = False
+            produced.append(visible)
+
+    def _normalize_chunk(self, raw_output: str) -> str:
+        """Normalize line endings without duplicating a split CRLF sequence."""
+        cleaned = ANSI_ESCAPE_PATTERN.sub("", raw_output)
+        if self._pending_carriage_return:
+            cleaned = f"\r{cleaned}"
+            self._pending_carriage_return = False
+        if cleaned.endswith("\r"):
+            cleaned = cleaned[:-1]
+            self._pending_carriage_return = True
+        return cleaned.replace("\r\n", "\n").replace("\r", "\n")
+
+    def _is_exit_record_prefix(self, line: str) -> bool:
+        if self._exit_record_prefix.startswith(line):
+            return True
+        if not line.startswith(self._exit_record_prefix):
+            return False
+        exit_digits = line[len(self._exit_record_prefix) :]
+        return exit_digits.isdigit()
+
+    def _parse_exit_record(self, line: str) -> PtyFramingCompletion:
+        if not line.startswith(self._exit_record_prefix):
+            raise ShellSessionFramingError(
+                "Exit code marker missing or malformed in end marker line",
+                raw_output=line,
+            )
+        exit_digits = line[len(self._exit_record_prefix) :]
+        if not exit_digits.isdigit():
+            raise ShellSessionFramingError(
+                "Exit code marker missing or malformed in end marker line",
+                raw_output=line,
+            )
+        return PtyFramingCompletion(exit_code=int(exit_digits))
+
+    def _visible_output(self, line: str) -> str | None:
+        if line == self._frame.start_marker:
+            return None
+        if line.startswith(self._frame.end_marker):
+            return None
+        if PTY_EXIT_CODE_MARKER in line:
+            return None
+        return strip_pty_artifacts(line, self._frame.wrapped_command)
+
+
 def normalize_pty_output(output: str) -> str:
     """Strip terminal control sequences and normalize PTY line endings."""
     cleaned = ANSI_ESCAPE_PATTERN.sub("", output)
@@ -99,7 +278,9 @@ def parse_marked_command_output(
             raw_output=raw_output,
         )
 
-    command_output = cleaned[content_start:end_idx].strip()
+    command_output = cleaned[content_start:end_idx]
+    if command_output.endswith("\n"):
+        command_output = command_output[:-1]
     end_line_start = end_idx
     end_line_end = cleaned.find("\n", end_idx)
     if end_line_end == -1:
