@@ -357,8 +357,12 @@ def extract_shell_wrapper_payload(command: str) -> Optional[str]:
     return None
 
 
-def split_shell_chained_segments(command_line: str) -> List[str]:
-    """Split a shell command line into top-level segments by `;`, `&&`, `||`."""
+def _split_shell_segments(
+    command_line: str,
+    *,
+    separators: set[str],
+) -> List[str]:
+    """Split a shell command line on the selected top-level control operators."""
     line = (command_line or "").strip()
     if not line:
         return []
@@ -371,12 +375,11 @@ def split_shell_chained_segments(command_line: str) -> List[str]:
     except Exception:
         return [line]
 
-    split_tokens = {";", "&&", "||"}
     segments: List[str] = []
     current: List[str] = []
 
     for token in tokens:
-        if token in split_tokens:
+        if token in separators:
             segment = " ".join(current).strip()
             if segment:
                 segments.append(segment)
@@ -389,6 +392,22 @@ def split_shell_chained_segments(command_line: str) -> List[str]:
         segments.append(tail)
 
     return segments or [line]
+
+
+def split_shell_chained_segments(command_line: str) -> List[str]:
+    """Split command chains while preserving each pipeline as one policy unit."""
+    return _split_shell_segments(
+        command_line,
+        separators={";", "&&", "||", "&"},
+    )
+
+
+def split_shell_executable_segments(command_line: str) -> List[str]:
+    """Split control flow into the individual commands that may execute."""
+    return _split_shell_segments(
+        command_line,
+        separators={";", "&&", "||", "&", "|"},
+    )
 
 
 def is_removal_segment(segment: str) -> bool:
@@ -436,7 +455,15 @@ def validate_shell_exec_command(
             if not line:
                 continue
 
-            segments = split_shell_chained_segments(line)
+            chained_segments = split_shell_chained_segments(line)
+            for chained_segment in chained_segments:
+                if "|" in chained_segment:
+                    pipeline_result = policy.validate(chained_segment)
+                    if not pipeline_result.allowed and pipeline_result.matched_pattern:
+                        source = f"{source_prefix} {line_no} pipeline"
+                        _validate_policy_segment(chained_segment, source=source)
+
+            segments = split_shell_executable_segments(line)
             multi_segment = len(segments) > 1
             for segment_idx, segment in enumerate(segments, start=1):
                 source = f"{source_prefix} {line_no}"
