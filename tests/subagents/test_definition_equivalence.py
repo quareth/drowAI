@@ -79,7 +79,7 @@ def test_pathfinder_definition_owns_current_tool_profile() -> None:
         "information_gathering.network_discovery.fping",
         "information_gathering.network_discovery.nmap",
     }
-    assert profile.tool_ids == definition.tool_ids
+    assert profile.tool_ids == (*definition.tool_ids, *UNIVERSAL_AGENT_TOOL_IDS)
     assert profile.capabilities_for_tool(
         "information_gathering.network_discovery.fping"
     ) == ("host_discovery",)
@@ -134,10 +134,7 @@ def test_utility_shell_metadata_does_not_become_mission_capability() -> None:
 def test_pathfinder_profile_appends_visible_registered_universal_utilities() -> None:
     definition = _pathfinder_definition()
 
-    profile = resolve_subagent_tool_profile(
-        definition,
-        (*definition.tool_ids, *UNIVERSAL_AGENT_TOOL_IDS),
-    )
+    profile = resolve_subagent_tool_profile(definition, definition.tool_ids)
 
     assert profile.tool_ids == (*definition.tool_ids, *UNIVERSAL_AGENT_TOOL_IDS)
     assert profile.capabilities_for_tool("shell.exec") == ()

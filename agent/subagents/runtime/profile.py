@@ -73,6 +73,18 @@ def resolve_subagent_tool_profile(
 ) -> SubagentToolProfile:
     """Resolve a bounded tool profile from definition tool ids and metadata."""
 
+    return effective_subagent_tool_profile(
+        definition,
+        _resolve_profile_specific_tool_profile(definition, visible_tool_ids),
+    )
+
+
+def _resolve_profile_specific_tool_profile(
+    definition: SubagentDefinition,
+    visible_tool_ids: Iterable[Any] | None = None,
+) -> SubagentToolProfile:
+    """Resolve only definition-owned mission tools before universal composition."""
+
     candidate_tool_ids = _normalize_tool_ids(
         visible_available_tools() if visible_tool_ids is None else visible_tool_ids
     )
@@ -102,9 +114,37 @@ def resolve_subagent_tool_profile(
             )
             added_tool_ids.add(tool_id)
 
-    visible_candidate_set = frozenset(candidate_tool_ids)
+    return SubagentToolProfile(tools=tuple(tools), definition_id=definition.id)
+
+
+def effective_subagent_tool_profile(
+    definition: SubagentDefinition,
+    profile: SubagentToolProfile | Any | None = None,
+    visible_tool_ids: Iterable[Any] | None = None,
+) -> SubagentToolProfile:
+    """Return a profile-specific tool set union the central universal tools."""
+
+    if profile is None:
+        profile = _resolve_profile_specific_tool_profile(definition, visible_tool_ids)
+
+    tools: list[SubagentToolSpec] = []
+    added_tool_ids: set[str] = set()
+    for raw_spec in getattr(profile, "tools", ()):
+        tool_id = _normalize_tool_id(getattr(raw_spec, "tool_id", ""))
+        display_name = str(getattr(raw_spec, "display_name", "") or "").strip()
+        if not tool_id or not display_name or tool_id in added_tool_ids:
+            continue
+        tools.append(
+            SubagentToolSpec(
+                tool_id=tool_id,
+                display_name=display_name,
+                capabilities=tuple(getattr(raw_spec, "capabilities", ()) or ()),
+            )
+        )
+        added_tool_ids.add(tool_id)
+
     for tool_id in UNIVERSAL_AGENT_TOOL_IDS:
-        if tool_id in added_tool_ids or tool_id not in visible_candidate_set:
+        if tool_id in added_tool_ids:
             continue
         metadata = _registered_visible_universal_tool_metadata(tool_id)
         if metadata is None:
@@ -212,6 +252,7 @@ def _normalize_tool_id(tool_id: Any) -> str:
 __all__ = [
     "SubagentToolProfile",
     "SubagentToolSpec",
+    "effective_subagent_tool_profile",
     "is_subagent_tool_allowed",
     "resolve_subagent_tool_ids",
     "resolve_subagent_tool_profile",

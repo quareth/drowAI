@@ -194,7 +194,11 @@ def _profile() -> SubagentToolProfile:
 def _profile_with_universal_shell_tools() -> SubagentToolProfile:
     return SubagentToolProfile(
         tools=(
-            *_profile().tools,
+            *(
+                spec
+                for spec in _profile().tools
+                if spec.tool_id not in {SHELL_EXEC_TOOL_ID, SHELL_WRITE_STDIN_TOOL_ID}
+            ),
             SubagentToolSpec(
                 tool_id=SHELL_EXEC_TOOL_ID,
                 display_name="shell.exec",
@@ -513,12 +517,18 @@ def test_runtime_profile_resolves_definition_owned_tools() -> None:
 
     profile = resolve_subagent_tool_profile(definition, definition.tool_ids)
 
-    assert profile.tool_ids == definition.tool_ids
+    assert profile.tool_ids == (
+        *definition.tool_ids,
+        SHELL_EXEC_TOOL_ID,
+        SHELL_WRITE_STDIN_TOOL_ID,
+    )
     assert profile.capabilities_for_tool(FPING_TOOL_ID) == ("host_discovery",)
     assert profile.capabilities_for_tool(NMAP_TOOL_ID) == (
         "port_scanning",
         "service_enumeration",
     )
+    assert profile.capabilities_for_tool(SHELL_EXEC_TOOL_ID) == ()
+    assert profile.capabilities_for_tool(SHELL_WRITE_STDIN_TOOL_ID) == ()
 
 
 def test_runtime_initial_state_uses_generic_metadata_key() -> None:
@@ -540,7 +550,12 @@ def test_runtime_initial_state_uses_generic_metadata_key() -> None:
         definition=_pathfinder_definition(),
     )
     assert subagent_state.as_metadata() == metadata["subagent"]
-    assert subagent_state.tool_profile.tool_ids == (FPING_TOOL_ID, NMAP_TOOL_ID)
+    assert subagent_state.tool_profile.tool_ids == (
+        FPING_TOOL_ID,
+        NMAP_TOOL_ID,
+        SHELL_EXEC_TOOL_ID,
+        SHELL_WRITE_STDIN_TOOL_ID,
+    )
     assert metadata["graph_thread_id"] == "child-thread-1"
     assert metadata["parent_graph_thread_id"] == "parent-thread-1"
     assert bundle["conversation_id"] == "conversation-1"
@@ -705,6 +720,8 @@ async def test_runtime_model_records_generic_route_metadata_and_call_topology() 
     assert request["tool_ids"] == [
         FPING_TOOL_ID,
         NMAP_TOOL_ID,
+        SHELL_EXEC_TOOL_ID,
+        SHELL_WRITE_STDIN_TOOL_ID,
     ]
     assert request["kwargs"] == {
         "tool_choice": "auto",
@@ -866,7 +883,12 @@ async def test_runtime_model_reconstructs_full_profile_after_committed_batch() -
     )
 
     assert after_fping["facts"]["tool_ids"] == [FPING_TOOL_ID]
-    assert after_fping["facts"]["tool_candidates"] == [FPING_TOOL_ID, NMAP_TOOL_ID]
+    assert after_fping["facts"]["tool_candidates"] == [
+        FPING_TOOL_ID,
+        NMAP_TOOL_ID,
+        SHELL_EXEC_TOOL_ID,
+        SHELL_WRITE_STDIN_TOOL_ID,
+    ]
 
     next_llm = _FakeBuilderLLM(
         [
@@ -885,7 +907,12 @@ async def test_runtime_model_reconstructs_full_profile_after_committed_batch() -
     )
 
     next_request = _request_projection(next_llm.requests[0])
-    assert next_request["tool_ids"] == [FPING_TOOL_ID, NMAP_TOOL_ID]
+    assert next_request["tool_ids"] == [
+        FPING_TOOL_ID,
+        NMAP_TOOL_ID,
+        SHELL_EXEC_TOOL_ID,
+        SHELL_WRITE_STDIN_TOOL_ID,
+    ]
     assert next_update["facts"]["metadata"][SUBAGENT_ACTION_METADATA_KEY][
         "tool_ids"
     ] == [NMAP_TOOL_ID]
@@ -1406,10 +1433,10 @@ async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> Non
     assert baseline == {
         "one_tool_model_calls": 1,
         "multi_iteration_model_calls": 1,
-        "one_tool_serialized_state_chars": 9686,
-        "multi_iteration_serialized_state_chars": 10908,
-        "multi_iteration_prompt_chars": 11543,
-        "multi_iteration_prompt_tokens": 4123,
+        "one_tool_serialized_state_chars": 9764,
+        "multi_iteration_serialized_state_chars": 10986,
+        "multi_iteration_prompt_chars": 11578,
+        "multi_iteration_prompt_tokens": 4135,
         "bounded_parent_handoff_projection_chars": 501,
         "bounded_parent_handoff_render_chars": 281,
         "parent_handoff_projection_model_calls": 0,
