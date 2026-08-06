@@ -40,6 +40,63 @@ def _seed_user_and_task(db, *, username: str, task_name: str, tenant_id: int = 1
     return task
 
 
+def test_compose_terminal_output_surfaces_silent_nonzero_exit() -> None:
+    output = ArtifactProvenanceQueryService._compose_terminal_output(
+        command_text="false",
+        stdout_text="",
+        stderr_text="",
+        execution_status="failed",
+        exit_code=7,
+    )
+
+    assert output == "$ false\n[process exited with code 7]"
+
+
+def test_compose_terminal_output_surfaces_failure_without_exit_code() -> None:
+    output = ArtifactProvenanceQueryService._compose_terminal_output(
+        command_text=None,
+        stdout_text=None,
+        stderr_text=None,
+        execution_status="timed_out",
+        exit_code=None,
+    )
+
+    assert output == "[execution status: timed_out]"
+
+
+def test_raw_output_batch_surfaces_failed_execution_without_artifacts() -> None:
+    engine, db = _build_session()
+    try:
+        task = _seed_user_and_task(
+            db,
+            username="query-silent-failure",
+            task_name="query-silent-failure-task",
+        )
+        ToolExecutionRepository(db).create(
+            task_id=task.id,
+            tool_name="shell.exec",
+            tool_arguments={"command": "false"},
+            agent_path="langgraph",
+            status="failed",
+            started_at=datetime.now(timezone.utc),
+            tool_call_id="tc-silent-failure",
+            exit_code=7,
+        )
+        db.commit()
+
+        batch = ArtifactProvenanceQueryService(db).get_raw_output_batch(
+            task_id=task.id,
+            tool_call_ids=["tc-silent-failure"],
+        )
+
+        result = batch["results"]["tc-silent-failure"]
+        assert result["status"] == "ready"
+        assert result["output_text"] == "[process exited with code 7]"
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_get_execution_by_id_returns_execution_with_optional_artifacts() -> None:
     engine, db = _build_session()
     try:
