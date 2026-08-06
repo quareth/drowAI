@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from fastapi import HTTPException
 import pytest
 
+import backend.services.terminal.manager as terminal_manager_module
 from backend.core.time_utils import utc_now
 from backend.services import terminal_session_manager as legacy_terminal_module
 from backend.services.terminal.contracts import (
@@ -604,25 +605,17 @@ async def test_create_user_session_with_authorized_task_uses_tenant_scoped_runti
     authorized_task = SimpleNamespace(id=88, tenant_id=701)
     calls: list[str] = []
 
-    async def _fake_validate_container_access(
-        task_id: int,
-        user_id: int,
-        *,
-        authorized_task,
-        runtime_call_scope,
-    ) -> bool:
-        assert runtime_call_scope is RuntimeCallScope.PRODUCT_TASK
-        assert task_id == 88
-        assert user_id == 9
-        assert getattr(authorized_task, "id", None) == 88
-        return True
-
     class _FakeRuntimeOperations:
         def __init__(self, _db):
             pass
 
         async def run_authorized_task_operation(self, **kwargs):
             calls.append(str(kwargs.get("operation")))
+            assert kwargs.get("runtime_call_scope") is RuntimeCallScope.PRODUCT_TASK
+            assert kwargs.get("user_id") == 9
+            assert getattr(kwargs.get("task"), "id", None) == 88
+            if kwargs.get("operation") == "get_runtime_status":
+                return SimpleNamespace(ok=True, metadata={"delegate_result": "running"})
             return SimpleNamespace(
                 ok=True,
                 metadata={
@@ -642,7 +635,6 @@ async def test_create_user_session_with_authorized_task_uses_tenant_scoped_runti
         return None
 
     monkeypatch.setattr(manager, "_validate_task_ownership", lambda *_args: (_ for _ in ()).throw(AssertionError))
-    monkeypatch.setattr(manager, "_validate_container_access", _fake_validate_container_access)
     monkeypatch.setattr(manager, "_pty_reader", _noop_reader)
     monkeypatch.setattr("backend.services.terminal.manager.RuntimeOperationService", _FakeRuntimeOperations)
     monkeypatch.setattr("backend.services.terminal.manager.SessionLocal", lambda: SimpleNamespace(close=lambda: None))
@@ -651,7 +643,7 @@ async def test_create_user_session_with_authorized_task_uses_tenant_scoped_runti
 
     assert session is not None
     assert session.task_id == 88
-    assert "open_terminal_session" in calls
+    assert calls == ["get_runtime_status", "open_terminal_session"]
     await manager.close_session(session.session_id)
 
 
@@ -743,6 +735,123 @@ async def test_create_user_session_local_behavior_requires_explicit_test_scope(
 
 
 @pytest.mark.asyncio
+async def test_create_user_session_waits_for_transient_runtime_before_one_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Transient runtime startup states should be rechecked before one terminal open."""
+    manager = TerminalSessionManager()
+    calls: list[str] = []
+    statuses: list[object] = ["unknown", {"status": "starting"}, "running"]
+
+    class _FakeRuntimeOperations:
+        def __init__(self, _db):
+            pass
+
+        async def run_user_task_operation(self, **kwargs):
+            operation = str(kwargs.get("operation"))
+            calls.append(operation)
+            if operation == "get_runtime_status":
+                return SimpleNamespace(
+                    ok=True,
+                    metadata={"delegate_result": statuses.pop(0)},
+                )
+            if operation == "open_terminal_session":
+                return SimpleNamespace(
+                    ok=True,
+                    metadata={
+                        "delegate_result": {
+                            "exec_id": "transient-exec",
+                            "socket": object(),
+                            "container_name": "task-93",
+                        }
+                    },
+                    error_message=None,
+                )
+            raise AssertionError(operation)
+
+    async def _noop_reader(_session):
+        return None
+
+    monkeypatch.setattr(manager, "_validate_task_ownership", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(manager, "_pty_reader", _noop_reader)
+    monkeypatch.setattr("backend.services.terminal.manager.RuntimeOperationService", _FakeRuntimeOperations)
+    monkeypatch.setattr("backend.services.terminal.manager.SessionLocal", lambda: SimpleNamespace(close=lambda: None))
+
+    session = await manager.create_session(task_id=93, user_id=12, tenant_id=701)
+
+    assert session is not None
+    assert session.exec_id == "transient-exec"
+    assert calls == [
+        "get_runtime_status",
+        "get_runtime_status",
+        "get_runtime_status",
+        "open_terminal_session",
+    ]
+    assert list(manager.sessions) == [session.session_id]
+
+
+@pytest.mark.asyncio
+async def test_create_user_session_rejects_stopped_runtime_without_terminal_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Definitive unavailable runtime states should fail before provider terminal open."""
+    manager = TerminalSessionManager()
+    calls: list[str] = []
+
+    class _FakeRuntimeOperations:
+        def __init__(self, _db):
+            pass
+
+        async def run_user_task_operation(self, **kwargs):
+            operation = str(kwargs.get("operation"))
+            calls.append(operation)
+            if operation == "get_runtime_status":
+                return SimpleNamespace(ok=True, metadata={"delegate_result": "exited"})
+            raise AssertionError("terminal open must not run for stopped runtime")
+
+    monkeypatch.setattr(manager, "_validate_task_ownership", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr("backend.services.terminal.manager.RuntimeOperationService", _FakeRuntimeOperations)
+    monkeypatch.setattr("backend.services.terminal.manager.SessionLocal", lambda: SimpleNamespace(close=lambda: None))
+
+    session = await manager.create_session(task_id=94, user_id=12, tenant_id=701)
+
+    assert session is None
+    assert calls == ["get_runtime_status"]
+    assert manager.sessions == {}
+
+
+@pytest.mark.asyncio
+async def test_create_user_session_readiness_deadline_leaves_no_session_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Readiness deadline expiry should not create provider terminals or session records."""
+    manager = TerminalSessionManager()
+    calls: list[str] = []
+
+    class _FakeRuntimeOperations:
+        def __init__(self, _db):
+            pass
+
+        async def run_user_task_operation(self, **kwargs):
+            operation = str(kwargs.get("operation"))
+            calls.append(operation)
+            if operation == "get_runtime_status":
+                return SimpleNamespace(ok=True, metadata={"delegate_result": "pending"})
+            raise AssertionError("terminal open must not run before runtime readiness")
+
+    monkeypatch.setattr(terminal_manager_module, "_TERMINAL_OPEN_DEADLINE_SEC", 0.01)
+    monkeypatch.setattr(manager, "_validate_task_ownership", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr("backend.services.terminal.manager.RuntimeOperationService", _FakeRuntimeOperations)
+    monkeypatch.setattr("backend.services.terminal.manager.SessionLocal", lambda: SimpleNamespace(close=lambda: None))
+
+    session = await manager.create_session(task_id=95, user_id=12, tenant_id=701)
+
+    assert session is None
+    assert calls == ["get_runtime_status"]
+    assert manager.sessions == {}
+
+
+@pytest.mark.asyncio
 async def test_create_agent_session_uses_internal_runtime_context_for_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -815,6 +924,64 @@ async def test_create_agent_session_uses_internal_runtime_context_for_identity(
     assert resolver_calls["actor_type"].value == "agent"
     assert resolver_calls["actor_id"] == "agent_session:named-session"
     assert session.user_id == 17
+
+
+@pytest.mark.asyncio
+async def test_create_agent_session_rejects_unavailable_runtime_before_terminal_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Agent PTY creation must not open a provider terminal for stopped runtimes."""
+    manager = TerminalSessionManager()
+    calls: list[str] = []
+
+    class _FakeResolver:
+        def __init__(self, _db):
+            pass
+
+        def resolve_internal_task_context(self, **kwargs):
+            return SimpleNamespace(
+                tenant_id=9,
+                task_id=45,
+                workspace_id="task-45",
+                runtime_placement_mode="local",
+                actor_type=kwargs["actor_type"],
+                actor_id=kwargs["actor_id"],
+                user_id=17,
+                runner_id=None,
+                execution_site_id=None,
+            )
+
+    class _FakeRuntimeOperations:
+        def __init__(self, _db):
+            pass
+
+        async def run_for_context(self, *, operation, **_kwargs):
+            calls.append(str(operation))
+            if operation == "get_runtime_status":
+                return SimpleNamespace(
+                    ok=True,
+                    metadata={"delegate_result": {"container_status": "exited"}},
+                )
+            raise AssertionError("terminal open must not run for stopped runtime")
+
+    monkeypatch.setattr(
+        "backend.services.terminal.manager.RuntimeProviderContextResolver",
+        _FakeResolver,
+    )
+    monkeypatch.setattr(
+        "backend.services.terminal.manager.RuntimeOperationService",
+        _FakeRuntimeOperations,
+    )
+    monkeypatch.setattr(
+        "backend.services.terminal.manager.SessionLocal",
+        lambda: SimpleNamespace(close=lambda: None),
+    )
+
+    with pytest.raises(RuntimeError, match="not available for terminal open"):
+        await manager._create_agent_session(task_id=45, cols=120, rows=30)
+
+    assert calls == ["get_runtime_status"]
+    assert manager.sessions == {}
 
 
 @pytest.mark.asyncio
