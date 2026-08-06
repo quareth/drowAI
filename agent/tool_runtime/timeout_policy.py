@@ -19,8 +19,11 @@ from runtime_shared.file_comm_contracts import (
     TOOL_TIMEOUT_FAILURE_CATEGORY,
 )
 from runtime_shared.shell_session_contracts import (
+    SHELL_SESSION_CLEANUP_TIMEOUT_SEC,
+    SHELL_SESSION_CONTROL_TIMEOUT_SEC,
     SHELL_SESSION_DEFAULT_YIELD_TIME_MS,
     SHELL_SESSION_MAX_YIELD_TIME_MS,
+    SHELL_SESSION_PREPARATION_TIMEOUT_SEC,
 )
 
 DEFAULT_TOOL_TIMEOUT_SECONDS = 600.0
@@ -453,7 +456,16 @@ class ToolTimeoutPolicy:
             requested_field = "yield_time_ms"
             source = "parameter:yield_time_ms"
 
-        deadline_seconds = max(0.0, yield_ms / 1000.0)
+        yield_seconds = max(0.0, yield_ms / 1000.0)
+        preparation_seconds = (
+            SHELL_SESSION_PREPARATION_TIMEOUT_SEC if tool_id == "shell.exec" else 0.0
+        )
+        control_seconds = (
+            SHELL_SESSION_CONTROL_TIMEOUT_SEC
+            if tool_id == "shell.write_stdin" and bool(raw_parameters.get("chars"))
+            else 0.0
+        )
+        deadline_seconds = preparation_seconds + control_seconds + yield_seconds
         native_timeout_seconds = max(1, int(math.ceil(deadline_seconds)))
 
         return ToolTimeoutPlan(
@@ -465,9 +477,18 @@ class ToolTimeoutPolicy:
             requested_timeout_seconds=requested_seconds,
             requested_timeout_field=requested_field,
             native_timeout_field=None,
-            max_timeout_seconds=SHELL_SESSION_MAX_YIELD_TIME_MS / 1000.0,
-            default_timeout_seconds=SHELL_SESSION_DEFAULT_YIELD_TIME_MS / 1000.0,
-            grace_seconds=self._config.shell_session_terminal_io_grace_seconds,
+            max_timeout_seconds=(
+                preparation_seconds + SHELL_SESSION_MAX_YIELD_TIME_MS / 1000.0
+                + control_seconds
+            ),
+            default_timeout_seconds=(
+                preparation_seconds + SHELL_SESSION_DEFAULT_YIELD_TIME_MS / 1000.0
+                + control_seconds
+            ),
+            grace_seconds=max(
+                self._config.shell_session_terminal_io_grace_seconds,
+                SHELL_SESSION_CLEANUP_TIMEOUT_SEC,
+            ),
             stripped_timeout_fields=(),
         )
 

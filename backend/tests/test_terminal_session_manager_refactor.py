@@ -112,6 +112,42 @@ async def test_read_output_result_returns_success_for_empty_provider_read(
 
 
 @pytest.mark.asyncio
+async def test_read_output_result_preserves_provider_truncation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = TerminalSessionManager()
+    session = TerminalSession(
+        session_id="session-truncated",
+        task_id=1,
+        user_id=0,
+        container_name="task-1",
+        connection_type="docker_exec",
+        exec_id="provider-session-truncated",
+    )
+    manager.sessions[session.session_id] = session
+    monkeypatch.setattr(
+        manager,
+        "_run_session_provider_operation",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                ok=True,
+                metadata={
+                    "delegate_result": {
+                        "data": b"remaining",
+                        "truncated": True,
+                    }
+                },
+            )
+        ),
+    )
+
+    result = await manager.read_output_result(session.session_id)
+
+    assert result.data == b"remaining"
+    assert result.truncated is True
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("timeout", [0.0, 0.01])
 async def test_read_output_result_preserves_idle_local_read_success(
     monkeypatch: pytest.MonkeyPatch,
@@ -349,6 +385,46 @@ async def test_prepare_agent_session_preserves_prompt_workspace_and_history_setu
         b"cd /workspace 2>/dev/null || true\n",
         b"unset HISTFILE\n",
     ]
+
+
+@pytest.mark.asyncio
+async def test_prepare_agent_session_cancellation_retires_partial_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = TerminalSessionManager()
+    session = TerminalSession(
+        session_id="agent_task_99_shell_partial",
+        task_id=99,
+        user_id=7,
+        container_name="task-99",
+        connection_type="docker_exec",
+        exec_id="provider-partial",
+        session_type="agent",
+    )
+    manager.sessions[session.session_id] = session
+    provider_operation = AsyncMock(return_value=SimpleNamespace(ok=True, metadata={}))
+    monkeypatch.setattr(
+        manager,
+        "get_or_create_agent_session",
+        AsyncMock(return_value=session),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_initialize_agent_session",
+        AsyncMock(side_effect=asyncio.CancelledError),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_run_session_provider_operation",
+        provider_operation,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await manager.prepare_agent_session(task_id=99)
+
+    assert session.is_active is False
+    assert session.session_id not in manager.sessions
+    assert provider_operation.await_count == 1
 
 
 @pytest.mark.asyncio

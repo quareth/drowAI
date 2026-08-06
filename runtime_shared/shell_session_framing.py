@@ -84,6 +84,10 @@ class StreamingPtyFramingParser:
     _WAITING_FOR_START = "waiting_for_start"
     _COLLECTING_OUTPUT = "collecting_output"
     _COMPLETE = "complete"
+    _ANSI_TEXT = "text"
+    _ANSI_ESCAPE = "escape"
+    _ANSI_CSI_PARAMETERS = "csi_parameters"
+    _ANSI_CSI_INTERMEDIATES = "csi_intermediates"
 
     def __init__(self, frame: PtyCommandFrame) -> None:
         self._frame = frame
@@ -91,6 +95,7 @@ class StreamingPtyFramingParser:
         self._pending_line = ""
         self._pending_carriage_return = False
         self._pending_visible_newline = False
+        self._ansi_state = self._ANSI_TEXT
         self._exit_record_prefix = f"{frame.end_marker}={PTY_EXIT_CODE_MARKER}"
         self._line_limit = max(
             len(frame.start_marker),
@@ -109,12 +114,13 @@ class StreamingPtyFramingParser:
             len(self._pending_line)
             + int(self._pending_carriage_return)
             + int(self._pending_visible_newline)
+            + int(self._ansi_state != self._ANSI_TEXT)
         )
 
     @property
     def retained_state_limit_chars(self) -> int:
         """Return the parser-owned retention bound."""
-        return self._line_limit + 2
+        return self._line_limit + 3
 
     def begin_output_window(self) -> None:
         """Start a public read window without carrying a separator into its delta."""
@@ -201,7 +207,7 @@ class StreamingPtyFramingParser:
 
     def _normalize_chunk(self, raw_output: str) -> str:
         """Normalize line endings without duplicating a split CRLF sequence."""
-        cleaned = ANSI_ESCAPE_PATTERN.sub("", raw_output)
+        cleaned = self._strip_streaming_ansi(raw_output)
         if self._pending_carriage_return:
             cleaned = f"\r{cleaned}"
             self._pending_carriage_return = False
@@ -209,6 +215,50 @@ class StreamingPtyFramingParser:
             cleaned = cleaned[:-1]
             self._pending_carriage_return = True
         return cleaned.replace("\r\n", "\n").replace("\r", "\n")
+
+    def _strip_streaming_ansi(self, raw_output: str) -> str:
+        """Strip CSI controls across arbitrary chunks with constant retained state."""
+        visible: list[str] = []
+        for char in raw_output:
+            codepoint = ord(char)
+            if self._ansi_state == self._ANSI_TEXT:
+                if char == "\x1b":
+                    self._ansi_state = self._ANSI_ESCAPE
+                else:
+                    visible.append(char)
+                continue
+
+            if self._ansi_state == self._ANSI_ESCAPE:
+                if char == "[":
+                    self._ansi_state = self._ANSI_CSI_PARAMETERS
+                elif char == "\x1b":
+                    visible.append("\x1b")
+                else:
+                    visible.extend(("\x1b", char))
+                    self._ansi_state = self._ANSI_TEXT
+                continue
+
+            if self._ansi_state == self._ANSI_CSI_PARAMETERS:
+                if 0x30 <= codepoint <= 0x3F:
+                    continue
+                if 0x20 <= codepoint <= 0x2F:
+                    self._ansi_state = self._ANSI_CSI_INTERMEDIATES
+                    continue
+                if 0x40 <= codepoint <= 0x7E:
+                    self._ansi_state = self._ANSI_TEXT
+                    continue
+                self._ansi_state = self._ANSI_TEXT
+                visible.append(char)
+                continue
+
+            if 0x20 <= codepoint <= 0x2F:
+                continue
+            if 0x40 <= codepoint <= 0x7E:
+                self._ansi_state = self._ANSI_TEXT
+                continue
+            self._ansi_state = self._ANSI_TEXT
+            visible.append(char)
+        return "".join(visible)
 
     def _is_exit_record_prefix(self, line: str) -> bool:
         if self._exit_record_prefix.startswith(line):

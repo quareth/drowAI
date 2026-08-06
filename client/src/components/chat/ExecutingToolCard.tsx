@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 
 interface ExecutingToolCardProps {
   toolName: string;
-  status?: "executing" | "completed" | "failed" | "cancelled" | "terminated" | "timed_out";
+  status?: "executing" | "yielded" | "completed" | "failed" | "cancelled" | "terminated" | "timed_out";
   taskId?: number | string;
   toolCallId?: string;
   /** Stable identifier so collapse/expand state persists across remounts. */
@@ -65,6 +65,7 @@ export function ExecutingToolCard({
   const hasLookupIdentity = taskId != null && normalizedToolCallId.length > 0;
 
   const isExecuting = status === "executing";
+  const isYielded = status === "yielded";
   const isCompleted = status === "completed";
   const isFailed = status === "failed";
   const isCancelled = status === "cancelled";
@@ -73,20 +74,24 @@ export function ExecutingToolCard({
 
   const statusLabel = isExecuting
     ? "Running"
-    : isCompleted
-      ? "Completed"
-      : isTimedOut
-        ? "Timed out"
-        : isCancelled || isTerminated
-        ? "Stopped"
-        : "Failed";
+    : isYielded
+      ? "Session running"
+      : isCompleted
+        ? "Completed"
+        : isTimedOut
+          ? "Timed out"
+          : isCancelled || isTerminated
+            ? "Stopped"
+            : "Failed";
   const statusColor = isExecuting
     ? "text-slate-400"
-    : isCompleted
-      ? "text-emerald-400"
-      : isCancelled || isTerminated
-        ? "text-slate-400"
-        : "text-rose-400";
+    : isYielded
+      ? "text-sky-400"
+      : isCompleted
+        ? "text-emerald-400"
+        : isCancelled || isTerminated
+          ? "text-slate-400"
+          : "text-rose-400";
 
   const rawOutput = useToolRawOutput({
     taskId,

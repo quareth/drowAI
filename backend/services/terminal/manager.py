@@ -26,6 +26,7 @@ from ..runtime_provider import (
     RuntimeProviderContextResolver,
 )
 from ..runtime_provider.terminal_stream_contract import is_push_terminal_stream
+from runtime_shared.shell_session_contracts import SHELL_SESSION_CLEANUP_TIMEOUT_SEC
 from runtime_shared.terminal_contracts import TerminalReadResult
 from .contracts import (
     AGENT_PROMPT_ENV,
@@ -786,13 +787,33 @@ class TerminalSessionManager:
             session.update_activity()
             return session
 
-        await self._initialize_agent_session(
-            session=session,
-            workspace_path=workspace_path,
-        )
+        try:
+            await self._initialize_agent_session(
+                session=session,
+                workspace_path=workspace_path,
+            )
+        except asyncio.CancelledError:
+            await self._retire_failed_agent_session(session)
+            raise
+        except Exception:
+            await self._retire_failed_agent_session(session)
+            raise
         session._drowai_initialized = True
         session.update_activity()
         return session
+
+    async def _retire_failed_agent_session(self, session: TerminalSession) -> None:
+        """Bound cleanup for a provider terminal that failed during initialization."""
+        try:
+            async with asyncio.timeout(SHELL_SESSION_CLEANUP_TIMEOUT_SEC):
+                await self.close_session(session.session_id)
+        except (TimeoutError, asyncio.CancelledError):
+            pass
+        finally:
+            session.is_active = False
+            session.socket = None
+            if self._registry.get(session.session_id) is session:
+                self._registry.remove(session.session_id)
 
     async def _initialize_agent_session(
         self,
@@ -1033,12 +1054,17 @@ class TerminalSessionManager:
                 except (TypeError, ValueError):
                     pass
             data = delegate.get("data", b"")
+            truncated = bool(delegate.get("truncated", False))
             if isinstance(data, bytes):
                 session.update_activity()
-                return TerminalReadResult(ok=True, data=data)
+                return TerminalReadResult(ok=True, data=data, truncated=truncated)
             if isinstance(data, str):
                 session.update_activity()
-                return TerminalReadResult(ok=True, data=data.encode())
+                return TerminalReadResult(
+                    ok=True,
+                    data=data.encode(),
+                    truncated=truncated,
+                )
         return TerminalReadResult(ok=True, data=b"")
 
     async def _run_session_provider_operation(

@@ -12,6 +12,11 @@ from agent.tool_runtime.timeout_policy import (
     ToolTimeoutPolicy,
 )
 from agent.tools import BaseTool, BaseToolArgs, ToolResult, register_tool
+from runtime_shared.shell_session_contracts import (
+    SHELL_SESSION_CLEANUP_TIMEOUT_SEC,
+    SHELL_SESSION_CONTROL_TIMEOUT_SEC,
+    SHELL_SESSION_PREPARATION_TIMEOUT_SEC,
+)
 
 
 class _NoTimeoutArgs(BaseModel):
@@ -193,9 +198,13 @@ def test_shell_session_exec_timeout_uses_yield_wait_not_process_lifetime():
         },
     )
 
-    assert plan.deadline_seconds == 1.5
-    assert plan.grace_seconds == 3
-    assert plan.deadline_seconds + plan.grace_seconds == 4.5
+    assert plan.deadline_seconds == SHELL_SESSION_PREPARATION_TIMEOUT_SEC + 1.5
+    assert plan.grace_seconds == SHELL_SESSION_CLEANUP_TIMEOUT_SEC
+    assert plan.deadline_seconds + plan.grace_seconds == (
+        SHELL_SESSION_PREPARATION_TIMEOUT_SEC
+        + SHELL_SESSION_CLEANUP_TIMEOUT_SEC
+        + 1.5
+    )
     assert plan.requested_timeout_field == "yield_time_ms"
     assert plan.native_timeout_field is None
     assert plan.normalized_parameters["max_runtime_sec"] == 180
@@ -213,10 +222,26 @@ def test_shell_session_write_timeout_uses_yield_wait():
     )
 
     assert plan.deadline_seconds == 0
-    assert plan.grace_seconds == 3
-    assert plan.deadline_seconds + plan.grace_seconds == 3
+    assert plan.grace_seconds == SHELL_SESSION_CLEANUP_TIMEOUT_SEC
+    assert plan.deadline_seconds + plan.grace_seconds == (
+        SHELL_SESSION_CLEANUP_TIMEOUT_SEC
+    )
     assert plan.requested_timeout_field == "yield_time_ms"
     assert plan.native_timeout_field is None
+
+
+def test_shell_session_write_timeout_includes_bounded_control_dispatch():
+    plan = _policy(default=25, max_seconds=300).resolve(
+        tool_id="shell.write_stdin",
+        parameters={
+            "session_id": "shs_public",
+            "chars": "answer\n",
+            "yield_time_ms": 250,
+        },
+    )
+
+    assert plan.deadline_seconds == SHELL_SESSION_CONTROL_TIMEOUT_SEC + 0.25
+    assert plan.grace_seconds == SHELL_SESSION_CLEANUP_TIMEOUT_SEC
 
 
 def test_shell_session_ignores_legacy_whole_operation_timeout_fields():
@@ -231,7 +256,7 @@ def test_shell_session_ignores_legacy_whole_operation_timeout_fields():
         },
     )
 
-    assert plan.deadline_seconds == 0.5
+    assert plan.deadline_seconds == SHELL_SESSION_PREPARATION_TIMEOUT_SEC + 0.5
     assert plan.requested_timeout_field == "yield_time_ms"
     assert plan.native_timeout_field is None
     assert plan.normalized_parameters["timeout_sec"] == 90

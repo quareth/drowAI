@@ -108,10 +108,15 @@ class ShellSessionOutputAccumulator:
         self._parser.begin_output_window()
         self._max_output_chars = max_output_chars
         self._bounded = _BoundedText(max_output_chars)
+        self._provider_output_truncated = False
 
     @property
     def truncated(self) -> bool:
-        return self._bounded.truncated
+        return self._provider_output_truncated or self._bounded.truncated
+
+    def mark_provider_output_truncated(self) -> None:
+        """Record upstream byte loss without fabricating public output text."""
+        self._provider_output_truncated = True
 
     @property
     def retained_state_chars(self) -> int:

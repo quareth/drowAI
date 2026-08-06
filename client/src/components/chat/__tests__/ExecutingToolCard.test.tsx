@@ -87,6 +87,30 @@ describe("ExecutingToolCard", () => {
     expect(toggle.getAttribute("disabled")).toBeNull();
   });
 
+  it("renders a yielded shell call as a durable expandable session state", () => {
+    mocked.useToolRawOutputMock.mockReturnValue({
+      state: { status: "loading" },
+      status: "loading",
+      isLoading: true,
+      isReady: false,
+      isNotAvailable: false,
+      isError: false,
+    });
+
+    render(
+      <ExecutingToolCard
+        toolName="shell.exec"
+        status="yielded"
+        taskId={1}
+        toolCallId="call-yielded"
+        testId="tool-card"
+      />,
+    );
+
+    expect(screen.getByText("Session running")).not.toBeNull();
+    expect(getToggleButton().getAttribute("disabled")).toBeNull();
+  });
+
   it("keeps expanded state during first-load and transitions to ready output", () => {
     mocked.useToolRawOutputMock.mockReturnValue({
       state: { status: "loading" },

@@ -6,6 +6,7 @@ import asyncio
 from datetime import UTC, datetime
 from uuid import uuid4
 
+from backend.services.runner_control import terminal_stream_registry as stream_registry_module
 from backend.services.runner_control.terminal_stream_registry import RunnerTerminalStreamRegistry
 from runtime_shared.runner_protocol import (
     RUNNER_PROTOCOL_SCHEMA_VERSION,
@@ -53,6 +54,98 @@ def test_terminal_stream_registry_routes_known_frames_only() -> None:
     )
 
     assert data == b"hello"
+
+
+def test_terminal_stream_registry_reports_bounded_buffer_loss_once(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(stream_registry_module, "_MAX_BUFFER_BYTES", 8)
+    registry = RunnerTerminalStreamRegistry()
+    runner_id = uuid4()
+    registry.register_stream(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=9,
+        session_id="sess-1",
+    )
+
+    assert registry.append_stream_frame(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=9,
+        session_id="sess-1",
+        data="first",
+    )
+    assert registry.append_stream_frame(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=9,
+        session_id="sess-1",
+        data="second",
+    )
+
+    first_read = asyncio.run(
+        registry.read_stream_output_result(
+            tenant_id=1,
+            runner_id=runner_id,
+            task_id=9,
+            session_id="sess-1",
+            size=3,
+            timeout=0,
+        )
+    )
+    second_read = asyncio.run(
+        registry.read_stream_output_result(
+            tenant_id=1,
+            runner_id=runner_id,
+            task_id=9,
+            session_id="sess-1",
+            size=8,
+            timeout=0,
+        )
+    )
+
+    assert first_read.ok is True
+    assert first_read.data == b"sec"
+    assert first_read.truncated is True
+    assert second_read.data == b"ond"
+    assert second_read.truncated is False
+
+
+def test_terminal_stream_registry_reports_loss_when_no_frame_bytes_remain(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(stream_registry_module, "_MAX_BUFFER_BYTES", 2)
+    registry = RunnerTerminalStreamRegistry()
+    runner_id = uuid4()
+    registry.register_stream(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=9,
+        session_id="sess-1",
+    )
+    assert registry.append_stream_frame(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=9,
+        session_id="sess-1",
+        data="dropped",
+    )
+
+    result = asyncio.run(
+        registry.read_stream_output_result(
+            tenant_id=1,
+            runner_id=runner_id,
+            task_id=9,
+            session_id="sess-1",
+            size=8,
+            timeout=0,
+        )
+    )
+
+    assert result.ok is True
+    assert result.data == b""
+    assert result.truncated is True
 
 
 def test_terminal_stream_registry_pushes_known_frames_to_registered_sink() -> None:

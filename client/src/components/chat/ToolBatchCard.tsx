@@ -31,7 +31,7 @@ interface ToolBatchCardProps {
 interface BatchRowState {
   toolCallId: string;
   toolName: string;
-  status: "executing" | "completed" | "failed" | "cancelled" | "terminated" | "timed_out";
+  status: "executing" | "yielded" | "completed" | "failed" | "cancelled" | "terminated" | "timed_out";
   retryAttempt?: number;
   retryMaxAttempts?: number;
   /** First-seen index in the message stream — used as a stable order key when
@@ -74,7 +74,7 @@ function deriveStatus(
 ): BatchRowState["status"] {
   const lowered = (rawStatus ?? "").toLowerCase();
   const process = (processStatus ?? "").toLowerCase();
-  if (process === "running") return "executing";
+  if (process === "running") return "yielded";
   if (process === "timed_out") return "timed_out";
   if (process === "terminated") return "terminated";
   if (process === "completed" && !["success", "ok", "completed"].includes(lowered)) {
@@ -263,7 +263,7 @@ function deriveBatchAggregate(messages: ChatMessage[], rows: BatchRowState[]): B
   if (!allTerminal) return { status: "executing", strategy };
   const anyFailed = rows.some((r) => r.status === "failed" || r.status === "timed_out");
   const anyCancelled = rows.some((r) => r.status === "cancelled" || r.status === "terminated");
-  const anyCompleted = rows.some((r) => r.status === "completed");
+  const anyCompleted = rows.some((r) => r.status === "completed" || r.status === "yielded");
   if (anyCancelled && !anyCompleted && !anyFailed) {
     return { status: "cancelled", strategy };
   }

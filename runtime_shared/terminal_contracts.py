@@ -55,3 +55,4 @@ class TerminalReadResult:
     ok: bool
     data: bytes = b""
     error_code: str | None = None
+    truncated: bool = False

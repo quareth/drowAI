@@ -11,6 +11,7 @@ from __future__ import annotations
 from backend.services.runner_control.terminal_frame_buffer import get_runner_terminal_frame_buffer
 from backend.services.runtime_provider.terminal_stream_contract import terminal_stream_from_payload
 from runtime_shared.runner_protocol import RunnerMessageType
+from runtime_shared.terminal_contracts import TerminalReadResult
 
 from ..dispatch.remote_dispatcher import CloudRunnerRemoteDispatcher
 from ..error_codes import _RUNNER_ASSIGNMENT_REQUIRED, _RUNNER_TERMINAL_STREAM_UNAVAILABLE
@@ -184,20 +185,44 @@ class CloudRunnerTerminalOperations:
         )
         timeout = request.payload.get("timeout")
         timeout_value = None if timeout is None else _coerce_non_negative_float(timeout, default=0.0)
-        data = await stream_client.read_output(size=size, timeout=timeout_value)
+        read_output_result = getattr(stream_client, "read_output_result", None)
+        if callable(read_output_result):
+            stream_result = await read_output_result(size=size, timeout=timeout_value)
+        else:
+            stream_result = TerminalReadResult(
+                ok=True,
+                data=await stream_client.read_output(size=size, timeout=timeout_value),
+            )
+        if not isinstance(stream_result, TerminalReadResult):
+            stream_data = (
+                bytes(stream_result)
+                if isinstance(stream_result, (bytes, bytearray))
+                else bytes(getattr(stream_result, "data", b""))
+            )
+            stream_result = TerminalReadResult(
+                ok=True,
+                data=stream_data,
+                truncated=bool(getattr(stream_result, "truncated", False)),
+            )
         return build_runtime_result(
             request,
-            accepted=True,
+            accepted=stream_result.ok,
             provider=self._provider_name,
-            status=RuntimeOperationStatus.SUCCEEDED,
+            status=(
+                RuntimeOperationStatus.SUCCEEDED
+                if stream_result.ok
+                else RuntimeOperationStatus.FAILED
+            ),
+            error_code=stream_result.error_code,
             metadata={
                 "protocol_domain": "remote_runtime",
                 "operation_name": "read_terminal_output",
                 "stream_mode": True,
                 "delegate_result": {
                     "session_id": stream_client.session_id,
-                    "data": data,
-                    "success": True,
+                    "data": stream_result.data,
+                    "success": stream_result.ok,
+                    "truncated": stream_result.truncated,
                 },
             },
         )

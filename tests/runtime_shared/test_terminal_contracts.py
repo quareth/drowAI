@@ -40,6 +40,7 @@ def test_terminal_read_result_distinguishes_idle_success_from_failure() -> None:
     assert idle.ok is True
     assert idle.data == b""
     assert idle.error_code is None
+    assert idle.truncated is False
     assert failure.ok is False
     assert failure.data == b""
     assert failure.error_code == "runtime_transport_failed"

@@ -20,6 +20,13 @@ The format is based on
   destruction, shutdown, resource exhaustion, and container escape while
   permitting pentesting workflows in the default permissive mode.
 
+### Fixed
+
+- Interactive shell sessions now preserve concurrent session limits, honor
+  bounded startup and input timing, report managed-output loss as truncation,
+  normalize split terminal controls, and present yielded commands as live
+  sessions instead of active tool calls.
+
 ### Security
 
 - Updated cryptography, Undici, and PostCSS to patched releases that address

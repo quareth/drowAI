@@ -32,6 +32,7 @@ class _SessionBuffer:
     frames: deque[TerminalFrame]
     total_bytes: int = 0
     last_sequence: int = -1
+    dropped_through_sequence: int = -1
     updated_at_monotonic: float = 0.0
 
 
@@ -196,6 +197,7 @@ class RunnerTerminalFrameBuffer:
                 "frames": [],
                 "data": "",
                 "next_sequence": after_sequence if isinstance(after_sequence, int) else -1,
+                "truncated": False,
             }
         safe_after = int(after_sequence) if isinstance(after_sequence, int) else -1
         safe_max_bytes = max(1, int(max_bytes))
@@ -215,6 +217,7 @@ class RunnerTerminalFrameBuffer:
                     "frames": [],
                     "data": "",
                     "next_sequence": safe_after,
+                    "truncated": False,
                 }
 
             buffer = self._buffers.get(key)
@@ -225,6 +228,7 @@ class RunnerTerminalFrameBuffer:
                     "frames": [],
                     "data": "",
                     "next_sequence": safe_after,
+                    "truncated": False,
                 }
 
             collected: list[TerminalFrame] = []
@@ -254,6 +258,7 @@ class RunnerTerminalFrameBuffer:
                 ],
                 "data": "".join(frame.data for frame in collected),
                 "next_sequence": next_sequence,
+                "truncated": safe_after < buffer.dropped_through_sequence,
             }
 
     def clear_session(
@@ -373,9 +378,17 @@ class RunnerTerminalFrameBuffer:
         while len(buffer.frames) > self._max_frames_per_session and buffer.frames:
             dropped = buffer.frames.popleft()
             buffer.total_bytes = max(0, buffer.total_bytes - dropped.byte_count)
+            buffer.dropped_through_sequence = max(
+                buffer.dropped_through_sequence,
+                dropped.sequence,
+            )
         while buffer.total_bytes > self._max_bytes_per_session and buffer.frames:
             dropped = buffer.frames.popleft()
             buffer.total_bytes = max(0, buffer.total_bytes - dropped.byte_count)
+            buffer.dropped_through_sequence = max(
+                buffer.dropped_through_sequence,
+                dropped.sequence,
+            )
 
     def _trim_sessions_for_new_key(self) -> None:
         if len(self._buffers) < self._max_sessions:

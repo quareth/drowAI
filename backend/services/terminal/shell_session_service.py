@@ -22,6 +22,9 @@ from typing import Any
 from backend import config as backend_config
 from backend.services.metrics.utils import safe_gauge, safe_inc
 from runtime_shared.shell_session_contracts import (
+    SHELL_SESSION_CLEANUP_TIMEOUT_SEC,
+    SHELL_SESSION_CONTROL_TIMEOUT_SEC,
+    SHELL_SESSION_PREPARATION_TIMEOUT_SEC,
     ShellExecRequest,
     ShellProcessStatus,
     ShellSessionErrorCode,
@@ -115,6 +118,15 @@ class ShellSessionRecord:
     pending_utf8_bytes: bytes = b""
 
 
+@dataclass(slots=True)
+class _StartCapacityReservation:
+    """Idempotent pending-capacity lease for one shell-session start."""
+
+    owner_key: tuple[int, int, str]
+    task_key: tuple[int, int]
+    released: bool = False
+
+
 class ShellSessionService:
     """Run interactive shell commands through provider-backed terminal sessions."""
 
@@ -154,37 +166,16 @@ class ShellSessionService:
                 duration_ms=self._duration_ms(started_at),
             )
 
-        async with self._lock:
-            if self._active_owner_count(identity) >= self._config.max_active_per_owner:
-                self._emit_operation_failed(
-                    identity,
-                    ShellSessionErrorCode.SESSION_LIMIT_REACHED,
-                )
-                return self._error_update(
-                    error_code=ShellSessionErrorCode.SESSION_LIMIT_REACHED,
-                    duration_ms=self._duration_ms(started_at),
-                )
-            if self._active_task_count(identity) >= self._config.max_active_per_task:
-                self._emit_operation_failed(
-                    identity,
-                    ShellSessionErrorCode.SESSION_LIMIT_REACHED,
-                )
-                return self._error_update(
-                    error_code=ShellSessionErrorCode.SESSION_LIMIT_REACHED,
-                    duration_ms=self._duration_ms(started_at),
-                )
-
         public_session_id = self._generate_public_session_id()
         frame = create_pty_command_frame(self._prepare_command(request))
-        owner_key: tuple[int, int, str] | None = None
-        task_key: tuple[int, int] | None = None
+        reservation: _StartCapacityReservation | None = None
         terminal_session_id: str | None = None
         registered = False
         start_error_code = ShellSessionErrorCode.COMMAND_START_FAILED
 
         async with self._lock:
-            owner_key, task_key = self._reserve_start_capacity_locked(identity)
-            if owner_key is None or task_key is None:
+            reservation = self._reserve_start_capacity_locked(identity)
+            if reservation is None:
                 self._emit_operation_failed(
                     identity,
                     ShellSessionErrorCode.SESSION_LIMIT_REACHED,
@@ -195,24 +186,23 @@ class ShellSessionService:
                 )
 
         try:
-            terminal_session = await self._prepare_reserved_terminal(
-                identity=identity,
-                request=request,
-                workspace_path=workspace_path,
-                public_session_id=public_session_id,
-                frame=frame,
-                owner_key=owner_key,
-                task_key=task_key,
-            )
-            terminal_session_id, record = terminal_session
-            registered = True
-            owner_key = None
-            task_key = None
-            if not await self._terminal_manager.send_input(
-                terminal_session_id, frame.wrapped_command.encode()
-            ):
+            async with asyncio.timeout(SHELL_SESSION_PREPARATION_TIMEOUT_SEC):
+                terminal_session = await self._prepare_reserved_terminal(
+                    identity=identity,
+                    request=request,
+                    workspace_path=workspace_path,
+                    public_session_id=public_session_id,
+                    frame=frame,
+                    reservation=reservation,
+                )
+                terminal_session_id, record = terminal_session
+                registered = True
                 start_error_code = ShellSessionErrorCode.RUNTIME_TRANSPORT_FAILED
-                raise RuntimeError("send_terminal_input failed")
+                if not await self._send_input_with_deadline(
+                    terminal_session_id,
+                    frame.wrapped_command.encode(),
+                ):
+                    raise RuntimeError("send_terminal_input failed")
 
             return await self._read_update(
                 record=record,
@@ -229,8 +219,6 @@ class ShellSessionService:
                 )
             elif terminal_session_id:
                 await self._close_terminal(terminal_session_id, interrupt=True)
-            elif owner_key is not None and task_key is not None:
-                await self._release_start_capacity(owner_key, task_key)
             raise
         except Exception:
             self._emit_operation_failed(
@@ -246,12 +234,12 @@ class ShellSessionService:
                 )
             elif terminal_session_id:
                 await self._close_terminal(terminal_session_id, interrupt=False)
-            elif owner_key is not None and task_key is not None:
-                await self._release_start_capacity(owner_key, task_key)
             return self._error_update(
                 error_code=start_error_code,
                 duration_ms=self._duration_ms(started_at),
             )
+        finally:
+            await self._release_start_capacity(reservation)
 
     async def write_stdin(
         self,
@@ -281,8 +269,9 @@ class ShellSessionService:
 
         try:
             if request.chars == "\u0003":
-                if not await self._terminal_manager.send_input(
-                    record.terminal_session_id, request.chars.encode()
+                if not await self._send_input_with_deadline(
+                    record.terminal_session_id,
+                    request.chars.encode(),
                 ):
                     return await self._fail_claimed_record(
                         record,
@@ -298,8 +287,9 @@ class ShellSessionService:
                 )
 
             if request.chars:
-                if not await self._terminal_manager.send_input(
-                    record.terminal_session_id, request.chars.encode()
+                if not await self._send_input_with_deadline(
+                    record.terminal_session_id,
+                    request.chars.encode(),
                 ):
                     return await self._fail_claimed_record(
                         record,
@@ -461,6 +451,8 @@ class ShellSessionService:
                     ShellSessionErrorCode.RUNTIME_TRANSPORT_FAILED,
                     started_at,
                 )
+            if result.truncated:
+                output.mark_provider_output_truncated()
             if not result.data:
                 if yield_time_ms == 0 or self._clock() >= deadline:
                     break
@@ -610,8 +602,7 @@ class ShellSessionService:
         workspace_path: str | None,
         public_session_id: str,
         frame: PtyCommandFrame,
-        owner_key: tuple[int, int, str],
-        task_key: tuple[int, int],
+        reservation: _StartCapacityReservation,
     ) -> tuple[str, ShellSessionRecord]:
         terminal_session_id: str | None = None
         try:
@@ -637,18 +628,16 @@ class ShellSessionService:
             )
             async with self._lock:
                 self._records[public_session_id] = record
-                self._release_start_capacity_locked(owner_key, task_key)
+                self._release_start_capacity_locked(reservation)
                 self._emit_session_opened(record)
             return terminal_session_id, record
         except asyncio.CancelledError:
             if terminal_session_id is not None:
                 await self._close_terminal(terminal_session_id, interrupt=True)
-            await self._release_start_capacity(owner_key, task_key)
             raise
         except Exception:
             if terminal_session_id is not None:
                 await self._close_terminal(terminal_session_id, interrupt=False)
-            await self._release_start_capacity(owner_key, task_key)
             raise
 
     async def _release_record(self, record: ShellSessionRecord) -> None:
@@ -657,13 +646,25 @@ class ShellSessionService:
             if current is record:
                 record.operation_in_progress = False
 
+    async def _send_input_with_deadline(
+        self,
+        terminal_session_id: str,
+        data: bytes,
+    ) -> bool:
+        """Send one shell control write within the shared invocation budget."""
+        async with asyncio.timeout(SHELL_SESSION_CONTROL_TIMEOUT_SEC):
+            return bool(
+                await self._terminal_manager.send_input(terminal_session_id, data)
+            )
+
     async def _release_start_capacity(
         self,
-        owner_key: tuple[int, int, str],
-        task_key: tuple[int, int],
+        reservation: _StartCapacityReservation | None,
     ) -> None:
+        if reservation is None or reservation.released:
+            return
         async with self._lock:
-            self._release_start_capacity_locked(owner_key, task_key)
+            self._release_start_capacity_locked(reservation)
 
     async def _fail_claimed_record(
         self,
@@ -765,15 +766,22 @@ class ShellSessionService:
             self._emit_session_closed(record, close_reason)
 
     async def _close_terminal(self, terminal_session_id: str, *, interrupt: bool) -> None:
-        if interrupt:
-            try:
-                await self._terminal_manager.send_input(terminal_session_id, b"\x03")
-                await asyncio.sleep(self._config.termination_grace_sec)
-            except Exception:
-                pass
         try:
-            await self._terminal_manager.close_session(terminal_session_id)
-        except Exception:
+            async with asyncio.timeout(SHELL_SESSION_CLEANUP_TIMEOUT_SEC):
+                if interrupt:
+                    try:
+                        await self._send_input_with_deadline(
+                            terminal_session_id,
+                            b"\x03",
+                        )
+                        await asyncio.sleep(self._config.termination_grace_sec)
+                    except Exception:
+                        pass
+                try:
+                    await self._terminal_manager.close_session(terminal_session_id)
+                except Exception:
+                    pass
+        except TimeoutError:
             pass
 
     async def _validate_runtime_context(
@@ -871,7 +879,7 @@ class ShellSessionService:
     def _reserve_start_capacity_locked(
         self,
         identity: ShellSessionIdentity,
-    ) -> tuple[tuple[int, int, str] | None, tuple[int, int] | None]:
+    ) -> _StartCapacityReservation | None:
         owner_key = self._owner_start_key(identity)
         task_key = self._task_start_key(identity)
         owner_pending = self._pending_owner_starts.get(owner_key, 0)
@@ -880,22 +888,26 @@ class ShellSessionService:
             self._active_owner_count(identity) + owner_pending
             >= self._config.max_active_per_owner
         ):
-            return None, None
+            return None
         if (
             self._active_task_count(identity) + task_pending
             >= self._config.max_active_per_task
         ):
-            return None, None
+            return None
 
         self._pending_owner_starts[owner_key] = owner_pending + 1
         self._pending_task_starts[task_key] = task_pending + 1
-        return owner_key, task_key
+        return _StartCapacityReservation(owner_key=owner_key, task_key=task_key)
 
     def _release_start_capacity_locked(
         self,
-        owner_key: tuple[int, int, str],
-        task_key: tuple[int, int],
+        reservation: _StartCapacityReservation,
     ) -> None:
+        if reservation.released:
+            return
+        reservation.released = True
+        owner_key = reservation.owner_key
+        task_key = reservation.task_key
         owner_pending = self._pending_owner_starts.get(owner_key, 0)
         if owner_pending <= 1:
             self._pending_owner_starts.pop(owner_key, None)

@@ -23,6 +23,7 @@ from runtime_shared.runner_protocol import (
     RunnerEnvelope,
     RunnerMessageType,
 )
+from runtime_shared.terminal_contracts import TerminalReadResult
 
 TERMINAL_STREAM_CAPABILITY = "terminal_stream_v1"
 _STREAM_MESSAGE_PREFIX = "terminal-stream-"
@@ -44,6 +45,7 @@ class _StreamBuffer:
     byte_count: int = 0
     event: asyncio.Event = field(default_factory=asyncio.Event)
     closed: bool = False
+    output_dropped: bool = False
 
 
 class CloudTerminalStreamClient:
@@ -108,7 +110,15 @@ class CloudTerminalStreamClient:
 
     async def read_output(self, size: int = 4096, timeout: float | None = None) -> bytes:
         """Read buffered stream frames up to `size` bytes."""
-        return await self._registry.read_stream_output(
+        return (await self.read_output_result(size=size, timeout=timeout)).data
+
+    async def read_output_result(
+        self,
+        size: int = 4096,
+        timeout: float | None = None,
+    ) -> TerminalReadResult:
+        """Read buffered frames with explicit transport-loss metadata."""
+        return await self._registry.read_stream_output_result(
             tenant_id=self._tenant_id,
             runner_id=self._runner_id,
             task_id=self._task_id,
@@ -308,6 +318,7 @@ class RunnerTerminalStreamRegistry:
             while buffer.byte_count > _MAX_BUFFER_BYTES and buffer.frames:
                 removed = buffer.frames.popleft()
                 buffer.byte_count -= len(removed)
+                buffer.output_dropped = True
         buffer.event.set()
         return True
 
@@ -357,6 +368,28 @@ class RunnerTerminalStreamRegistry:
         timeout: float | None,
     ) -> bytes:
         """Read buffered stream bytes with optional timeout."""
+        return (
+            await self.read_stream_output_result(
+                tenant_id=tenant_id,
+                runner_id=runner_id,
+                task_id=task_id,
+                session_id=session_id,
+                size=size,
+                timeout=timeout,
+            )
+        ).data
+
+    async def read_stream_output_result(
+        self,
+        *,
+        tenant_id: int,
+        runner_id: UUID,
+        task_id: int,
+        session_id: str,
+        size: int,
+        timeout: float | None,
+    ) -> TerminalReadResult:
+        """Read buffered bytes and report whether bounded buffering dropped output."""
         key = self._stream_key(
             tenant_id=tenant_id,
             runner_id=runner_id,
@@ -369,7 +402,10 @@ class RunnerTerminalStreamRegistry:
             with self._lock:
                 buffer = self._buffers.get(key)
                 if buffer is None or buffer.closed:
-                    return b""
+                    return TerminalReadResult(
+                        ok=False,
+                        error_code="terminal_stream_unavailable",
+                    )
                 if buffer.frames:
                     chunks: list[bytes] = []
                     remaining = safe_size
@@ -386,16 +422,26 @@ class RunnerTerminalStreamRegistry:
                         remaining = 0
                     if not buffer.frames:
                         buffer.event.clear()
-                    return b"".join(chunks)
+                    truncated = buffer.output_dropped
+                    buffer.output_dropped = False
+                    return TerminalReadResult(
+                        ok=True,
+                        data=b"".join(chunks),
+                        truncated=truncated,
+                    )
+                if buffer.output_dropped:
+                    buffer.output_dropped = False
+                    buffer.event.clear()
+                    return TerminalReadResult(ok=True, truncated=True)
                 event = buffer.event
 
             if deadline is not None and asyncio.get_running_loop().time() >= deadline:
-                return b""
+                return TerminalReadResult(ok=True)
             wait_timeout = None if deadline is None else max(0.0, deadline - asyncio.get_running_loop().time())
             try:
                 await asyncio.wait_for(event.wait(), timeout=wait_timeout)
             except TimeoutError:
-                return b""
+                return TerminalReadResult(ok=True)
             event.clear()
 
     @staticmethod

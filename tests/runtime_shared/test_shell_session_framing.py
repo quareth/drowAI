@@ -33,6 +33,40 @@ def test_create_pty_command_frame_uses_unique_markers_and_wrapper() -> None:
     assert "echo ok" in frame.wrapped_command
 
 
+@pytest.mark.parametrize("split_at", range(1, 5))
+def test_streaming_parser_strips_ansi_sequence_split_at_any_boundary(
+    split_at: int,
+) -> None:
+    frame = create_pty_command_frame("printf red", command_id="ansi-split")
+    parser = StreamingPtyFramingParser(frame)
+    sequence = "\x1b[31m"
+    chunks = [
+        f"{frame.start_marker}\n{sequence[:split_at]}",
+        f"{sequence[split_at:]}red\n",
+        f"{frame.end_marker}={PTY_EXIT_CODE_MARKER}0\n",
+    ]
+
+    output = []
+    completion = None
+    for chunk in chunks:
+        result = parser.ingest(chunk)
+        output.append(result.stdout)
+        completion = result.completion or completion
+
+    assert "".join(output) == "red"
+    assert "\x1b" not in "".join(output)
+    assert completion is not None
+    assert completion.exit_code == 0
+
+
+def test_streaming_parser_keeps_incomplete_ansi_state_constant() -> None:
+    frame = create_pty_command_frame("printf red", command_id="ansi-bounded")
+    parser = StreamingPtyFramingParser(frame)
+    parser.ingest(f"{frame.start_marker}\n\x1b[" + ("1" * 100_000))
+
+    assert parser.retained_state_chars <= parser.retained_state_limit_chars
+
+
 def test_parse_marked_output_ignores_echoed_wrapper_marker() -> None:
     raw = (
         "printf '__DROWAI_CMD_START_abc12345__\\n'; { echo ok; } 2>&1; "

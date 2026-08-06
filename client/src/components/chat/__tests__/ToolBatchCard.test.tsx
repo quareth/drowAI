@@ -323,7 +323,7 @@ describe("ToolBatchCard", () => {
 
     render(<ToolBatchCard messages={messages} groupKey="shell-states" />);
 
-    expect(screen.getAllByText("Running").length).toBeGreaterThan(0);
+    expect(screen.getByText("Session running")).toBeTruthy();
     expect(screen.getByText("Completed")).toBeTruthy();
     expect(screen.getByText("Timed out")).toBeTruthy();
   });

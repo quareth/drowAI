@@ -27,6 +27,7 @@ from backend.services.runtime_provider.contracts import (
     build_runtime_result,
     is_pending_runner_operation_result,
 )
+from runtime_shared.terminal_contracts import TerminalReadResult
 
 
 @dataclass
@@ -247,6 +248,16 @@ class _FakeTerminalStream:
 class _DisconnectedTerminalStream(_FakeTerminalStream):
     def channel_connected(self) -> bool:
         return False
+
+
+class _TruncatedTerminalStream(_FakeTerminalStream):
+    async def read_output_result(
+        self,
+        size: int = 4096,
+        timeout: float | None = None,
+    ) -> TerminalReadResult:
+        del size, timeout
+        return TerminalReadResult(ok=True, data=b"remaining-output", truncated=True)
 
 
 class _RetireSession:
@@ -2452,6 +2463,24 @@ def test_cloud_runner_provider_stream_terminal_io_bypasses_runtime_jobs() -> Non
     assert stream.resizes == [(120, 40)]
     assert runtime_job_service.created_requests == []
     assert coordination_store.enqueued == []
+
+
+def test_cloud_runner_provider_preserves_stream_truncation_metadata() -> None:
+    provider, _session, _, _ = _build_provider()
+    stream = _TruncatedTerminalStream()
+
+    result = asyncio.run(
+        provider.read_terminal_output(
+            _request(
+                "read_terminal_output",
+                payload={"socket": stream, "size": 128, "timeout": 0},
+            )
+        )
+    )
+
+    assert result.status == RuntimeOperationStatus.SUCCEEDED
+    assert result.metadata["delegate_result"]["data"] == b"remaining-output"
+    assert result.metadata["delegate_result"]["truncated"] is True
 
 
 @pytest.mark.parametrize(

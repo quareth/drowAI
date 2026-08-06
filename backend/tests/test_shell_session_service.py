@@ -703,6 +703,34 @@ async def test_oversized_output_drains_to_completion_without_extra_poll() -> Non
 
 
 @pytest.mark.asyncio
+async def test_provider_buffer_loss_sets_public_truncation_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = FakeTerminalManager()
+    service = _service(manager)
+    original_read = manager.read_output_result
+
+    async def _read_with_loss(*args, **kwargs) -> TerminalReadResult:
+        result = await original_read(*args, **kwargs)
+        return TerminalReadResult(
+            ok=result.ok,
+            data=result.data,
+            error_code=result.error_code,
+            truncated=bool(result.data),
+        )
+
+    monkeypatch.setattr(manager, "read_output_result", _read_with_loss)
+
+    update = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(command="echo quick", yield_time_ms=0),
+    )
+
+    assert update.process_status is ShellProcessStatus.COMPLETED
+    assert update.truncated is True
+
+
+@pytest.mark.asyncio
 async def test_untruncated_output_remains_exact_above_head_tail_split() -> None:
     manager = FakeTerminalManager()
     service = _service(manager)

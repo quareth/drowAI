@@ -18,6 +18,14 @@ SHELL_SESSION_MAX_ENV_ENTRIES = 64
 SHELL_SESSION_MAX_ENV_TOTAL_BYTES = 32 * 1024
 SHELL_SESSION_DEFAULT_YIELD_TIME_MS = 10_000
 SHELL_SESSION_MAX_YIELD_TIME_MS = 30_000
+# Session creation includes runtime readiness, provider terminal open, and PTY
+# initialization. Keep this bound shared so the backend operation and the agent
+# scheduler enforce the same invocation budget.
+SHELL_SESSION_PREPARATION_TIMEOUT_SEC = 8.0
+SHELL_SESSION_CONTROL_TIMEOUT_SEC = 5.0
+# Cleanup may interrupt once and then close the provider terminal; each control
+# operation is independently bounded and the default termination pause is one second.
+SHELL_SESSION_CLEANUP_TIMEOUT_SEC = 12.0
 SHELL_SESSION_DEFAULT_MAX_OUTPUT_CHARS = 32_000
 SHELL_SESSION_MIN_OUTPUT_CHARS = 1_024
 SHELL_SESSION_MAX_OUTPUT_CHARS = 128_000
