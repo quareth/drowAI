@@ -272,7 +272,7 @@ def prepare_subagent_child_config(
         assignment=assignment,
         graph_thread_id=graph_thread_id,
     )
-    configurable.setdefault("graph_runtime_context", graph_runtime_context)
+    configurable["graph_runtime_context"] = graph_runtime_context
     configurable.setdefault("canonical_conversation_id", assignment.conversation_id)
     configurable.setdefault("canonical_turn_id", assignment.parent_turn_id)
     turn_sequence = assignment.relevant_context.get("turn_sequence")
