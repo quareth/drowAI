@@ -36,6 +36,9 @@ from backend.services.data_plane.registry import get_object_store
 from backend.services.artifact.runner_result_ingest_service import RunnerResultIngestService
 from backend.services.runner_control.audit import RunnerControlAuditEmitter, RunnerControlAuditService
 from backend.services.runner_control.terminal_frame_buffer import get_runner_terminal_frame_buffer
+from backend.services.runner_control.terminal_stream_registry import (
+    get_runner_terminal_stream_registry,
+)
 from backend.services.runner_control.runtime_job_service import RuntimeJobService, RuntimeJobServiceError
 from backend.services.task.retirement_service import TaskRetirementService
 from backend.services.task.state_service import TaskStateService
@@ -688,12 +691,20 @@ class RuntimeEventService:
                 stream=payload.stream,
                 data=safe_frame_data,
             )
+            streamed = get_runner_terminal_stream_registry().append_stream_frame(
+                tenant_id=tenant_id,
+                runner_id=runner_id,
+                task_id=task_id,
+                session_id=payload.session_id,
+                data=safe_frame_data,
+            )
             event_metadata["terminal"] = {
                 "session_id": payload.session_id,
                 "sequence": payload.sequence,
                 "stream": payload.stream,
                 "data": safe_frame_data,
                 "buffered": buffered,
+                "streamed": streamed,
             }
         elif isinstance(payload, _RESULT_PAYLOAD_TYPES):
             event_metadata["operation_id"] = str(payload.operation_id)
