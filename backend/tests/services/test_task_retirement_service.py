@@ -151,6 +151,16 @@ async def test_retire_runtime_returns_provider_failure_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("backend.database.SessionLocal", lambda: _FakeDb())
+    cleaned_tasks: list[tuple[int, int]] = []
+
+    async def fake_cleanup(*, tenant_id: int, task_id: int) -> None:
+        cleaned_tasks.append((tenant_id, task_id))
+
+    monkeypatch.setattr(
+        TaskRetirementService,
+        "cleanup_runtime_stream_state",
+        staticmethod(fake_cleanup),
+    )
     _FakeRuntimeOperations.result = SimpleNamespace(
         ok=False,
         provider="cloud_runner",
@@ -168,6 +178,7 @@ async def test_retire_runtime_returns_provider_failure_message(
         "status=rejected | code=RUNNER_ASSIGNMENT_REQUIRED | "
         "error=Runner assignment is missing."
     )
+    assert cleaned_tasks == [(17, 55)]
 
 
 @pytest.mark.asyncio
@@ -175,6 +186,16 @@ async def test_retire_runtime_returns_unexpected_error_message(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr("backend.database.SessionLocal", lambda: _FakeDb())
+    cleaned_tasks: list[tuple[int, int]] = []
+
+    async def fake_cleanup(*, tenant_id: int, task_id: int) -> None:
+        cleaned_tasks.append((tenant_id, task_id))
+
+    monkeypatch.setattr(
+        TaskRetirementService,
+        "cleanup_runtime_stream_state",
+        staticmethod(fake_cleanup),
+    )
 
     class _RaisingRuntimeOperations(_FakeRuntimeOperations):
         async def run_for_context(self, **kwargs: Any):
@@ -189,3 +210,4 @@ async def test_retire_runtime_returns_unexpected_error_message(
     assert result.message == (
         "Unexpected runtime retirement error for task 88: provider unavailable"
     )
+    assert cleaned_tasks == [(17, 88)]

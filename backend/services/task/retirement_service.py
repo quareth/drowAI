@@ -52,6 +52,8 @@ class TaskRetirementService:
         runtime_call_scope: RuntimeCallScope | str = RuntimeCallScope.PRODUCT_TASK,
     ) -> RuntimeRetirementResult:
         """Retire container, workspace, and in-memory stream runtime state for a task."""
+        context = None
+        retirement_attempted = False
         try:
             from backend.database import SessionLocal
 
@@ -73,6 +75,7 @@ class TaskRetirementService:
                 )
                 if blocked_result is not None:
                     return blocked_result
+                retirement_attempted = True
                 result = await runtime_operations.run_for_context(
                     context=context,
                     operation="retire_task_runtime",
@@ -103,11 +106,12 @@ class TaskRetirementService:
                 success=False,
                 message=f"Unexpected runtime retirement error for task {task_id}: {exc}",
             )
-
-        await self.cleanup_runtime_stream_state(
-            tenant_id=int(context.tenant_id),
-            task_id=task_id,
-        )
+        finally:
+            if retirement_attempted and context is not None:
+                await self.cleanup_runtime_stream_state(
+                    tenant_id=int(context.tenant_id),
+                    task_id=task_id,
+                )
 
         return RuntimeRetirementResult(
             success=True,
