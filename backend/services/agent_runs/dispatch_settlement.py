@@ -33,7 +33,9 @@ from .registry import ProcessLocalAgentRunRegistry
 from .result_projection import CompletedAgentResultHandoff
 
 logger = logging.getLogger(__name__)
-_SHELL_OWNER_CLEANUP_STATUSES = frozenset({"completed", "failed", "cancelled"})
+_SHELL_OWNER_CLEANUP_STATUSES = frozenset(
+    {"completed", "partial", "blocked", "failed", "cancelled"}
+)
 
 
 def _subagent_execution_owner_id(agent_run_id: str) -> str | None:
@@ -273,18 +275,21 @@ class DispatchSettlement:
         completions: list[AgentRunCompletion] = []
         for (item, _child_task), result in zip(launched, settled, strict=True):
             assignment = item.assignment
+            cleanup_status: str | None = None
             if isinstance(result, AgentRunCompletion):
                 completions.append(result)
-                await self._close_subagent_owner_shell_sessions_for_settlement(
-                    item=item,
-                    status=result.result.outcome,
-                )
+                cleanup_status = result.result.outcome
+            elif isinstance(result, SubagentRunPaused):
                 continue
-
-            if isinstance(
+            elif isinstance(
                 result,
                 (SubagentRunCancelled, SubagentRunFailed),
             ):
+                cleanup_status = (
+                    "cancelled"
+                    if isinstance(result, SubagentRunCancelled)
+                    else "failed"
+                )
                 terminal = await self._registry.get(
                     tenant_id=assignment.tenant_id,
                     task_id=assignment.task_id,
@@ -302,28 +307,29 @@ class DispatchSettlement:
                         graph_thread_id=item.graph_thread_id,
                     )
                     completions.append(completion)
-                    await self._close_subagent_owner_shell_sessions_for_settlement(
-                        item=item,
-                        status=completion.result.outcome,
-                    )
-                continue
-            if isinstance(result, SubagentRunPaused):
-                continue
-            terminal = await self._registry.get(
-                tenant_id=assignment.tenant_id,
-                task_id=assignment.task_id,
-                agent_run_id=assignment.agent_run_id,
-            )
-            if terminal is not None and terminal.result is not None:
-                completion = AgentRunCompletion(
-                    result=terminal.result,
-                    usage_records=(),
-                    graph_thread_id=item.graph_thread_id,
+                    cleanup_status = completion.result.outcome
+            else:
+                cleanup_status = (
+                    "cancelled" if isinstance(result, asyncio.CancelledError) else "failed"
                 )
-                completions.append(completion)
+                terminal = await self._registry.get(
+                    tenant_id=assignment.tenant_id,
+                    task_id=assignment.task_id,
+                    agent_run_id=assignment.agent_run_id,
+                )
+                if terminal is not None and terminal.result is not None:
+                    completion = AgentRunCompletion(
+                        result=terminal.result,
+                        usage_records=(),
+                        graph_thread_id=item.graph_thread_id,
+                    )
+                    completions.append(completion)
+                    cleanup_status = completion.result.outcome
+
+            if cleanup_status is not None:
                 await self._close_subagent_owner_shell_sessions_for_settlement(
                     item=item,
-                    status=completion.result.outcome,
+                    status=cleanup_status,
                 )
         return tuple(completions)
 

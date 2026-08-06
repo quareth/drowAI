@@ -377,6 +377,43 @@ async def test_settle_child_result_logs_and_preserves_result_on_cleanup_failure(
     assert "shell_session.subagent_owner_cleanup_failed" in caplog.text
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["partial", "blocked"])
+async def test_settle_child_result_closes_owner_for_every_terminal_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+) -> None:
+    shell_service = _ShellCleanupService()
+    monkeypatch.setattr(
+        dispatch_settlement_module,
+        "get_shell_session_service",
+        lambda: shell_service,
+    )
+    settlement = DispatchSettlement(registry=ProcessLocalAgentRunRegistry())
+    item = _plan("pathfinder")[0]
+    completion = _completion(
+        item.assignment,
+        graph_thread_id=item.graph_thread_id,
+        outcome=outcome,
+    )
+
+    settled = await settlement.settle_child_result(
+        completion,
+        item=item,
+        task_id=TASK_ID,
+        turn_index=5,
+    )
+
+    assert settled.completion is completion
+    assert shell_service.close_calls == [
+        {
+            "tenant_id": TENANT_ID,
+            "task_id": TASK_ID,
+            "execution_owner_id": "subagent:run-1",
+        }
+    ]
+
+
 def test_stop_for_child_exception_preserves_status_and_usage_mapping() -> None:
     settlement = DispatchSettlement(registry=ProcessLocalAgentRunRegistry())
     item = _plan("pathfinder")[0]
@@ -512,6 +549,33 @@ async def test_settle_launched_batch_on_failure_recovers_original_order(
             "task_id": TASK_ID,
             "execution_owner_id": "subagent:run-3",
         },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_settle_launched_batch_cleans_owner_when_cancel_has_no_registry_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shell_service = _ShellCleanupService()
+    monkeypatch.setattr(
+        dispatch_settlement_module,
+        "get_shell_session_service",
+        lambda: shell_service,
+    )
+    settlement = DispatchSettlement(registry=ProcessLocalAgentRunRegistry())
+    item = _plan("pathfinder")[0]
+    child = _TerminalAwaitable(asyncio.CancelledError(), raise_result=True)
+
+    completions = await settlement.settle_launched_batch_on_failure([(item, child)])
+
+    assert completions == ()
+    assert child.cancelled is True
+    assert shell_service.close_calls == [
+        {
+            "tenant_id": TENANT_ID,
+            "task_id": TASK_ID,
+            "execution_owner_id": "subagent:run-1",
+        }
     ]
 
 
