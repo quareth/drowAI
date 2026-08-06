@@ -896,7 +896,7 @@ def test_cloud_runner_provider_send_tool_command_rejects_when_feature_flag_disab
                 "send_tool_command",
                 runner_id=runner_id,
                 payload={
-                    "tool": "shell.exec",
+                    "tool": "filesystem.read_file",
                     "command_id": "cmd-1",
                     "command": "id",
                     "timeout_seconds": 10,
@@ -925,7 +925,7 @@ def test_cloud_runner_provider_send_tool_command_rejects_when_runner_tool_capabi
     request = _request(
         "send_tool_command",
         runner_id=str(runner.id),
-        payload={"tool": "shell.exec", "command_id": "cmd-missing-tool-cap", "command": "id"},
+        payload={"tool": "filesystem.read_file", "command_id": "cmd-missing-tool-cap", "command": "id"},
     )
     request.metadata["lane_dispatch"] = {"lane": "container_scoped", "authority": "container_runner_transport"}
 
@@ -953,7 +953,7 @@ def test_cloud_runner_provider_send_tool_command_rejects_when_channel_capability
     request = _request(
         "send_tool_command",
         runner_id=str(runner.id),
-        payload={"tool": "shell.exec", "command_id": "cmd-missing-channel-cap", "command": "id"},
+        payload={"tool": "filesystem.read_file", "command_id": "cmd-missing-channel-cap", "command": "id"},
     )
     request.metadata["lane_dispatch"] = {"lane": "container_scoped", "authority": "container_runner_transport"}
 
@@ -1042,7 +1042,7 @@ def test_cloud_runner_provider_send_tool_command_rejects_non_runner_runtime_plac
         "send_tool_command",
         runner_id=str(uuid4()),
         payload={
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "command_id": "cmd-local-placement",
             "command": "id",
             "timeout_seconds": 10,
@@ -1068,7 +1068,7 @@ def test_cloud_runner_provider_send_tool_command_rejects_secret_bearing_env(monk
         "send_tool_command",
         runner_id=runner_id,
         payload={
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "command_id": "cmd-3",
             "command": "id",
             "env": {"api_key": "sk-secret"},
@@ -1093,7 +1093,7 @@ def test_cloud_runner_provider_send_tool_command_rejects_legacy_args(monkeypatch
         "send_tool_command",
         runner_id=str(uuid4()),
         payload={
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "command_id": "cmd-legacy-args",
             "command": "id",
             "args": {"command": "id"},
@@ -1127,7 +1127,7 @@ def test_cloud_runner_provider_send_tool_command_rejects_missing_or_empty_comman
     monkeypatch.setenv("RUNNER_TOOL_COMMAND_ENABLED", "1")
     provider, _, runtime_job_service, coordination_store = _build_provider()
     request_payload = {
-        "tool": "shell.exec",
+        "tool": "filesystem.read_file",
         "command_id": "cmd-invalid-args",
         "timeout_seconds": 10,
     }
@@ -1157,7 +1157,7 @@ def test_cloud_runner_provider_send_tool_command_rejects_secret_bearing_params(m
         "send_tool_command",
         runner_id=str(uuid4()),
         payload={
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "command_id": "cmd-secret-params",
             "command": "id",
             "params": {"secret_ref": "vault://tooling-plane/secret"},
@@ -1194,7 +1194,7 @@ def test_cloud_runner_provider_send_tool_command_rejects_runtime_identity_params
         "send_tool_command",
         runner_id=str(uuid4()),
         payload={
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "command_id": "cmd-runtime-id-params",
             "command": "id",
             "params": {identity_key: "injected-value"},
@@ -1232,7 +1232,7 @@ def test_cloud_runner_provider_send_tool_command_rejects_missing_active_task_run
     request = _request(
         "send_tool_command",
         runner_id=str(runner.id),
-        payload={"tool": "shell.exec", "command_id": "cmd-no-task-runtime", "command": "id"},
+        payload={"tool": "filesystem.read_file", "command_id": "cmd-no-task-runtime", "command": "id"},
     )
     request.metadata["lane_dispatch"] = {"lane": "container_scoped", "authority": "container_runner_transport"}
 
@@ -1283,7 +1283,7 @@ def test_cloud_runner_provider_send_tool_command_enqueues_tooling_plane_tool_com
         "send_tool_command",
         runner_id=str(runner_id),
         payload={
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "command_id": "tool-call-1",
             "tool_call_id": "tool-call-1",
             "tool_batch_id": "batch-1",
@@ -1301,7 +1301,7 @@ def test_cloud_runner_provider_send_tool_command_enqueues_tooling_plane_tool_com
     assert len(runtime_job_service.created_requests) == 1
     created_request = runtime_job_service.created_requests[0]
     assert created_request.job_type == "tool.command"
-    assert created_request.payload_json["tool"] == "shell.exec"
+    assert created_request.payload_json["tool"] == "filesystem.read_file"
     assert created_request.payload_json["command_id"] == "tool-call-1"
     assert created_request.payload_json["task_runtime_job_id"] == str(task_runtime_job_id)
     assert created_request.payload_json["command"] == "id"
@@ -1321,7 +1321,7 @@ def test_cloud_runner_provider_send_tool_command_enqueues_tooling_plane_tool_com
     assert outbound["payload_json"]["command_id"] == "tool-call-1"
     assert outbound["payload_json"]["task_runtime_job_id"] == str(task_runtime_job_id)
     assert outbound["payload_json"]["workspace_id"] == "task-34"
-    assert outbound["payload_json"]["tool"] == "shell.exec"
+    assert outbound["payload_json"]["tool"] == "filesystem.read_file"
     assert outbound["payload_json"]["timeout_seconds"] == 12.5
     assert outbound["payload_json"]["timeout_policy"] == {
         "deadline_seconds": 12.5,
@@ -1377,7 +1377,7 @@ def test_cloud_runner_provider_send_tool_command_propagates_pty_transport_params
         "send_tool_command",
         runner_id=str(runner_id),
         payload={
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "command_id": "tool-call-pty",
             "tool_call_id": "tool-call-pty",
             "command": "id",
@@ -1441,7 +1441,7 @@ def test_cloud_runner_provider_send_tool_command_propagates_delivery_policy(monk
         "send_tool_command",
         runner_id=str(runner_id),
         payload={
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "command_id": f"cmd-{offline_mode}",
             "command": "id",
             "delivery_policy": {
@@ -1518,7 +1518,7 @@ def test_cloud_runner_provider_send_tool_command_reuses_terminal_command_identit
         "send_tool_command",
         runner_id=str(runner_id),
         payload={
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "command_id": "cmd-retry",
             "command": "id",
             "timeout_seconds": 10,
@@ -1610,7 +1610,7 @@ def test_cloud_runner_provider_send_tool_command_rejects_cross_binding_command_i
         "send_tool_command",
         runner_id=str(runner_id),
         payload={
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "command_id": "cmd-conflict",
             "command": "id",
             "timeout_seconds": 10,
@@ -1664,7 +1664,7 @@ def test_cloud_runner_provider_send_tool_command_returns_failed_when_runner_ack_
         "send_tool_command",
         runner_id=str(runner_id),
         payload={
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "command_id": "tool-call-ack-failed",
             "command": "id",
             "timeout_seconds": 12.5,
@@ -1721,7 +1721,7 @@ def test_cloud_runner_provider_send_tool_command_returns_pending_when_ack_not_re
         "send_tool_command",
         runner_id=str(runner_id),
         payload={
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "command_id": "tool-call-no-ack",
             "command": "id",
             "timeout_seconds": 12.5,
@@ -1760,7 +1760,7 @@ def test_cloud_runner_provider_send_tool_command_reuses_pending_command_identity
             "workspace_id": "task-34",
             "operation_id": "persisted-op-retry",
             "runtime_image": "ghcr.io/drowai/kali:tooling-plane",
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
         },
         result_json={},
         error_code=None,
@@ -1793,7 +1793,7 @@ def test_cloud_runner_provider_send_tool_command_reuses_pending_command_identity
         "send_tool_command",
         runner_id=str(runner_id),
         payload={
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "command_id": "cmd-retry-missing-outbound",
             "command": "id",
             "timeout_seconds": 10,
@@ -1833,7 +1833,7 @@ def test_cloud_runner_provider_send_tool_command_reuses_pending_command_identity
             "workspace_id": "task-34",
             "operation_id": "persisted-op-pending",
             "runtime_image": "ghcr.io/drowai/kali:tooling-plane",
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
         },
         result_json={},
         error_code=None,
@@ -1866,7 +1866,7 @@ def test_cloud_runner_provider_send_tool_command_reuses_pending_command_identity
         "send_tool_command",
         runner_id=str(runner_id),
         payload={
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "command_id": "cmd-retry-pending",
             "command": "id",
             "timeout_seconds": 10,
@@ -1910,7 +1910,7 @@ def test_cloud_runner_provider_send_tool_command_waits_for_tool_result_success(m
             "stderr": "",
             "artifacts": ["artifacts/cmd-1/stdout.txt"],
             "command_id": "tool-call-success",
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "result": {"duration_seconds": 0.4},
             "metadata": {"runtime_ms": 400},
             "operation_id": "tool-op-1",
@@ -1943,7 +1943,7 @@ def test_cloud_runner_provider_send_tool_command_waits_for_tool_result_success(m
         "send_tool_command",
         runner_id=str(runner_id),
         payload={
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "command_id": "tool-call-success",
             "command": "id",
             "timeout_seconds": 12.5,
@@ -2005,7 +2005,7 @@ def test_cloud_runner_provider_send_tool_command_waits_for_ack_failure_terminal_
         "send_tool_command",
         runner_id=str(runner_id),
         payload={
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "command_id": "tool-call-ack-failed-wait",
             "command": "id",
             "timeout_seconds": 12.5,
@@ -2043,7 +2043,7 @@ def test_cloud_runner_provider_send_tool_command_waits_for_failed_tool_result_pr
             "stderr": "permission denied",
             "artifacts": ["artifacts/cmd-2/stderr.txt"],
             "command_id": "tool-call-failed",
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "error_code": "TOOL_FAILED",
             "error_message": "Tool execution failed.",
             "result": {"duration_seconds": 0.9},
@@ -2078,7 +2078,7 @@ def test_cloud_runner_provider_send_tool_command_waits_for_failed_tool_result_pr
         "send_tool_command",
         runner_id=str(runner_id),
         payload={
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "command_id": "tool-call-failed",
             "command": "id",
             "timeout_seconds": 12.5,
@@ -2140,7 +2140,7 @@ def test_cloud_runner_provider_send_tool_command_wait_for_result_times_out(monke
         "send_tool_command",
         runner_id=str(runner_id),
         payload={
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "command_id": "tool-call-result-timeout",
             "command": "id",
             "timeout_seconds": 12.5,
@@ -2185,7 +2185,7 @@ def test_cloud_runner_provider_send_tool_command_reports_artifact_upload_timeout
         status="accepted",
         result_json={
             "command_id": "tool-call-artifact-timeout",
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "status": "succeeded",
             "success": True,
             "exit_code": 0,
@@ -2227,7 +2227,7 @@ def test_cloud_runner_provider_send_tool_command_reports_artifact_upload_timeout
         "send_tool_command",
         runner_id=str(runner_id),
         payload={
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "command_id": "tool-call-artifact-timeout",
             "command": "id",
             "timeout_seconds": 12.5,
@@ -2301,7 +2301,7 @@ def test_cloud_runner_provider_send_tool_command_wait_for_result_respects_shared
         "send_tool_command",
         runner_id=str(runner_id),
         payload={
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "command_id": "tool-call-shared-timeout-budget",
             "command": "id",
             "timeout_seconds": 12.5,
@@ -2358,7 +2358,7 @@ def test_cloud_runner_provider_send_tool_command_cancellation_returns_cancelled_
         "send_tool_command",
         runner_id=str(runner_id),
         payload={
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "command_id": "cmd-cancel",
             "command": "id",
             "timeout_seconds": 5.0,
