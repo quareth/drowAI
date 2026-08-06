@@ -14,6 +14,12 @@ The format is based on
   continue yielded sessions with exact input or polling, and receive bounded,
   task-isolated output with lifecycle cleanup.
 
+### Changed
+
+- Interactive shell policy now reserves hard blocks for obvious environment
+  destruction, shutdown, resource exhaustion, and container escape while
+  permitting pentesting workflows in the default permissive mode.
+
 ### Security
 
 - Updated cryptography, Undici, and PostCSS to patched releases that address
