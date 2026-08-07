@@ -17,6 +17,7 @@ from backend.services.chat.turn_identity_resolver import (
     resolve_turn_identity_from_reserved_message_best_effort,
 )
 from backend.services.langgraph_chat import AgentMode, ChatInputs, ExecutionMode
+from runtime_shared.shell_session_contracts import format_shell_execution_owner_id
 from backend.services.langgraph_chat.compression.context_models import (
     CompressionRequiredError,
 )
@@ -109,7 +110,7 @@ def _main_execution_owner_id(turn_id: Optional[str]) -> Optional[str]:
     normalized = turn_id.strip()
     if not normalized:
         return None
-    return f"main:{normalized}"
+    return format_shell_execution_owner_id("main", normalized)
 
 
 async def _close_main_owner_shell_sessions_for_status(

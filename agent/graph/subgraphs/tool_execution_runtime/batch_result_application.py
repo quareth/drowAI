@@ -10,6 +10,10 @@ from __future__ import annotations
 from typing import Any, Mapping, Optional
 
 from agent.tool_runtime.batch.types import ToolBatch, ToolCall, ToolCallResult, ToolCallStatus
+from agent.tool_runtime.output_persistence_policy import (
+    OutputPersistenceDecision,
+    resolve_output_persistence,
+)
 
 from .approval_and_idempotency import _store_dispatch_cache_entry
 from .batch_runner import emit_tool_batch_end, write_compact_batch_metadata
@@ -45,6 +49,12 @@ def finish_with_batch_result(
     emitter: Optional[Any],
 ) -> dict:
     """Apply terminal batch results and return the graph update."""
+    persistence_decision_by_call_id = _persistence_decisions_for_batch(
+        batch=batch,
+        projection_by_call_id=projection_by_call_id,
+        outcome_by_call_id=outcome_by_call_id,
+        cached_dispatch_by_call_id=cached_dispatch_by_call_id,
+    )
     if original_plan:
         facts.metadata["planner_plan"] = original_plan
     _apply_call_results_in_manifest_order(
@@ -72,6 +82,7 @@ def finish_with_batch_result(
         tool_catalog_by_call_id=tool_catalog_by_call_id,
         cached_dispatch_by_call_id=cached_dispatch_by_call_id,
         metadata_patch_by_call_id=metadata_patch_by_call_id,
+        persistence_decision_by_call_id=persistence_decision_by_call_id,
     )
     write_compact_batch_metadata(
         facts,
@@ -79,6 +90,7 @@ def finish_with_batch_result(
         result=result,
         compact_by_call_id=compact_by_call_id,
         deterministic_compact_by_call_id=deterministic_compact_by_call_id,
+        persistence_decision_by_call_id=persistence_decision_by_call_id,
     )
     _enqueue_completed_execution_ingestions(
         facts=facts,
@@ -86,9 +98,13 @@ def finish_with_batch_result(
         execution_id_by_call_id=execution_id_by_call_id,
         compact_by_call_id=compact_by_call_id,
         deterministic_compact_by_call_id=deterministic_compact_by_call_id,
+        outcome_by_call_id=outcome_by_call_id,
         deps=deps,
     )
-    if projection_by_call_id or cached_dispatch_by_call_id:
+    if any(
+        decision.retain_durable_output
+        for decision in persistence_decision_by_call_id.values()
+    ):
         append_tool_phase_snapshot_from_metadata(
             facts=facts,
             turn_sequence=turn_sequence,
@@ -114,6 +130,7 @@ def _enqueue_completed_execution_ingestions(
     execution_id_by_call_id: Mapping[str, Optional[Any]],
     compact_by_call_id: Mapping[str, Mapping[str, Any]],
     deterministic_compact_by_call_id: Mapping[str, Mapping[str, Any]],
+    outcome_by_call_id: Mapping[str, Any],
     deps: Mapping[str, Any],
 ) -> None:
     """Queue durable knowledge ingestion for each persisted tool execution."""
@@ -126,6 +143,17 @@ def _enqueue_completed_execution_ingestions(
     if not callable(enqueue):
         return
     for call in batch.tool_calls:
+        outcome = outcome_by_call_id.get(call.tool_call_id)
+        result_metadata = (
+            outcome.result
+            if outcome is not None and isinstance(getattr(outcome, "result", None), Mapping)
+            else None
+        )
+        if not resolve_output_persistence(
+            call.tool_id,
+            result_metadata,
+        ).knowledge_eligible:
+            continue
         execution_id = execution_id_by_call_id.get(call.tool_call_id)
         compact_output = deterministic_compact_by_call_id.get(
             call.tool_call_id
@@ -235,7 +263,11 @@ def _apply_call_results_in_manifest_order(
 
         compact_result = projection.get("compact_result_dict")
         observation_text = observation_by_call_id.get(call.tool_call_id, "")
-        if isinstance(compact_result, Mapping):
+        persistence_decision = projection.get("persistence_decision")
+        retain_durable_output = not isinstance(
+            persistence_decision, OutputPersistenceDecision
+        ) or persistence_decision.retain_durable_output
+        if isinstance(compact_result, Mapping) and retain_durable_output:
             _record_active_todo_attempt(
                 interactive,
                 outcome=outcome,
@@ -301,11 +333,34 @@ def _restore_primary_call_metadata_fields(
     tool_catalog_by_call_id: Mapping[str, Mapping[str, Any]],
     cached_dispatch_by_call_id: Mapping[str, Mapping[str, Any]],
     metadata_patch_by_call_id: Mapping[str, Mapping[str, Any]],
+    persistence_decision_by_call_id: Mapping[str, OutputPersistenceDecision],
 ) -> None:
-    """Restore primary-call metadata projections after batch execution."""
+    """Restore the first durably retained call after batch execution."""
     if not batch.tool_calls:
         return
-    primary = batch.tool_calls[0]
+    primary = next(
+        (
+            call
+            for call in batch.tool_calls
+            if persistence_decision_by_call_id.get(call.tool_call_id) is None
+            or persistence_decision_by_call_id[call.tool_call_id].retain_durable_output
+        ),
+        None,
+    )
+    if primary is None:
+        if hasattr(facts, "selected_tool"):
+            facts.selected_tool = None
+        if hasattr(facts, "tool_parameters"):
+            facts.tool_parameters = {}
+        for key in (
+            "selected_tool",
+            "tool_parameters",
+            "last_tool_result",
+            "last_artifact_path",
+        ):
+            facts.metadata.pop(key, None)
+        return
+
     primary_parameters = dict(primary.parameters or {})
     if hasattr(facts, "selected_tool"):
         facts.selected_tool = primary.tool_id
@@ -315,16 +370,22 @@ def _restore_primary_call_metadata_fields(
     facts.metadata["tool_parameters"] = primary_parameters
 
     primary_projection = projection_by_call_id.get(primary.tool_call_id)
-    if isinstance(primary_projection, Mapping):
+    primary_decision = persistence_decision_by_call_id.get(primary.tool_call_id)
+    if (
+        isinstance(primary_projection, Mapping)
+        and (primary_decision is None or primary_decision.retain_durable_output)
+    ):
         result_for_metadata = primary_projection.get("result_for_metadata")
         if isinstance(result_for_metadata, Mapping):
             facts.metadata["last_tool_result"] = dict(result_for_metadata)
-    else:
+    elif primary_decision is None or primary_decision.retain_durable_output:
         cached = cached_dispatch_by_call_id.get(primary.tool_call_id)
         if isinstance(cached, Mapping) and isinstance(
             cached.get("last_tool_result"), Mapping
         ):
             facts.metadata["last_tool_result"] = dict(cached["last_tool_result"])
+    else:
+        facts.metadata.pop("last_tool_result", None)
 
     primary_catalog = tool_catalog_by_call_id.get(primary.tool_call_id)
     if isinstance(primary_catalog, Mapping):
@@ -341,6 +402,41 @@ def _restore_primary_call_metadata_fields(
         for key in ("last_artifact_path", "workspace_path", "last_execution_id"):
             if key in primary_patch:
                 facts.metadata[key] = primary_patch[key]
+
+
+def _persistence_decisions_for_batch(
+    *,
+    batch: ToolBatch,
+    projection_by_call_id: Mapping[str, Mapping[str, Any]],
+    outcome_by_call_id: Mapping[str, Any],
+    cached_dispatch_by_call_id: Mapping[str, Mapping[str, Any]],
+) -> dict[str, OutputPersistenceDecision]:
+    """Return one output decision per call without inspecting command text."""
+
+    decisions: dict[str, OutputPersistenceDecision] = {}
+    for call in batch.tool_calls:
+        projection = projection_by_call_id.get(call.tool_call_id)
+        decision = (
+            projection.get("persistence_decision")
+            if isinstance(projection, Mapping)
+            else None
+        )
+        if isinstance(decision, OutputPersistenceDecision):
+            decisions[call.tool_call_id] = decision
+            continue
+        outcome = outcome_by_call_id.get(call.tool_call_id)
+        result_metadata = (
+            outcome.result
+            if outcome is not None and isinstance(getattr(outcome, "result", None), Mapping)
+            else cached_dispatch_by_call_id.get(call.tool_call_id, {}).get(
+                "last_tool_result"
+            )
+        )
+        decisions[call.tool_call_id] = resolve_output_persistence(
+            call.tool_id,
+            result_metadata if isinstance(result_metadata, Mapping) else None,
+        )
+    return decisions
 
 
 def _apply_trace_delta(interactive: Any, delta: Optional[Mapping[str, Any]]) -> None:

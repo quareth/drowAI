@@ -1519,6 +1519,71 @@ def test_runner_channel_manager_accepts_result_shaped_remote_runtime_dual_event_
     assert refreshed_runtime_vpn_status_job.status == "succeeded"
 
 
+def test_runner_channel_manager_accepts_result_before_delivery_bookkeeping_completes() -> None:
+    db = _build_session()
+    tenant, runner = _seed_runner(db)
+    task = _seed_runner_assigned_task(db, tenant=tenant, runner=runner)
+    runtime_status_job = _seed_runtime_job(
+        db,
+        tenant=tenant,
+        runner=runner,
+        task=task,
+        job_type="runtime.status",
+    )
+    runtime_status_job.status = "dispatching"
+    db.flush()
+
+    manager = RunnerChannelManager(db)
+    credential_id = _issue_credential_id(db, tenant_id=tenant.id, runner_id=runner.id)
+    session = manager.open_session(
+        RunnerChannelAuthContext(
+            tenant_id=tenant.id,
+            runner_id=runner.id,
+            credential_id=credential_id,
+            allowed_protocol_versions=("runner_control.v1", "remote_runtime.v1"),
+        )
+    )
+    manager.handle_inbound_json(
+        session,
+        _envelope_json(
+            tenant_id=tenant.id,
+            runner_id=runner.id,
+            message_type="runner.hello",
+            payload={"version": "1.9.0", "capabilities": ["docker"], "labels": {"site": "hq"}},
+        ),
+    )
+
+    result = manager.handle_inbound_json(
+        session,
+        _envelope_json(
+            tenant_id=tenant.id,
+            runner_id=runner.id,
+            message_type="runtime.status",
+            schema_version="remote_runtime.v1",
+            runtime_job_id=str(runtime_status_job.id),
+            task_id=task.id,
+            payload={
+                "operation_id": "runtime-status-fast-result",
+                "status": "succeeded",
+                "error_code": None,
+                "error_message": None,
+                "result": {"job_status": "running", "container_status": "running"},
+            },
+        ),
+    )
+    db.commit()
+
+    assert result.response_envelopes == ()
+    refreshed = db.execute(
+        select(RuntimeJob).where(RuntimeJob.id == runtime_status_job.id)
+    ).scalar_one()
+    assert refreshed.status == "succeeded"
+    assert refreshed.result_json["result"] == {
+        "job_status": "running",
+        "container_status": "running",
+    }
+
+
 def test_runner_channel_manager_rejects_remote_runtime_event_with_operation_family_mismatch() -> None:
     db = _build_session()
     tenant, runner = _seed_runner(db)

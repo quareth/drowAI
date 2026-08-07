@@ -222,13 +222,6 @@ class GraphRuntimeContext(BaseModel):
             missing.append("user_id")
         return missing
 
-    def missing_shell_session_runtime_identity_fields(self) -> List[str]:
-        """Return runtime identity fields required for shell-session operations."""
-        missing = self.missing_tool_runtime_identity_fields()
-        if not isinstance(self.execution_owner_id, str) or not self.execution_owner_id.strip():
-            missing.append("execution_owner_id")
-        return missing
-
     def requires_local_workspace_path(self) -> bool:
         """Return whether local execution requires a local workspace path."""
         return self.normalized_runtime_placement_mode() == "local"

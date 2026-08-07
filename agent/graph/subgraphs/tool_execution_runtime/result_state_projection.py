@@ -25,10 +25,11 @@ from ...utils import iteration_memory as _iteration_memory
 from ...utils.llm_resolver import ROLE_TOOL_OUTPUT_COMPRESSOR
 from ...utils.tool_optimization import ToolExecution, get_scan_phase, record_tool_execution
 from runtime_shared.durable_secret_masking import mask_durable_secrets
+from runtime_shared.shell_capabilities import SHELL_SESSION_TOOL_IDS
+from agent.tool_runtime.output_persistence_policy import OutputPersistenceDecision
 
 _CURRENT_TURN_RUNTIME_CONTROLS_KEY = "current_turn_runtime_controls"
-_SHELL_SESSION_TOOL_IDS = frozenset({"shell.exec", "shell.write_stdin"})
-_SHELL_SESSION_COMPACT_RESULT_KEYS = (
+SHELL_SESSION_COMPACT_RESULT_KEYS = (
     "process_status",
     "session_id",
     "exit_code",
@@ -38,6 +39,9 @@ _SHELL_SESSION_COMPACT_RESULT_KEYS = (
     "truncated",
     "summary",
     "error_code",
+)
+SHELL_SESSION_STATE_RESULT_KEYS = tuple(
+    key for key in SHELL_SESSION_COMPACT_RESULT_KEYS if key not in {"stdout", "stderr"}
 )
 
 
@@ -95,12 +99,12 @@ def preserve_shell_session_result_fields(
     """Carry bounded shell-session continuation fields into compact projections."""
     projected = dict(compact_result)
     resolved_tool = str(raw_result.get("tool") or raw_result.get("tool_id") or tool_name)
-    if resolved_tool not in _SHELL_SESSION_TOOL_IDS:
+    if resolved_tool not in SHELL_SESSION_TOOL_IDS:
         return projected
     if not any(key in raw_result for key in ("process_status", "stdin_available", "session_id")):
         return projected
 
-    for key in _SHELL_SESSION_COMPACT_RESULT_KEYS:
+    for key in SHELL_SESSION_COMPACT_RESULT_KEYS:
         if key in raw_result:
             projected[key] = raw_result[key]
 
@@ -138,6 +142,7 @@ def _append_tool_execution_record(
     workspace_id: Optional[str],
     artifact_refs_for_memory: Sequence[Mapping[str, Any]],
     artifact_projection_metadata: Optional[Mapping[str, Any]] = None,
+    persistence_decision: OutputPersistenceDecision | None = None,
 ) -> None:
     """Persist a compact per-call execution record for provenance/telemetry joins."""
     result_map = dict(outcome.result or {})
@@ -185,13 +190,24 @@ def _append_tool_execution_record(
         if not isinstance(artifact_visibility, str) or not artifact_visibility.strip():
             artifact_visibility = "runner_workspace_only"
 
-    stdout_excerpt = mask_durable_secrets(
-        str(result_map.get("stdout_excerpt") or ""),
-        source="tool_execution_record_stdout_excerpt",
+    retain_output = (
+        persistence_decision is None or persistence_decision.retain_durable_output
     )
-    stderr_excerpt = mask_durable_secrets(
-        str(result_map.get("stderr_excerpt") or ""),
-        source="tool_execution_record_stderr_excerpt",
+    stdout_excerpt = (
+        mask_durable_secrets(
+            str(result_map.get("stdout_excerpt") or ""),
+            source="tool_execution_record_stdout_excerpt",
+        )
+        if retain_output
+        else ""
+    )
+    stderr_excerpt = (
+        mask_durable_secrets(
+            str(result_map.get("stderr_excerpt") or ""),
+            source="tool_execution_record_stderr_excerpt",
+        )
+        if retain_output
+        else ""
     )
 
     record: Dict[str, Any] = {
@@ -202,6 +218,14 @@ def _append_tool_execution_record(
         "success": bool(result_map.get("success")),
         "duration_ms": int(duration_seconds * 1000),
         "exit_code": result_map.get("exit_code"),
+        "process_status": result_map.get("process_status"),
+        "truncated": bool(result_map.get("truncated", False)),
+        "capability": (
+            persistence_decision.originating_capability.value
+            if persistence_decision is not None
+            and persistence_decision.originating_capability is not None
+            else None
+        ),
         "stdout_excerpt": stdout_excerpt if isinstance(stdout_excerpt, str) else "",
         "stderr_excerpt": stderr_excerpt if isinstance(stderr_excerpt, str) else "",
         "lane": lane,
@@ -215,9 +239,15 @@ def _append_tool_execution_record(
         "artifact_scope": artifact_scope,
         "artifact_promotion_status": artifact_promotion_status,
         "artifact_visibility": artifact_visibility,
-        "artifact_refs": [
-            dict(item) for item in artifact_refs_for_memory if isinstance(item, Mapping)
-        ],
+        "artifact_refs": (
+            [
+                dict(item)
+                for item in artifact_refs_for_memory
+                if isinstance(item, Mapping)
+            ]
+            if retain_output
+            else []
+        ),
     }
 
     history = facts.metadata.setdefault("tool_execution_records", [])
@@ -583,6 +613,7 @@ async def project_result_state(
     tool_batch_id: Optional[str] = None,
     tool_intent: str = "",
     apply_to_state: bool = True,
+    persistence_decision: OutputPersistenceDecision | None = None,
 ) -> Dict[str, Any]:
     """Project compact result and metadata updates into interactive state."""
     resolved_tool_id = str(outcome.tool_id or tool_name)
@@ -674,6 +705,9 @@ async def project_result_state(
             tool_name=resolved_tool_id,
         )
 
+    retain_durable_output = (
+        persistence_decision is None or persistence_decision.retain_durable_output
+    )
     artifact_refs_for_memory: list[dict[str, Any]] = []
     compact_artifact_refs = compact_result_dict.get("artifact_refs")
     if isinstance(compact_artifact_refs, list):
@@ -700,7 +734,7 @@ async def project_result_state(
             for item in persisted_artifact_refs
             if isinstance(item.get("path"), str) and str(item.get("path")).strip()
         ]
-    if persisted_artifact_refs:
+    if persisted_artifact_refs and retain_durable_output:
         artifact_refs_for_memory = enrich_artifact_refs_with_provenance_fn(
             refs=artifact_refs_for_memory,
             provenance_refs=persisted_artifact_refs,
@@ -710,6 +744,8 @@ async def project_result_state(
             turn_sequence=turn_sequence,
         )
     artifact_refs_for_memory = _sanitize_artifact_refs_for_memory(artifact_refs_for_memory)
+    if not retain_durable_output:
+        artifact_refs_for_memory = []
     if artifact_refs_for_memory:
         compact_result_dict["artifact_refs"] = artifact_refs_for_memory
         if deterministic_compact_result_dict is not None:
@@ -756,6 +792,7 @@ async def project_result_state(
         "artifact_projection_metadata": artifact_projection_metadata,
         "resolved_tool_id": resolved_tool_id,
         "compression_usage_record": compression_result.usage_record,
+        "persistence_decision": persistence_decision,
     }
     if apply_to_state:
         apply_result_state_projection(
@@ -803,6 +840,9 @@ def apply_result_state_projection(
     ]
     compression_usage_record = projection.get("compression_usage_record")
     artifact_projection_metadata = projection.get("artifact_projection_metadata")
+    persistence_decision = projection.get("persistence_decision")
+    if not isinstance(persistence_decision, OutputPersistenceDecision):
+        persistence_decision = None
     workspace_id_value = None
     workspace_id_raw = facts.metadata.get("workspace_id")
     if isinstance(workspace_id_raw, str) and workspace_id_raw.strip():
@@ -831,8 +871,6 @@ def apply_result_state_projection(
     if not isinstance(durable_artifact_refs, list):
         durable_artifact_refs = []
 
-    facts.metadata.setdefault("tool_history", []).append(durable_graph_metadata)
-    facts.metadata["last_tool_result"] = durable_result_for_metadata
     _append_tool_execution_record(
         facts=facts,
         outcome=outcome,
@@ -846,12 +884,25 @@ def apply_result_state_projection(
         artifact_projection_metadata=(
             artifact_projection_metadata if isinstance(artifact_projection_metadata, Mapping) else None
         ),
+        persistence_decision=persistence_decision,
     )
     _append_compression_usage_record(
         interactive,
         compression_usage_record if isinstance(compression_usage_record, Mapping) else None,
         logger=logger,
     )
+    if persistence_decision is not None and not persistence_decision.retain_durable_output:
+        for key in (
+            "last_tool_result",
+            "last_tool_result_compact",
+            "last_tool_result_compact_batch",
+            "last_artifact_path",
+        ):
+            facts.metadata.pop(key, None)
+        return
+
+    facts.metadata.setdefault("tool_history", []).append(durable_graph_metadata)
+    facts.metadata["last_tool_result"] = durable_result_for_metadata
 
     existing_working_memory = facts.metadata.get("working_memory")
     raw_result_metadata = outcome.result.get("metadata") if isinstance(outcome.result, Mapping) else {}
@@ -984,11 +1035,16 @@ def project_trace_history_and_outbound_events(
     diag_info_fn: Callable[..., None],
     logger: Any,
     deterministic_compact_result_dict: Optional[Mapping[str, Any]] = None,
+    persistence_decision: OutputPersistenceDecision | None = None,
 ) -> str:
     """Project trace/history side effects, tool_end event, and dispatch cache payload."""
-    interactive.trace.reasoning.extend(outcome.reasoning)
+    retain_durable_output = (
+        persistence_decision is None or persistence_decision.retain_durable_output
+    )
+    if retain_durable_output:
+        interactive.trace.reasoning.extend(outcome.reasoning)
     observation_text = compact_observation_text_fn(compact_result_dict, fallback=outcome.summary)
-    if observation_text:
+    if observation_text and retain_durable_output:
         interactive.trace.observations.append(observation_text)
 
     execution_reasoning = str(
@@ -1001,18 +1057,19 @@ def project_trace_history_and_outbound_events(
         outcome.result["approval_reason"] = approval_result.get("action")
         outcome.result["approval_metadata"] = dict(approval_result)
 
-    interactive.trace.executed_tools.append(
-        tool_execution_record_cls(
-            tool_id=str(outcome.tool_id),
-            args=dict(outcome.parameters),
-            status="success" if outcome.result.get("success") else "error",
-            observation=observation_text,
-            reasoning=execution_reasoning,
-            approval_granted=outcome.result.get("approval_granted"),
-            approval_reason=outcome.result.get("approval_reason"),
-            approval_metadata=dict(outcome.result.get("approval_metadata") or {}),
+    if retain_durable_output:
+        interactive.trace.executed_tools.append(
+            tool_execution_record_cls(
+                tool_id=str(outcome.tool_id),
+                args=dict(outcome.parameters),
+                status="success" if outcome.result.get("success") else "error",
+                observation=observation_text,
+                reasoning=execution_reasoning,
+                approval_granted=outcome.result.get("approval_granted"),
+                approval_reason=outcome.result.get("approval_reason"),
+                approval_metadata=dict(outcome.result.get("approval_metadata") or {}),
+            )
         )
-    )
 
     if has_writer and writer is not None:
         process_status = str(
@@ -1049,6 +1106,9 @@ def project_trace_history_and_outbound_events(
                     "report_recommendations": compact_result_dict.get("report_recommendations", []),
                 },
                 "compact_tool_result": compact_result_dict,
+                "output_persistence": (
+                    "durable" if retain_durable_output else "transient"
+                ),
                 "error": None,
                 "ind": 1,
                 "step_type": "tool_end",
@@ -1081,22 +1141,67 @@ def project_trace_history_and_outbound_events(
             sub_turn_index,
         )
 
+    cache_compact_result = dict(compact_result_dict)
+    cache_deterministic_result = deterministic_compact_result_dict
+    cache_result_for_metadata = dict(result_for_metadata)
+    cache_graph_metadata = dict(graph_metadata)
+    cache_action_record = dict(action_record)
+    cache_observation = observation_text
+    cache_reasoning = list(outcome.reasoning or [])
+    if not retain_durable_output:
+        operational_keys = {
+            "tool",
+            "status",
+            "success",
+            "process_status",
+            "session_id",
+            "exit_code",
+            "stdin_available",
+            "truncated",
+            "error_code",
+        }
+        cache_compact_result = {
+            key: value
+            for key, value in cache_compact_result.items()
+            if key in operational_keys
+        }
+        cache_deterministic_result = None
+        cache_result_for_metadata = {
+            key: value
+            for key, value in cache_result_for_metadata.items()
+            if key in operational_keys
+        }
+        raw_metadata = result_for_metadata.get("metadata")
+        if isinstance(raw_metadata, Mapping):
+            operational_metadata = {
+                key: raw_metadata[key]
+                for key in ("route_policy", "runtime_session", "error_code")
+                if key in raw_metadata
+            }
+            if operational_metadata:
+                cache_result_for_metadata["metadata"] = operational_metadata
+        cache_graph_metadata = {}
+        cache_action_record = {"tool_id": str(outcome.tool_id)}
+        cache_observation = ""
+        cache_reasoning = []
+        execution_reasoning = ""
+
     store_dispatch_cache_result_fn(
         facts=facts,
         tool_dispatch_cache_key=tool_dispatch_cache_key,
         tool_call_id=tool_call_id,
-        compact_result_dict=dict(compact_result_dict),
+        compact_result_dict=cache_compact_result,
         deterministic_compact_result_dict=(
-            dict(deterministic_compact_result_dict)
-            if isinstance(deterministic_compact_result_dict, Mapping)
+            dict(cache_deterministic_result)
+            if isinstance(cache_deterministic_result, Mapping)
             else None
         ),
-        result_for_metadata=dict(result_for_metadata),
-        graph_metadata=dict(graph_metadata),
-        action_record=dict(action_record),
-        observation_text=observation_text,
-        reasoning_additions=list(outcome.reasoning or []),
-        outcome_parameters=outcome.parameters,
+        result_for_metadata=cache_result_for_metadata,
+        graph_metadata=cache_graph_metadata,
+        action_record=cache_action_record,
+        observation_text=cache_observation,
+        reasoning_additions=cache_reasoning,
+        outcome_parameters=(outcome.parameters if retain_durable_output else {}),
         outcome_success=bool(outcome.result.get("success")),
         outcome_summary=execution_reasoning,
         approval_granted=outcome.result.get("approval_granted"),

@@ -32,6 +32,7 @@ from runtime_shared.shell_session_contracts import (
     ShellSessionUpdate,
     ShellWriteRequest,
 )
+from runtime_shared.shell_capabilities import ShellCapability
 from runtime_shared.shell_session_framing import (
     PtyCommandFrame,
     StreamingPtyFramingParser,
@@ -107,14 +108,11 @@ class ShellSessionRecord:
     public_session_id: str
     terminal_session_id: str
     identity: ShellSessionIdentity
-    frame: PtyCommandFrame
+    originating_capability: ShellCapability
     framing_parser: StreamingPtyFramingParser
-    process_status: ShellProcessStatus
-    created_at: float
     last_activity_at: float
     deadline_at: float
     operation_in_progress: bool = False
-    close_requested: bool = False
     pending_utf8_bytes: bytes = b""
 
 
@@ -155,6 +153,7 @@ class ShellSessionService:
         *,
         identity: ShellSessionIdentity,
         request: ShellExecRequest,
+        capability: ShellCapability = ShellCapability.ASSESSMENT,
     ) -> ShellSessionUpdate:
         """Start one PTY shell command and return its first bounded update."""
         started_at = self._clock()
@@ -193,6 +192,7 @@ class ShellSessionService:
                     workspace_path=workspace_path,
                     public_session_id=public_session_id,
                     frame=frame,
+                    capability=capability,
                     reservation=reservation,
                 )
                 terminal_session_id, record = terminal_session
@@ -313,6 +313,26 @@ class ShellSessionService:
                 ShellSessionErrorCode.RUNTIME_TRANSPORT_FAILED,
                 started_at,
             )
+
+    async def get_session_capability(
+        self,
+        *,
+        identity: ShellSessionIdentity,
+        public_session_id: str,
+    ) -> ShellCapability | None:
+        """Return the capability of an owned live session without claiming it."""
+
+        normalized_id = str(public_session_id or "").strip()
+        async with self._lock:
+            record = self._records.get(normalized_id)
+            if record is None or not self._same_owner(record.identity, identity):
+                return None
+            now = self._clock()
+            if self._is_deadline_expired(record, now) or self._is_idle_expired(
+                record, now
+            ):
+                return None
+            return record.originating_capability
 
     async def close_owner_sessions(
         self,
@@ -467,28 +487,9 @@ class ShellSessionService:
                     started_at,
                 )
             if completion is not None:
-                stdout, truncated = output.stdout()
                 if terminate_after_window:
-                    self._emit_process_completed(record, ShellProcessStatus.TERMINATED)
-                    await self._remove_and_close_record(
-                        record.public_session_id,
-                        interrupt=False,
-                        expected_record=record,
-                        close_reason="interrupted",
-                    )
-                    return ShellSessionUpdate(
-                        success=True,
-                        status="success",
-                        process_status=ShellProcessStatus.TERMINATED,
-                        session_id=None,
-                        stdout=stdout,
-                        stderr="",
-                        exit_code=None,
-                        stdin_available=False,
-                        truncated=truncated,
-                        duration_ms=self._duration_ms(started_at),
-                        summary="Command was interrupted.",
-                    )
+                    break
+                stdout, truncated = output.stdout()
                 exit_code = completion.exit_code
                 self._emit_process_completed(record, ShellProcessStatus.COMPLETED)
                 await self._remove_and_close_record(
@@ -569,7 +570,6 @@ class ShellSessionService:
             now = self._clock()
             if self._is_deadline_expired(record, now):
                 self._records.pop(normalized_id, None)
-                record.close_requested = True
                 self._emit_active_session_gauges(record.identity.runtime_placement_mode)
                 self._emit_process_completed(record, ShellProcessStatus.TIMED_OUT)
                 close_record = record
@@ -577,7 +577,6 @@ class ShellSessionService:
                 close_reason = "deadline_expired"
             elif self._is_idle_expired(record, now):
                 self._records.pop(normalized_id, None)
-                record.close_requested = True
                 self._emit_active_session_gauges(record.identity.runtime_placement_mode)
                 close_record = record
                 error_code = ShellSessionErrorCode.SESSION_UNAVAILABLE
@@ -602,6 +601,7 @@ class ShellSessionService:
         workspace_path: str | None,
         public_session_id: str,
         frame: PtyCommandFrame,
+        capability: ShellCapability,
         reservation: _StartCapacityReservation,
     ) -> tuple[str, ShellSessionRecord]:
         terminal_session_id: str | None = None
@@ -618,10 +618,8 @@ class ShellSessionService:
                 public_session_id=public_session_id,
                 terminal_session_id=terminal_session_id,
                 identity=identity,
-                frame=frame,
+                originating_capability=capability,
                 framing_parser=StreamingPtyFramingParser(frame),
-                process_status=ShellProcessStatus.RUNNING,
-                created_at=now,
                 last_activity_at=now,
                 deadline_at=now + float(request.max_runtime_sec),
                 operation_in_progress=True,
@@ -703,7 +701,6 @@ class ShellSessionService:
             if expected_record is not None and record is not expected_record:
                 return
             self._records.pop(public_session_id, None)
-            record.close_requested = True
             record.operation_in_progress = False
             self._emit_active_session_gauges(record.identity.runtime_placement_mode)
         await self._close_records(
@@ -724,7 +721,6 @@ class ShellSessionService:
             ]
             for record in records:
                 self._records.pop(record.public_session_id, None)
-                record.close_requested = True
                 record.operation_in_progress = False
             self._emit_active_session_gauges(
                 *(record.identity.runtime_placement_mode for record in records)
@@ -744,7 +740,6 @@ class ShellSessionService:
                     records.append((record, "idle_expired"))
             for record, _close_reason in records:
                 self._records.pop(record.public_session_id, None)
-                record.close_requested = True
                 record.operation_in_progress = False
             self._emit_active_session_gauges(
                 *(

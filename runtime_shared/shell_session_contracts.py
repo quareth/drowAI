@@ -58,6 +58,14 @@ ShellRuntimePlacementMode = Literal["local", "runner"]
 ShellSessionStatus = Literal["success", "error"]
 
 
+def format_shell_execution_owner_id(
+    owner_type: Literal["main", "subagent"],
+    owner_id: str,
+) -> str:
+    """Return the canonical shell-session execution owner identifier."""
+    return f"{owner_type}:{owner_id}"
+
+
 class ShellProcessStatus(str, Enum):
     """Provider-neutral process state exposed in shell-session results."""
 

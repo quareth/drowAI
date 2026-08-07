@@ -45,7 +45,9 @@ def resolve_agent_run_attribution(
     if source.get("agent_run_id") and source.get("producer_type") is None:
         source["producer_type"] = "subagent"
     if source.get("agent_display_name") is None:
-        source["agent_display_name"] = _format_agent_kind(source.get("agent_kind"))
+        source["agent_display_name"] = _format_agent_kind(
+            source.get("agent_id") or source.get("agent_kind")
+        )
 
     attribution: dict[str, Any] = {}
     for key in AGENT_RUN_ATTRIBUTION_KEYS:

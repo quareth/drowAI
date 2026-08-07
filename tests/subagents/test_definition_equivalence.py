@@ -137,7 +137,8 @@ def test_pathfinder_profile_appends_visible_registered_universal_utilities() -> 
     profile = resolve_subagent_tool_profile(definition, definition.tool_ids)
 
     assert profile.tool_ids == (*definition.tool_ids, *UNIVERSAL_AGENT_TOOL_IDS)
-    assert profile.capabilities_for_tool("shell.exec") == ()
+    assert profile.capabilities_for_tool("shell.utility") == ()
+    assert profile.capabilities_for_tool("shell.assessment") == ()
     assert profile.capabilities_for_tool("shell.write_stdin") == ()
     assert profile.capabilities_for_tool(
         "information_gathering.network_discovery.fping"
@@ -160,7 +161,8 @@ def test_universal_utilities_still_require_catalog_visibility(monkeypatch) -> No
         (*definition.tool_ids, *UNIVERSAL_AGENT_TOOL_IDS),
     )
 
-    assert "shell.exec" in profile.tool_ids
+    assert "shell.utility" in profile.tool_ids
+    assert "shell.assessment" in profile.tool_ids
     assert "shell.write_stdin" not in profile.tool_ids
 
 
@@ -172,14 +174,15 @@ def test_universal_utilities_still_require_tool_registration(monkeypatch) -> Non
     monkeypatch.setattr(
         tool_registry,
         "tool_exists",
-        lambda tool_id: tool_id != "shell.exec",
+        lambda tool_id: tool_id != "shell.utility",
     )
     profile = resolve_subagent_tool_profile(
         definition,
         (*definition.tool_ids, *UNIVERSAL_AGENT_TOOL_IDS),
     )
 
-    assert "shell.exec" not in profile.tool_ids
+    assert "shell.utility" not in profile.tool_ids
+    assert "shell.assessment" in profile.tool_ids
     assert "shell.write_stdin" in profile.tool_ids
 
 

@@ -6,8 +6,13 @@ from typing import Any
 
 import pytest
 
-from agent.graph.nodes.finalize import _build_prompts, finalize_results
+from agent.graph.nodes.finalize import (
+    _build_prompts,
+    _collect_simple_tool_context,
+    finalize_results,
+)
 from agent.graph.state import FactsState, InteractiveState, TraceState
+from core.prompts.builders.post_tool.evidence import register_runtime_compact_evidence
 
 
 class _FakeEmitter:
@@ -101,3 +106,47 @@ def test_deep_reasoning_capability_selects_dr_finalizer_path(
     _build_prompts(state)
 
     assert captured["capability"] == "deep_reasoning"
+
+
+def test_simple_finalizer_reads_runtime_only_utility_evidence_without_state_write() -> None:
+    batch_id = "tb-runtime-only-finalizer"
+    compact = {
+        "tool": "shell.utility",
+        "status": "success",
+        "success": True,
+        "summary": "Created /workspace/boris.txt.",
+        "key_findings": [],
+        "errors": [],
+        "report_recommendations": [],
+    }
+    register_runtime_compact_evidence(
+        {
+            "tool_batch_id": batch_id,
+            "status": "completed",
+            "success": True,
+            "results": [
+                {
+                    "tool_call_id": "tc-runtime-only-finalizer",
+                    "tool_id": "shell.utility",
+                    "status": "success",
+                    "success": True,
+                    "compact_tool_result": compact,
+                }
+            ],
+        },
+        single_compact=compact,
+    )
+    state = InteractiveState(
+        facts=FactsState(
+            task_id=1,
+            message="Create boris.txt",
+            capability="simple_tool_execution",
+            metadata={"tool_batch_id": batch_id},
+        ),
+        trace=TraceState(),
+    )
+
+    context = _collect_simple_tool_context(state, context=None)
+
+    assert context["synthesized"]["summary"] == "Created /workspace/boris.txt."
+    assert state.facts.metadata == {"tool_batch_id": batch_id}

@@ -13,7 +13,9 @@ def test_build_full_tool_catalog_filters_and_limits(monkeypatch) -> None:
     monkeypatch.setattr(
         "agent.tools.tool_registry.available_tools",
         lambda: [
-            "shell.exec",
+            "shell.utility",
+            "shell.assessment",
+            "shell.write_stdin",
             "filesystem.read_file",
             "filesystem.grep",
             "web_applications.web_crawlers.ffuf",
@@ -23,7 +25,7 @@ def test_build_full_tool_catalog_filters_and_limits(monkeypatch) -> None:
 
     result = build_full_tool_catalog(config, logger=logging.getLogger(__name__))
 
-    assert result == ["shell.exec", "filesystem.read_file"]
+    assert result == ["shell.utility", "shell.assessment", "shell.write_stdin"]
 
 
 def test_default_bounded_catalog_preserves_universal_shell_tools(monkeypatch) -> None:
@@ -35,14 +37,19 @@ def test_default_bounded_catalog_preserves_universal_shell_tools(monkeypatch) ->
             "filesystem.search_text",
             "shell.script",
             "web_applications.web_crawlers.ffuf",
-            "shell.exec",
+            "shell.utility",
+            "shell.assessment",
             "shell.write_stdin",
         ],
     )
 
     result = build_full_tool_catalog(AgentConfig(), logger=logging.getLogger(__name__))
 
-    assert result == ["filesystem.read_file", "shell.exec", "shell.write_stdin"]
+    assert result == [
+        "shell.utility",
+        "shell.assessment",
+        "shell.write_stdin",
+    ]
     assert "shell.script" not in result
 
 
@@ -62,7 +69,9 @@ def test_build_full_tool_catalog_includes_visible_service_access(monkeypatch) ->
     monkeypatch.setattr(
         "agent.tools.tool_registry.available_tools",
         lambda: [
-            "shell.exec",
+            "shell.utility",
+            "shell.assessment",
+            "shell.write_stdin",
             "filesystem.read_file",
             "service_access.ftp_login",
             "shell.script",
@@ -72,4 +81,9 @@ def test_build_full_tool_catalog_includes_visible_service_access(monkeypatch) ->
 
     result = build_full_tool_catalog(config, logger=logging.getLogger(__name__))
 
-    assert result == ["shell.exec", "filesystem.read_file", "service_access.ftp_login"]
+    assert result == [
+        "shell.utility",
+        "shell.assessment",
+        "shell.write_stdin",
+        "service_access.ftp_login",
+    ]

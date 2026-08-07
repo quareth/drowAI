@@ -19,6 +19,7 @@ import { useMemo } from "react";
 
 import { ExecutingToolCard } from "./ExecutingToolCard";
 import type { ChatMessage } from "./types";
+import type { CompactToolResult } from "@/types/compact-tool-result";
 
 interface ToolBatchCardProps {
   /** All messages grouped under one ``tool_batch_id``. */
@@ -31,9 +32,11 @@ interface ToolBatchCardProps {
 interface BatchRowState {
   toolCallId: string;
   toolName: string;
+  commandDisplay?: string;
   status: "executing" | "yielded" | "completed" | "failed" | "cancelled" | "terminated" | "timed_out";
   retryAttempt?: number;
   retryMaxAttempts?: number;
+  compactToolResult?: CompactToolResult;
   /** First-seen index in the message stream — used as a stable order key when
    * the batch_start manifest is absent. */
   firstSeenIndex: number;
@@ -204,6 +207,10 @@ function buildRows(messages: ChatMessage[], manifest: Map<string, number>): Batc
     if (toolName) {
       row.toolName = toolName;
     }
+    const commandDisplay = readString(metadata, "command_display");
+    if (commandDisplay) {
+      row.commandDisplay = commandDisplay;
+    }
 
     const retryAttempt = readNumber(metadata, "retry_attempt");
     if (retryAttempt !== undefined) {
@@ -216,6 +223,12 @@ function buildRows(messages: ChatMessage[], manifest: Map<string, number>): Batc
         readString(metadata, "status"),
         readString(metadata, "process_status"),
       );
+      if (metadata?.output_persistence === "transient") {
+        const compact = metadata.compact_tool_result;
+        if (compact && typeof compact === "object") {
+          row.compactToolResult = compact as CompactToolResult;
+        }
+      }
     }
   });
 
@@ -309,6 +322,8 @@ export function ToolBatchCard({ messages, groupKey, taskId }: ToolBatchCardProps
         testId={`tool-batch-card-${groupKey}-row-${only.toolCallId}`}
         retryAttempt={only.retryAttempt}
         retryMaxAttempts={only.retryMaxAttempts}
+        compactToolResult={only.compactToolResult}
+        commandDisplay={only.commandDisplay}
       />
     );
   }
@@ -344,6 +359,8 @@ export function ToolBatchCard({ messages, groupKey, taskId }: ToolBatchCardProps
             testId={`tool-batch-card-${groupKey}-row-${row.toolCallId}`}
             retryAttempt={row.retryAttempt}
             retryMaxAttempts={row.retryMaxAttempts}
+            compactToolResult={row.compactToolResult}
+            commandDisplay={row.commandDisplay}
             layout="batch-row"
           />
         ))}

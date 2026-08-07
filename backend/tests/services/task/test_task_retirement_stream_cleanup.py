@@ -13,10 +13,7 @@ from backend.services.runner_control.terminal_frame_buffer import get_runner_ter
 from backend.services.task.retirement_service import TaskRetirementService
 from backend.services.terminal.manager import terminal_session_manager
 from backend.services.terminal.models import TerminalSession
-from runtime_shared.shell_session_port import (
-    clear_shell_session_service_resolver,
-    set_shell_session_service_resolver,
-)
+from runtime_shared import shell_session_port
 
 
 class _FakeHub:
@@ -83,8 +80,9 @@ async def test_cleanup_runtime_stream_state_closes_task_sessions_and_clears_task
 
     fake_hub = _FakeHub()
     fake_shell_service = _FakeShellSessionService()
+    previous_resolver = shell_session_port._shell_session_service_resolver
     try:
-        set_shell_session_service_resolver(lambda: fake_shell_service)
+        shell_session_port.set_shell_session_service_resolver(lambda: fake_shell_service)
         monkeypatch.setattr(
             "backend.services.task.retirement_service.get_in_memory_stream_hub",
             lambda: fake_hub,
@@ -92,7 +90,7 @@ async def test_cleanup_runtime_stream_state_closes_task_sessions_and_clears_task
 
         await TaskRetirementService.cleanup_runtime_stream_state(tenant_id=10, task_id=41)
     finally:
-        clear_shell_session_service_resolver()
+        shell_session_port._shell_session_service_resolver = previous_resolver
 
     assert fake_shell_service.closed_task_sessions == [(10, 41)]
     assert terminal_session_manager.get_session("session-task-41") is None
@@ -135,9 +133,12 @@ async def test_cleanup_runtime_stream_state_logs_shell_cleanup_failure_without_b
     )
     fake_hub = _FakeHub()
     caplog.set_level("DEBUG", logger="backend.services.task.retirement_service")
+    previous_resolver = shell_session_port._shell_session_service_resolver
 
     try:
-        set_shell_session_service_resolver(lambda: _RaisingShellSessionService())
+        shell_session_port.set_shell_session_service_resolver(
+            lambda: _RaisingShellSessionService()
+        )
         monkeypatch.setattr(
             "backend.services.task.retirement_service.get_in_memory_stream_hub",
             lambda: fake_hub,
@@ -145,7 +146,7 @@ async def test_cleanup_runtime_stream_state_logs_shell_cleanup_failure_without_b
 
         await TaskRetirementService.cleanup_runtime_stream_state(tenant_id=10, task_id=43)
     finally:
-        clear_shell_session_service_resolver()
+        shell_session_port._shell_session_service_resolver = previous_resolver
 
     assert terminal_session_manager.get_session("session-task-43") is None
     assert fake_hub.removed_task_ids == [43]

@@ -13,6 +13,9 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from core.prompts.builders.tool_planning import ToolPlanningPromptBuilder
+from core.prompts.builders.shell_capability_profiles import (
+    build_shell_capability_profiles,
+)
 from core.prompts.registry import PromptRegistry
 from core.runbooks.models import RunbookStage
 from core.runbooks.service import RunbookService
@@ -51,6 +54,7 @@ class SubagentRuntimePromptBuilder:
         ownership_boundary: str,
         boundary_rules: Sequence[str],
         max_committed_tools_per_batch: int,
+        callable_tool_ids: Sequence[str] = (),
     ) -> str:
         """Return the versioned system prompt for the subagent runtime."""
 
@@ -73,6 +77,12 @@ class SubagentRuntimePromptBuilder:
             boundary_rules=_to_prompt_bullets(boundary_rules),
             native_tool_guidance=shared_guidance,
         )
+        profile_section = build_shell_capability_profiles(
+            callable_tool_ids,
+            prompt_registry=self._prompt_registry,
+        )
+        if profile_section:
+            rendered = f"{rendered.rstrip()}\n\n{profile_section}\n"
         return _ensure_trailing_newline(rendered)
 
     def build_user_prompt(

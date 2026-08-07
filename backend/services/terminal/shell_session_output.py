@@ -7,21 +7,13 @@ detection, and performs no provider I/O or session lifecycle work.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from runtime_shared.shell_session_framing import (
     PtyCommandFrame,
+    PtyFramingCompletion,
     StreamingPtyFramingParser,
 )
 
 _TRUNCATION_MARKER = "\n[... shell output truncated ...]\n"
-
-
-@dataclass(frozen=True, slots=True)
-class ShellSessionCompletion:
-    """Completion marker parsed from a bounded output accumulator."""
-
-    exit_code: int
 
 
 class _BoundedText:
@@ -37,10 +29,6 @@ class _BoundedText:
     @property
     def truncated(self) -> bool:
         return self._total_len > self._limit
-
-    @property
-    def total_len(self) -> int:
-        return self._total_len
 
     @property
     def retained_len(self) -> int:
@@ -128,7 +116,7 @@ class ShellSessionOutputAccumulator:
         """Return the configured upper bound for helper-owned retained text."""
         return self._max_output_chars + self._parser.retained_state_limit_chars
 
-    def ingest(self, raw_output: str) -> ShellSessionCompletion | None:
+    def ingest(self, raw_output: str) -> PtyFramingCompletion | None:
         """Consume decoded provider output and return completion when detected."""
         if not raw_output:
             return None
@@ -141,7 +129,7 @@ class ShellSessionOutputAccumulator:
             self._bounded.append(result.stdout)
         if result.completion is None:
             return None
-        return ShellSessionCompletion(exit_code=result.completion.exit_code)
+        return result.completion
 
     def stdout(self) -> tuple[str, bool]:
         """Return the current bounded public stdout delta and truncation flag."""

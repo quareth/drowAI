@@ -121,16 +121,26 @@ def _transition_runtime_job_from_ack(
     if runtime_job_id is None:
         return
     try:
-        RuntimeJobService(db).transition_runtime_job(
-            tenant_id=session.tenant_id,
-            runtime_job_id=runtime_job_id,
-            next_status=next_status,
-            result_json={"source": "runner_ack", "ack_status": ack_status},
-            error_code=error_code,
-            error_message=error_message,
-        )
+        runtime_job_service = RuntimeJobService(db)
+        result_json = {"source": "runner_ack", "ack_status": ack_status}
+        if next_status == "acknowledged":
+            runtime_job_service.advance_runtime_job_delivery(
+                tenant_id=session.tenant_id,
+                runtime_job_id=runtime_job_id,
+                next_status=next_status,
+                result_json=result_json,
+            )
+        else:
+            runtime_job_service.transition_runtime_job(
+                tenant_id=session.tenant_id,
+                runtime_job_id=runtime_job_id,
+                next_status=next_status,
+                result_json=result_json,
+                error_code=error_code,
+                error_message=error_message,
+            )
     except RuntimeJobServiceError as exc:
-        if exc.error_code in {"RUNTIME_JOB_TRANSITION_STALE", "RUNTIME_JOB_TRANSITION_INVALID"}:
+        if exc.error_code == "RUNTIME_JOB_TRANSITION_STALE":
             return
         logger.warning(
             "runner_control.runtime_job_ack_transition_failed tenant_id=%s runner_id=%s runtime_job_id=%s next_status=%s error_code=%s",

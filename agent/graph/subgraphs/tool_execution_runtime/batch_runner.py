@@ -29,6 +29,7 @@ from agent.tool_runtime.batch.types import (
 from agent.tool_runtime.batch.validator import BatchValidationResult, BatchValidator
 from core.prompts.builders.post_tool.evidence import register_runtime_compact_evidence
 from runtime_shared.durable_secret_masking import mask_durable_secrets
+from agent.tool_runtime.output_persistence_policy import OutputPersistenceDecision
 
 
 def deserialize_tool_batch_from_plan_data(plan_data: Mapping[str, Any]) -> Optional[ToolBatch]:
@@ -414,6 +415,9 @@ def write_compact_batch_metadata(
     result: BatchResult,
     compact_by_call_id: Optional[Mapping[str, Mapping[str, Any]]] = None,
     deterministic_compact_by_call_id: Optional[Mapping[str, Mapping[str, Any]]] = None,
+    persistence_decision_by_call_id: Optional[
+        Mapping[str, OutputPersistenceDecision]
+    ] = None,
 ) -> None:
     """Author the batch-shaped compact metadata + the derived legacy field.
 
@@ -471,6 +475,36 @@ def write_compact_batch_metadata(
         metadata_dict,
         single_compact=legacy_compact if legacy_compact is not None else {},
     )
+    facts.metadata["tool_batch_id"] = batch.tool_batch_id
+    decisions = dict(persistence_decision_by_call_id or {})
+    retained_call_ids = {
+        call.tool_call_id
+        for call in batch.tool_calls
+        if decisions.get(call.tool_call_id) is None
+        or decisions[call.tool_call_id].retain_durable_output
+    }
+    if len(retained_call_ids) != len(batch.tool_calls):
+        facts.metadata.pop("last_tool_result_compact_batch", None)
+        facts.metadata.pop("last_tool_result_compact", None)
+        durable_rows = [
+            dict(row)
+            for row in metadata_dict.get("results", [])
+            if isinstance(row, Mapping)
+            and str(row.get("tool_call_id") or "") in retained_call_ids
+        ]
+        if not durable_rows:
+            return
+        metadata_dict = dict(metadata_dict)
+        metadata_dict["results"] = durable_rows
+        metadata_dict["success"] = all(bool(row.get("success")) for row in durable_rows)
+        metadata_dict["status"] = (
+            "completed"
+            if metadata_dict["success"]
+            else "completed_with_errors"
+        )
+        if not batch.tool_calls or batch.tool_calls[0].tool_call_id not in retained_call_ids:
+            legacy_compact = None
+
     facts.metadata["last_tool_result_compact_batch"] = mask_durable_secrets(
         metadata_dict,
         source="last_tool_result_compact_batch",

@@ -9,8 +9,10 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from agent.semantic.enrichment import extract_runtime_semantic_inputs
+from agent.tool_runtime.output_persistence_policy import OutputPersistenceDecision
 from agent.tool_runtime.workspace_artifacts import should_persist_workspace_artifact
 from runtime_shared.durable_secret_masking import mask_durable_secrets
+
 
 def get_provenance_service(
     *,
@@ -169,6 +171,7 @@ def save_execution_artifact(
     save_tool_output_artifact_fn: Callable[..., Any],
     safe_inc_fn: Callable[[str], None],
     logger: Any,
+    persistence_decision: OutputPersistenceDecision | None = None,
 ) -> Optional[str]:
     """Best-effort artifact save block with unchanged failure tolerance."""
     artifact_path: Optional[str] = None
@@ -188,7 +191,12 @@ def save_execution_artifact(
             stderr = outcome.result.get("stderr", "")
 
             current_tool_id = outcome.tool_id or tool_name
-            if should_persist_workspace_artifact(current_tool_id):
+            should_persist = (
+                persistence_decision.persist_workspace_artifact
+                if persistence_decision is not None
+                else should_persist_workspace_artifact(current_tool_id)
+            )
+            if should_persist:
                 artifact_path = save_tool_output_artifact_fn(
                     workspace_path=resolved_workspace,
                     stdout=stdout,
@@ -199,6 +207,7 @@ def save_execution_artifact(
                 logger.debug(
                     f"[TOOL_EXECUTION] Skipping artifact creation for read-only tool: {current_tool_id}"
                 )
+                return None
 
             if artifact_path:
                 facts.metadata["last_artifact_path"] = artifact_path
@@ -354,6 +363,7 @@ def record_provenance_execution_start(
     workspace_path: Optional[str],
     logger: Any,
     safe_inc_fn: Callable[[str], None],
+    persistence_decision: OutputPersistenceDecision | None = None,
 ) -> Optional[Any]:
     """Record provenance execution start; always non-fatal."""
     execution_id = None
@@ -382,6 +392,12 @@ def record_provenance_execution_start(
                 execution_metadata={
                     "capability": facts.capability,
                     "iteration": facts.iterations,
+                    "originating_capability": (
+                        persistence_decision.originating_capability.value
+                        if persistence_decision is not None
+                        and persistence_decision.originating_capability is not None
+                        else None
+                    ),
                 },
             )
             if execution_record is not None:
@@ -433,6 +449,7 @@ def finalize_provenance_execution(
     collect_provenance_artifact_refs_fn: Callable[..., List[Dict[str, Any]]],
     logger: Any,
     safe_inc_fn: Callable[[str], None],
+    persistence_decision: OutputPersistenceDecision | None = None,
 ) -> List[Dict[str, Any]]:
     """Complete provenance execution and return persisted artifact refs."""
     persisted_artifact_refs: List[Dict[str, Any]] = []
@@ -449,7 +466,11 @@ def finalize_provenance_execution(
             else:
                 status = "error"
             current_tool_id = str(outcome.tool_id or tool_name)
-            persist_output_artifacts = should_persist_artifact_outputs_fn(current_tool_id)
+            persist_output_artifacts = (
+                persistence_decision.persist_workspace_artifact
+                if persistence_decision is not None
+                else should_persist_artifact_outputs_fn(current_tool_id)
+            )
             stdout = outcome.result.get("stdout", "") or ""
             stderr = outcome.result.get("stderr", "") or ""
             runtime_result_metadata = outcome.result.get("metadata")
@@ -498,7 +519,14 @@ def finalize_provenance_execution(
                     current_tool_id,
                 )
             execution_metadata_patch: Dict[str, Any] = {}
-            if isinstance(runtime_result_metadata, Mapping):
+            if (
+                persistence_decision is not None
+                and persistence_decision.originating_capability is not None
+            ):
+                execution_metadata_patch["originating_capability"] = (
+                    persistence_decision.originating_capability.value
+                )
+            if persist_output_artifacts and isinstance(runtime_result_metadata, Mapping):
                 tool_metadata = dict(runtime_result_metadata)
                 execution_metadata_patch["tool_metadata"] = tool_metadata
                 semantic_inputs = extract_runtime_semantic_inputs(tool_metadata)
@@ -613,13 +641,18 @@ def finalize_provenance_after_execution_error(
     should_persist_artifact_outputs_fn: Callable[[str], bool],
     logger: Any,
     safe_inc_fn: Callable[[str], None],
+    persistence_decision: OutputPersistenceDecision | None = None,
 ) -> None:
     """Best-effort finalize when coordinator raises after start write."""
     failure_db = None
     try:
         provenance_service, failure_db = get_provenance_service_fn()
         if provenance_service:
-            persist_failure_artifacts = should_persist_artifact_outputs_fn(tool_name)
+            persist_failure_artifacts = (
+                persistence_decision.persist_workspace_artifact
+                if persistence_decision is not None
+                else should_persist_artifact_outputs_fn(tool_name)
+            )
             completed_execution = provenance_service.complete_tool_execution(
                 execution_id=execution_id,
                 status="error",

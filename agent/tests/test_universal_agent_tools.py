@@ -10,7 +10,8 @@ from agent.tools.universal_agent_tools import UNIVERSAL_AGENT_TOOL_IDS
 
 def test_universal_agent_tool_ids_are_stable_and_immutable() -> None:
     assert UNIVERSAL_AGENT_TOOL_IDS == (
-        "shell.exec",
+        "shell.utility",
+        "shell.assessment",
         "shell.write_stdin",
     )
     assert isinstance(UNIVERSAL_AGENT_TOOL_IDS, tuple)
@@ -38,7 +39,16 @@ def test_universal_agent_tool_authority_stays_data_only() -> None:
     }
 
     assert imported_modules == set()
-    assert imported_names == set()
+    assert imported_names == {
+        "SHELL_ASSESSMENT_TOOL_ID",
+        "SHELL_UTILITY_TOOL_ID",
+        "SHELL_WRITE_STDIN_TOOL_ID",
+    }
+    assert {
+        node.module
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom) and node.module != "__future__"
+    } == {"runtime_shared.shell_capabilities"}
     assert not any(
         isinstance(node, (ast.ClassDef, ast.FunctionDef)) for node in tree.body
     )

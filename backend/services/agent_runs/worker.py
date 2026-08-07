@@ -46,6 +46,7 @@ from backend.services.langgraph_chat.checkpoint.checkpointer_service import (
 from backend.services.langgraph_chat.execution.graph_executor import LangGraphExecutor
 from backend.services.langgraph_chat.hitl_constants import GRAPH_RECURSION_LIMIT
 from backend.services.langgraph_chat.streaming.adapter import LangGraphStreamingAdapter
+from runtime_shared.shell_session_contracts import format_shell_execution_owner_id
 
 from .cancellation import AsyncCancellationProbe
 
@@ -295,7 +296,9 @@ def _graph_runtime_context_from_projection(
     context["graph_thread_id"] = graph_thread_id
     context["tenant_id"] = assignment.tenant_id
     context["turn_id"] = assignment.parent_turn_id
-    context["execution_owner_id"] = f"subagent:{assignment.agent_run_id}"
+    context["execution_owner_id"] = format_shell_execution_owner_id(
+        "subagent", assignment.agent_run_id
+    )
     turn_sequence = assignment.relevant_context.get("turn_sequence")
     if isinstance(turn_sequence, int) and not isinstance(turn_sequence, bool):
         context["turn_sequence"] = turn_sequence

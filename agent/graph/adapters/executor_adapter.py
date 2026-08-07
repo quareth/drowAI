@@ -17,10 +17,6 @@ from agent.models import Action, ActionType, ExecutionResult, ExecutionStrategy
 from agent.planner import ScopeParser
 from agent.scope_validator import ScopeValidator
 from agent.tool_runtime.pty_identity import derive_parallel_pty_identity
-from agent.tool_runtime.backend_tool_policy import (
-    SHELL_EXEC_TOOL_ID,
-    SHELL_WRITE_STDIN_TOOL_ID,
-)
 from agent.tool_runtime.timeout_policy import ToolTimeoutPlan, resolve_tool_timeout_plan
 from agent.utils.output_processing import smart_truncate, classify_output_type
 from agent.utils.truncation_config import (
@@ -58,6 +54,13 @@ from runtime_shared.shell_session_contracts import (
     ShellWriteRequest,
 )
 from runtime_shared.shell_session_port import get_shell_session_service
+from runtime_shared.shell_capabilities import (
+    SHELL_EXEC_TOOL_ID,
+    SHELL_SESSION_START_TOOL_IDS,
+    SHELL_WRITE_STDIN_TOOL_ID,
+    ShellCapability,
+    resolve_shell_start_capability,
+)
 
 from backend.services.runtime_provider.contracts import (
     RuntimeActorType,
@@ -397,21 +400,6 @@ class GraphToolExecutor:
     ) -> Dict[str, Any]:
         """Execute a shell-session tool call through the runtime-shared service port."""
         identity = self._build_shell_session_identity(dispatch_input=dispatch_input)
-        if identity is None:
-            missing = "tenant_id, task_id, execution_owner_id, workspace_id"
-            message = (
-                "tool execution runtime context is missing shell-session identity "
-                f"field(s): {missing}."
-            )
-            return self._shell_session_error_payload(
-                tool_id=str(request["tool"]),
-                message=message,
-                status="missing_shell_session_identity",
-                error_code="missing_shell_session_identity",
-                decision=decision,
-                dispatch_input=dispatch_input,
-            )
-
         try:
             session_request = self._build_shell_session_request(
                 tool_id=str(request["tool"]),
@@ -439,9 +427,30 @@ class GraphToolExecutor:
             )
 
         service = get_shell_session_service()
+        originating_capability: ShellCapability | None = None
         if isinstance(session_request, ShellExecRequest):
-            update = await service.execute(identity=identity, request=session_request)
+            originating_capability = resolve_shell_start_capability(request["tool"])
+            if str(request["tool"]) == SHELL_EXEC_TOOL_ID:
+                originating_capability = ShellCapability.ASSESSMENT
+            if originating_capability is None:
+                return self._shell_session_error_payload(
+                    tool_id=str(request["tool"]),
+                    message=f"Unsupported shell-session start tool `{request['tool']}`.",
+                    status="unsupported_shell_session_tool",
+                    error_code="unsupported_shell_session_tool",
+                    decision=decision,
+                    dispatch_input=dispatch_input,
+                )
+            update = await service.execute(
+                identity=identity,
+                request=session_request,
+                capability=originating_capability,
+            )
         else:
+            originating_capability = await service.get_session_capability(
+                identity=identity,
+                public_session_id=session_request.session_id,
+            )
             update = await service.write_stdin(identity=identity, request=session_request)
 
         return self._shell_session_update_payload(
@@ -449,28 +458,18 @@ class GraphToolExecutor:
             update=update,
             decision=decision,
             dispatch_input=dispatch_input,
+            originating_capability=originating_capability,
         )
 
     @staticmethod
     def _build_shell_session_identity(
         *,
         dispatch_input: ToolCallDispatchInput,
-    ) -> ShellSessionIdentity | None:
-        """Build service authority context from serializable graph runtime metadata."""
+    ) -> ShellSessionIdentity:
+        """Project lane-validated runtime metadata into service authority context."""
         runtime_metadata = dispatch_input.runtime_metadata or {}
         workspace_id = runtime_metadata.get("workspace_id")
         execution_owner_id = dispatch_input.execution_owner_id
-        if (
-            dispatch_input.tenant_id is None
-            or dispatch_input.task_id is None
-            or not isinstance(execution_owner_id, str)
-            or not execution_owner_id.strip()
-            or not isinstance(workspace_id, str)
-            or not workspace_id.strip()
-            or dispatch_input.runtime_placement_mode not in {"local", "runner"}
-        ):
-            return None
-
         workspace_path = runtime_metadata.get("workspace_path")
         if not isinstance(workspace_path, str):
             workspace_path = None
@@ -484,9 +483,9 @@ class GraphToolExecutor:
         return ShellSessionIdentity(
             tenant_id=int(dispatch_input.tenant_id),
             task_id=int(dispatch_input.task_id),
-            execution_owner_id=execution_owner_id.strip(),
+            execution_owner_id=str(execution_owner_id).strip(),
             runtime_placement_mode=dispatch_input.runtime_placement_mode,
-            workspace_id=workspace_id.strip(),
+            workspace_id=str(workspace_id).strip(),
             workspace_path=workspace_path,
             runner_id=runner_id,
             execution_site_id=execution_site_id,
@@ -500,7 +499,7 @@ class GraphToolExecutor:
     ) -> ShellExecRequest | ShellWriteRequest:
         """Convert normalized graph parameters into a typed shell-session request."""
         normalized = dict(parameters or {})
-        if tool_id == SHELL_EXEC_TOOL_ID:
+        if tool_id in SHELL_SESSION_START_TOOL_IDS:
             return ShellExecRequest(**normalized)
         if tool_id == SHELL_WRITE_STDIN_TOOL_ID:
             return ShellWriteRequest(**normalized)
@@ -552,6 +551,7 @@ class GraphToolExecutor:
         update: ShellSessionUpdate,
         decision: ToolLaneDispatchDecision,
         dispatch_input: ToolCallDispatchInput,
+        originating_capability: ShellCapability | None = None,
     ) -> Dict[str, Any]:
         """Map a shell-session update to the graph tool-result payload shape."""
         process_status = (
@@ -590,6 +590,10 @@ class GraphToolExecutor:
         }
         if error_code:
             metadata["error_code"] = error_code
+        if originating_capability is not None:
+            metadata["runtime_session"]["originating_capability"] = (
+                originating_capability.value
+            )
 
         status = "success" if update.success else "failed"
         if error_code == ShellSessionErrorCode.SHELL_RUNTIME_UNAVAILABLE.value:

@@ -10,22 +10,21 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Literal
 
+from runtime_shared.shell_capabilities import (
+    SHELL_EXEC_TOOL_ID,
+    SHELL_SESSION_TOOL_IDS,
+    SHELL_WRITE_STDIN_TOOL_ID,
+)
+
 
 CVE_LOOKUP_TOOL_ID = "knowledge.cve_lookup"
-SHELL_EXEC_TOOL_ID = "shell.exec"
-SHELL_WRITE_STDIN_TOOL_ID = "shell.write_stdin"
 
 _BACKEND_SCOPED_TOOL_IDS: frozenset[str] = frozenset(
     {
         CVE_LOOKUP_TOOL_ID,
     }
 )
-_RUNTIME_SESSION_SCOPED_TOOL_IDS: frozenset[str] = frozenset(
-    {
-        SHELL_EXEC_TOOL_ID,
-        SHELL_WRITE_STDIN_TOOL_ID,
-    }
-)
+_RUNTIME_SESSION_SCOPED_TOOL_IDS: frozenset[str] = SHELL_SESSION_TOOL_IDS
 
 ExecutionLane = Literal[
     "container_scoped",

@@ -14,6 +14,7 @@ from runtime_shared.shell_session_contracts import (
     ShellSessionUpdate,
     ShellWriteRequest,
 )
+from runtime_shared.shell_capabilities import ShellCapability
 
 
 def _identity() -> ShellSessionIdentity:
@@ -35,6 +36,7 @@ class _BoundShellSessionService:
         *,
         identity: ShellSessionIdentity,
         request: ShellExecRequest,
+        capability: ShellCapability = ShellCapability.ASSESSMENT,
     ) -> ShellSessionUpdate:
         assert identity.execution_owner_id == "main:turn-123"
         assert request.command == "whoami"
@@ -50,6 +52,14 @@ class _BoundShellSessionService:
             truncated=False,
             duration_ms=1,
         )
+
+    async def get_session_capability(
+        self,
+        *,
+        identity: ShellSessionIdentity,
+        public_session_id: str,
+    ) -> ShellCapability | None:
+        return ShellCapability.ASSESSMENT
 
     async def write_stdin(
         self,
@@ -134,6 +144,13 @@ async def test_unbound_service_fails_closed_with_structured_update(
         request=ShellWriteRequest(session_id="shs_abc123"),
     )
     assert poll.error_code is ShellSessionErrorCode.SHELL_RUNTIME_UNAVAILABLE
+    assert (
+        await service.get_session_capability(
+            identity=_identity(),
+            public_session_id="shs_abc123",
+        )
+        is None
+    )
 
     await service.close_owner_sessions(
         tenant_id=7,

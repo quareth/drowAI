@@ -712,7 +712,7 @@ def test_dual_lane_compact_rows_render_llm_then_deterministic() -> None:
 
 
 def test_output_info_renders_condensed_artifact_reading_guidance() -> None:
-    """Output info points to visible filesystem follow-up when requested."""
+    """Output info gives bounded, tool-neutral recovery guidance."""
 
     metadata: Dict[str, Any] = {
         "last_artifact_path": "/workspace/.artifacts/out.txt",
@@ -728,8 +728,8 @@ def test_output_info_renders_condensed_artifact_reading_guidance() -> None:
     assert result["output_info"] == (
         "Output condensed (12,345 chars omitted). "
         "If key evidence is still missing and the saved path is available, "
-        "use a visible filesystem read/search tool with bounded scope. "
-        "Do not default to full reads."
+        "retrieve only the bounded portion needed to close that gap. "
+        "Do not default to reading the entire saved output."
         "\nSaved output path: `/workspace/.artifacts/out.txt`"
     )
 

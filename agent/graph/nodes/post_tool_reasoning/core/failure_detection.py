@@ -129,7 +129,7 @@ def build_failure_context_from_state(state: InteractiveState) -> FailureContext:
     metadata = state.facts.safe_metadata
     synthesized_output = metadata.get("synthesized_output", {}) or {}
     last_tool_result = metadata.get("last_tool_result", {}) or {}
-    evidence = read_compact_evidence(metadata)
+    evidence = read_compact_evidence(metadata, prefer_runtime=True)
     compact_result = _primary_compact_from_evidence(evidence, metadata)
     batch_failure_text = _batch_failure_text(evidence)
     

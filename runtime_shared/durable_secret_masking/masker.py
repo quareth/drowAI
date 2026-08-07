@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .detectors import detect_durable_secret_spans
+from runtime_shared.shell_capabilities import SHELL_SESSION_TOOL_IDS
 
 MASK_PREFIX = "<DURABLE_SECRET_MASK"
 _SENSITIVE_KEY_PARTS = frozenset(
@@ -62,7 +63,7 @@ _SHELL_RESULT_SOURCES_ALLOWING_PUBLIC_SESSION_IDS = frozenset(
     }
 )
 _SHELL_RESULT_TOOL_IDS = frozenset(
-    {"shell.exec", "shell.write_stdin", "shell_exec", "shell_write_stdin"}
+    {*SHELL_SESSION_TOOL_IDS, "shell_exec", "shell_write_stdin"}
 )
 _PUBLIC_SHELL_SESSION_ID_PREFIX = "shs_"
 _TERMINAL_MESSAGE_TYPES = frozenset(

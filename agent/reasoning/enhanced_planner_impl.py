@@ -444,9 +444,6 @@ class EnhancedActionPlanner:
         capability_surface = render_capability_surface(limited_tool_list)
         max_tools = int(getattr(self.config, "max_tools_per_action", 3))
         max_committed = int(getattr(self.config, "max_committed_tools_per_batch", 1) or 1)
-        parameter_system_prompt = prompt_builder.build_tool_parameters_system_prompt(
-            max_committed_tools_per_batch=max_committed,
-        )
         selection_prompt = prompt_builder.build_select_tools_prompt(
             resolved_tools=limited_tool_list,
             catalog=tool_entries,
@@ -507,6 +504,10 @@ class EnhancedActionPlanner:
                 tool_batch=None,
             )
         specs, fn_map = build_function_tool_specs_for(selection.selected_tools)
+        parameter_system_prompt = prompt_builder.build_tool_parameters_system_prompt(
+            max_committed_tools_per_batch=max_committed,
+            callable_tool_ids=selection.selected_tools,
+        )
         artifact_file_metadata = build_artifact_file_metadata_for_prompt(
             selected_tools=selection.selected_tools,
             workspace_path=context.get("workspace_path"),

@@ -270,6 +270,51 @@ describe("ExecutingToolCard", () => {
     expect(screen.getByText("Raw output unavailable: referenced artifact data is missing.")).not.toBeNull();
   });
 
+  it("shows same-turn compact output without requesting a persisted artifact", () => {
+    mocked.useToolRawOutputMock.mockReturnValue({
+      state: { status: "not_available", reason: "missing_output_artifacts" },
+      status: "not_available",
+      isLoading: false,
+      isReady: false,
+      isNotAvailable: true,
+      isError: false,
+    });
+
+    render(
+      <ExecutingToolCard
+        toolName="shell.utility"
+        status="completed"
+        taskId={40}
+        toolCallId="call-utility"
+        testId="tool-card"
+        commandDisplay="touch /workspace/boris.txt"
+        compactToolResult={{
+          schema_version: "2.0",
+          tool: "shell.utility",
+          status: "success",
+          success: true,
+          summary: "Created /workspace/boris.txt.",
+          key_findings: [],
+          errors: [],
+          report_recommendations: [],
+          structured_signals: [],
+          decision_evidence: [],
+          lossiness_risk: "low",
+        }}
+      />,
+    );
+
+    fireEvent.click(getToggleButton());
+
+    expect(screen.getByTestId("tool-card-terminal").textContent).toBe(
+      "$ touch /workspace/boris.txt\nCreated /workspace/boris.txt.",
+    );
+    expect(screen.queryByText(/Raw output unavailable/)).toBeNull();
+    expect(mocked.useToolRawOutputMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({ enabled: false }),
+    );
+  });
+
   it("renders retrieval-error fallback when resolver returns error state", () => {
     mocked.useToolRawOutputMock.mockReturnValue({
       state: { status: "error", message: "network issue" },

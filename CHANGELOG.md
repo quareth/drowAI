@@ -16,6 +16,9 @@ The format is based on
 
 ### Changed
 
+- Shell commands now use explicit utility or assessment aliases; utility commands
+  and compact results remain visible for the immediate response without becoming
+  reusable assessment evidence.
 - Interactive shell policy now reserves hard blocks for obvious environment
   destruction, shutdown, resource exhaustion, and container escape while
   permitting pentesting workflows in the default permissive mode.
@@ -24,8 +27,9 @@ The format is based on
 
 - Interactive shell sessions now preserve concurrent session limits, honor
   bounded startup and input timing, report managed-output loss as truncation,
-  normalize split terminal controls, and present yielded commands as live
-  sessions instead of active tool calls.
+  normalize split terminal controls, tolerate managed-runner results that arrive
+  before delivery acknowledgements, and present yielded commands as live sessions
+  instead of active tool calls.
 
 ### Security
 

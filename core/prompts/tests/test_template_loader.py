@@ -99,6 +99,22 @@ def test_prompt_registry_exposes_simple_chat_template(tmp_path: Path) -> None:
     assert registry.get_template("simple_chat_system") == "DrowAI chat system prompt"
 
 
+def test_prompt_registry_loads_versioned_shell_capability_profiles() -> None:
+    registry = PromptRegistry()
+
+    utility_latest = registry.get_template("shell_capability_profile_utility")
+    utility_v1 = registry.get_template(
+        "shell_capability_profile_utility", version="v1"
+    )
+    assessment_latest = registry.get_template(
+        "shell_capability_profile_assessment"
+    )
+
+    assert utility_latest == utility_v1
+    assert utility_latest.startswith("Use shell.utility for ordinary")
+    assert assessment_latest.startswith("Use shell.assessment for commands")
+
+
 def test_template_loader_raises_for_missing_template(tmp_path: Path) -> None:
     root = tmp_path / "templates"
     root.mkdir()

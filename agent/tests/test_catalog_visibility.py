@@ -8,9 +8,9 @@ from agent.tools.enhanced_metadata import ToolCatalogRole
 from agent.tools.universal_agent_tools import UNIVERSAL_AGENT_TOOL_IDS
 
 MVP_VISIBLE_TOOLS = [
-    "shell.exec",
+    "shell.utility",
+    "shell.assessment",
     "shell.write_stdin",
-    "networking_utilities.network",
     "service_access.ftp_login",
     "service_access.ftp_list",
     "service_access.ftp_download",
@@ -25,21 +25,6 @@ MVP_VISIBLE_TOOLS = [
     "exploitation_tools.metasploit.run_exploit",
     "web_applications.web_crawlers.ffuf",
     "sniffing_spoofing.network_sniffers.tshark",
-    "filesystem.append_file",
-    "filesystem.copy_path",
-    "filesystem.delete_path",
-    "filesystem.edit_lines",
-    "filesystem.find_paths",
-    "filesystem.grep",
-    "filesystem.list_dir",
-    "filesystem.make_dir",
-    "filesystem.move_path",
-    "filesystem.read_file",
-    "filesystem.read_head",
-    "filesystem.read_tail",
-    "filesystem.search_text",
-    "filesystem.stat_path",
-    "filesystem.write_file",
 ]
 
 
@@ -54,11 +39,11 @@ def test_hidden_and_visible_predicates_match_mvp_allowlist_policy() -> None:
     assert catalog_visibility.is_tool_hidden_from_catalog("shell.script") is True
     assert catalog_visibility.is_tool_visible_in_catalog("shell.script") is False
 
-    assert catalog_visibility.is_tool_hidden_from_catalog("filesystem.grep") is False
-    assert catalog_visibility.is_tool_visible_in_catalog("filesystem.grep") is True
+    assert catalog_visibility.is_tool_hidden_from_catalog("filesystem.grep") is True
+    assert catalog_visibility.is_tool_visible_in_catalog("filesystem.grep") is False
 
-    assert catalog_visibility.is_tool_hidden_from_catalog("filesystem.read_file") is False
-    assert catalog_visibility.is_tool_visible_in_catalog("filesystem.read_file") is True
+    assert catalog_visibility.is_tool_hidden_from_catalog("filesystem.read_file") is True
+    assert catalog_visibility.is_tool_visible_in_catalog("filesystem.read_file") is False
 
     assert catalog_visibility.is_tool_hidden_from_catalog("run_kali_utility") is True
     assert catalog_visibility.is_tool_visible_in_catalog("run_kali_utility") is False
@@ -138,6 +123,8 @@ def test_filter_visible_tool_ids_is_stable_deduped_and_stripped() -> None:
     result = catalog_visibility.filter_visible_tool_ids(
         [
             " shell.exec ",
+            "shell.utility",
+            "shell.assessment",
             "shell.write_stdin",
             "filesystem.read_file",
             "filesystem.grep",
@@ -155,10 +142,9 @@ def test_filter_visible_tool_ids_is_stable_deduped_and_stripped() -> None:
     )
 
     assert result == [
-        "shell.exec",
+        "shell.utility",
+        "shell.assessment",
         "shell.write_stdin",
-        "filesystem.read_file",
-        "filesystem.grep",
         "service_access.ftp_login",
         "information_gathering.dns.amass",
         "information_gathering.network_discovery.fping",
@@ -171,6 +157,8 @@ def test_visible_available_tools_delegates_to_registry_and_visibility(monkeypatc
         "agent.tools.tool_registry.available_tools",
         lambda: [
             "shell.exec",
+            "shell.utility",
+            "shell.assessment",
             "shell.write_stdin",
             "filesystem.read_file",
             "service_access.ftp_login",
@@ -182,12 +170,11 @@ def test_visible_available_tools_delegates_to_registry_and_visibility(monkeypatc
     )
 
     assert catalog_visibility.visible_available_tools() == [
-        "shell.exec",
+        "shell.utility",
+        "shell.assessment",
         "shell.write_stdin",
-        "filesystem.read_file",
         "service_access.ftp_login",
         "information_gathering.dns.amass",
-        "filesystem.grep",
     ]
 
 
@@ -207,7 +194,7 @@ def test_artifact_tools_stay_hidden_even_when_legacy_overlay_flag_is_set() -> No
     assert catalog_visibility.filter_visible_tool_ids(
         ["artifact.search", "filesystem.read_file", "shell.write_stdin"],
         include_artifact_tools=True,
-    ) == ["filesystem.read_file", "shell.write_stdin"]
+    ) == ["shell.write_stdin"]
 
 
 def test_http_download_is_visible_utility_not_user_configurable_pentest() -> None:

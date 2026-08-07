@@ -17,6 +17,7 @@ from agent.graph.subgraphs.tool_execution_runtime.batch_runner import (
 )
 from agent.graph.subgraphs.tool_execution_runtime.batch_result_application import (
     _enqueue_completed_execution_ingestions,
+    _restore_primary_call_metadata_fields,
 )
 from agent.graph.subgraphs.tool_execution_runtime.approval_and_idempotency import (
     apply_cached_dispatch_result,
@@ -41,6 +42,7 @@ from agent.tool_runtime.batch.types import (
 )
 from core.prompts.builders.post_tool.evidence import read_compact_evidence
 from core.prompts.builders.post_tool.last_tool import extract_last_tool_sections
+from agent.tool_runtime.output_persistence_policy import resolve_output_persistence
 
 
 @dataclass
@@ -65,6 +67,10 @@ def test_completed_batch_enqueues_each_persisted_execution_and_isolates_failures
             ToolCall("tc-1", "nmap", {"target": "127.0.0.1"}),
             ToolCall("tc-2", "curl", {"url": "https://example.test"}),
             ToolCall("tc-3", "shell.exec", {"command": "true"}),
+            ToolCall("tc-4", "shell.utility", {"command": "nmap localhost"}),
+            ToolCall("tc-5", "shell.assessment", {"command": "ls -la"}),
+            ToolCall("tc-6", "shell.write_stdin", {"session_id": "utility-session"}),
+            ToolCall("tc-7", "shell.write_stdin", {"session_id": "assessment-session"}),
         ),
         requested_execution_strategy=ExecutionStrategy.SEQUENTIAL,
     )
@@ -83,13 +89,39 @@ def test_completed_batch_enqueues_each_persisted_execution_and_isolates_failures
             "tc-1": "execution-1",
             "tc-2": "execution-2",
             "tc-3": None,
+            "tc-4": "execution-4",
+            "tc-5": "execution-5",
+            "tc-6": "execution-6",
+            "tc-7": "execution-7",
         },
         compact_by_call_id={
             "tc-1": {"summary": "fallback"},
             "tc-2": {"summary": "curl complete"},
+            "tc-4": {"summary": "utility transient"},
+            "tc-5": {"summary": "assessment retained"},
+            "tc-6": {"summary": "utility continuation transient"},
+            "tc-7": {"summary": "assessment continuation retained"},
         },
         deterministic_compact_by_call_id={
             "tc-1": {"summary": "nmap complete"},
+        },
+        outcome_by_call_id={
+            "tc-6": _Outcome(
+                result={
+                    "metadata": {
+                        "runtime_session": {"originating_capability": "utility"}
+                    }
+                },
+                duration=0.1,
+            ),
+            "tc-7": _Outcome(
+                result={
+                    "metadata": {
+                        "runtime_session": {"originating_capability": "assessment"}
+                    }
+                },
+                duration=0.1,
+            ),
         },
         deps={
             "_enqueue_execution_ingestion": _enqueue,
@@ -101,10 +133,92 @@ def test_completed_batch_enqueues_each_persisted_execution_and_isolates_failures
     assert [attempt["execution_id"] for attempt in attempts] == [
         "execution-1",
         "execution-2",
+        "execution-5",
+        "execution-7",
     ]
     assert attempts[0]["compact_output"]["summary"] == "nmap complete"
     assert attempts[1]["compact_output"]["summary"] == "curl complete"
+    assert attempts[2]["compact_output"]["summary"] == "assessment retained"
+    assert attempts[3]["compact_output"]["summary"] == (
+        "assessment continuation retained"
+    )
     assert metrics == ["knowledge_ingestion_enqueue_failures"]
+
+
+def test_utility_only_batch_clears_output_bearing_primary_metadata() -> None:
+    facts = _Facts(
+        metadata={
+            "selected_tool": "shell.utility",
+            "tool_parameters": {"command": "printf transient"},
+            "last_tool_result": {"stdout": "transient"},
+            "last_artifact_path": "artifacts/transient.txt",
+        }
+    )
+    facts.selected_tool = "shell.utility"
+    facts.tool_parameters = {"command": "printf transient"}
+    batch = ToolBatch(
+        tool_batch_id="tb-utility",
+        tool_calls=(
+            ToolCall("tc-utility", "shell.utility", {"command": "printf transient"}),
+        ),
+        requested_execution_strategy=ExecutionStrategy.SEQUENTIAL,
+    )
+
+    _restore_primary_call_metadata_fields(
+        facts=facts,
+        batch=batch,
+        projection_by_call_id={},
+        tool_catalog_by_call_id={},
+        cached_dispatch_by_call_id={},
+        metadata_patch_by_call_id={},
+        persistence_decision_by_call_id={
+            "tc-utility": resolve_output_persistence("shell.utility")
+        },
+    )
+
+    assert facts.selected_tool is None
+    assert facts.tool_parameters == {}
+    assert set(facts.metadata).isdisjoint(
+        {"selected_tool", "tool_parameters", "last_tool_result", "last_artifact_path"}
+    )
+
+
+def test_mixed_batch_restores_first_durable_call_not_utility_call() -> None:
+    facts = _Facts(metadata={})
+    facts.selected_tool = None
+    facts.tool_parameters = {}
+    batch = ToolBatch(
+        tool_batch_id="tb-mixed",
+        tool_calls=(
+            ToolCall("tc-utility", "shell.utility", {"command": "pwd"}),
+            ToolCall("tc-assessment", "shell.assessment", {"command": "nmap localhost"}),
+        ),
+        requested_execution_strategy=ExecutionStrategy.SEQUENTIAL,
+    )
+
+    _restore_primary_call_metadata_fields(
+        facts=facts,
+        batch=batch,
+        projection_by_call_id={
+            "tc-assessment": {
+                "result_for_metadata": {
+                    "tool": "shell.assessment",
+                    "summary": "assessment retained",
+                }
+            }
+        },
+        tool_catalog_by_call_id={},
+        cached_dispatch_by_call_id={},
+        metadata_patch_by_call_id={},
+        persistence_decision_by_call_id={
+            "tc-utility": resolve_output_persistence("shell.utility"),
+            "tc-assessment": resolve_output_persistence("shell.assessment"),
+        },
+    )
+
+    assert facts.selected_tool == "shell.assessment"
+    assert facts.tool_parameters == {"command": "nmap localhost"}
+    assert facts.metadata["last_tool_result"]["summary"] == "assessment retained"
 
 
 def test_append_tool_execution_record_persists_route_and_runtime_identity_fields() -> None:
@@ -330,6 +444,83 @@ def test_apply_result_state_projection_masks_tool_history_without_mutating_runti
     assert "<DURABLE_SECRET_MASK:" in serialized_execution_records
 
 
+def test_utility_projection_retains_only_operational_execution_record() -> None:
+    sentinel = "TRANSIENT_UTILITY_OUTPUT_SENTINEL"
+    working_memory = {"objective": {"text": "keep existing memory"}}
+    facts = _Facts(
+        metadata={
+            "workspace_id": "task-utility",
+            "working_memory": working_memory,
+            "last_tool_result": {"stdout": "stale"},
+            "last_tool_result_compact": {"summary": "stale"},
+        },
+        iterations=1,
+    )
+    memory_calls: list[dict[str, Any]] = []
+
+    apply_result_state_projection(
+        interactive=SimpleNamespace(trace=SimpleNamespace(usage_records=[])),
+        facts=facts,
+        outcome=SimpleNamespace(
+            tool_id="shell.utility",
+            parameters={"command": "printf transient"},
+            result={
+                "success": True,
+                "status": "success",
+                "stdout": sentinel,
+                "stdout_excerpt": sentinel,
+                "stderr": "",
+                "exit_code": 0,
+                "truncated": False,
+                "metadata": {
+                    "runtime_session": {"originating_capability": "utility"},
+                    "semantic_observations": [{"value": sentinel}],
+                },
+            },
+            summary=sentinel,
+            duration=0.1,
+        ),
+        projection={
+            "resolved_tool_id": "shell.utility",
+            "compact_result_dict": {"summary": sentinel, "key_findings": [sentinel]},
+            "result_for_metadata": {"stdout": sentinel, "summary": sentinel},
+            "graph_metadata": {"result": {"stdout": sentinel}},
+            "action_record": {"params": {"command": "printf transient"}},
+            "artifact_refs_for_memory": [{"path": "artifacts/transient.txt"}],
+            "compression_usage_record": None,
+            "persistence_decision": resolve_output_persistence("shell.utility"),
+        },
+        execution_id="exec-utility",
+        tool_call_id="tc-utility",
+        turn_sequence=12,
+        compact_observation_text_fn=lambda compact, fallback=None: str(
+            compact.get("summary") or fallback or ""
+        ),
+        refresh_trace_scratchpad_fn=lambda _interactive: None,
+        memory_reduce_tool_result_fn=lambda **kwargs: memory_calls.append(kwargs),
+        logger=SimpleNamespace(
+            warning=lambda *_args, **_kwargs: None,
+            debug=lambda *_args, **_kwargs: None,
+        ),
+        safe_inc_fn=lambda _name: None,
+    )
+
+    assert facts.metadata["working_memory"] is working_memory
+    assert memory_calls == []
+    assert set(facts.metadata).isdisjoint(
+        {"last_tool_result", "last_tool_result_compact", "tool_history", "action_history"}
+    )
+    [record] = facts.metadata["tool_execution_records"]
+    assert record["tool"] == "shell.utility"
+    assert record["capability"] == "utility"
+    assert record["status"] == "success"
+    assert record["exit_code"] == 0
+    assert record["stdout_excerpt"] == ""
+    assert record["stderr_excerpt"] == ""
+    assert record["artifact_refs"] == []
+    assert sentinel not in str(facts.metadata)
+
+
 def test_apply_result_state_projection_sets_clears_and_counts_validation_errors() -> None:
     sentinel = "PocSecret-DurableMasking-Sentinel-validation-1"
     facts = _Facts(metadata={"workspace_id": "task-validation"}, iterations=2)
@@ -457,6 +648,66 @@ def test_project_trace_history_masks_dispatch_cache_without_masking_runtime_even
     serialized_cache = str(cache_entry)
     assert sentinel not in serialized_cache
     assert "<DURABLE_SECRET_MASK:" in serialized_cache
+
+
+def test_utility_dispatch_cache_excludes_transient_output_but_event_keeps_it() -> None:
+    sentinel = "TRANSIENT_UTILITY_EVENT_SENTINEL"
+    facts = _Facts(metadata={})
+    interactive = SimpleNamespace(
+        trace=SimpleNamespace(reasoning=[], observations=[], executed_tools=[]),
+    )
+    emitted_events: list[Mapping[str, Any]] = []
+    compact_result = {
+        "tool": "shell.utility",
+        "status": "success",
+        "success": True,
+        "summary": sentinel,
+        "key_findings": [sentinel],
+    }
+    outcome = SimpleNamespace(
+        tool_id="shell.utility",
+        parameters={"command": "printf transient"},
+        result={"success": True, "exit_code": 0},
+        summary=sentinel,
+        reasoning=[sentinel],
+    )
+
+    project_trace_history_and_outbound_events(
+        interactive=interactive,
+        facts=facts,
+        outcome=outcome,
+        compact_result_dict=compact_result,
+        result_for_metadata={"stdout": sentinel, "summary": sentinel},
+        graph_metadata={"summary": sentinel},
+        action_record={"params": {"command": "printf transient"}},
+        approval_response=None,
+        tool_name="shell.utility",
+        tool_call_id="tc-utility-cache",
+        tool_batch_id="tb-utility-cache",
+        conversation_id="conv-1",
+        turn_id="turn-1",
+        turn_sequence=9,
+        sub_turn_index=None,
+        interrupt_id=None,
+        has_writer=True,
+        writer=emitted_events.append,
+        compact_observation_text_fn=lambda compact, fallback=None: str(
+            compact.get("summary") or fallback or ""
+        ),
+        tool_execution_record_cls=SimpleNamespace,
+        store_dispatch_cache_result_fn=store_dispatch_cache_result,
+        tool_dispatch_cache_key="tool_dispatch_cache",
+        diag_info_fn=lambda *_args, **_kwargs: None,
+        logger=SimpleNamespace(info=lambda *_args, **_kwargs: None),
+        persistence_decision=resolve_output_persistence("shell.utility"),
+    )
+
+    assert sentinel in str(emitted_events[0])
+    assert emitted_events[0]["output_persistence"] == "transient"
+    assert sentinel not in str(facts.metadata["tool_dispatch_cache"])
+    assert interactive.trace.reasoning == []
+    assert interactive.trace.observations == []
+    assert interactive.trace.executed_tools == []
 
 
 def test_shell_session_projection_preserves_continuation_fields_and_nullable_exit_code() -> None:
@@ -970,6 +1221,53 @@ def test_compact_batch_metadata_keeps_ptr_runtime_copy_raw_and_durable_copy_mask
     )
     assert sentinel in runtime_sections["tool_output_summary"]
     assert sentinel in runtime_sections["key_findings"]
+
+
+def test_utility_compact_evidence_is_runtime_only() -> None:
+    sentinel = "TRANSIENT_RUNTIME_ONLY_SENTINEL"
+    facts = _Facts(metadata={})
+    batch = ToolBatch(
+        tool_batch_id="tb-utility-runtime-only",
+        tool_calls=(
+            ToolCall("tc-utility-runtime-only", "shell.utility", {"command": "printf x"}),
+        ),
+        requested_execution_strategy=ExecutionStrategy.SEQUENTIAL,
+    )
+    result = BatchResult(
+        tool_batch_id=batch.tool_batch_id,
+        status=BatchStatus.COMPLETED,
+        call_results=(
+            ToolCallResult(
+                tool_call_id="tc-utility-runtime-only",
+                tool_id="shell.utility",
+                status=ToolCallStatus.SUCCESS,
+            ),
+        ),
+        effective_execution_strategy=ExecutionStrategy.SEQUENTIAL,
+        requested_execution_strategy=ExecutionStrategy.SEQUENTIAL,
+    )
+
+    write_compact_batch_metadata(
+        facts,
+        batch=batch,
+        result=result,
+        compact_by_call_id={
+            "tc-utility-runtime-only": {
+                "tool": "shell.utility",
+                "summary": sentinel,
+                "success": True,
+            }
+        },
+        persistence_decision_by_call_id={
+            "tc-utility-runtime-only": resolve_output_persistence("shell.utility")
+        },
+    )
+
+    assert facts.metadata == {"tool_batch_id": "tb-utility-runtime-only"}
+    assert read_compact_evidence(facts.metadata) is None
+    runtime_view = read_compact_evidence(facts.metadata, prefer_runtime=True)
+    assert runtime_view is not None
+    assert sentinel in str(runtime_view.raw)
 
 
 def test_sanitize_artifact_refs_drops_signed_urls_and_object_keys() -> None:

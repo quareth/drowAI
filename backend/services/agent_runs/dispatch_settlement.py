@@ -13,6 +13,7 @@ import logging
 from collections.abc import Awaitable
 from typing import Any
 
+from runtime_shared.shell_session_contracts import format_shell_execution_owner_id
 from runtime_shared.shell_session_port import get_shell_session_service
 
 from .completion import (
@@ -43,7 +44,7 @@ def _subagent_execution_owner_id(agent_run_id: str) -> str | None:
     normalized = agent_run_id.strip()
     if not normalized:
         return None
-    return f"subagent:{normalized}"
+    return format_shell_execution_owner_id("subagent", normalized)
 
 
 class DispatchSettlement:
@@ -136,36 +137,36 @@ class DispatchSettlement:
         turn_index: int | None,
     ) -> DispatchChildSettlement:
         """Translate one gathered child result into a typed dispatch fact."""
-        if isinstance(result, AgentRunCompletion):
-            settlement = DispatchChildSettlement(item, completion=result)
-            await self._close_subagent_owner_shell_sessions_for_settlement(
-                item=item,
-                status=result.result.outcome,
-            )
-            return settlement
         if isinstance(result, SubagentRunPaused):
             return DispatchChildSettlement(item, paused=True)
-        terminal_completion = await self.completion_for_terminal_exception(
-            result,
-            item=item,
-        )
-        if terminal_completion is not None:
-            settlement = DispatchChildSettlement(item, completion=terminal_completion)
-            await self._close_subagent_owner_shell_sessions_for_settlement(
+
+        if isinstance(result, AgentRunCompletion):
+            settlement = DispatchChildSettlement(item, completion=result)
+            cleanup_status = result.result.outcome
+        else:
+            terminal_completion = await self.completion_for_terminal_exception(
+                result,
                 item=item,
-                status=terminal_completion.result.outcome,
             )
-            return settlement
-        stop = self.stop_for_child_exception(
-            result,
-            item=item,
-            task_id=task_id,
-            turn_index=turn_index,
-        )
-        settlement = DispatchChildSettlement(item, stop=stop)
+            if terminal_completion is not None:
+                settlement = DispatchChildSettlement(
+                    item,
+                    completion=terminal_completion,
+                )
+                cleanup_status = terminal_completion.result.outcome
+            else:
+                stop = self.stop_for_child_exception(
+                    result,
+                    item=item,
+                    task_id=task_id,
+                    turn_index=turn_index,
+                )
+                settlement = DispatchChildSettlement(item, stop=stop)
+                cleanup_status = stop.status
+
         await self._close_subagent_owner_shell_sessions_for_settlement(
             item=item,
-            status=stop.status,
+            status=cleanup_status,
         )
         return settlement
 

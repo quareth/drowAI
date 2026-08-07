@@ -28,6 +28,11 @@ from agent.tool_runtime.workspace_artifacts import (  # noqa: E402
     schedule_workspace_artifact_indexing as schedule_artifact_indexing_service,
     should_persist_workspace_artifact,
 )
+from runtime_shared.shell_capabilities import (  # noqa: E402
+    SHELL_ASSESSMENT_TOOL_ID,
+    SHELL_EXEC_TOOL_ID,
+    SHELL_UTILITY_TOOL_ID,
+)
 from agent.utils.artifact_manager import save_tool_output_artifact  # noqa: E402
 from backend.services.metrics.utils import safe_gauge, safe_inc  # noqa: E402
 
@@ -95,6 +100,7 @@ from .tool_execution_runtime.artifact_and_provenance import (  # noqa: E402
     save_execution_artifact as save_execution_artifact_service,
 )
 from .tool_execution_runtime.result_state_projection import (  # noqa: E402
+    SHELL_SESSION_STATE_RESULT_KEYS,
     apply_result_state_projection as apply_result_state_projection_service,
     compact_observation_text as compact_observation_text_service,
     project_result_state as project_result_state_service,
@@ -140,7 +146,12 @@ def _enqueue_execution_ingestion(
     )
 
 
-HIGH_RISK_TOOL_PREFIXES = ("shell.exec", "exploitation_tools.")
+HIGH_RISK_TOOL_PREFIXES = (
+    SHELL_EXEC_TOOL_ID,
+    SHELL_UTILITY_TOOL_ID,
+    SHELL_ASSESSMENT_TOOL_ID,
+    "exploitation_tools.",
+)
 MEDIUM_RISK_TOOL_PREFIXES = (
     "information_gathering.network_discovery.nmap",
     "vulnerability_analysis.",
@@ -150,19 +161,10 @@ _COMPACT_SANITIZED_RESULT_KEYS = frozenset(
         "tool",
         "status",
         "success",
-        "exit_code",
         "duration",
         "parameters",
-        "process_status",
-        "session_id",
-        "stdin_available",
-        "stdout",
-        "stderr",
-        "truncated",
-        "summary",
-        "error_code",
     }
-)
+).union(SHELL_SESSION_STATE_RESULT_KEYS)
 _APPROVAL_GATE_COMPLETED_KEY = "tool_approval_gate_completed"
 _APPROVAL_GATE_RESPONSE_KEY = "tool_approval_response"
 _TOOL_CALL_ID_KEY = "tool_call_id"

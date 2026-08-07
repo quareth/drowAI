@@ -25,6 +25,10 @@ from runtime_shared.shell_session_contracts import (
     SHELL_SESSION_MAX_YIELD_TIME_MS,
     SHELL_SESSION_PREPARATION_TIMEOUT_SEC,
 )
+from runtime_shared.shell_capabilities import (
+    SHELL_SESSION_START_TOOL_IDS,
+    SHELL_WRITE_STDIN_TOOL_ID,
+)
 
 DEFAULT_TOOL_TIMEOUT_SECONDS = 600.0
 DEFAULT_TOOL_TIMEOUT_GRACE_SECONDS = 5.0
@@ -64,17 +68,6 @@ def _coerce_positive_seconds(value: Any) -> Optional[float]:
 
 def _coerce_non_negative_seconds(value: Any) -> Optional[float]:
     """Return a non-negative seconds value or ``None`` when invalid."""
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    if not math.isfinite(parsed) or parsed < 0:
-        return None
-    return parsed
-
-
-def _coerce_non_negative_milliseconds(value: Any) -> Optional[float]:
-    """Return a non-negative millisecond value or ``None`` when invalid."""
     try:
         parsed = float(value)
     except (TypeError, ValueError):
@@ -444,7 +437,7 @@ class ToolTimeoutPolicy:
     ) -> ToolTimeoutPlan:
         """Resolve bounded wait policy for one shell-session invocation."""
         raw_yield_ms = raw_parameters.get("yield_time_ms")
-        yield_ms = _coerce_non_negative_milliseconds(raw_yield_ms)
+        yield_ms = _coerce_non_negative_seconds(raw_yield_ms)
         requested_seconds: Optional[float] = None
         requested_field: Optional[str] = None
         source = "default:yield_time_ms"
@@ -458,11 +451,13 @@ class ToolTimeoutPolicy:
 
         yield_seconds = max(0.0, yield_ms / 1000.0)
         preparation_seconds = (
-            SHELL_SESSION_PREPARATION_TIMEOUT_SEC if tool_id == "shell.exec" else 0.0
+            SHELL_SESSION_PREPARATION_TIMEOUT_SEC
+            if tool_id in SHELL_SESSION_START_TOOL_IDS
+            else 0.0
         )
         control_seconds = (
             SHELL_SESSION_CONTROL_TIMEOUT_SEC
-            if tool_id == "shell.write_stdin" and bool(raw_parameters.get("chars"))
+            if tool_id == SHELL_WRITE_STDIN_TOOL_ID and bool(raw_parameters.get("chars"))
             else 0.0
         )
         deadline_seconds = preparation_seconds + control_seconds + yield_seconds

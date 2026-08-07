@@ -33,6 +33,7 @@ from runtime_shared.shell_session_contracts import (
     ShellWriteRequest,
 )
 from runtime_shared.shell_session_framing import PTY_EXIT_CODE_MARKER
+from runtime_shared.shell_capabilities import ShellCapability
 from runtime_shared.terminal_contracts import TerminalReadResult
 
 _PUBLIC_ASSERT_FIELDS = {
@@ -466,6 +467,47 @@ async def test_quick_command_returns_completed_update_and_closes_terminal() -> N
     assert update.stdout == "quick"
     assert manager.prepare_calls[0]["workspace_path"] == "/workspace"
     assert manager.closed_sessions == ["terminal-1"]
+
+
+@pytest.mark.asyncio
+async def test_live_session_capability_is_owner_bound_and_removed_with_session() -> None:
+    manager = FakeTerminalManager()
+    service = _service(manager)
+    owner = _identity()
+
+    started = await service.execute(
+        identity=owner,
+        request=ShellExecRequest(command="interactive", yield_time_ms=0),
+        capability=ShellCapability.UTILITY,
+    )
+
+    assert started.session_id is not None
+    assert (
+        await service.get_session_capability(
+            identity=owner,
+            public_session_id=started.session_id,
+        )
+        is ShellCapability.UTILITY
+    )
+    assert (
+        await service.get_session_capability(
+            identity=_identity(execution_owner_id="subagent:other"),
+            public_session_id=started.session_id,
+        )
+        is None
+    )
+
+    await service.write_stdin(
+        identity=owner,
+        request=ShellWriteRequest(session_id=started.session_id, chars="\u0003"),
+    )
+    assert (
+        await service.get_session_capability(
+            identity=owner,
+            public_session_id=started.session_id,
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio

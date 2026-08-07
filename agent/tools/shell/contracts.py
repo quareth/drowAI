@@ -97,7 +97,7 @@ class ShellWriteStdinArgs(BaseModel):
         ...,
         min_length=1,
         max_length=SHELL_SESSION_MAX_PUBLIC_ID_CHARS,
-        description="Opaque public shell-session handle returned by shell.exec.",
+        description="Opaque public shell-session handle returned by a shell start alias.",
     )
     chars: str = Field(
         default="",

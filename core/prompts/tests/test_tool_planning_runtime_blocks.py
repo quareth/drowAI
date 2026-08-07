@@ -182,7 +182,8 @@ def test_native_tool_call_shared_guidance_includes_minimal_shell_session_rules()
         max_committed_tools_per_batch=3,
     )
 
-    assert "Use shell.exec to start a command." in guidance
+    assert "Use shell.utility or shell.assessment to start a command" in guidance
+    assert "Use shell.exec to start a command." not in guidance
     assert 'process_status "running"' in guidance
     assert "retain the exact returned session_id" in guidance
     assert 'shell.write_stdin with chars="" to poll' in guidance

@@ -45,6 +45,11 @@ _RUNTIME_JOB_STATUS_ORDER: dict[str, int] = {
     "expired": 90,
 }
 _RUNTIME_JOB_TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled", "lost", "expired"})
+_RUNTIME_JOB_RESULT_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
+_RUNTIME_JOB_IN_FLIGHT_STATUSES = frozenset(
+    {"assigned", "dispatching", "dispatched", "acknowledged", "accepted", "running"}
+)
+_RUNTIME_JOB_DELIVERY_STATUSES = frozenset({"dispatching", "dispatched", "acknowledged"})
 _RUNTIME_JOB_ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
     "queued": frozenset({"assigned", "cancelled", "expired", "failed"}),
     "assigned": frozenset({"dispatching", "cancelled", "lost", "expired", "failed"}),
@@ -279,11 +284,74 @@ class RuntimeJobService:
     ) -> RuntimeJob:
         """Apply one validated Runner Control transition and persist metadata updates."""
 
-        runtime_job = self._require_runtime_job(tenant_id=tenant_id, runtime_job_id=runtime_job_id)
-        normalized_next = _normalize_required_status(next_status)
-        current_status = _normalize_status(runtime_job.status)
-        _assert_valid_transition(current_status=current_status, next_status=normalized_next)
+        return self._apply_runtime_job_transition(
+            tenant_id=tenant_id,
+            runtime_job_id=runtime_job_id,
+            next_status=next_status,
+            payload_json=payload_json,
+            result_json=result_json,
+            error_code=error_code,
+            error_message=error_message,
+            lease_expires_at=lease_expires_at,
+            transition_source="ordered",
+        )
 
+    def advance_runtime_job_delivery(
+        self,
+        *,
+        tenant_id: int,
+        runtime_job_id: UUID,
+        next_status: str,
+        result_json: Mapping[str, Any] | None = None,
+    ) -> RuntimeJob:
+        """Record monotonic transport progress without regressing an operation result."""
+
+        return self._apply_runtime_job_transition(
+            tenant_id=tenant_id,
+            runtime_job_id=runtime_job_id,
+            next_status=next_status,
+            result_json=result_json,
+            transition_source="delivery",
+        )
+
+    def complete_runtime_job_from_result(
+        self,
+        *,
+        tenant_id: int,
+        runtime_job_id: UUID,
+        next_status: str,
+        result_json: Mapping[str, Any] | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> RuntimeJob:
+        """Persist an authenticated runner result despite reordered delivery events."""
+
+        return self._apply_runtime_job_transition(
+            tenant_id=tenant_id,
+            runtime_job_id=runtime_job_id,
+            next_status=next_status,
+            result_json=result_json,
+            error_code=error_code,
+            error_message=error_message,
+            transition_source="result",
+        )
+
+    def _apply_runtime_job_transition(
+        self,
+        *,
+        tenant_id: int,
+        runtime_job_id: UUID,
+        next_status: str,
+        payload_json: Mapping[str, Any] | None = None,
+        result_json: Mapping[str, Any] | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+        lease_expires_at: datetime | None = None,
+        transition_source: str,
+    ) -> RuntimeJob:
+        """Lock, validate, and apply one source-aware runtime-job transition."""
+
+        normalized_next = _normalize_required_status(next_status)
         payload_copy = _mask_optional_mapping(
             _clone_mapping(payload_json),
             source="runtime_job_payload_transition",
@@ -294,6 +362,20 @@ class RuntimeJobService:
         )
 
         with self._transaction_context():
+            runtime_job = self._require_runtime_job(
+                tenant_id=tenant_id,
+                runtime_job_id=runtime_job_id,
+                for_update=True,
+            )
+            current_status = _normalize_status(runtime_job.status)
+            should_apply = _transition_should_apply(
+                current_status=current_status,
+                next_status=normalized_next,
+                transition_source=transition_source,
+            )
+            if not should_apply:
+                return runtime_job
+
             runtime_job.status = normalized_next
             if payload_copy is not None:
                 runtime_job.payload_json = payload_copy
@@ -323,13 +405,20 @@ class RuntimeJobService:
 
         return runtime_job
 
-    def _require_runtime_job(self, *, tenant_id: int, runtime_job_id: UUID) -> RuntimeJob:
-        runtime_job = self._db.execute(
-            select(RuntimeJob).where(
-                RuntimeJob.id == runtime_job_id,
-                RuntimeJob.tenant_id == tenant_id,
-            )
-        ).scalar_one_or_none()
+    def _require_runtime_job(
+        self,
+        *,
+        tenant_id: int,
+        runtime_job_id: UUID,
+        for_update: bool = False,
+    ) -> RuntimeJob:
+        statement = select(RuntimeJob).where(
+            RuntimeJob.id == runtime_job_id,
+            RuntimeJob.tenant_id == tenant_id,
+        )
+        if for_update:
+            statement = statement.with_for_update().execution_options(populate_existing=True)
+        runtime_job = self._db.execute(statement).scalar_one_or_none()
         if runtime_job is None:
             raise RuntimeJobServiceError(
                 error_code="RUNTIME_JOB_NOT_FOUND",
@@ -416,6 +505,59 @@ def _assert_valid_transition(*, current_status: str, next_status: str) -> None:
     raise RuntimeJobServiceError(
         error_code="RUNTIME_JOB_TRANSITION_INVALID",
         message=f"Invalid runtime job transition: {current_status} -> {next_status}",
+    )
+
+
+def _transition_should_apply(
+    *,
+    current_status: str,
+    next_status: str,
+    transition_source: str,
+) -> bool:
+    if transition_source == "ordered":
+        _assert_valid_transition(current_status=current_status, next_status=next_status)
+        return True
+
+    if transition_source == "delivery":
+        if next_status not in _RUNTIME_JOB_DELIVERY_STATUSES:
+            raise RuntimeJobServiceError(
+                error_code="RUNTIME_JOB_TRANSITION_INVALID",
+                message=f"Unsupported delivery transition target: {next_status}",
+            )
+        if current_status in _RUNTIME_JOB_TERMINAL_STATUSES:
+            return False
+        if current_status not in _RUNTIME_JOB_IN_FLIGHT_STATUSES:
+            raise RuntimeJobServiceError(
+                error_code="RUNTIME_JOB_TRANSITION_INVALID",
+                message=f"Invalid delivery transition: {current_status} -> {next_status}",
+            )
+        return _RUNTIME_JOB_STATUS_ORDER[next_status] > _RUNTIME_JOB_STATUS_ORDER[current_status]
+
+    if transition_source == "result":
+        if next_status not in _RUNTIME_JOB_RESULT_STATUSES:
+            raise RuntimeJobServiceError(
+                error_code="RUNTIME_JOB_TRANSITION_INVALID",
+                message=f"Unsupported runner-result transition target: {next_status}",
+            )
+        if current_status == next_status:
+            return False
+        if current_status in _RUNTIME_JOB_TERMINAL_STATUSES:
+            raise RuntimeJobServiceError(
+                error_code="RUNTIME_JOB_TRANSITION_STALE",
+                message=(
+                    "Runtime job result conflicts with the job's existing terminal status."
+                ),
+            )
+        if current_status not in _RUNTIME_JOB_IN_FLIGHT_STATUSES:
+            raise RuntimeJobServiceError(
+                error_code="RUNTIME_JOB_TRANSITION_INVALID",
+                message=f"Invalid runner-result transition: {current_status} -> {next_status}",
+            )
+        return True
+
+    raise RuntimeJobServiceError(
+        error_code="RUNTIME_JOB_TRANSITION_INVALID",
+        message=f"Unsupported runtime job transition source: {transition_source}",
     )
 
 

@@ -573,7 +573,7 @@ class RuntimeEventService:
         error_code = _payload_error_code(payload=payload)
         error_message = _payload_error_message(payload=payload)
         try:
-            transitioned = RuntimeJobService(self._db).transition_runtime_job(
+            transitioned = RuntimeJobService(self._db).complete_runtime_job_from_result(
                 tenant_id=tenant_id,
                 runtime_job_id=runtime_job.id,
                 next_status=next_status,
@@ -582,14 +582,6 @@ class RuntimeEventService:
                 error_message=error_message,
             )
         except RuntimeJobServiceError as exc:
-            if exc.error_code in {"RUNTIME_JOB_TRANSITION_STALE", "RUNTIME_JOB_TRANSITION_INVALID"}:
-                logger.info(
-                    "runner_control.runtime_event_stale_transition runtime_job_id=%s message_type=%s error_code=%s",
-                    runtime_job.id,
-                    envelope.type,
-                    exc.error_code,
-                )
-                return None
             raise RuntimeEventServiceError(
                 error_code=exc.error_code,
                 message=str(exc),

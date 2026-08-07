@@ -352,6 +352,25 @@ class TestToolEventProcessing:
         assert result["metadata"]["ind"] == stream_consts.TOOL_PHASE_INDEX
         assert "Executing nmap" in result["content"]
 
+    def test_shell_tool_start_exposes_sanitized_command_for_live_display(self, adapter):
+        """Shell cards receive display text without persisting or exposing secrets."""
+        result = adapter.process_streaming_event(
+            {
+                "type": "tool_start",
+                "tool": "shell.utility",
+                "conversation_id": "conv-1",
+                "turn_id": "turn-1",
+                "parameters": {
+                    "command": "TOKEN=secret touch /workspace/boris.txt",
+                },
+            }
+        )
+
+        assert result is not None
+        assert result["metadata"]["command_display"] == (
+            "TOKEN=<REDACTED> touch /workspace/boris.txt"
+        )
+
     def test_adapter_processes_tool_batch_start(self, adapter):
         event = {
             "type": "tool_batch_start",
@@ -644,6 +663,46 @@ class TestToolEventProcessing:
         mock_persist.assert_called_once()
         assert mock_persist.call_args.kwargs["reserved_message_id"] == 101
         assert mock_persist.call_args.kwargs["tool_call_info"]["persisted_marker"] is True
+
+    def test_transient_tool_end_streams_compact_output_without_persisting_tool_call(
+        self,
+        adapter,
+    ):
+        """Utility output stays available to the live card but out of chat history."""
+        event = {
+            "type": "tool_end",
+            "tool": "shell.utility",
+            "tool_call_id": "call-transient-1",
+            "conversation_id": "conv-1",
+            "turn_id": "turn-1",
+            "status": "success",
+            "output_persistence": "transient",
+            "compact_tool_result": {
+                "schema_version": "2.0",
+                "tool": "shell.utility",
+                "status": "success",
+                "success": True,
+                "summary": "Created /workspace/boris.txt.",
+                "key_findings": [],
+                "errors": [],
+                "report_recommendations": [],
+                "structured_signals": [],
+                "decision_evidence": [],
+                "lossiness_risk": "low",
+            },
+        }
+        state_container = Mock()
+        state_container.reserved_message_id = 101
+
+        with patch.object(adapter._tool_call_snapshot_service, "persist_snapshot") as mock_persist:
+            result = adapter.process_streaming_event(event, state_container=state_container)
+
+        assert result["metadata"]["output_persistence"] == "transient"
+        assert result["metadata"]["compact_tool_result"]["summary"] == (
+            "Created /workspace/boris.txt."
+        )
+        state_container.add_tool_call.assert_not_called()
+        mock_persist.assert_not_called()
 
     @pytest.mark.parametrize(
         ("reserved_message_id", "tool_call_id"),

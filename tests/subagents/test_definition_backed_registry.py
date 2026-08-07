@@ -180,7 +180,8 @@ http_probe = "web_mapping"
     assert definition.kind == "web_assessment"
     assert profile.tool_ids == (
         "information_gathering.web_enumeration.http_request",
-        "shell.exec",
+        "shell.utility",
+        "shell.assessment",
         "shell.write_stdin",
     )
     assert assignment.suggested_capabilities == ("web_mapping",)

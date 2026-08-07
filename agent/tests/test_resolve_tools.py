@@ -98,7 +98,7 @@ def test_resolve_tools_http_aliases(monkeypatch):
 def test_resolve_tools_network_utility_aliases(monkeypatch):
     monkeypatch.setattr(
         "agent.tools.resolve_tools.available_tools",
-        lambda: ["networking_utilities.network"],
+        lambda: ["shell.utility", "networking_utilities.network"],
     )
 
     for alias in [
@@ -112,6 +112,4 @@ def test_resolve_tools_network_utility_aliases(monkeypatch):
         "interfaces",
         "routes",
     ]:
-        assert resolve_tools_for_capability(alias, {}, DummyConfig()) == [
-            "networking_utilities.network"
-        ]
+        assert resolve_tools_for_capability(alias, {}, DummyConfig()) == ["shell.utility"]

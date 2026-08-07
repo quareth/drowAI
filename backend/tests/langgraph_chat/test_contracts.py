@@ -78,21 +78,3 @@ def test_graph_runtime_context_serializes_execution_owner_id() -> None:
 
     assert payload["execution_owner_id"] == "main:turn-123"
     assert context.missing_tool_runtime_identity_fields() == []
-    assert context.missing_shell_session_runtime_identity_fields() == []
-
-
-def test_shell_session_runtime_identity_requires_execution_owner_id_only_for_shell() -> None:
-    context = GraphRuntimeContext(
-        task_id=1,
-        user_id=1,
-        tenant_id=3,
-        runtime_placement_mode="runner",
-        workspace_id="task-1",
-        actor_type="agent",
-        actor_id="langgraph",
-    )
-
-    assert context.missing_tool_runtime_identity_fields() == []
-    assert context.missing_shell_session_runtime_identity_fields() == [
-        "execution_owner_id",
-    ]

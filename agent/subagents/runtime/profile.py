@@ -89,7 +89,6 @@ def _resolve_profile_specific_tool_profile(
         visible_available_tools() if visible_tool_ids is None else visible_tool_ids
     )
     tools: list[SubagentToolSpec] = []
-    added_tool_ids: set[str] = set()
 
     for tool_id in candidate_tool_ids:
         if tool_id in _UNIVERSAL_AGENT_TOOL_ID_SET:
@@ -112,7 +111,6 @@ def _resolve_profile_specific_tool_profile(
                     capabilities=capabilities,
                 )
             )
-            added_tool_ids.add(tool_id)
 
     return SubagentToolProfile(tools=tuple(tools), definition_id=definition.id)
 

@@ -24,6 +24,7 @@ from runtime_shared.shell_session_contracts import (
     ShellSessionUpdate,
     ShellWriteRequest,
 )
+from runtime_shared.shell_capabilities import ShellCapability
 
 
 class _StubExecutor:
@@ -78,15 +79,26 @@ class _FakeShellSessionService:
         self.update = update
         self.exec_calls: list[tuple[ShellSessionIdentity, ShellExecRequest]] = []
         self.write_calls: list[tuple[ShellSessionIdentity, ShellWriteRequest]] = []
+        self.capability = ShellCapability.ASSESSMENT
 
     async def execute(
         self,
         *,
         identity: ShellSessionIdentity,
         request: ShellExecRequest,
+        capability: ShellCapability = ShellCapability.ASSESSMENT,
     ) -> ShellSessionUpdate:
+        self.capability = capability
         self.exec_calls.append((identity, request))
         return self.update
+
+    async def get_session_capability(
+        self,
+        *,
+        identity: ShellSessionIdentity,
+        public_session_id: str,
+    ) -> ShellCapability | None:
+        return self.capability
 
     async def write_stdin(
         self,
@@ -380,6 +392,59 @@ async def test_shell_exec_running_update_maps_session_continuation_fields(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("tool_id", "expected_capability"),
+    [
+        ("shell.utility", ShellCapability.UTILITY),
+        ("shell.assessment", ShellCapability.ASSESSMENT),
+    ],
+)
+async def test_shell_start_alias_retains_originating_capability(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    tool_id: str,
+    expected_capability: ShellCapability,
+) -> None:
+    service = _FakeShellSessionService(
+        ShellSessionUpdate(
+            success=True,
+            status="success",
+            process_status=ShellProcessStatus.RUNNING,
+            session_id="shs_capability123",
+            stdout="ready\n",
+            stdin_available=True,
+            duration_ms=10,
+        )
+    )
+    monkeypatch.setattr(
+        shell_session_port,
+        "_shell_session_service_resolver",
+        lambda: service,
+    )
+
+    result = await GraphToolExecutor(executor=_StubExecutor()).execute_tool(
+        {
+            "tool": tool_id,
+            "parameters": {"command": "printf ready"},
+            "tool_call_id": "call-capability",
+            "timeout_plan": {
+                "tool_id": tool_id,
+                "deadline_seconds": 5.0,
+                "native_timeout_seconds": 5,
+                "normalized_parameters": {"command": "printf ready"},
+                "source": "test",
+            },
+        },
+        context=_shell_context(tmp_path),
+    )
+
+    assert service.capability is expected_capability
+    assert result["metadata"]["runtime_session"]["originating_capability"] == (
+        expected_capability.value
+    )
+
+
+@pytest.mark.asyncio
 async def test_shell_exec_nonzero_completion_maps_failed_without_fake_exit_code(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
@@ -497,6 +562,7 @@ async def test_shell_write_stdin_builds_write_request(
             duration_ms=20,
         )
     )
+    service.capability = ShellCapability.UTILITY
     monkeypatch.setattr(
         shell_session_port,
         "_shell_session_service_resolver",
@@ -525,6 +591,7 @@ async def test_shell_write_stdin_builds_write_request(
 
     assert result["success"] is True
     assert result["process_status"] == "running"
+    assert result["metadata"]["runtime_session"]["originating_capability"] == "utility"
     assert service.write_calls
     _, write_request = service.write_calls[0]
     assert write_request == ShellWriteRequest(session_id="shs_public123", chars="yes\n")

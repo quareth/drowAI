@@ -116,6 +116,14 @@ def test_shell_script_schema_keeps_legacy_fields() -> None:
         "transport",
         "strict_mode",
     }
+    assert ShellScriptArgs(script="echo test").transport is None
+    assert (
+        ShellScriptArgs(script="echo test", transport="file-comm").transport
+        == "file-comm"
+    )
+    assert ShellScriptArgs(script="echo test", transport="pty").transport == "pty"
+    with pytest.raises(ValidationError):
+        ShellScriptArgs(script="echo test", transport="direct")
 
 
 def test_shell_exec_direct_run_fails_closed_without_host_subprocess(

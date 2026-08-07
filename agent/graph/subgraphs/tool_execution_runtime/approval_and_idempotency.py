@@ -22,10 +22,7 @@ from agent.tool_runtime.batch.types import (
     ToolCallResult,
     ToolCallStatus,
 )
-from agent.tool_runtime.backend_tool_policy import (
-    SHELL_EXEC_TOOL_ID,
-    SHELL_WRITE_STDIN_TOOL_ID,
-)
+from runtime_shared.shell_capabilities import SHELL_SESSION_TOOL_IDS
 from runtime_shared.durable_secret_masking import mask_durable_secrets
 
 from ...infrastructure.state_models import GraphRuntimeContext
@@ -58,9 +55,7 @@ _DISPATCH_CACHE_SENSITIVE_KEY_PARTS = frozenset(
         "chars",
     }
 )
-_DISPATCH_CACHE_SHELL_TOOL_IDS = frozenset(
-    {SHELL_EXEC_TOOL_ID, SHELL_WRITE_STDIN_TOOL_ID}
-)
+_DISPATCH_CACHE_SHELL_TOOL_IDS = SHELL_SESSION_TOOL_IDS
 _PUBLIC_SHELL_SESSION_ID_PREFIX = "shs_"
 _DISPATCH_CACHE_SECRET_PLACEHOLDER = "<DURABLE_SECRET_MASK:secret>"
 

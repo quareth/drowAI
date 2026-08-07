@@ -371,6 +371,115 @@ def test_transition_runtime_job_duplicate_ack_replay_is_idempotent_before_runtim
     assert replay_ack.result_json == {"ack": "accepted-replay"}
 
 
+def test_runner_result_terminalizes_dispatching_job_and_late_delivery_is_a_noop() -> None:
+    db = _build_session()
+    tenant_one, _tenant_two, user = _seed_tenant_context(db)
+    task_one = _seed_task(db, tenant=tenant_one, user=user, suffix="fast-result")
+    runner_one = _seed_runner(db, tenant=tenant_one, suffix="fast-result")
+
+    service = RuntimeJobService(db)
+    job = service.create_runtime_job(
+        RuntimeJobCreateRequest(
+            tenant_id=tenant_one.id,
+            task_id=task_one.id,
+            job_type="runtime.status",
+            idempotency_key="fast-result-transition",
+        )
+    )
+    service.assign_runtime_job(
+        tenant_id=tenant_one.id,
+        runtime_job_id=job.id,
+        runner_id=runner_one.id,
+    )
+    service.advance_runtime_job_delivery(
+        tenant_id=tenant_one.id,
+        runtime_job_id=job.id,
+        next_status="dispatching",
+    )
+
+    completed = service.complete_runtime_job_from_result(
+        tenant_id=tenant_one.id,
+        runtime_job_id=job.id,
+        next_status="succeeded",
+        result_json={"source": "runner_event", "result": {"job_status": "running"}},
+    )
+    late_delivery = service.advance_runtime_job_delivery(
+        tenant_id=tenant_one.id,
+        runtime_job_id=job.id,
+        next_status="dispatched",
+        result_json={"source": "dispatcher"},
+    )
+    late_ack = service.advance_runtime_job_delivery(
+        tenant_id=tenant_one.id,
+        runtime_job_id=job.id,
+        next_status="acknowledged",
+        result_json={"source": "runner_ack"},
+    )
+    duplicate_result = service.complete_runtime_job_from_result(
+        tenant_id=tenant_one.id,
+        runtime_job_id=job.id,
+        next_status="succeeded",
+        result_json={"source": "duplicate"},
+    )
+    db.commit()
+
+    assert completed.status == "succeeded"
+    assert late_delivery.status == "succeeded"
+    assert late_ack.status == "succeeded"
+    assert duplicate_result.status == "succeeded"
+    assert duplicate_result.result_json == {
+        "source": "runner_event",
+        "result": {"job_status": "running"},
+    }
+
+    with pytest.raises(RuntimeJobServiceError) as conflict:
+        service.complete_runtime_job_from_result(
+            tenant_id=tenant_one.id,
+            runtime_job_id=job.id,
+            next_status="failed",
+        )
+    assert conflict.value.error_code == "RUNTIME_JOB_TRANSITION_STALE"
+
+
+def test_delivery_ack_can_skip_intermediate_transport_observations() -> None:
+    db = _build_session()
+    tenant_one, _tenant_two, user = _seed_tenant_context(db)
+    task_one = _seed_task(db, tenant=tenant_one, user=user, suffix="fast-ack")
+    runner_one = _seed_runner(db, tenant=tenant_one, suffix="fast-ack")
+
+    service = RuntimeJobService(db)
+    job = service.create_runtime_job(
+        RuntimeJobCreateRequest(
+            tenant_id=tenant_one.id,
+            task_id=task_one.id,
+            job_type="runtime.status",
+            idempotency_key="fast-ack-transition",
+        )
+    )
+    service.assign_runtime_job(
+        tenant_id=tenant_one.id,
+        runtime_job_id=job.id,
+        runner_id=runner_one.id,
+    )
+
+    acknowledged = service.advance_runtime_job_delivery(
+        tenant_id=tenant_one.id,
+        runtime_job_id=job.id,
+        next_status="acknowledged",
+        result_json={"source": "runner_ack"},
+    )
+    stale_dispatch = service.advance_runtime_job_delivery(
+        tenant_id=tenant_one.id,
+        runtime_job_id=job.id,
+        next_status="dispatched",
+    )
+    db.commit()
+
+    assert acknowledged.status == "acknowledged"
+    assert stale_dispatch.status == "acknowledged"
+    assert stale_dispatch.result_json == {"source": "runner_ack"}
+
+
 def test_transition_runtime_job_duplicate_runtime_started_cannot_reopen_succeeded_task_start_job() -> None:
     db = _build_session()
     tenant_one, _tenant_two, user = _seed_tenant_context(db)

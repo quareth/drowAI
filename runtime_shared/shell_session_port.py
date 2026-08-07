@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Callable, Protocol
 
+from runtime_shared.shell_capabilities import ShellCapability
+
 from runtime_shared.shell_session_contracts import (
     ShellExecRequest,
     ShellSessionErrorCode,
@@ -26,7 +28,15 @@ class ShellSessionServicePort(Protocol):
         *,
         identity: ShellSessionIdentity,
         request: ShellExecRequest,
+        capability: ShellCapability = ShellCapability.ASSESSMENT,
     ) -> ShellSessionUpdate: ...
+
+    async def get_session_capability(
+        self,
+        *,
+        identity: ShellSessionIdentity,
+        public_session_id: str,
+    ) -> ShellCapability | None: ...
 
     async def write_stdin(
         self,
@@ -59,8 +69,17 @@ class _UnavailableShellSessionService:
         *,
         identity: ShellSessionIdentity,
         request: ShellExecRequest,
+        capability: ShellCapability = ShellCapability.ASSESSMENT,
     ) -> ShellSessionUpdate:
         return _runtime_unavailable_update()
+
+    async def get_session_capability(
+        self,
+        *,
+        identity: ShellSessionIdentity,
+        public_session_id: str,
+    ) -> ShellCapability | None:
+        return None
 
     async def write_stdin(
         self,

@@ -119,6 +119,18 @@ def test_tool_catalog_entries_shell_exec_runbook_shape():
     assert len(description) <= 200
 
 
+def test_shell_start_aliases_share_one_concrete_tool_and_schema() -> None:
+    utility = get_tool("shell.utility")
+    assessment = get_tool("shell.assessment")
+    internal = get_tool("shell.exec")
+
+    assert utility is assessment is internal
+    assert utility.args_model is assessment.args_model is internal.args_model
+    assert {"shell.utility", "shell.assessment", "shell.exec"}.issubset(
+        available_tools()
+    )
+
+
 def test_tool_catalog_entries_shell_write_stdin_runbook_shape():
     from agent.tools.enhanced_tool_metadata import build_tool_catalog_entries
 
@@ -193,11 +205,13 @@ def test_tool_catalog_entries_hides_tools_removed_from_llm_catalogs():
     ]:
         assert is_tool_hidden_from_catalog(tool_id), tool_id
 
-    assert is_tool_visible_in_catalog("shell.exec")
+    assert is_tool_hidden_from_catalog("shell.exec")
+    assert is_tool_visible_in_catalog("shell.utility")
+    assert is_tool_visible_in_catalog("shell.assessment")
     assert is_tool_visible_in_catalog("shell.write_stdin")
     assert is_tool_visible_in_catalog("exploitation_tools.metasploit.run_exploit")
     assert is_tool_hidden_from_catalog("shell.script")
-    assert not is_tool_hidden_from_catalog("filesystem.grep")
+    assert is_tool_hidden_from_catalog("filesystem.grep")
 
 
 def test_available_tools_excludes_netdiscover_from_catalog():

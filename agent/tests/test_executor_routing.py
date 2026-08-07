@@ -578,8 +578,10 @@ class TestRoutingPriority:
             assert call_kwargs["timeout_plan"].deadline_seconds == 600
     
     @pytest.mark.asyncio
+    @patch.dict(os.environ, {"ENABLE_PTY_EXECUTION": "false"})
     async def test_filecomm_used_when_no_pty_requested(self, executor):
-        """Legacy shell.script uses file-comm when PTY is not selected."""
+        """Legacy shell.script uses file-comm when PTY execution is disabled."""
+        executor._pty_enabled_cached = None
         with patch.object(executor, '_execute_tool_via_comm') as mock_comm:
             mock_comm.return_value = ExecutionResult(
                 success=True,
