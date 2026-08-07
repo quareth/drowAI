@@ -206,7 +206,6 @@ def _validate_execution_candidate(
     tool_id: str,
     parameters: Dict[str, Any],
     get_tool_fn: Callable[[str], Any],
-    max_shell_command_chars: int,
     metric_hook: Optional[Callable[[str], None]],
     logger: Any,
 ) -> ToolParameterValidationResult:
@@ -240,7 +239,6 @@ def _validate_execution_candidate(
             parameters,
             get_tool_fn=get_tool_fn,
             generate_fix_suggestion_fn=generate_fix_suggestion,
-            max_command_chars=max_shell_command_chars,
             metric_hook=metric_hook,
             logger=logger,
         )
@@ -277,7 +275,6 @@ def _validate_planner_candidate(
     parameters: Dict[str, Any],
     action_target: Optional[str],
     get_tool_fn: Callable[[str], Any],
-    max_shell_command_chars: int,
     metric_hook: Optional[Callable[[str], None]],
     logger: Any,
 ) -> ToolParameterValidationResult:
@@ -334,7 +331,6 @@ def _validate_planner_candidate(
             tool_id=tool_id,
             parameters=_sanitize_parameters(compiled_parameters),
             get_tool_fn=get_tool_fn,
-            max_shell_command_chars=max_shell_command_chars,
             metric_hook=metric_hook,
             logger=logger,
         )
@@ -356,7 +352,6 @@ def validate_tool_parameters(
     parse_error: Optional[str] = None,
     raw_arguments: str = "",
     get_tool_fn: Callable[[str], Any] = get_tool,
-    max_shell_command_chars: int = 320,
     metric_hook: Optional[Callable[[str], None]] = None,
     logger: Any = None,
 ) -> ToolParameterValidationResult:
@@ -431,7 +426,6 @@ def validate_tool_parameters(
                 parameters=parameters,
                 action_target=action_target,
                 get_tool_fn=get_tool_fn,
-                max_shell_command_chars=max_shell_command_chars,
                 metric_hook=metric_hook,
                 logger=logger,
             )
@@ -439,7 +433,6 @@ def validate_tool_parameters(
             tool_id=tool_id,
             parameters=parameters,
             get_tool_fn=get_tool_fn,
-            max_shell_command_chars=max_shell_command_chars,
             metric_hook=metric_hook,
             logger=logger,
         )

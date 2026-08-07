@@ -406,14 +406,12 @@ def split_shell_executable_segments(command_line: str) -> List[str]:
 def validate_shell_exec_command(
     command: str,
     *,
-    max_command_chars: int = 320,
     policy: Optional[CommandPolicy] = None,
     metric_hook: Optional[Callable[[str], None]] = None,
 ) -> List[Dict[str, str]]:
     """Validate shell command text and return error descriptors."""
     validation_errors: List[Dict[str, str]] = []
     command_text = str(command or "")
-    _ = max_command_chars
 
     if policy is None:
         policy = CommandPolicy()
@@ -483,7 +481,6 @@ def validate_shell_tool_parameters(
     *,
     get_tool_fn: Callable[[str], object],
     generate_fix_suggestion_fn: Callable[[dict], str],
-    max_command_chars: int = 320,
     metric_hook: Optional[Callable[[str], None]] = None,
     logger: object = None,
 ) -> List[Dict[str, str]]:
@@ -510,7 +507,6 @@ def validate_shell_tool_parameters(
         command = str(getattr(args, command_field, "") or "")
         validation_errors = validate_shell_exec_command(
             command,
-            max_command_chars=max_command_chars,
             metric_hook=metric_hook,
         )
         if validation_errors and logger and hasattr(logger, "log_operation"):

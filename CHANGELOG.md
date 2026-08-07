@@ -22,6 +22,8 @@ The format is based on
 - Interactive shell policy now reserves hard blocks for obvious environment
   destruction, shutdown, resource exhaustion, and container escape while
   permitting pentesting workflows in the default permissive mode.
+- The inert `SHELL_EXEC_MAX_COMMAND_CHARS` agent setting has been retired;
+  command length alone remains accepted and no replacement limit was added.
 
 ### Fixed
 

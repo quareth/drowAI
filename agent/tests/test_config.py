@@ -30,14 +30,13 @@ def test_load_from_env_defaults(monkeypatch):
     assert cfg.max_concurrent_scans == 3
     assert cfg.llm_tool_selection_timeout == LLM_TIMEOUT_PLANNER_TOOL_SELECTION_SEC == 120
     assert cfg.tool_call_timeout == PLANNER_TOOL_CALL_TIMEOUT_SEC == LLM_TIMEOUT_PLANNER_PARAMETER_RESOLUTION_SEC == 120
-    assert cfg.shell_exec_max_command_chars == 320
 
 
-def test_load_from_env_shell_exec_length_override(monkeypatch):
+def test_load_from_env_ignores_retired_shell_exec_length_setting(monkeypatch):
     monkeypatch.setenv("OPENAI_API_KEY", "key")
     monkeypatch.setenv("SHELL_EXEC_MAX_COMMAND_CHARS", "420")
     cfg = AgentConfig.load_from_env()
-    assert cfg.shell_exec_max_command_chars == 420
+    assert not hasattr(cfg, "shell_exec_max_command_chars")
 
 
 def test_load_from_env_planner_tool_call_timeout_override(monkeypatch):

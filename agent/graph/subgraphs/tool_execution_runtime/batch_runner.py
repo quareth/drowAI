@@ -132,9 +132,6 @@ def validate_batch(
         ),
         "candidate_tool_ids": candidate_tool_ids,
         "action_target": _action_target(facts),
-        "max_shell_command_chars": int(
-            getattr(config, "shell_exec_max_command_chars", 320) or 320
-        ),
         "high_risk_tool_prefixes": ("exploitation_tools.",),
     }
     available_tool_ids = _available_tool_ids()
