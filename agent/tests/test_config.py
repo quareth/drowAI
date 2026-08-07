@@ -32,9 +32,13 @@ def test_load_from_env_defaults(monkeypatch):
     assert cfg.tool_call_timeout == PLANNER_TOOL_CALL_TIMEOUT_SEC == LLM_TIMEOUT_PLANNER_PARAMETER_RESOLUTION_SEC == 120
 
 
-def test_load_from_env_ignores_retired_shell_exec_length_setting(monkeypatch):
+@pytest.mark.parametrize("retired_value", ["420", "not-a-number"])
+def test_load_from_env_ignores_retired_shell_exec_length_setting(
+    monkeypatch,
+    retired_value,
+):
     monkeypatch.setenv("OPENAI_API_KEY", "key")
-    monkeypatch.setenv("SHELL_EXEC_MAX_COMMAND_CHARS", "420")
+    monkeypatch.setenv("SHELL_EXEC_MAX_COMMAND_CHARS", retired_value)
     cfg = AgentConfig.load_from_env()
     assert not hasattr(cfg, "shell_exec_max_command_chars")
 

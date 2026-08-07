@@ -71,8 +71,9 @@ argument bounds.
 
 - Traced the wired configuration, executor, shared parameter-validation, shell
   policy, batch-runner, and batch-validator paths.
-- Locked the focused pre-change baseline at 68 passing tests, including explicit
-  long-command acceptance and existing shell policy rejection coverage.
+- Locked the focused pre-change baseline at 115 passing tests and one unchanged
+  Pydantic V1 validator warning, including explicit long-command acceptance and
+  existing shell policy rejection coverage.
 
 ### Phase 2 — Atomic retirement
 
@@ -80,16 +81,29 @@ argument bounds.
   and all wired forwarding in one focused change.
 - Preserved all validator bodies and policy behavior apart from removal of the
   already ignored arguments.
+- Re-ran the focused suite after the full cutover: 115 passed with the same
+  unchanged Pydantic V1 validator warning.
 
-### Phase 3 — Review & Cleanup
+### Phase 3 — Contract tests and operator documentation
 
-- Re-ran the identical focused suite: 68 passed, matching the baseline.
-- Confirmed the retired names remain only in documentation and the regression
-  test that proves the old environment variable is ignored; no runtime
-  validation or configuration path references them.
-- Confirmed no duplicate owner, fallback, compatibility shim, new flag, unused
-  import, or new module was introduced.
-- Confirmed the diff passes whitespace validation.
+- Added explicit regression coverage showing both numeric and malformed
+  `SHELL_EXEC_MAX_COMMAND_CHARS` values are ignored after retirement.
+- Re-ran the focused suite with the added malformed-value regression: 116 passed
+  with the same unchanged Pydantic V1 validator warning.
+- Recorded the operator-visible retirement under the `[Unreleased]` changelog:
+  command length alone remains accepted and no replacement limit was added.
+
+### Phase 4 — Review & Cleanup
+
+- Ran the residual-reference gate and confirmed retired spellings remain only
+  in the explicit regression test, changelog, proposal, and implementation
+  guide.
+- Re-ran the final focused suite: 116 passed with the same unchanged Pydantic
+  V1 validator warning.
+- Confirmed `git diff --check` passes and no runtime configuration,
+  validation, schema, routing, provider, approval, timeout, output, result,
+  release metadata, fallback, shim, alias, re-export, new flag, or replacement
+  limit change remains outside the retirement scope.
 
 ## Non-goals
 
