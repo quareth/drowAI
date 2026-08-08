@@ -1058,10 +1058,14 @@ def project_trace_history_and_outbound_events(
         outcome.result["approval_metadata"] = dict(approval_result)
 
     if retain_durable_output:
+        durable_execution_args = _mask_durable_mapping(
+            dict(outcome.parameters),
+            source="tool_execution_trace_args",
+        )
         interactive.trace.executed_tools.append(
             tool_execution_record_cls(
                 tool_id=str(outcome.tool_id),
-                args=dict(outcome.parameters),
+                args=durable_execution_args,
                 status="success" if outcome.result.get("success") else "error",
                 observation=observation_text,
                 reasoning=execution_reasoning,

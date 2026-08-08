@@ -585,8 +585,9 @@ def test_apply_result_state_projection_sets_clears_and_counts_validation_errors(
     assert increments == ["langgraph_tool_validation_errors"]
 
 
-def test_project_trace_history_masks_dispatch_cache_without_masking_runtime_event() -> None:
+def test_project_trace_history_masks_checkpoint_and_cache_without_masking_runtime_event() -> None:
     sentinel = "PocSecret-DurableMasking-Sentinel-cache-1"
+    public_session_id = "shs_trace_secret_123"
     facts = _Facts(metadata={})
     interactive = SimpleNamespace(
         trace=SimpleNamespace(reasoning=[], observations=[], executed_tools=[]),
@@ -594,7 +595,7 @@ def test_project_trace_history_masks_dispatch_cache_without_masking_runtime_even
     emitted_events: list[Mapping[str, Any]] = []
     compact_result = {
         "schema_version": "2.0",
-        "tool": "shell.exec",
+        "tool": "shell.write_stdin",
         "status": "success",
         "success": True,
         "process_status": "running",
@@ -602,8 +603,8 @@ def test_project_trace_history_masks_dispatch_cache_without_masking_runtime_even
         "key_findings": [f"Authorization: Bearer {sentinel}"],
     }
     outcome = SimpleNamespace(
-        tool_id="shell.exec",
-        parameters={"password": sentinel},
+        tool_id="shell.write_stdin",
+        parameters={"session_id": public_session_id, "chars": sentinel},
         result={"success": True, "exit_code": None, "process_status": "running"},
         summary=f"captured password={sentinel}",
         reasoning=[f"reasoned over {sentinel}"],
@@ -636,6 +637,16 @@ def test_project_trace_history_masks_dispatch_cache_without_masking_runtime_even
         tool_dispatch_cache_key="tool_dispatch_cache",
         diag_info_fn=lambda *_args, **_kwargs: None,
         logger=SimpleNamespace(info=lambda *_args, **_kwargs: None),
+        persistence_decision=resolve_output_persistence(
+            "shell.write_stdin",
+            {
+                "metadata": {
+                    "runtime_session": {
+                        "originating_capability": "assessment",
+                    }
+                }
+            },
+        ),
     )
 
     assert sentinel in observation_text
@@ -643,6 +654,9 @@ def test_project_trace_history_masks_dispatch_cache_without_masking_runtime_even
     assert sentinel in str(emitted_events[0]["compact_tool_result"])
     assert emitted_events[0]["status"] == "running"
     assert emitted_events[0]["process_status"] == "running"
+    serialized_trace_args = str(interactive.trace.executed_tools[0].args)
+    assert sentinel not in serialized_trace_args
+    assert "<DURABLE_SECRET_MASK:" in serialized_trace_args
 
     cache_entry = facts.metadata["tool_dispatch_cache"]["tc-cache-secret"]
     serialized_cache = str(cache_entry)

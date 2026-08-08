@@ -37,8 +37,9 @@ The format is based on
   buffer truncation instead of leaving completed commands running until timeout.
 - Parallel tool batches now serialize operations targeting the same interactive
   shell session while preserving concurrency across independent sessions.
-- Durable interactive shell history now masks stdin values before persistence,
-  preventing credentials entered during assessment sessions from reaching the database.
+- Durable interactive shell history now masks stdin values before database or
+  graph-checkpoint persistence, preventing credentials entered during assessment
+  sessions from reaching either durable store.
 - Fallback tool planning now receives every visible mission tool instead of
   collapsing to only universal shell tools; the obsolete `MAX_TOOLS_EXPOSED`
   setting is now ignored.
