@@ -36,6 +36,7 @@ from backend.services.runner_control.channel.auth import RunnerChannelAuthContex
 from backend.services.runner_control.channel.terminal_cleanup import (
     _cleanup_runner_terminal_state,
 )
+import backend.services.runner_control.channel.lifecycle as channel_lifecycle
 from backend.services.runner_control.channel_manager import RunnerChannelManager
 from backend.services.runner_control.credentials import RunnerCredentialService
 from backend.services.terminal.manager import terminal_session_manager
@@ -690,6 +691,40 @@ def test_runner_channel_manager_close_session_marks_runner_offline_when_last_lea
     event_types = [event["event_type"] for event in audit_events]
     assert "runner.disconnected" in event_types
     assert "runner.offline" in event_types
+
+
+def test_superseded_channel_close_preserves_replacement_terminal_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Closing an overlapped old socket must not clean the current runner's sessions."""
+    db = _build_session()
+    tenant, runner = _seed_runner(db)
+    manager = RunnerChannelManager(db, lease_ttl_seconds=30)
+    credential_id = _issue_credential_id(db, tenant_id=tenant.id, runner_id=runner.id)
+    auth = RunnerChannelAuthContext(
+        tenant_id=tenant.id,
+        runner_id=runner.id,
+        credential_id=credential_id,
+        allowed_protocol_versions=("runner_control.v1",),
+    )
+    cleanup_calls: list[uuid.UUID] = []
+    monkeypatch.setattr(
+        channel_lifecycle,
+        "_cleanup_runner_terminal_state",
+        lambda *, db, tenant_id, runner_id: cleanup_calls.append(runner_id),
+    )
+
+    old_session = manager.open_session(auth)
+    new_session = manager.open_session(auth)
+    manager.close_session(old_session)
+
+    assert cleanup_calls == []
+    current_connection = db.execute(
+        select(RunnerConnection).where(
+            RunnerConnection.connection_id == new_session.connection_id,
+        )
+    ).scalar_one()
+    assert current_connection.status == "active"
 
 
 def test_runner_channel_manager_close_session_tolerates_deleted_runner() -> None:

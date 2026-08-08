@@ -7,13 +7,15 @@ codes for managed runner startup, health, runtime-info, and cleanup operations.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import fcntl
 import json
 import logging
 import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Iterator, Sequence
 
 from drowai_runner.cleanup import RunnerCleanupService
 from drowai_runner.configure import configure_runner_toml
@@ -47,6 +49,32 @@ EXIT_CONFIGURE_FAILED = 5
 EXIT_CLOUD_RUN_FAILED = 6
 EXIT_CLEANUP_FAILED = 7
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _runner_process_lock(runner_root: Path) -> Iterator[None]:
+    """Prevent two runner processes from sharing one local runtime root."""
+    lock_path = runner_root / "control" / "runner-process.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_file = lock_path.open("a+", encoding="utf-8")
+    try:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RunnerCloudClientError(
+                error_code="RUNNER_ALREADY_RUNNING",
+                message=f"Another runner process already owns runner_root `{runner_root}`.",
+            ) from exc
+        lock_file.seek(0)
+        lock_file.truncate()
+        lock_file.write(str(os.getpid()))
+        lock_file.flush()
+        yield
+    finally:
+        try:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        finally:
+            lock_file.close()
 
 
 @dataclass(frozen=True, slots=True)
@@ -464,8 +492,9 @@ def runtime_info_command(config: RunnerConfig) -> int:
 def managed_run_command(config: RunnerConfig) -> int:
     """Run managed runner control-plane loop with deterministic error mapping."""
     try:
-        logger.info("runner.cloud.start %s", _masked_runner_log(config))
-        return run_cloud_mode(config)
+        with _runner_process_lock(config.runner_root):
+            logger.info("runner.cloud.start %s", _masked_runner_log(config))
+            return run_cloud_mode(config)
     except RunnerCloudClientError as exc:
         logger.error(
             "runner.cloud.failed error_code=%s message=%s",

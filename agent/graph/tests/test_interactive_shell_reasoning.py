@@ -75,6 +75,63 @@ class _PlannerContinuationLLM:
         )
 
 
+def test_running_shell_constrains_next_planner_step_to_session_continuation() -> None:
+    """A yielded session must not allow the planner to start a replacement shell."""
+    public_session_id = "shs_main_continuation_123"
+    metadata = {
+        "selected_categories": ["utility"],
+        "last_tool_result": {
+            "tool": "shell.utility",
+            "status": "success",
+            "process_status": "running",
+            "session_id": public_session_id,
+            "parameters": {"command": "sleep 1; printf done"},
+        },
+        "last_tool_result_compact": {
+            "tool": "shell.utility",
+            "status": "success",
+            "process_status": "running",
+            "session_id": public_session_id,
+            "summary": "Command is still running.",
+        },
+    }
+    interactive = InteractiveState(
+        facts=FactsState(
+            task_id=42,
+            message="Complete the current action.",
+            current_goal="Wait for the command result.",
+            metadata=metadata,
+        ),
+        trace=TraceState(),
+    )
+    request = ToolExecutionRequest(
+        capability="deep_reasoning",
+        targets=[],
+        message="Complete the current action.",
+        task_id=42,
+        metadata=interactive.facts.metadata_copy(),
+        workspace_path="/workspace",
+    )
+
+    context = build_planner_context(
+        interactive,
+        request,
+        get_category_filtered_catalog=lambda _categories, _config: [
+            "shell.utility",
+            "shell.write_stdin",
+        ],
+        get_full_tool_catalog_for_planner=lambda _config: [
+            "shell.utility",
+            "shell.write_stdin",
+        ],
+        working_memory_summary_max_chars=2000,
+    )
+
+    assert context["resolved_tools"] == ["shell.write_stdin"]
+    assert public_session_id in context["next_tool_hint"]
+    assert context["tool_intent"]["session_id"] == public_session_id
+
+
 @pytest.mark.asyncio
 async def test_main_agent_planner_commits_shell_write_stdin_for_running_shell() -> None:
     public_session_id = "shs_main_continuation_123"

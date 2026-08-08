@@ -35,6 +35,7 @@ ChannelSender = Callable[[RunnerEnvelope], Awaitable[None]]
 
 @dataclass(slots=True)
 class _ChannelBinding:
+    connection_id: str
     sender: ChannelSender
 
 
@@ -194,21 +195,48 @@ class RunnerTerminalStreamRegistry:
         *,
         tenant_id: int,
         runner_id: UUID,
+        connection_id: str = "legacy",
         sender: ChannelSender,
     ) -> None:
         """Register the active websocket sender for one runner channel."""
         with self._lock:
-            self._channels[(int(tenant_id), runner_id)] = _ChannelBinding(sender=sender)
+            self._channels[(int(tenant_id), runner_id)] = _ChannelBinding(
+                connection_id=str(connection_id).strip(),
+                sender=sender,
+            )
 
     def has_channel(self, *, tenant_id: int, runner_id: UUID) -> bool:
         """Return whether the runner has an active terminal stream channel."""
         with self._lock:
             return (int(tenant_id), runner_id) in self._channels
 
-    def unregister_channel(self, *, tenant_id: int, runner_id: UUID) -> None:
-        """Drop channel and close all stream buffers for the runner."""
+    def is_current_channel(
+        self,
+        *,
+        tenant_id: int,
+        runner_id: UUID,
+        connection_id: str,
+    ) -> bool:
+        """Return whether a connection still owns the runner stream route."""
+        with self._lock:
+            binding = self._channels.get((int(tenant_id), runner_id))
+            return binding is not None and binding.connection_id == str(connection_id).strip()
+
+    def unregister_channel(
+        self,
+        *,
+        tenant_id: int,
+        runner_id: UUID,
+        connection_id: str | None = None,
+    ) -> None:
+        """Drop a matching channel and close its runner stream buffers."""
         key = (int(tenant_id), runner_id)
         with self._lock:
+            binding = self._channels.get(key)
+            if binding is None:
+                return
+            if connection_id is not None and binding.connection_id != str(connection_id).strip():
+                return
             self._channels.pop(key, None)
             stream_keys = [stream_key for stream_key in self._buffers if stream_key[:2] == key]
             buffers = [self._buffers.pop(stream_key) for stream_key in stream_keys]

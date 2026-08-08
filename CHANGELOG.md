@@ -27,6 +27,10 @@ The format is based on
 
 ### Fixed
 
+- Yielded shell commands now remain connected to their existing session during
+  agent continuation, and overlapping runner reconnects no longer split terminal
+  creation, input, and output across different runner channels. A second runner
+  process is also rejected when it tries to share the same runner root.
 - Managed-runner terminal frames now use one buffered-reader delivery path,
   preventing duplicate live output and replay history.
 - Recursive root and home removal remains blocked when invoked through transparent

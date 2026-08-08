@@ -398,14 +398,20 @@ class TerminalSessionManager:
         try:
             while session.is_active and self._session_provider_ref(session) is not None:
                 try:
-                    chunk = await self.read_output(session.session_id, 4096, timeout=0.5)
+                    result = await self.read_output_result(
+                        session.session_id,
+                        4096,
+                        timeout=0.5,
+                    )
                 except Exception:
                     await asyncio.sleep(0.01)
                     continue
-                if not chunk:
-                    await asyncio.sleep(0.01)
+                if not result.ok or result.eof:
+                    session.is_active = False
+                    return
+                if not result.data:
                     continue
-                await self._handle_output_chunk(session, chunk)
+                await self._handle_output_chunk(session, result.data)
         except asyncio.CancelledError:
             pass
         except Exception as exc:

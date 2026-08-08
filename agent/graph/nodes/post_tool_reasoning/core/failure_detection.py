@@ -29,6 +29,7 @@ class FailureContext:
     stderr: str
     summary: str
     key_findings: list
+    process_status: Optional[str] = None
     
     
 def detect_failure(context: FailureContext) -> Tuple[bool, Optional[str]]:
@@ -45,6 +46,9 @@ def detect_failure(context: FailureContext) -> Tuple[bool, Optional[str]]:
         - failure_detected: True if failure was detected
         - failure_category: Classification string or None if no failure
     """
+    if str(context.process_status or "").strip().lower() == "running":
+        return False, None
+
     # Primary failure indicators (aligned with original logic)
     # Note: success_flag comes from last_tool_result.success OR synthesized_output.success
     failure_conditions = [
@@ -172,6 +176,8 @@ def build_failure_context_from_state(state: InteractiveState) -> FailureContext:
         stderr=stderr_value,
         summary=str(compact_result.get("summary") or synthesized_output.get("summary") or "").strip(),
         key_findings=compact_result.get("key_findings") or synthesized_output.get("key_findings") or [],
+        process_status=compact_result.get("process_status")
+        or last_tool_result.get("process_status"),
     )
 
 

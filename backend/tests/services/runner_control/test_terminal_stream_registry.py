@@ -258,3 +258,41 @@ def test_terminal_stream_registry_sends_non_durable_envelope() -> None:
     assert sent == [envelope]
     registry.unregister_channel(tenant_id=1, runner_id=runner_id)
     assert not registry.has_channel(tenant_id=1, runner_id=runner_id)
+
+
+def test_stale_channel_disconnect_does_not_remove_replacement_channel() -> None:
+    """An overlapping runner reconnect must not tear down the newer stream route."""
+    registry = RunnerTerminalStreamRegistry()
+    runner_id = uuid4()
+
+    async def _old_send(_envelope: RunnerEnvelope) -> None:
+        return None
+
+    async def _new_send(_envelope: RunnerEnvelope) -> None:
+        return None
+
+    registry.register_channel(
+        tenant_id=1,
+        runner_id=runner_id,
+        connection_id="old-connection",
+        sender=_old_send,
+    )
+    registry.register_channel(
+        tenant_id=1,
+        runner_id=runner_id,
+        connection_id="new-connection",
+        sender=_new_send,
+    )
+
+    registry.unregister_channel(
+        tenant_id=1,
+        runner_id=runner_id,
+        connection_id="old-connection",
+    )
+
+    assert registry.has_channel(tenant_id=1, runner_id=runner_id)
+    assert registry.is_current_channel(
+        tenant_id=1,
+        runner_id=runner_id,
+        connection_id="new-connection",
+    )
