@@ -521,6 +521,81 @@ def test_utility_projection_retains_only_operational_execution_record() -> None:
     assert sentinel not in str(facts.metadata)
 
 
+def test_running_utility_projection_retains_only_active_execution_control() -> None:
+    sentinel = "TRANSIENT_RUNNING_OUTPUT_SENTINEL"
+    public_session_id = "shs_runtime_control_123"
+    facts = _Facts(
+        metadata={
+            "workspace_id": "task-utility",
+            "current_turn_runtime_controls": {
+                "turn_sequence": 12,
+                "unavailable_tools": ["missing.tool"],
+            },
+        }
+    )
+
+    apply_result_state_projection(
+        interactive=SimpleNamespace(trace=SimpleNamespace(usage_records=[])),
+        facts=facts,
+        outcome=SimpleNamespace(
+            tool_id="shell.utility",
+            parameters={"command": "sleep 30; printf done"},
+            result={
+                "success": True,
+                "status": "success",
+                "process_status": "running",
+                "session_id": public_session_id,
+                "stdin_available": True,
+                "stdout": sentinel,
+                "exit_code": None,
+            },
+            summary=sentinel,
+            duration=10.0,
+        ),
+        projection={
+            "resolved_tool_id": "shell.utility",
+            "compact_result_dict": {
+                "summary": sentinel,
+                "process_status": "running",
+                "session_id": public_session_id,
+                "stdin_available": True,
+            },
+            "result_for_metadata": {"stdout": sentinel},
+            "graph_metadata": {},
+            "action_record": {"params": {"command": "sleep 30; printf done"}},
+            "artifact_refs_for_memory": [],
+            "compression_usage_record": None,
+            "persistence_decision": resolve_output_persistence("shell.utility"),
+        },
+        execution_id="exec-running-utility",
+        tool_call_id="tc-running-utility",
+        turn_sequence=12,
+        compact_observation_text_fn=lambda compact, fallback=None: str(
+            compact.get("summary") or fallback or ""
+        ),
+        refresh_trace_scratchpad_fn=lambda _interactive: None,
+        memory_reduce_tool_result_fn=lambda **_kwargs: None,
+        logger=SimpleNamespace(
+            warning=lambda *_args, **_kwargs: None,
+            debug=lambda *_args, **_kwargs: None,
+        ),
+        safe_inc_fn=lambda _name: None,
+    )
+
+    controls = facts.metadata["current_turn_runtime_controls"]
+    assert controls["unavailable_tools"] == ["missing.tool"]
+    assert controls["active_execution"] == {
+        "originating_tool_id": "shell.utility",
+        "continuation_tool_id": "shell.write_stdin",
+        "process_status": "running",
+        "session_id": public_session_id,
+        "stdin_available": True,
+    }
+    assert "last_tool_result" not in facts.metadata
+    assert "last_tool_result_compact" not in facts.metadata
+    assert sentinel not in str(facts.metadata)
+
+
 def test_apply_result_state_projection_sets_clears_and_counts_validation_errors() -> None:
     sentinel = "PocSecret-DurableMasking-Sentinel-validation-1"
     facts = _Facts(metadata={"workspace_id": "task-validation"}, iterations=2)

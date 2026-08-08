@@ -18,6 +18,7 @@ from core.prompts.builders.post_tool.evidence import (
     select_compact_evidence_for_reasoning,
 )
 from ...state import InteractiveState
+from ...runtime_controls import read_active_execution_control
 from ...utils.llm_resolver import (
     ROLE_POST_TOOL_OBSERVATION,
     resolve_llm_call_settings,
@@ -68,6 +69,7 @@ from .models import (
     RetryablePostToolReasoningError,
     SUBAGENT_HANDOFF_BATCH_OUTCOME_SOURCE,
     VALID_POST_ACTION_OUTCOME_SOURCES,
+    ToolIntent,
     map_decision_output_to_post_tool_reasoning_output,
 )
 
@@ -278,6 +280,46 @@ def _prefix_reasoning(prefix: str, existing: str) -> str:
     if not current:
         return prefix
     return f"{prefix} Original PAR rationale: {current}"
+
+
+def _apply_active_execution_decision_policy(
+    interactive: InteractiveState,
+    output: PostToolReasoningOutput,
+) -> bool:
+    """Keep a running execution on its existing continuation capability."""
+
+    active = read_active_execution_control(interactive.facts.safe_metadata)
+    if active is None:
+        return False
+    session_id = str(active.get("session_id") or "").strip()
+    continuation_tool_id = str(
+        active.get("continuation_tool_id") or ""
+    ).strip()
+    prior_intent = output.tool_intent
+    output.next_action = "call_tool"
+    output.failure_detected = False
+    output.failure_category = None
+    output.retry_suggested = False
+    output.user_goal_achieved = False
+    output.todo_progress = []
+    output.effective_next_goal = None
+    output.agent_handoff = None
+    output.tool_intent = ToolIntent(
+        description=(
+            f"Continue the existing running shell session with {continuation_tool_id}."
+        ),
+        target=session_id,
+        focus=(
+            prior_intent.focus
+            if prior_intent is not None and prior_intent.focus
+            else "Poll for completion or provide only the required session input."
+        ),
+    )
+    output.action_reasoning = _prefix_reasoning(
+        "The runtime reports an active execution; continuation must use its existing session.",
+        output.action_reasoning,
+    )
+    return True
 
 
 def _apply_source_aware_decision_policy(
@@ -1061,6 +1103,13 @@ async def post_tool_reasoning(
         decision_output,
         observation=observation,
     )
+    active_execution_running = (
+        outcome_source == DIRECT_TOOL_OUTCOME_SOURCE
+        and _apply_active_execution_decision_policy(
+            interactive,
+            output,
+        )
+    )
 
     # Handle retry suggestions (budgeted for both streaming and non-streaming)
     retry_suggested = (
@@ -1115,6 +1164,8 @@ async def post_tool_reasoning(
     )
 
     _enforce_simple_tool_single_step_policy(output, capability)
+    if active_execution_running:
+        _apply_active_execution_decision_policy(interactive, output)
     _record_par_decision_route(
         task_id=facts.task_id,
         outcome_source=outcome_source,
@@ -1130,7 +1181,14 @@ async def post_tool_reasoning(
     # Apply progress updates from LLM output and capture changed-only deltas.
     todo_updates = _apply_progress_updates(interactive, output)
     _apply_request_contract_policy(interactive, output)
-    if apply_active_todo_stall_guard(interactive, output, todo_updates=todo_updates):
+    if (
+        not active_execution_running
+        and apply_active_todo_stall_guard(
+            interactive,
+            output,
+            todo_updates=todo_updates,
+        )
+    ):
         stall_tracking = metadata.get(TODO_STALL_METADATA_KEY)
         forced_action = (
             stall_tracking.get("forced_action")

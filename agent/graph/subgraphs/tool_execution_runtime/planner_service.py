@@ -63,13 +63,14 @@ from ...memory.target_resolution import (  # noqa: E402
     coerce_target_value,
     resolve_planner_target,
 )
+from ...runtime_controls import (  # noqa: E402
+    read_active_execution_control,
+    read_current_turn_runtime_controls,
+)
 from ...state import InteractiveState  # noqa: E402
 from ...utils import iteration_memory as _iteration_memory  # noqa: E402
 from ...utils.cache_invalidation import create_plan_context, invalidate_plan, should_invalidate_plan  # noqa: E402
 from ...utils.history_formatter import sanitize_history_content  # noqa: E402
-
-_CURRENT_TURN_RUNTIME_CONTROLS_KEY = "current_turn_runtime_controls"
-
 
 # NOTE: ``resolve_planner_target`` previously had a local definition here that
 # duplicated (and diverged from) the canonical implementation in
@@ -176,17 +177,8 @@ def _current_turn_phase_records(metadata: Mapping[str, Any]) -> List[Dict[str, A
 
 def _current_turn_unavailable_tools(metadata: Mapping[str, Any]) -> List[str]:
     """Return runtime-owned current-turn unavailable tools for planner control."""
-    controls = metadata.get(_CURRENT_TURN_RUNTIME_CONTROLS_KEY)
-    if not isinstance(controls, Mapping):
-        return []
-
-    requested_turn = metadata.get("turn_sequence")
-    control_turn = controls.get("turn_sequence")
-    if (
-        isinstance(requested_turn, int)
-        and isinstance(control_turn, int)
-        and requested_turn != control_turn
-    ):
+    controls = read_current_turn_runtime_controls(metadata)
+    if controls is None:
         return []
 
     raw_tools = controls.get("unavailable_tools")
@@ -298,6 +290,31 @@ def build_planner_context(
     if not resolved_tools:
         fallback_tools = get_full_tool_catalog_for_planner(agent_config)
         resolved_tools = iter_non_artifact_tools(fallback_tools)
+
+    active_execution = read_active_execution_control(metadata)
+    if active_execution is not None:
+        continuation_tool_id = str(
+            active_execution.get("continuation_tool_id") or ""
+        ).strip()
+        session_id = str(active_execution.get("session_id") or "").strip()
+        prior_intent = tool_intent if isinstance(tool_intent, Mapping) else {}
+        resolved_tools = [continuation_tool_id]
+        tool_intent = {
+            "description": str(
+                prior_intent.get("description")
+                or "Continue the existing running shell session."
+            ),
+            "focus": str(
+                prior_intent.get("focus")
+                or "Poll or provide required input without starting a replacement command."
+            ),
+            "target": session_id,
+            "session_id": session_id,
+        }
+        next_tool_hint = (
+            f"Use {continuation_tool_id} with session_id {session_id}; "
+            "do not start another execution."
+        )
     artifact_tool_exposure_metadata = {
         "allow_search": False,
         "allow_read": False,

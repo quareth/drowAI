@@ -16,6 +16,11 @@ from core.prompts.builders.post_tool.last_tool import (
 )
 
 from ...memory.findings import extract_observed_findings
+from ...runtime_controls import (
+    ensure_current_turn_runtime_controls,
+    read_active_execution_control,
+    set_active_execution_control,
+)
 from ...memory.target_resolution import (
     RUNTIME_TOOL_TARGET_FIELD_SPECS,
     coerce_target_value,
@@ -25,10 +30,12 @@ from ...utils import iteration_memory as _iteration_memory
 from ...utils.llm_resolver import ROLE_TOOL_OUTPUT_COMPRESSOR
 from ...utils.tool_optimization import ToolExecution, get_scan_phase, record_tool_execution
 from runtime_shared.durable_secret_masking import mask_durable_secrets
-from runtime_shared.shell_capabilities import SHELL_SESSION_TOOL_IDS
+from runtime_shared.shell_capabilities import (
+    SHELL_SESSION_TOOL_IDS,
+    SHELL_WRITE_STDIN_TOOL_ID,
+)
 from agent.tool_runtime.output_persistence_policy import OutputPersistenceDecision
 
-_CURRENT_TURN_RUNTIME_CONTROLS_KEY = "current_turn_runtime_controls"
 SHELL_SESSION_COMPACT_RESULT_KEYS = (
     "process_status",
     "session_id",
@@ -511,31 +518,67 @@ def _record_current_turn_unavailable_tool(
     if failure_category != "tool_unavailable" or not isinstance(turn_sequence, int):
         return
 
-    controls = metadata.get(_CURRENT_TURN_RUNTIME_CONTROLS_KEY)
-    if (
-        not isinstance(controls, Mapping)
-        or controls.get("turn_sequence") != turn_sequence
-    ):
-        controls_map: Dict[str, Any] = {
-            "turn_sequence": turn_sequence,
-            "unavailable_tools": [],
-        }
-    else:
-        raw_tools = controls.get("unavailable_tools")
-        tools = []
-        if isinstance(raw_tools, list):
-            tools = [str(item).strip() for item in raw_tools if str(item).strip()]
-        controls_map = {
-            "turn_sequence": turn_sequence,
-            "unavailable_tools": tools,
-        }
-
+    controls_map = ensure_current_turn_runtime_controls(
+        metadata,
+        turn_sequence=turn_sequence,
+    )
     unavailable_tools = list(controls_map["unavailable_tools"])
     normalized_tool_id = str(tool_id or "").strip()
     if normalized_tool_id and normalized_tool_id not in unavailable_tools:
         unavailable_tools.append(normalized_tool_id)
     controls_map["unavailable_tools"] = unavailable_tools
-    metadata[_CURRENT_TURN_RUNTIME_CONTROLS_KEY] = controls_map
+
+
+def _update_active_execution_control(
+    metadata: Dict[str, Any],
+    *,
+    turn_sequence: Optional[int],
+    tool_id: str,
+    tool_result: Mapping[str, Any],
+    compact_result: Mapping[str, Any],
+) -> None:
+    """Project shell lifecycle state without retaining shell output."""
+
+    if not isinstance(turn_sequence, int) or tool_id not in SHELL_SESSION_TOOL_IDS:
+        return
+    process_status = str(
+        tool_result.get("process_status")
+        or compact_result.get("process_status")
+        or ""
+    ).strip().lower()
+    session_id = str(
+        tool_result.get("session_id") or compact_result.get("session_id") or ""
+    ).strip()
+    existing = read_active_execution_control(metadata)
+    if process_status != "running" or not session_id:
+        if existing is not None:
+            set_active_execution_control(
+                metadata,
+                turn_sequence=turn_sequence,
+                active_execution=None,
+            )
+        return
+
+    originating_tool_id = tool_id
+    if tool_id == SHELL_WRITE_STDIN_TOOL_ID and existing is not None:
+        originating_tool_id = str(
+            existing.get("originating_tool_id") or tool_id
+        ).strip()
+    set_active_execution_control(
+        metadata,
+        turn_sequence=turn_sequence,
+        active_execution={
+            "originating_tool_id": originating_tool_id,
+            "continuation_tool_id": SHELL_WRITE_STDIN_TOOL_ID,
+            "process_status": "running",
+            "session_id": session_id,
+            "stdin_available": bool(
+                tool_result.get("stdin_available")
+                if "stdin_available" in tool_result
+                else compact_result.get("stdin_available")
+            ),
+        },
+    )
 
 
 def append_tool_phase_snapshot_from_metadata(
@@ -890,6 +933,13 @@ def apply_result_state_projection(
         interactive,
         compression_usage_record if isinstance(compression_usage_record, Mapping) else None,
         logger=logger,
+    )
+    _update_active_execution_control(
+        facts.metadata,
+        turn_sequence=turn_sequence,
+        tool_id=resolved_tool_id,
+        tool_result=dict(outcome.result),
+        compact_result=compact_result_dict,
     )
     if persistence_decision is not None and not persistence_decision.retain_durable_output:
         for key in (

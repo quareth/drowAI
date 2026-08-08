@@ -14,13 +14,68 @@ from agent.graph.nodes.post_tool_reasoning.models import (
     ToolIntent,
 )
 from agent.providers.llm.core.base import ToolCall, ToolCallResult
-from agent.graph.nodes.post_tool_reasoning.node import _update_active_decision_memory
+from agent.graph.nodes.post_tool_reasoning.node import (
+    _apply_active_execution_decision_policy,
+    _update_active_decision_memory,
+)
 from agent.graph.state import FactsState, InteractiveState, TodoItem, TodoStatus, TraceState
 from agent.graph.utils.todo_stall_guard import TODO_STALL_METADATA_KEY
 from core.prompts.builders.post_tool.evidence import register_runtime_compact_evidence
 
 
 DecisionCall = Callable[..., Awaitable[PostToolReasoningOutput]]
+
+
+def test_running_execution_overrides_model_failure_and_replacement_retry() -> None:
+    public_session_id = "shs_ptr_control_123"
+    state = InteractiveState(
+        facts=FactsState(
+            task_id=42,
+            message="Continue the command.",
+            metadata={
+                "turn_sequence": 4,
+                "current_turn_runtime_controls": {
+                    "turn_sequence": 4,
+                    "unavailable_tools": [],
+                    "active_execution": {
+                        "originating_tool_id": "shell.utility",
+                        "continuation_tool_id": "shell.write_stdin",
+                        "process_status": "running",
+                        "session_id": public_session_id,
+                        "stdin_available": True,
+                    },
+                },
+            },
+        ),
+        trace=TraceState(),
+    )
+    output = PostToolReasoningOutput(
+        observation="The command failed, so I will start a replacement command now.",
+        next_action="call_tool",
+        action_reasoning="The parameters appear invalid and need replacement.",
+        tool_intent=ToolIntent(
+            description="Start a replacement shell command.",
+            target=None,
+            focus="retry from scratch",
+        ),
+        failure_detected=True,
+        failure_category="invalid_params",
+        retry_suggested=True,
+        user_goal_achieved=True,
+        todo_progress=[],
+    )
+
+    active = _apply_active_execution_decision_policy(state, output)
+
+    assert active is True
+    assert output.next_action == "call_tool"
+    assert output.failure_detected is False
+    assert output.failure_category is None
+    assert output.retry_suggested is False
+    assert output.user_goal_achieved is False
+    assert output.tool_intent is not None
+    assert output.tool_intent.target == public_session_id
+    assert "existing running shell session" in output.tool_intent.description
 
 
 def _decision_projection(
@@ -281,6 +336,94 @@ async def test_runtime_only_utility_evidence_reaches_ptr_without_checkpoint_outp
     assert "synthesized_output" not in updated.facts.metadata
     assert "working_memory" not in updated.facts.metadata
     assert updated.trace.observations == []
+
+
+@pytest.mark.asyncio
+async def test_running_utility_cannot_be_reclassified_as_failure_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch_id = "tb-running-utility-ptr"
+    public_session_id = "shs_running_utility_ptr_123"
+    compact = {
+        "tool": "shell.utility",
+        "status": "success",
+        "success": True,
+        "process_status": "running",
+        "session_id": public_session_id,
+        "stdin_available": True,
+        "exit_code": None,
+        "summary": "The command is still running.",
+        "key_findings": [],
+        "errors": [],
+        "report_recommendations": [],
+    }
+    register_runtime_compact_evidence(
+        {
+            "tool_batch_id": batch_id,
+            "status": "completed",
+            "success": True,
+            "results": [
+                {
+                    "tool_call_id": "tc-running-utility-ptr",
+                    "tool_id": "shell.utility",
+                    "status": "success",
+                    "success": True,
+                    "compact_tool_result": compact,
+                }
+            ],
+        },
+        single_compact=compact,
+    )
+
+    async def false_failure_decision(**_: Any) -> PostToolReasoningOutput:
+        return PostToolReasoningOutput(
+            observation="The command failed, so I should replace it with another command.",
+            next_action="call_tool",
+            action_reasoning="The command parameters appear invalid and require a retry.",
+            tool_intent=ToolIntent(
+                description="Start a replacement shell command.",
+                focus="retry from scratch",
+            ),
+            user_goal_achieved=False,
+            todo_progress=[],
+            failure_detected=True,
+            failure_category="invalid_params",
+            retry_suggested=True,
+        )
+
+    _install_route_client(monkeypatch, false_failure_decision)
+    state = _make_state(
+        {
+            "tool_batch_id": batch_id,
+            "turn_sequence": 5,
+            "current_turn_runtime_controls": {
+                "turn_sequence": 5,
+                "unavailable_tools": [],
+                "active_execution": {
+                    "originating_tool_id": "shell.utility",
+                    "continuation_tool_id": "shell.write_stdin",
+                    "process_status": "running",
+                    "session_id": public_session_id,
+                    "stdin_available": True,
+                },
+            },
+        },
+        capability="deep_reasoning",
+    )
+
+    update = await node.post_tool_reasoning(
+        state,
+        context=None,
+        config={},
+        writer=None,
+    )
+    updated = InteractiveState.from_mapping(update)
+
+    assert node._get_retry_count(updated) == 0
+    assert updated.facts.metadata.get("failure_detected") is not True
+    assert updated.facts.metadata["last_post_tool_action"] == "call_tool"
+    assert updated.facts.metadata["tool_intent"]["target"] == public_session_id
+    assert "synthesized_output" not in updated.facts.metadata
 
 
 @pytest.mark.asyncio
