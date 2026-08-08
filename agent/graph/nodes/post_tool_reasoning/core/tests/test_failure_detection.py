@@ -116,24 +116,6 @@ class TestDetectFailure:
         assert failure is False
         assert category is None
 
-    def test_running_shell_without_output_is_not_a_failure(self):
-        """A yielded shell session is pending work, not an empty-output failure."""
-        context = FailureContext(
-            success_flag=True,
-            status="success",
-            exit_code=None,
-            stdout="",
-            stderr="",
-            summary="",
-            key_findings=[],
-            process_status="running",
-        )
-
-        failure, category = detect_failure(context)
-
-        assert failure is False
-        assert category is None
-
 
 class TestClassifyFailureCategory:
     """Tests for classify_failure_category function."""
@@ -276,3 +258,4 @@ class TestBuildFailureContextFromState:
         assert context.stderr == ""
         assert failure is True
         assert category == "empty_output"
+

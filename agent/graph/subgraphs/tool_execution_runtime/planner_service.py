@@ -21,7 +21,6 @@ from agent.tool_runtime.batch.plan_view import (
 from agent.tool_runtime.artifact_file_metadata import (
     collect_artifact_file_ref_candidates,
 )
-from runtime_shared.shell_capabilities import SHELL_WRITE_STDIN_TOOL_ID
 
 
 def _serialize_tool_batch(batch: _ToolBatch) -> Dict[str, Any]:
@@ -230,20 +229,6 @@ def _current_tool_params(
     return {}
 
 
-def _running_shell_session_id(metadata: Mapping[str, Any]) -> str | None:
-    """Return the public handle when the preceding shell process is still live."""
-    for key in ("last_tool_result_compact", "last_tool_result"):
-        result = metadata.get(key)
-        if not isinstance(result, Mapping):
-            continue
-        if str(result.get("process_status") or "").strip().lower() != "running":
-            continue
-        session_id = str(result.get("session_id") or "").strip()
-        if session_id:
-            return session_id
-    return None
-
-
 def build_planner_context(
     interactive: InteractiveState,
     request: ToolExecutionRequest,
@@ -313,20 +298,6 @@ def build_planner_context(
     if not resolved_tools:
         fallback_tools = get_full_tool_catalog_for_planner(agent_config)
         resolved_tools = iter_non_artifact_tools(fallback_tools)
-
-    running_session_id = _running_shell_session_id(metadata)
-    if running_session_id:
-        resolved_tools = [SHELL_WRITE_STDIN_TOOL_ID]
-        tool_intent = {
-            "description": "Continue the existing running shell session.",
-            "focus": "Poll or provide required input without starting a replacement command.",
-            "target": running_session_id,
-            "session_id": running_session_id,
-        }
-        next_tool_hint = (
-            f"Use {SHELL_WRITE_STDIN_TOOL_ID} with session_id {running_session_id}; "
-            "do not start another shell session."
-        )
     artifact_tool_exposure_metadata = {
         "allow_search": False,
         "allow_read": False,

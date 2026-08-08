@@ -139,20 +139,11 @@ class RunnerChannelLifecycle:
                 Runner.id == session.runner_id,
             )
         ).scalar_one_or_none()
-        active_connection_count = self._db.execute(
-            select(func.count(RunnerConnection.id)).where(
-                RunnerConnection.tenant_id == session.tenant_id,
-                RunnerConnection.runner_id == session.runner_id,
-                RunnerConnection.status == "active",
-                RunnerConnection.lease_expires_at > now,
-            )
-        ).scalar_one()
-        if int(active_connection_count or 0) == 0:
-            _cleanup_runner_terminal_state(
-                db=self._db,
-                tenant_id=session.tenant_id,
-                runner_id=session.runner_id,
-            )
+        _cleanup_runner_terminal_state(
+            db=self._db,
+            tenant_id=session.tenant_id,
+            runner_id=session.runner_id,
+        )
         if runner is None:
             self._metrics.record_runner_presence_snapshot(tenant_id=session.tenant_id)
             logger.info(

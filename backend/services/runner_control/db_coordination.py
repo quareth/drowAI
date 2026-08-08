@@ -85,16 +85,6 @@ class DBRunnerCoordinationStore(RunnerCoordinationStore):
                     raise
 
         with self._db.begin_nested():
-            self._db.execute(
-                update(RunnerConnection)
-                .where(
-                    RunnerConnection.tenant_id == tenant_id,
-                    RunnerConnection.runner_id == runner_id,
-                    RunnerConnection.connection_id != str(connection_id).strip(),
-                    RunnerConnection.status == "active",
-                )
-                .values(status="disconnected", last_seen_at=last_seen_at)
-            )
             connection.pod_id = str(pod_id).strip() or self._pod_id
             connection.status = "active"
             connection.lease_expires_at = lease_expires_at
@@ -124,8 +114,8 @@ class DBRunnerCoordinationStore(RunnerCoordinationStore):
             if connection is None:
                 return None
 
-            if str(connection.status or "").strip().lower() != "active":
-                return None
+            # Idempotent refresh always converges to active + latest lease bounds.
+            connection.status = "active"
             connection.lease_expires_at = lease_expires_at
             connection.last_seen_at = last_seen_at
             self._db.flush()

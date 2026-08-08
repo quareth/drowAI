@@ -255,20 +255,6 @@ class InMemoryRunnerCoordinationStore(RunnerCoordinationStore):
         last_seen_at: datetime,
     ) -> RunnerConnectionLease:
         with self._lock:
-            for key, current in list(self._leases.items()):
-                if key[:2] != (tenant_id, runner_id) or key[2] == connection_id:
-                    continue
-                if current.status != "active":
-                    continue
-                self._leases[key] = RunnerConnectionLease(
-                    tenant_id=current.tenant_id,
-                    runner_id=current.runner_id,
-                    pod_id=current.pod_id,
-                    connection_id=current.connection_id,
-                    status="disconnected",
-                    lease_expires_at=current.lease_expires_at,
-                    last_seen_at=_ensure_utc(last_seen_at),
-                )
             key = (tenant_id, runner_id, connection_id)
             lease = RunnerConnectionLease(
                 tenant_id=tenant_id,
@@ -294,7 +280,7 @@ class InMemoryRunnerCoordinationStore(RunnerCoordinationStore):
         with self._lock:
             key = (tenant_id, runner_id, connection_id)
             current = self._leases.get(key)
-            if current is None or current.status != "active":
+            if current is None:
                 return None
             refreshed = RunnerConnectionLease(
                 tenant_id=current.tenant_id,
