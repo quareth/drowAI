@@ -23,6 +23,7 @@ from ._formatting import (
     format_todos,
     get_field,
 )
+from .evidence import EvidenceView
 from .last_tool import extract_last_tool_sections, iter_renderable_last_tool_sections
 from .sections import (
     extract_scope_hint,
@@ -76,6 +77,7 @@ class PostToolReasoningPromptBuilder:
         turn_sequence: Optional[int] = None,
         current_ptr_phase_sequence: Optional[int] = None,
         latest_recorded_phase_sequence: Optional[int] = None,
+        evidence: Optional[EvidenceView] = None,
     ) -> str:
         """Build the user prompt with full context.
 
@@ -100,6 +102,9 @@ class PostToolReasoningPromptBuilder:
                 the builder never computes it.
             outcome_source: Deterministic source metadata resolved by the PTR/PAR
                 node. The default preserves direct-tool prompt compatibility.
+            evidence: Caller-selected compact evidence for this reasoning turn.
+                Passing it prevents the builder from independently restoring
+                transient rows from the same-process runtime batch.
 
         Returns:
             Formatted user prompt string.
@@ -121,6 +126,7 @@ class PostToolReasoningPromptBuilder:
             facts,
             synthesized,
             prefer_runtime_evidence=True,
+            evidence_override=evidence,
         )
 
         failure_ctx = as_mapping(failure_context or {})

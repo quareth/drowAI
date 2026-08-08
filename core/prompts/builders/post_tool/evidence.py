@@ -177,8 +177,75 @@ def read_compact_evidence(
     return None
 
 
+def select_compact_evidence_for_reasoning(
+    metadata: Mapping[str, Any],
+) -> tuple[Optional[EvidenceView], bool]:
+    """Select same-turn evidence without restoring transient batch rows.
+
+    Durable evidence is the authority for row membership and ordering. When
+    same-process runtime evidence is available, matching rows supply their raw
+    compact payloads so immediate reasoning keeps the existing unmasked view.
+    Runtime-only evidence remains available to the current turn but is marked
+    non-durable so callers can suppress graph and memory persistence.
+
+    Returns:
+        A pair of ``(evidence, is_durable)``. ``is_durable`` is true only when
+        the selected row set is backed by durable metadata.
+    """
+    durable = read_compact_evidence(metadata)
+    runtime = read_compact_evidence(metadata, prefer_runtime=True)
+    if durable is None:
+        return runtime, False
+    if runtime is None:
+        return durable, True
+
+    runtime_by_call_id = {
+        str(row.get("tool_call_id")): row
+        for row in runtime.rows
+        if str(row.get("tool_call_id") or "").strip()
+    }
+    selected_rows: list[Dict[str, Any]] = []
+    for durable_row in durable.rows:
+        call_id = str(durable_row.get("tool_call_id") or "").strip()
+        runtime_row = runtime_by_call_id.get(call_id) if call_id else None
+        if (
+            runtime_row is None
+            and durable.source == "single"
+            and runtime.source == "single"
+            and len(durable.rows) == 1
+            and len(runtime.rows) == 1
+        ):
+            runtime_row = runtime.rows[0]
+        selected_rows.append(dict(runtime_row or durable_row))
+
+    successes = [row for row in selected_rows if row.get("success")]
+    failures = [row for row in selected_rows if not row.get("success")]
+    selected_raw = dict(durable.raw)
+    if durable.source == "batch":
+        selected_raw["results"] = [dict(row) for row in selected_rows]
+    elif selected_rows:
+        compact = selected_rows[0].get("compact_tool_result")
+        if isinstance(compact, Mapping):
+            selected_raw = dict(compact)
+
+    return (
+        EvidenceView(
+            source=durable.source,
+            status=durable.status,
+            success=durable.success,
+            rows=tuple(selected_rows),
+            failed_rows=tuple(failures),
+            successful_rows=tuple(successes),
+            deferred_followups=durable.deferred_followups,
+            raw=selected_raw,
+        ),
+        True,
+    )
+
+
 __all__ = [
     "EvidenceView",
     "read_compact_evidence",
     "register_runtime_compact_evidence",
+    "select_compact_evidence_for_reasoning",
 ]

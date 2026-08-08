@@ -51,7 +51,7 @@ from ._formatting import (
     get_field,
     truncate,
 )
-from .evidence import read_compact_evidence
+from .evidence import EvidenceView, read_compact_evidence
 
 LAST_TOOL_SECTION_HEADINGS: Mapping[str, str] = {
     "tool_executed": "Tool Executed",
@@ -150,6 +150,7 @@ def extract_last_tool_sections(
     synthesized: Optional[Mapping[str, Any]] = None,
     *,
     prefer_runtime_evidence: bool = False,
+    evidence_override: Optional[EvidenceView] = None,
 ) -> dict[str, str]:
     """Project last-tool runtime state into formatted prompt section bodies.
 
@@ -165,6 +166,9 @@ def extract_last_tool_sections(
         prefer_runtime_evidence: Prefer same-process raw compact evidence
             registered for the active PTR turn. Leave disabled for durable
             phase snapshots and stored prompt projections.
+        evidence_override: Preselected evidence whose row membership and
+            persistence eligibility were resolved by the caller. When set,
+            the helper does not independently reread runtime evidence.
 
     Returns:
         Dict with exactly the ten keys documented in the module
@@ -192,10 +196,12 @@ def extract_last_tool_sections(
     # ``single``-source view when no batch metadata exists, so this is
     # the sole reader — no direct ``metadata.get('last_tool_result_compact')``
     # fallback is needed.
-    evidence = read_compact_evidence(
-        metadata_view,
-        prefer_runtime=prefer_runtime_evidence,
-    )
+    evidence = evidence_override
+    if evidence is None:
+        evidence = read_compact_evidence(
+            metadata_view,
+            prefer_runtime=prefer_runtime_evidence,
+        )
     compact_result: Mapping[str, Any] = {}
     deterministic_compact_result: Mapping[str, Any] = {}
     if evidence is not None and evidence.rows:

@@ -27,6 +27,8 @@ The format is based on
 
 ### Fixed
 
+- Mixed shell batches now keep utility output transient while post-tool
+  reasoning selects and persists only durable assessment evidence.
 - Interactive shell sessions now preserve concurrent session limits, honor
   bounded startup and input timing, report managed-output loss as truncation,
   normalize split terminal controls, tolerate managed-runner results that arrive

@@ -14,6 +14,8 @@ import pytest
 from core.prompts.builders.post_tool.evidence import (
     EvidenceView,
     read_compact_evidence,
+    register_runtime_compact_evidence,
+    select_compact_evidence_for_reasoning,
 )
 
 
@@ -112,3 +114,85 @@ def test_single_failure_surfaces_in_failed_rows():
     assert view.success is False
     assert len(view.failed_rows) == 1
     assert view.successful_rows == ()
+
+
+def test_reasoning_selection_uses_durable_ids_with_matching_runtime_rows():
+    batch_id = "tb-reasoning-selection"
+    register_runtime_compact_evidence(
+        {
+            "tool_batch_id": batch_id,
+            "status": "completed",
+            "success": True,
+            "results": [
+                {
+                    "tool_call_id": "tc-transient",
+                    "tool_id": "example.transient",
+                    "status": "success",
+                    "success": True,
+                    "compact_tool_result": {"summary": "TRANSIENT_SENTINEL"},
+                },
+                {
+                    "tool_call_id": "tc-durable",
+                    "tool_id": "example.durable",
+                    "status": "success",
+                    "success": True,
+                    "compact_tool_result": {"summary": "RAW_DURABLE_SENTINEL"},
+                },
+            ],
+        }
+    )
+    metadata = {
+        "tool_batch_id": batch_id,
+        "last_tool_result_compact_batch": {
+            "tool_batch_id": batch_id,
+            "status": "completed",
+            "success": True,
+            "results": [
+                {
+                    "tool_call_id": "tc-durable",
+                    "tool_id": "example.durable",
+                    "status": "success",
+                    "success": True,
+                    "compact_tool_result": {"summary": "MASKED_DURABLE_SENTINEL"},
+                }
+            ],
+        },
+    }
+
+    view, is_durable = select_compact_evidence_for_reasoning(metadata)
+
+    assert view is not None
+    assert is_durable is True
+    assert [row["tool_call_id"] for row in view.rows] == ["tc-durable"]
+    assert view.rows[0]["compact_tool_result"]["summary"] == (
+        "RAW_DURABLE_SENTINEL"
+    )
+    assert "TRANSIENT_SENTINEL" not in str(view.raw)
+
+
+def test_reasoning_selection_marks_runtime_only_evidence_non_durable():
+    batch_id = "tb-runtime-only-selection"
+    register_runtime_compact_evidence(
+        {
+            "tool_batch_id": batch_id,
+            "status": "completed",
+            "success": True,
+            "results": [
+                {
+                    "tool_call_id": "tc-runtime-only",
+                    "tool_id": "example.transient",
+                    "status": "success",
+                    "success": True,
+                    "compact_tool_result": {"summary": "RUNTIME_ONLY_SENTINEL"},
+                }
+            ],
+        }
+    )
+
+    view, is_durable = select_compact_evidence_for_reasoning(
+        {"tool_batch_id": batch_id}
+    )
+
+    assert view is not None
+    assert is_durable is False
+    assert view.rows[0]["tool_call_id"] == "tc-runtime-only"

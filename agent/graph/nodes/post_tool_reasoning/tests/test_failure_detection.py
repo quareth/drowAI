@@ -283,6 +283,115 @@ async def test_runtime_only_utility_evidence_reaches_ptr_without_checkpoint_outp
     assert updated.trace.observations == []
 
 
+@pytest.mark.asyncio
+async def test_mixed_runtime_evidence_uses_only_durable_rows_for_ptr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch_id = "tb-mixed-ptr"
+    utility_compact = {
+        "tool": "shell.utility",
+        "status": "success",
+        "success": True,
+        "summary": "TRANSIENT_UTILITY_SENTINEL",
+        "key_findings": [],
+        "errors": [],
+        "report_recommendations": [],
+    }
+    assessment_compact = {
+        "tool": "shell.assessment",
+        "status": "success",
+        "success": True,
+        "summary": "DURABLE_ASSESSMENT_SENTINEL",
+        "key_findings": ["Port 443 is open."],
+        "errors": [],
+        "report_recommendations": [],
+    }
+    register_runtime_compact_evidence(
+        {
+            "tool_batch_id": batch_id,
+            "status": "completed",
+            "success": True,
+            "results": [
+                {
+                    "tool_call_id": "tc-utility",
+                    "tool_id": "shell.utility",
+                    "status": "success",
+                    "success": True,
+                    "compact_tool_result": utility_compact,
+                },
+                {
+                    "tool_call_id": "tc-assessment",
+                    "tool_id": "shell.assessment",
+                    "status": "success",
+                    "success": True,
+                    "compact_tool_result": assessment_compact,
+                },
+            ],
+        },
+        single_compact=utility_compact,
+    )
+    captured: Dict[str, str] = {}
+
+    async def fake_decision_call(**kwargs: Any) -> PostToolReasoningOutput:
+        captured["user_prompt"] = kwargs["user_prompt"]
+        return PostToolReasoningOutput(
+            observation="The durable assessment found port 443 open.",
+            next_action="finalize",
+            action_reasoning="The durable assessment completed successfully.",
+            tool_intent=None,
+            user_goal_achieved=True,
+            todo_progress=[],
+            effective_next_goal=None,
+            failure_detected=False,
+            failure_category=None,
+            retry_suggested=False,
+        )
+
+    _install_route_client(monkeypatch, fake_decision_call)
+    state = _make_state(
+        {
+            "tool_batch_id": batch_id,
+            "turn_sequence": 1,
+            "last_tool_result_compact_batch": {
+                "tool_batch_id": batch_id,
+                "status": "completed",
+                "success": True,
+                "results": [
+                    {
+                        "tool_call_id": "tc-assessment",
+                        "tool_id": "shell.assessment",
+                        "status": "success",
+                        "success": True,
+                        "compact_tool_result": assessment_compact,
+                    }
+                ],
+            },
+        },
+        capability="simple_tool_execution",
+        message="Assess the local service and report the result",
+        selected_tool="shell.assessment",
+        tool_parameters={"command": "nmap localhost"},
+    )
+
+    update = await node.post_tool_reasoning(
+        state,
+        context=None,
+        config={},
+        writer=None,
+    )
+    updated = InteractiveState.from_mapping(update)
+
+    assert "DURABLE_ASSESSMENT_SENTINEL" in captured["user_prompt"]
+    assert "TRANSIENT_UTILITY_SENTINEL" not in captured["user_prompt"]
+    assert updated.trace.observations == [
+        "The durable assessment found port 443 open."
+    ]
+    assert updated.facts.metadata["synthesized_output"]["observation_text"] == (
+        "The durable assessment found port 443 open."
+    )
+    assert updated.facts.metadata["working_memory"]["current_turn_phases"]
+
+
 def test_retry_budget_tracking() -> None:
     """Retry counter increments correctly and ``_can_retry`` flips to False
     only when ``count >= MAX_RETRIES``.

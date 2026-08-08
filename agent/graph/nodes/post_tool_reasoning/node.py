@@ -14,7 +14,9 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 from ...infrastructure.state_models import GraphRuntimeContext
 from ...context.runtime_state import sync_target_hint_from_plan_todo
 from core.prompts.builders.post_tool import PostToolReasoningPromptBuilder
-from core.prompts.builders.post_tool.evidence import read_compact_evidence
+from core.prompts.builders.post_tool.evidence import (
+    select_compact_evidence_for_reasoning,
+)
 from ...state import InteractiveState
 from ...utils.llm_resolver import (
     ROLE_POST_TOOL_OBSERVATION,
@@ -771,20 +773,21 @@ async def post_tool_reasoning(
 
     # Get synthesized tool output
     synthesized = metadata.get("synthesized_output") or {}
-    durable_evidence = read_compact_evidence(metadata)
-    preferred_evidence = read_compact_evidence(metadata, prefer_runtime=True)
+    reasoning_evidence, reasoning_evidence_is_durable = (
+        select_compact_evidence_for_reasoning(metadata)
+    )
     runtime_only_evidence = (
         outcome_source == DIRECT_TOOL_OUTCOME_SOURCE
-        and durable_evidence is None
-        and preferred_evidence is not None
+        and reasoning_evidence is not None
+        and not reasoning_evidence_is_durable
     )
     if (
         outcome_source == DIRECT_TOOL_OUTCOME_SOURCE
         and not synthesized
-        and preferred_evidence is not None
-        and preferred_evidence.rows
+        and reasoning_evidence is not None
+        and reasoning_evidence.rows
     ):
-        compact = preferred_evidence.rows[0].get("compact_tool_result")
+        compact = reasoning_evidence.rows[0].get("compact_tool_result")
         if isinstance(compact, Mapping):
             synthesized = dict(compact)
             synthesized["vulnerabilities"] = list(compact.get("errors") or [])
@@ -913,6 +916,11 @@ async def post_tool_reasoning(
             turn_sequence=turn_sequence,
             current_ptr_phase_sequence=current_ptr_phase_sequence,
             latest_recorded_phase_sequence=latest_recorded_phase_sequence,
+            evidence=(
+                reasoning_evidence
+                if outcome_source == DIRECT_TOOL_OUTCOME_SOURCE
+                else None
+            ),
         )
         decision_tools = [
             build_post_tool_commit_tool(get_subagent_registry().ids())
