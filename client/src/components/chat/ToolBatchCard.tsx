@@ -176,10 +176,18 @@ function buildRows(messages: ChatMessage[], manifest: Map<string, number>): Batc
             };
             rows.set(callId, row);
           }
-          row.status = deriveStatus(
-            typeof item.status === "string" ? item.status : undefined,
-            typeof item.process_status === "string" ? item.process_status : undefined,
+          const rawStatus = typeof item.status === "string" ? item.status : undefined;
+          const processStatus =
+            typeof item.process_status === "string" ? item.process_status : undefined;
+          const existingProcessStatus = ["yielded", "terminated", "timed_out"].includes(
+            row.status,
           );
+          const genericBatchStatus = ["success", "ok", "completed", "failed", "error"].includes(
+            (rawStatus ?? "").toLowerCase(),
+          );
+          if (processStatus || !existingProcessStatus || !genericBatchStatus) {
+            row.status = deriveStatus(rawStatus, processStatus);
+          }
         });
       }
       return;

@@ -1427,6 +1427,76 @@ async def test_ctrl_c_uses_termination_grace_as_drain_deadline() -> None:
 
 
 @pytest.mark.asyncio
+async def test_successful_quiet_poll_refreshes_idle_activity() -> None:
+    manager = FakeTerminalManager()
+    clock = MutableClock()
+    service = ShellSessionService(
+        terminal_manager=manager,
+        config=_config(idle_timeout_sec=1),
+        runtime_context_resolver=lambda _identity: _context(),
+        clock=clock,
+    )
+    first = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(
+            command="interactive",
+            yield_time_ms=0,
+            max_runtime_sec=10,
+        ),
+    )
+
+    assert first.session_id is not None
+    clock.advance(0.75)
+    poll = await service.write_stdin(
+        identity=_identity(),
+        request=ShellWriteRequest(session_id=first.session_id, yield_time_ms=0),
+    )
+
+    assert poll.process_status is ShellProcessStatus.RUNNING
+    assert poll.stdout == ""
+    clock.advance(0.75)
+    await service.cleanup_stale_sessions()
+    assert first.session_id in service._records
+    assert manager.closed_sessions == []
+
+
+@pytest.mark.asyncio
+async def test_quiet_poll_does_not_extend_hard_runtime_deadline() -> None:
+    manager = FakeTerminalManager()
+    clock = MutableClock()
+    service = ShellSessionService(
+        terminal_manager=manager,
+        config=_config(idle_timeout_sec=1),
+        runtime_context_resolver=lambda _identity: _context(),
+        clock=clock,
+    )
+    first = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(
+            command="interactive",
+            yield_time_ms=0,
+            max_runtime_sec=1,
+        ),
+    )
+
+    assert first.session_id is not None
+    clock.advance(0.75)
+    poll = await service.write_stdin(
+        identity=_identity(),
+        request=ShellWriteRequest(session_id=first.session_id, yield_time_ms=0),
+    )
+    assert poll.process_status is ShellProcessStatus.RUNNING
+
+    clock.advance(0.5)
+    timed_out = await service.write_stdin(
+        identity=_identity(),
+        request=ShellWriteRequest(session_id=first.session_id, yield_time_ms=0),
+    )
+    assert timed_out.error_code is ShellSessionErrorCode.COMMAND_TIMED_OUT
+    assert timed_out.process_status is ShellProcessStatus.TIMED_OUT
+
+
+@pytest.mark.asyncio
 async def test_idle_expiry_closes_through_common_cleanup_path() -> None:
     manager = FakeTerminalManager()
     clock = MutableClock()

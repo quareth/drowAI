@@ -27,6 +27,10 @@ The format is based on
 
 ### Fixed
 
+- Tool batch cards now preserve running, terminated, and timed-out shell process
+  states when the aggregate batch result arrives.
+- Successful quiet shell polls now refresh session activity without extending
+  the command's hard runtime deadline.
 - Managed interactive shell sessions now detect framing loss after provider
   buffer truncation instead of leaving completed commands running until timeout.
 - Parallel tool batches now serialize operations targeting the same interactive

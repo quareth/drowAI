@@ -67,11 +67,13 @@ def test_tool_batch_end_payload_aggregates_per_call_status():
                 tool_call_id="tc-1",
                 tool_id="web.ffuf",
                 status=ToolCallStatus.SUCCESS,
+                raw_result={"process_status": "running"},
             ),
             ToolCallResult(
                 tool_call_id="tc-2",
                 tool_id="web.whatweb",
                 status=ToolCallStatus.FAILED,
+                raw_result={"process_status": "timed_out"},
                 failure_category="timeout",
             ),
         ),
@@ -86,4 +88,6 @@ def test_tool_batch_end_payload_aggregates_per_call_status():
     assert payload["failed"] == 1
     assert payload["execution_strategy"] == "parallel"
     assert [r["tool_call_id"] for r in payload["results"]] == ["tc-1", "tc-2"]
+    assert payload["results"][0]["process_status"] == "running"
+    assert payload["results"][1]["process_status"] == "timed_out"
     assert payload["results"][1]["failure_category"] == "timeout"

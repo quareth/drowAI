@@ -619,6 +619,7 @@ class ShellSessionService:
             elif record.operation_in_progress:
                 return None, ShellSessionErrorCode.SESSION_BUSY
             else:
+                record.last_activity_at = now
                 record.operation_in_progress = True
                 return record, ShellSessionErrorCode.SESSION_UNAVAILABLE
         await self._close_records(

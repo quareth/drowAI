@@ -12,6 +12,7 @@ Payload shapes match the design doc's manifest snippets in
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, Dict
 
 from agent.execution_strategy import ExecutionStrategy
@@ -72,15 +73,19 @@ def build_tool_batch_end_payload(result: BatchResult) -> Dict[str, Any]:
         for r in result.call_results
         if r.status in (ToolCallStatus.FAILED, ToolCallStatus.CANCELLED, ToolCallStatus.DENIED)
     )
-    rows = [
-        {
+    rows = []
+    for row in result.call_results:
+        row_payload = {
             "tool_call_id": row.tool_call_id,
             "tool": row.tool_id,
             "status": row.status.value,
             "failure_category": row.failure_category,
         }
-        for row in result.call_results
-    ]
+        if isinstance(row.raw_result, Mapping):
+            process_status = row.raw_result.get("process_status")
+            if isinstance(process_status, str) and process_status.strip():
+                row_payload["process_status"] = process_status.strip().lower()
+        rows.append(row_payload)
     return {
         "tool_batch_id": result.tool_batch_id,
         "execution_strategy": _strategy_name(result.effective_execution_strategy),

@@ -300,6 +300,7 @@ describe("ToolBatchCard", () => {
             { tool_call_id: "tc_running", tool_id: "shell.exec" },
             { tool_call_id: "tc_completed", tool_id: "shell.write_stdin" },
             { tool_call_id: "tc_timeout", tool_id: "shell.exec" },
+            { tool_call_id: "tc_terminated", tool_id: "shell.write_stdin" },
           ],
         },
       }),
@@ -307,6 +308,7 @@ describe("ToolBatchCard", () => {
         ["tc_running", "success", "running"],
         ["tc_completed", "success", "completed"],
         ["tc_timeout", "error", "timed_out"],
+        ["tc_terminated", "success", "terminated"],
       ].map(([toolCallId, status, processStatus]) =>
         makeMsg({
           id: `end-${toolCallId}`,
@@ -319,6 +321,20 @@ describe("ToolBatchCard", () => {
           },
         }),
       ),
+      makeMsg({
+        id: "batch-end",
+        metadata: {
+          step_type: "tool_batch_end",
+          tool_batch_id: "tb_shell_states",
+          status: "completed_with_errors",
+          results: [
+            { tool_call_id: "tc_running", tool: "shell.exec", status: "success" },
+            { tool_call_id: "tc_completed", tool: "shell.write_stdin", status: "success" },
+            { tool_call_id: "tc_timeout", tool: "shell.exec", status: "failed" },
+            { tool_call_id: "tc_terminated", tool: "shell.write_stdin", status: "success" },
+          ],
+        },
+      }),
     ];
 
     render(<ToolBatchCard messages={messages} groupKey="shell-states" />);
@@ -326,6 +342,32 @@ describe("ToolBatchCard", () => {
     expect(screen.getByText("Session running")).toBeTruthy();
     expect(screen.getByText("Completed")).toBeTruthy();
     expect(screen.getByText("Timed out")).toBeTruthy();
+    expect(screen.getByText("Stopped")).toBeTruthy();
+  });
+
+  it("uses process status from batch-end-only shell rows", () => {
+    const messages: ChatMessage[] = [
+      makeMsg({
+        id: "batch-end",
+        metadata: {
+          step_type: "tool_batch_end",
+          tool_batch_id: "tb_shell_only",
+          status: "completed",
+          results: [
+            {
+              tool_call_id: "tc_running",
+              tool: "shell.exec",
+              status: "success",
+              process_status: "running",
+            },
+          ],
+        },
+      }),
+    ];
+
+    render(<ToolBatchCard messages={messages} groupKey="shell-batch-only" />);
+
+    expect(screen.getByText("Session running")).toBeTruthy();
   });
 
   it("renders terminal batch rows when no per-tool events were emitted", () => {
