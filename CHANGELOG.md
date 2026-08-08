@@ -27,6 +27,8 @@ The format is based on
 
 ### Fixed
 
+- Interactive shell output now preserves valid text and command completion
+  after invalid UTF-8 bytes instead of falsely timing out completed commands.
 - Interactive UI and agent terminals now start in the task runtime's
   `/workspace` directory without changing runtime-service startup paths.
 - Mixed shell batches now keep utility output transient while post-tool

@@ -114,6 +114,12 @@ class FakeTerminalManager:
                 self.queues[session_id].extend(
                     bytes([byte]) for byte in protocol.encode()
                 )
+            elif "invalid-utf8-completes" in text:
+                self.queues[session_id].append(
+                    f"{start}\nbefore:".encode()
+                    + b"\xff"
+                    + f":after\n{end}={PTY_EXIT_CODE_MARKER}0\n".encode()
+                )
             elif "oversized-completes" in text:
                 self.queues[session_id].append((f"{start}\n" + ("x" * 5000)).encode())
                 self.queues[session_id].append(
@@ -862,6 +868,26 @@ async def test_protocol_records_and_utf8_output_may_split_at_byte_boundaries() -
     assert update.stdout == "caf\u00e9"
     assert update.truncated is False
     assert "\ufffd" not in update.stdout
+
+
+@pytest.mark.asyncio
+async def test_invalid_utf8_preserves_valid_suffix_and_completion_marker() -> None:
+    manager = FakeTerminalManager()
+    service = _service(manager)
+
+    update = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(
+            command="invalid-utf8-completes",
+            yield_time_ms=0,
+            max_output_chars=1024,
+        ),
+    )
+
+    assert update.process_status is ShellProcessStatus.COMPLETED
+    assert update.exit_code == 0
+    assert update.stdout == "before:\ufffd:after"
+    assert update.truncated is False
 
 
 @pytest.mark.asyncio

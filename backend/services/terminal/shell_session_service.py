@@ -9,6 +9,7 @@ Responsibilities:
 from __future__ import annotations
 
 import asyncio
+import codecs
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 import hashlib
@@ -848,14 +849,11 @@ class ShellSessionService:
         return " && ".join(parts)
 
     def _decode_bytes(self, record: ShellSessionRecord, chunk: bytes) -> str:
-        data = record.pending_utf8_bytes + bytes(chunk)
-        try:
-            record.pending_utf8_bytes = b""
-            return data.decode("utf-8")
-        except UnicodeDecodeError as exc:
-            safe = data[: exc.start]
-            record.pending_utf8_bytes = data[exc.start:][-4:]
-            return safe.decode("utf-8", errors="replace")
+        """Decode one PTY chunk while retaining only an incomplete UTF-8 tail."""
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        decoded = decoder.decode(record.pending_utf8_bytes + bytes(chunk), final=False)
+        record.pending_utf8_bytes = decoder.getstate()[0]
+        return decoded
 
     def _active_owner_count(self, identity: ShellSessionIdentity) -> int:
         return sum(
