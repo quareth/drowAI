@@ -21,7 +21,10 @@ from backend.models.runner_control import Runner, RunnerConnection
 from backend.core.network_utils import normalize_ip_address
 from backend.services.runner_control.audit import RunnerControlAuditService
 from backend.services.runner_control.channel.auth import RunnerChannelAuthContext, RunnerChannelAuthError
-from backend.services.runner_control.channel.terminal_cleanup import _cleanup_runner_terminal_state
+from backend.services.runner_control.channel.terminal_cleanup import (
+    _cleanup_runner_terminal_state,
+    _reset_runner_terminal_state,
+)
 from backend.services.runner_control.channel.types import RunnerChannelSession
 from backend.services.runner_control.coordination import RunnerCoordinationStore
 from backend.services.runner_control.metrics import RunnerControlMetrics
@@ -139,11 +142,20 @@ class RunnerChannelLifecycle:
                 Runner.id == session.runner_id,
             )
         ).scalar_one_or_none()
-        _cleanup_runner_terminal_state(
-            db=self._db,
-            tenant_id=session.tenant_id,
-            runner_id=session.runner_id,
-        )
+        active_connection_count = self._db.execute(
+            select(func.count(RunnerConnection.id)).where(
+                RunnerConnection.tenant_id == session.tenant_id,
+                RunnerConnection.runner_id == session.runner_id,
+                RunnerConnection.status == "active",
+                RunnerConnection.lease_expires_at > now,
+            )
+        ).scalar_one()
+        if int(active_connection_count or 0) == 0:
+            _cleanup_runner_terminal_state(
+                db=self._db,
+                tenant_id=session.tenant_id,
+                runner_id=session.runner_id,
+            )
         if runner is None:
             self._metrics.record_runner_presence_snapshot(tenant_id=session.tenant_id)
             logger.info(
@@ -185,6 +197,24 @@ class RunnerChannelLifecycle:
             session.connection_id,
         )
         self._db.flush()
+
+    async def reset_terminal_state(self, session: RunnerChannelSession) -> None:
+        """Invalidate PTYs from the prior channel before this one is accepted."""
+        await _reset_runner_terminal_state(
+            db=self._db,
+            tenant_id=session.tenant_id,
+            runner_id=session.runner_id,
+        )
+
+    def is_session_current(self, session: RunnerChannelSession) -> bool:
+        """Return whether this channel still owns the runner's active lease."""
+        return self._coordination.is_connection_lease_active(
+            tenant_id=session.tenant_id,
+            runner_id=session.runner_id,
+            pod_id=self._pod_id,
+            connection_id=session.connection_id,
+            at=_utcnow(),
+        )
 
     def _reconcile_presence(self, *, now: datetime) -> None:
         result = self._registry.reconcile_stale_presence(now=now)

@@ -27,6 +27,10 @@ The format is based on
 
 ### Fixed
 
+- Shell commands now remain attached to their tool execution until completion by
+  default, while explicitly yielded interactive sessions continue on the same PTY.
+- Managed runners now enforce one active connection per identity, reject duplicate
+  local processes, and invalidate prior PTYs before a replacement channel is used.
 - Managed-runner terminal frames now use one buffered-reader delivery path,
   preventing duplicate live output and replay history.
 - Recursive root and home removal remains blocked when invoked through transparent

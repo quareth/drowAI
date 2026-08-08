@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from backend.database import Base
 from backend.models.runner_control import ExecutionSite, Runner, RunnerConnection, RunnerControlMessage
 from backend.models.tenant import Tenant
+from backend.services.runner_control.coordination import InMemoryRunnerCoordinationStore
 from backend.services.runner_control.db_coordination import DBRunnerCoordinationStore
 
 
@@ -117,6 +118,101 @@ def test_db_coordination_claim_refresh_release_is_idempotent() -> None:
     assert rows[0].status == "disconnected"
 
 
+def test_new_connection_lease_supersedes_previous_runner_connection() -> None:
+    """Only the newest channel for one runner may remain dispatch-capable."""
+    db = _build_session()
+    tenant, runner = _seed_runner(db)
+    store = DBRunnerCoordinationStore(db, pod_id="pod-a")
+    now = datetime.now(tz=UTC)
+
+    store.claim_connection_lease(
+        tenant_id=tenant.id,
+        runner_id=runner.id,
+        pod_id="pod-a",
+        connection_id="conn-old",
+        lease_expires_at=now + timedelta(seconds=90),
+        last_seen_at=now,
+    )
+    store.claim_connection_lease(
+        tenant_id=tenant.id,
+        runner_id=runner.id,
+        pod_id="pod-b",
+        connection_id="conn-new",
+        lease_expires_at=now + timedelta(seconds=90),
+        last_seen_at=now + timedelta(seconds=1),
+    )
+
+    statuses = {
+        row.connection_id: row.status
+        for row in db.execute(
+            select(RunnerConnection).where(
+                RunnerConnection.tenant_id == tenant.id,
+                RunnerConnection.runner_id == runner.id,
+            )
+        ).scalars()
+    }
+    assert statuses == {"conn-old": "disconnected", "conn-new": "active"}
+    assert not store.is_connection_lease_active(
+        tenant_id=tenant.id,
+        runner_id=runner.id,
+        pod_id="pod-a",
+        connection_id="conn-old",
+        at=now + timedelta(seconds=2),
+    )
+    assert store.refresh_connection_lease(
+        tenant_id=tenant.id,
+        runner_id=runner.id,
+        connection_id="conn-old",
+        lease_expires_at=now + timedelta(seconds=180),
+        last_seen_at=now + timedelta(seconds=2),
+    ) is None
+    assert store.is_connection_lease_active(
+        tenant_id=tenant.id,
+        runner_id=runner.id,
+        pod_id="pod-b",
+        connection_id="conn-new",
+        at=now + timedelta(seconds=2),
+    )
+
+
+def test_in_memory_connection_lease_supersedes_previous_connection() -> None:
+    store = InMemoryRunnerCoordinationStore()
+    runner_id = uuid.uuid4()
+    now = datetime.now(tz=UTC)
+
+    store.claim_connection_lease(
+        tenant_id=1,
+        runner_id=runner_id,
+        pod_id="pod-a",
+        connection_id="conn-old",
+        lease_expires_at=now + timedelta(seconds=90),
+        last_seen_at=now,
+    )
+    store.claim_connection_lease(
+        tenant_id=1,
+        runner_id=runner_id,
+        pod_id="pod-b",
+        connection_id="conn-new",
+        lease_expires_at=now + timedelta(seconds=90),
+        last_seen_at=now + timedelta(seconds=1),
+    )
+
+    assert not store.is_connection_lease_active(
+        tenant_id=1,
+        runner_id=runner_id,
+        pod_id="pod-a",
+        connection_id="conn-old",
+        at=now + timedelta(seconds=2),
+    )
+    assert store.is_connection_lease_active(
+        tenant_id=1,
+        runner_id=runner_id,
+        pod_id="pod-b",
+        connection_id="conn-new",
+        at=now + timedelta(seconds=2),
+    )
+
+
 def test_db_coordination_expire_stale_leases_marks_runner_offline() -> None:
     db = _build_session()
     tenant, runner = _seed_runner(db)
@@ -141,7 +237,7 @@ def test_db_coordination_expire_stale_leases_marks_runner_offline() -> None:
     )
 
     result = store.expire_stale_leases(now=now)
-    assert result.expired_connection_count == 2
+    assert result.expired_connection_count == 1
     assert result.offline_runner_count == 1
 
     repeat = store.expire_stale_leases(now=now + timedelta(seconds=1))

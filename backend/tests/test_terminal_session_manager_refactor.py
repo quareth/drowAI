@@ -33,6 +33,7 @@ from backend.services.terminal.shell_session_service import ShellSessionService
 from backend.services.terminal_session_manager import TerminalSessionManager, TerminalSession
 from backend.services.runtime_provider import RuntimeCallScope
 from runtime_shared.shell_session_port import get_shell_session_service
+from runtime_shared.terminal_contracts import TerminalReadResult
 
 
 def test_terminal_session_manager_facade_reexports_public_surface() -> None:
@@ -663,12 +664,17 @@ async def test_managed_stream_reader_delivers_each_frame_once(
 
     session.listeners.add(_WebSocket())
 
-    async def _fake_read_output(_session_id: str, _size: int, *, timeout: float | None = None) -> bytes:
+    async def _fake_read_output(
+        _session_id: str,
+        _size: int,
+        *,
+        timeout: float | None = None,
+    ) -> TerminalReadResult:
         timeouts.append(timeout)
         session.is_active = False
-        return b"prompt> "
+        return TerminalReadResult(ok=True, data=b"prompt> ")
 
-    monkeypatch.setattr(manager, "read_output", _fake_read_output)
+    monkeypatch.setattr(manager, "read_output_result", _fake_read_output)
 
     await manager._pty_reader(session)
 
@@ -676,6 +682,43 @@ async def test_managed_stream_reader_delivers_each_frame_once(
     assert sent == [b"prompt> "]
     assert list(session.output_buffer) == [b"prompt> "]
     assert session.buffer_bytes == len(b"prompt> ")
+
+
+@pytest.mark.asyncio
+async def test_managed_stream_reader_stops_after_transport_loss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A lost stream is terminal state, not an empty read to poll forever."""
+    manager = TerminalSessionManager()
+    session = TerminalSession(
+        session_id="term-managed-disconnected",
+        task_id=42,
+        user_id=7,
+        container_name="runner-task-42",
+        connection_type="docker_exec",
+        exec_id="runner-session-42",
+        stream_mode=True,
+    )
+    manager.sessions[session.session_id] = session
+    reads = 0
+
+    async def _failed_read(
+        _session_id: str,
+        _size: int,
+        *,
+        timeout: float | None = None,
+    ) -> TerminalReadResult:
+        nonlocal reads
+        del timeout
+        reads += 1
+        return TerminalReadResult(ok=False, error_code="terminal_stream_unavailable")
+
+    monkeypatch.setattr(manager, "read_output_result", _failed_read)
+
+    await manager._pty_reader(session)
+
+    assert reads == 1
+    assert session.is_active is False
 
 
 @pytest.mark.asyncio

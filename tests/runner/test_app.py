@@ -913,6 +913,28 @@ def test_cli_returns_stable_error_code_on_invalid_config(capsys, tmp_path: Path)
     assert payload["error_code"] == "INVALID_CONFIG"
 
 
+def test_managed_runner_rejects_duplicate_process_for_same_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """A second process must fail before connecting with the same local state."""
+    config = _build_runner_config(tmp_path)
+    called = False
+
+    def _unexpected_run(_config: app.RunnerConfig) -> int:
+        nonlocal called
+        called = True
+        return app.EXIT_OK
+
+    monkeypatch.setattr(app, "run_cloud_mode", _unexpected_run)
+
+    with app._runner_process_lock(config.runner_root):
+        exit_code = app.managed_run_command(config)
+
+    assert exit_code == app.EXIT_CLOUD_RUN_FAILED
+    assert called is False
+
+
 def test_run_subcommand_accepts_config_flag_after_command(monkeypatch, tmp_path: Path) -> None:
     config_path = tmp_path / "runner.toml"
     expected_root = tmp_path / "runner-root"

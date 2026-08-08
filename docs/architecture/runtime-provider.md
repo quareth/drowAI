@@ -211,6 +211,10 @@ runner-control router:
 - `WS   /api/runner-control/channel`
 
 Managed runner processes start the control-plane client with `drowai_runner run`.
+One runner identity owns one active channel lease. A new channel atomically
+supersedes the prior lease and clears prior terminal state before acceptance;
+an old channel cannot resume its lease or remove the replacement stream route.
+The runner also rejects a second local process that uses the same runner root.
 The channel carries `task.start`, `runtime.started`, `tool.command`,
 `artifact.manifest`, `artifact.upload.request`, `artifact.upload.complete`,
 terminal operations, and artifact messages. Terminal message types are:

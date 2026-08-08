@@ -1,9 +1,9 @@
-"""Runner websocket-channel terminal disconnect cleanup helpers.
+"""Runner websocket-channel terminal reset and disconnect cleanup helpers.
 
-Purpose: clean runner-owned terminal frame buffers and terminal sessions when a
-runner channel disconnects. Scope boundary: this module owns only disconnect
-terminal cleanup and task lookup for that cleanup; it does not own channel
-open/close lifecycle, terminal infrastructure, or frame buffering internals.
+Purpose: clean runner-owned terminal frame buffers and sessions before channel
+replacement or after final disconnect. Scope boundary: this module owns terminal
+cleanup and task lookup only; it does not own channel lifecycle, terminal
+infrastructure, or frame buffering internals.
 """
 
 from __future__ import annotations
@@ -109,8 +109,8 @@ async def _cleanup_runner_session_state(
     await _cleanup_runner_terminal_sessions(task_ids)
 
 
-def _cleanup_runner_terminal_state(*, db: Session, tenant_id: int, runner_id: UUID) -> None:
-    runner_task_ids = [
+def _runner_task_ids(*, db: Session, tenant_id: int, runner_id: UUID) -> list[int]:
+    return [
         int(task_id)
         for task_id in db.execute(
             select(Task.id).where(
@@ -120,7 +120,15 @@ def _cleanup_runner_terminal_state(*, db: Session, tenant_id: int, runner_id: UU
             )
         ).scalars().all()
     ]
-    if not runner_task_ids:
+
+
+def _clear_runner_terminal_frames(
+    *,
+    tenant_id: int,
+    runner_id: UUID,
+    task_ids: list[int],
+) -> None:
+    if not task_ids:
         return
     try:
         from backend.services.runner_control.terminal_frame_buffer import (
@@ -128,7 +136,7 @@ def _cleanup_runner_terminal_state(*, db: Session, tenant_id: int, runner_id: UU
         )
 
         frame_buffer = get_runner_terminal_frame_buffer()
-        for task_id in runner_task_ids:
+        for task_id in task_ids:
             frame_buffer.clear_task(tenant_id=tenant_id, task_id=task_id)
     except Exception:
         logger.debug(
@@ -138,9 +146,53 @@ def _cleanup_runner_terminal_state(*, db: Session, tenant_id: int, runner_id: UU
             exc_info=True,
         )
 
+
+def _prepare_runner_terminal_cleanup(
+    *,
+    db: Session,
+    tenant_id: int,
+    runner_id: UUID,
+) -> list[int]:
+    task_ids = _runner_task_ids(db=db, tenant_id=tenant_id, runner_id=runner_id)
+    _clear_runner_terminal_frames(
+        tenant_id=tenant_id,
+        runner_id=runner_id,
+        task_ids=task_ids,
+    )
+    return task_ids
+
+
+async def _reset_runner_terminal_state(
+    *,
+    db: Session,
+    tenant_id: int,
+    runner_id: UUID,
+) -> None:
+    """Clear stale runner terminal state before a replacement channel is usable."""
+    task_ids = _prepare_runner_terminal_cleanup(
+        db=db,
+        tenant_id=tenant_id,
+        runner_id=runner_id,
+    )
+    if task_ids:
+        await _cleanup_runner_session_state(
+            tenant_id=tenant_id,
+            task_ids=task_ids,
+        )
+
+
+def _cleanup_runner_terminal_state(*, db: Session, tenant_id: int, runner_id: UUID) -> None:
+    task_ids = _prepare_runner_terminal_cleanup(
+        db=db,
+        tenant_id=tenant_id,
+        runner_id=runner_id,
+    )
+    if not task_ids:
+        return
+
     _run_or_schedule_disconnect_cleanup(
         _cleanup_runner_session_state(
             tenant_id=tenant_id,
-            task_ids=runner_task_ids,
+            task_ids=task_ids,
         )
     )

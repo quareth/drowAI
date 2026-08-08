@@ -17,6 +17,41 @@ from runtime_shared.runner_protocol import (
 )
 
 
+def test_stale_channel_unregister_cannot_remove_replacement_route() -> None:
+    registry = RunnerTerminalStreamRegistry()
+    runner_id = uuid4()
+
+    async def _old_sender(_envelope: RunnerEnvelope) -> None:
+        return None
+
+    async def _new_sender(_envelope: RunnerEnvelope) -> None:
+        return None
+
+    registry.register_channel(
+        tenant_id=1,
+        runner_id=runner_id,
+        connection_id="conn-old",
+        sender=_old_sender,
+    )
+    registry.register_channel(
+        tenant_id=1,
+        runner_id=runner_id,
+        connection_id="conn-new",
+        sender=_new_sender,
+    )
+    registry.unregister_channel(
+        tenant_id=1,
+        runner_id=runner_id,
+        connection_id="conn-old",
+    )
+
+    assert registry.is_current_channel(
+        tenant_id=1,
+        runner_id=runner_id,
+        connection_id="conn-new",
+    )
+
+
 def test_terminal_stream_registry_routes_known_frames_only() -> None:
     registry = RunnerTerminalStreamRegistry()
     runner_id = uuid4()

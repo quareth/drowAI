@@ -55,18 +55,30 @@ class DBRunnerCoordinationStore(RunnerCoordinationStore):
     ) -> RunnerConnectionLease:
         lease_expires_at = _ensure_utc(lease_expires_at)
         last_seen_at = _ensure_utc(last_seen_at)
+        normalized_connection_id = str(connection_id).strip()
+
+        # Serialize claims for one runner identity across backend pods. Without
+        # this parent-row lock, two concurrent inserts can both remain active.
+        self._db.execute(
+            select(Runner.id)
+            .where(
+                Runner.tenant_id == tenant_id,
+                Runner.id == runner_id,
+            )
+            .with_for_update()
+        ).scalar_one()
 
         connection = self._find_connection(
             tenant_id=tenant_id,
             runner_id=runner_id,
-            connection_id=connection_id,
+            connection_id=normalized_connection_id,
         )
         if connection is None:
             connection = RunnerConnection(
                 tenant_id=tenant_id,
                 runner_id=runner_id,
                 pod_id=str(pod_id).strip() or self._pod_id,
-                connection_id=str(connection_id).strip(),
+                connection_id=normalized_connection_id,
                 status="active",
                 lease_expires_at=lease_expires_at,
                 last_seen_at=last_seen_at,
@@ -79,12 +91,22 @@ class DBRunnerCoordinationStore(RunnerCoordinationStore):
                 connection = self._find_connection(
                     tenant_id=tenant_id,
                     runner_id=runner_id,
-                    connection_id=connection_id,
+                    connection_id=normalized_connection_id,
                 )
                 if connection is None:
                     raise
 
         with self._db.begin_nested():
+            self._db.execute(
+                update(RunnerConnection)
+                .where(
+                    RunnerConnection.tenant_id == tenant_id,
+                    RunnerConnection.runner_id == runner_id,
+                    RunnerConnection.connection_id != normalized_connection_id,
+                    RunnerConnection.status == "active",
+                )
+                .values(status="disconnected", last_seen_at=last_seen_at)
+            )
             connection.pod_id = str(pod_id).strip() or self._pod_id
             connection.status = "active"
             connection.lease_expires_at = lease_expires_at
@@ -114,12 +136,40 @@ class DBRunnerCoordinationStore(RunnerCoordinationStore):
             if connection is None:
                 return None
 
-            # Idempotent refresh always converges to active + latest lease bounds.
-            connection.status = "active"
+            if str(connection.status or "").strip().lower() != "active":
+                return None
             connection.lease_expires_at = lease_expires_at
             connection.last_seen_at = last_seen_at
             self._db.flush()
             return _to_connection_lease(connection)
+
+    def is_connection_lease_active(
+        self,
+        *,
+        tenant_id: int,
+        runner_id: UUID,
+        pod_id: str,
+        connection_id: str,
+        at: datetime,
+    ) -> bool:
+        normalized_pod_id = str(pod_id).strip()
+        normalized_connection_id = str(connection_id).strip()
+        if not normalized_pod_id or not normalized_connection_id:
+            return False
+        return bool(
+            self._db.execute(
+                select(
+                    exists().where(
+                        RunnerConnection.tenant_id == tenant_id,
+                        RunnerConnection.runner_id == runner_id,
+                        RunnerConnection.pod_id == normalized_pod_id,
+                        RunnerConnection.connection_id == normalized_connection_id,
+                        RunnerConnection.status == "active",
+                        RunnerConnection.lease_expires_at > _ensure_utc(at),
+                    )
+                )
+            ).scalar_one()
+        )
 
     def release_connection_lease(
         self,

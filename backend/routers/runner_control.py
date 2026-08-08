@@ -379,6 +379,10 @@ async def _runner_channel_inbound_loop(
             loop_state.close_code = int(exc.code or loop_state.close_code)
             return
 
+        if not manager.is_session_current(session):
+            loop_state.close_reason = "Runner channel superseded by a newer connection."
+            return
+
         stream_envelope = _try_parse_runner_envelope(inbound)
         if stream_envelope is not None:
             if stream_registry.handle_stream_ack(stream_envelope):
@@ -1215,10 +1219,12 @@ async def runner_channel(
             remote_ip_address=websocket.client.host if websocket.client else None,
         )
         db.commit()
+        await manager.reset_terminal_state(session)
         await websocket.accept()
         stream_registry.register_channel(
             tenant_id=identity.tenant_id,
             runner_id=identity.runner_id,
+            connection_id=session.connection_id,
             sender=_send_stream_envelope,
         )
         inbound_task = asyncio.create_task(
@@ -1233,6 +1239,13 @@ async def runner_channel(
             )
         )
         while True:
+            if not stream_registry.is_current_channel(
+                tenant_id=identity.tenant_id,
+                runner_id=identity.runner_id,
+                connection_id=session.connection_id,
+            ) or not manager.is_session_current(session):
+                loop_state.close_reason = "Runner channel superseded by a newer connection."
+                break
             if inbound_task.done():
                 inbound_task.result()
                 break
@@ -1261,6 +1274,7 @@ async def runner_channel(
         stream_registry.unregister_channel(
             tenant_id=identity.tenant_id,
             runner_id=identity.runner_id,
+            connection_id=session.connection_id if session is not None else None,
         )
         ack_waiters.fail_all(error_message=loop_state.close_reason)
         if inbound_task is not None and not inbound_task.done():

@@ -36,6 +36,7 @@ from backend.services.runner_control.channel.auth import RunnerChannelAuthContex
 from backend.services.runner_control.channel.terminal_cleanup import (
     _cleanup_runner_terminal_state,
 )
+import backend.services.runner_control.channel.lifecycle as channel_lifecycle
 from backend.services.runner_control.channel_manager import RunnerChannelManager
 from backend.services.runner_control.credentials import RunnerCredentialService
 from backend.services.terminal.manager import terminal_session_manager
@@ -690,6 +691,53 @@ def test_runner_channel_manager_close_session_marks_runner_offline_when_last_lea
     event_types = [event["event_type"] for event in audit_events]
     assert "runner.disconnected" in event_types
     assert "runner.offline" in event_types
+
+
+@pytest.mark.asyncio
+async def test_replacement_channel_invalidates_old_terminal_state_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A replacement starts clean; closing the old socket cannot clean the new one."""
+    db = _build_session()
+    tenant, runner = _seed_runner(db)
+    manager = RunnerChannelManager(db, lease_ttl_seconds=30)
+    credential_id = _issue_credential_id(db, tenant_id=tenant.id, runner_id=runner.id)
+    auth = RunnerChannelAuthContext(
+        tenant_id=tenant.id,
+        runner_id=runner.id,
+        credential_id=credential_id,
+        allowed_protocol_versions=("runner_control.v1",),
+    )
+    reset_calls: list[uuid.UUID] = []
+    close_cleanup_calls: list[uuid.UUID] = []
+
+    async def _record_reset(*, db, tenant_id, runner_id) -> None:
+        reset_calls.append(runner_id)
+
+    monkeypatch.setattr(
+        channel_lifecycle,
+        "_reset_runner_terminal_state",
+        _record_reset,
+    )
+    monkeypatch.setattr(
+        channel_lifecycle,
+        "_cleanup_runner_terminal_state",
+        lambda *, db, tenant_id, runner_id: close_cleanup_calls.append(runner_id),
+    )
+
+    old_session = manager.open_session(auth)
+    await manager.reset_terminal_state(old_session)
+    new_session = manager.open_session(auth)
+    await manager.reset_terminal_state(new_session)
+    assert reset_calls == [runner.id, runner.id]
+    assert not manager.is_session_current(old_session)
+    assert manager.is_session_current(new_session)
+
+    manager.close_session(old_session)
+    assert close_cleanup_calls == []
+
+    manager.close_session(new_session)
+    assert close_cleanup_calls == [runner.id]
 
 
 def test_runner_channel_manager_close_session_tolerates_deleted_runner() -> None:
