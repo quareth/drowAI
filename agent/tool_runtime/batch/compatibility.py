@@ -190,6 +190,9 @@ class BatchCompatibilityChecker:
 def _target_key(parameters: object) -> Optional[str]:
     if not isinstance(parameters, dict):
         return None
+    session_id = parameters.get("session_id")
+    if isinstance(session_id, str) and session_id.strip():
+        return f"session:{session_id.strip()}"
     for key in ("target", "url", "host"):
         value = parameters.get(key)
         if isinstance(value, str) and value.strip():

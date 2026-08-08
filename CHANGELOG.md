@@ -27,6 +27,8 @@ The format is based on
 
 ### Fixed
 
+- Parallel tool batches now serialize operations targeting the same interactive
+  shell session while preserving concurrency across independent sessions.
 - Durable interactive shell history now masks stdin values before persistence,
   preventing credentials entered during assessment sessions from reaching the database.
 - Fallback tool planning now receives every visible mission tool instead of
