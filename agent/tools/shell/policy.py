@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Dict, List, Optional
 from pydantic import ValidationError
+from runtime_shared.shell_capabilities import canonical_shell_implementation_tool_id
 
 
 class PolicyEnforcement(str, Enum):
@@ -29,8 +30,38 @@ class PolicyResult:
     severity: str = "info"  # "info", "warning", "error"
 
 
+_PROTECTED_RECURSIVE_REMOVAL_TARGETS = frozenset({"/", "/*", "~", "~/*"})
+
+
+def _is_protected_recursive_removal(command: str) -> bool:
+    """Return whether ``rm`` recursively targets the runtime root or home."""
+    try:
+        tokens = shlex.split(command, posix=True)
+    except Exception:
+        return False
+    if not tokens or os.path.basename(tokens[0]).lower() != "rm":
+        return False
+
+    recursive = False
+    targets: List[str] = []
+    options_ended = False
+    for token in tokens[1:]:
+        if not options_ended and token == "--":
+            options_ended = True
+        elif not options_ended and token == "--recursive":
+            recursive = True
+        elif not options_ended and token.startswith("-"):
+            recursive = recursive or "r" in token[1:] or "R" in token[1:]
+        else:
+            targets.append(token)
+
+    return recursive and any(
+        target in _PROTECTED_RECURSIVE_REMOVAL_TARGETS for target in targets
+    )
+
+
 class CommandPolicy:
-    """Validates shell commands against allowlist and denylist rules."""
+    """Apply an optional allowlist and a small set of obvious-hazard blocks."""
 
     def __init__(self, enforcement: Optional[PolicyEnforcement] = None):
         """Initialize policy with enforcement level from env or default to PERMISSIVE for pentesting."""
@@ -104,6 +135,8 @@ class CommandPolicy:
         for pattern in self._denylist_patterns:
             if self._matches_pattern(command, pattern):
                 return pattern
+        if _is_protected_recursive_removal(command):
+            return "recursive removal of runtime root/home"
         return None
 
     def _matches_pattern(self, command: str, pattern: str) -> bool:
@@ -133,8 +166,8 @@ class CommandPolicy:
         In PERMISSIVE mode (default), this is advisory - unlisted commands will warn but still execute.
         In STRICT mode, only these commands are allowed.
         
-        Note: Pentesting tools (nmap, metasploit, etc.) should use structured tool implementations
-        rather than raw shell execution. This allowlist focuses on core utilities and troubleshooting.
+        The allowlist is deliberately not a complete list of pentesting commands. Permissive mode
+        allows commands outside it after applying the small obvious-hazard denylist below.
         """
         return [
             # Package managers (for installing pentesting tools)
@@ -261,48 +294,21 @@ class CommandPolicy:
         ]
 
     def _build_denylist(self) -> List[str]:
-        """Build denylist of explicitly forbidden command patterns."""
+        """Build hard blocks for runtime destruction, exhaustion, and escape."""
         return [
-            # Destructive filesystem operations
+            # Destructive runtime operations
             "rm -rf /",
             "rm -rf /*",
             "rm -rf ~",
             "rm -rf ~/*",
-            "rm -rf .",
-            "rm -rf ./*",
-            "rm -rf *",  # Too broad
-            "dd if=*",
+            "dd *of=/dev/sd*",
+            "dd *of=/dev/vd*",
+            "dd *of=/dev/xvd*",
+            "dd *of=/dev/nvme*",
+            "dd *of=/dev/mmcblk*",
+            "dd *of=/dev/mapper/*",
+            "dd *of=/dev/disk/*",
             "mkfs*",
-            "fdisk *",
-            "parted *",
-            "shred *",
-            # Privilege escalation
-            "sudo su",
-            "sudo -i",
-            "sudo bash",
-            "sudo sh",
-            "passwd",
-            "passwd *",
-            "useradd *",
-            "usermod *",
-            "groupadd *",
-            "chown root *",
-            "chmod 777 *",
-            "chmod -R 777 *",
-            # Code execution from network
-            "curl * | bash",
-            "curl * | sh",
-            "wget * | bash",
-            "wget * | sh",
-            "curl * -o - | bash",
-            # Network listeners (exfiltration risk)
-            "nc -l *",
-            "ncat -l *",
-            "netcat -l *",
-            "python -m http.server",
-            "python -m SimpleHTTPServer",
-            "php -S *",
-            # System modification
             "reboot",
             "shutdown *",
             "halt",
@@ -311,26 +317,14 @@ class CommandPolicy:
             "init 6",
             "systemctl reboot",
             "systemctl poweroff",
-            # Kernel/system
-            "insmod *",
-            "rmmod *",
-            "modprobe *",
-            "sysctl *",
             # Fork bombs and resource exhaustion
             ":(){:|:&};:",
             ":(){ :|:& };:",
-            "while true; do *",
-            # Sensitive file access
-            "cat /etc/shadow",
-            "cat /etc/passwd",
-            "cat ~/.ssh/*",
-            "cat /root/*",
             # Docker escape attempts
-            "docker run --privileged *",
-            "docker run -v /:/host *",
-            # Cron/scheduled tasks
-            "crontab *",
-            "at *",
+            "docker run *--privileged*",
+            "docker run *-v /:/*",
+            "docker run *--volume /:/*",
+            "docker run *--mount *src=/*",
         ]
 
 
@@ -357,8 +351,12 @@ def extract_shell_wrapper_payload(command: str) -> Optional[str]:
     return None
 
 
-def split_shell_chained_segments(command_line: str) -> List[str]:
-    """Split a shell command line into top-level segments by `;`, `&&`, `||`."""
+def _split_shell_segments(
+    command_line: str,
+    *,
+    separators: set[str],
+) -> List[str]:
+    """Split a shell command line on the selected top-level control operators."""
     line = (command_line or "").strip()
     if not line:
         return []
@@ -371,12 +369,11 @@ def split_shell_chained_segments(command_line: str) -> List[str]:
     except Exception:
         return [line]
 
-    split_tokens = {";", "&&", "||"}
     segments: List[str] = []
     current: List[str] = []
 
     for token in tokens:
-        if token in split_tokens:
+        if token in separators:
             segment = " ".join(current).strip()
             if segment:
                 segments.append(segment)
@@ -391,40 +388,31 @@ def split_shell_chained_segments(command_line: str) -> List[str]:
     return segments or [line]
 
 
-def is_removal_segment(segment: str) -> bool:
-    """Detect whether a segment executes `rm` directly."""
-    try:
-        tokens = shlex.split(segment, posix=True)
-    except Exception:
-        return False
-    if not tokens:
-        return False
-    return os.path.basename(tokens[0]).lower() == "rm"
+def split_shell_chained_segments(command_line: str) -> List[str]:
+    """Split command chains while preserving each pipeline as one policy unit."""
+    return _split_shell_segments(
+        command_line,
+        separators={";", "&&", "||", "&"},
+    )
+
+
+def split_shell_executable_segments(command_line: str) -> List[str]:
+    """Split control flow into the individual commands that may execute."""
+    return _split_shell_segments(
+        command_line,
+        separators={";", "&&", "||", "&", "|"},
+    )
 
 
 def validate_shell_exec_command(
     command: str,
     *,
-    max_command_chars: int = 320,
     policy: Optional[CommandPolicy] = None,
     metric_hook: Optional[Callable[[str], None]] = None,
 ) -> List[Dict[str, str]]:
     """Validate shell command text and return error descriptors."""
     validation_errors: List[Dict[str, str]] = []
     command_text = str(command or "")
-    max_chars = int(max_command_chars or 320)
-
-    if len(command_text) > max_chars:
-        validation_errors.append(
-            {
-                "field": "command",
-                "error": f"Command too long ({len(command_text)} > {max_chars} characters)",
-                "message": f"Command exceeds max length of {max_chars} characters (received {len(command_text)}).",
-                "suggested_fix": "Use a shorter command for the immediate objective, then continue in a follow-up tool call.",
-            }
-        )
-        if metric_hook:
-            metric_hook("executor_shell_exec_length_rejected")
 
     if policy is None:
         policy = CommandPolicy()
@@ -448,35 +436,21 @@ def validate_shell_exec_command(
             if not line:
                 continue
 
-            segments = split_shell_chained_segments(line)
+            chained_segments = split_shell_chained_segments(line)
+            for chained_segment in chained_segments:
+                if "|" in chained_segment:
+                    pipeline_result = policy.validate(chained_segment)
+                    if not pipeline_result.allowed and pipeline_result.matched_pattern:
+                        source = f"{source_prefix} {line_no} pipeline"
+                        _validate_policy_segment(chained_segment, source=source)
+
+            segments = split_shell_executable_segments(line)
             multi_segment = len(segments) > 1
             for segment_idx, segment in enumerate(segments, start=1):
                 source = f"{source_prefix} {line_no}"
                 if multi_segment:
                     source = f"{source} segment {segment_idx}"
                 _validate_policy_segment(segment, source=source)
-
-            # Lightweight guardrail: disallow `rm` segments hidden in chained commands.
-            if multi_segment:
-                for segment_idx, segment in enumerate(segments, start=1):
-                    if not is_removal_segment(segment):
-                        continue
-                    source = f"{source_prefix} {line_no} segment {segment_idx}"
-                    validation_errors.append(
-                        {
-                            "field": "command",
-                            "error": f"Chained removal blocked in {source}",
-                            "message": (
-                                f"Chained removal is blocked in {source}. "
-                                "Run removal as a separate explicit command."
-                            ),
-                            "suggested_fix": (
-                                "Split this into separate commands so removal is explicit and isolated."
-                            ),
-                        }
-                    )
-                    if metric_hook:
-                        metric_hook("executor_shell_exec_chained_removal_rejected")
 
     _validate_segments_by_line(command_text, source_prefix="command line")
 
@@ -508,12 +482,12 @@ def validate_shell_tool_parameters(
     *,
     get_tool_fn: Callable[[str], object],
     generate_fix_suggestion_fn: Callable[[dict], str],
-    max_command_chars: int = 320,
     metric_hook: Optional[Callable[[str], None]] = None,
     logger: object = None,
 ) -> List[Dict[str, str]]:
-    """Validate strict shell tool parameters for ``shell.exec`` and ``shell.script``."""
-    if tool_id not in {"shell.exec", "shell.script"}:
+    """Validate shell parameters for implementation ids and model-facing aliases."""
+    canonical_tool_id = canonical_shell_implementation_tool_id(tool_id)
+    if canonical_tool_id not in {"shell.exec", "shell.script"}:
         return []
 
     try:
@@ -531,21 +505,16 @@ def validate_shell_tool_parameters(
 
         args = args_model(**dict(parameters or {}))
 
-        # shell.script keeps existing behavior (line-by-line policy validation in tool.run).
-        if tool_id != "shell.exec":
-            return []
-
-        command = str(getattr(args, "command", "") or "")
-        max_chars = int(max_command_chars or 320)
+        command_field = "command" if canonical_tool_id == "shell.exec" else "script"
+        command = str(getattr(args, command_field, "") or "")
         validation_errors = validate_shell_exec_command(
             command,
-            max_command_chars=max_chars,
             metric_hook=metric_hook,
         )
         if validation_errors and logger and hasattr(logger, "log_operation"):
             logger.log_operation(
                 "WARNING",
-                "EnhancedExecutor: shell.exec quality gate rejected command",
+                "EnhancedExecutor: shell policy gate rejected command",
                 metadata={
                     "tool_id": tool_id,
                     "error_count": len(validation_errors),
@@ -580,8 +549,6 @@ __all__ = [
     "PolicyEnforcement",
     "extract_shell_wrapper_payload",
     "split_shell_chained_segments",
-    "is_removal_segment",
     "validate_shell_exec_command",
     "validate_shell_tool_parameters",
 ]
-

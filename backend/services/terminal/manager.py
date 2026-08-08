@@ -26,6 +26,8 @@ from ..runtime_provider import (
     RuntimeProviderContextResolver,
 )
 from ..runtime_provider.terminal_stream_contract import is_push_terminal_stream
+from runtime_shared.shell_session_contracts import SHELL_SESSION_CLEANUP_TIMEOUT_SEC
+from runtime_shared.terminal_contracts import TerminalReadResult
 from .contracts import (
     AGENT_PROMPT_ENV,
     AGENT_PROMPT_MARKER,
@@ -36,6 +38,47 @@ from .models import TerminalSession
 from .registry import TerminalSessionRegistry
 
 logger = logging.getLogger(__name__)
+
+
+_TERMINAL_READY_RUNTIME_STATUSES = frozenset({"running"})
+_TERMINAL_TRANSIENT_RUNTIME_STATUSES = frozenset(
+    {
+        "",
+        "unknown",
+        "pending",
+        "starting",
+        "container_starting",
+        "created",
+        "restarting",
+        "queued",
+        "assigned",
+        "dispatching",
+        "dispatched",
+        "acknowledged",
+        "accepted",
+    }
+)
+_TERMINAL_UNAVAILABLE_RUNTIME_STATUSES = frozenset(
+    {
+        "paused",
+        "stopped",
+        "exited",
+        "dead",
+        "failed",
+        "error",
+        "errored",
+        "cancelled",
+        "canceled",
+        "lost",
+        "expired",
+        "missing",
+        "not_found",
+        "none",
+        "removed",
+    }
+)
+_TERMINAL_READINESS_POLL_INTERVAL_SEC = 0.1
+_TERMINAL_OPEN_DEADLINE_SEC = 5.0
 
 
 class TerminalSessionManager:
@@ -221,49 +264,52 @@ class TerminalSessionManager:
                 logger.warning("User %s has reached maximum sessions limit", user_id)
                 return None
 
-            validation_kwargs = {
-                "authorized_task": authorized_task,
-                "runtime_call_scope": runtime_call_scope,
-            }
-            if authorized_task is None:
-                validation_kwargs["tenant_id"] = tenant_id
-            if not await self._validate_container_access(task_id, user_id, **validation_kwargs):
-                logger.error("User %s cannot access runtime for task %s", user_id, task_id)
-                return None
-
             session_id = self._generate_session_id(user_id, task_id)
             db = SessionLocal()
             try:
                 runtime_operations = RuntimeOperationService(db)
-                if authorized_task is not None:
-                    result = await runtime_operations.run_authorized_task_operation(
-                        task=authorized_task,
-                        user_id=user_id,
-                        operation="open_terminal_session",
-                        call=lambda provider, request: provider.open_terminal_session(request),
-                        payload={"shell": "/bin/bash", "cols": cols, "rows": rows},
-                        metadata={"wait_for_result": True, "wait_timeout_seconds": 5.0},
-                        runtime_call_scope=runtime_call_scope,
-                    )
-                else:
+
+                async def _dispatch_terminal_operation(
+                    *,
+                    operation: str,
+                    call,
+                    payload: dict[str, Any] | None = None,
+                    metadata: dict[str, Any] | None = None,
+                ):
+                    if authorized_task is not None:
+                        return await runtime_operations.run_authorized_task_operation(
+                            task=authorized_task,
+                            user_id=user_id,
+                            operation=operation,
+                            call=call,
+                            payload=payload,
+                            metadata=metadata,
+                            runtime_call_scope=runtime_call_scope,
+                        )
                     if tenant_id is None:
-                        logger.error("Terminal session denied without tenant context for task %s", task_id)
-                        return None
-                    result = await runtime_operations.run_user_task_operation(
+                        raise RuntimeError(
+                            f"Terminal session denied without tenant context for task {task_id}"
+                        )
+                    return await runtime_operations.run_user_task_operation(
                         task_id=task_id,
                         user_id=user_id,
                         tenant_id=int(tenant_id),
-                        operation="open_terminal_session",
-                        call=lambda provider, request: provider.open_terminal_session(request),
-                        payload={"shell": "/bin/bash", "cols": cols, "rows": rows},
-                        metadata={"wait_for_result": True, "wait_timeout_seconds": 5.0},
+                        operation=operation,
+                        call=call,
+                        payload=payload,
+                        metadata=metadata,
                         runtime_call_scope=runtime_call_scope,
                     )
+
+                result = await self._open_terminal_when_runtime_ready(
+                    task_id=task_id,
+                    dispatch=_dispatch_terminal_operation,
+                    shell="/bin/bash",
+                    cols=cols,
+                    rows=rows,
+                )
             finally:
                 db.close()
-            if not result.ok:
-                logger.error("Terminal provider open failed for task %s: %s", task_id, result.error_message)
-                return None
             delegate = result.metadata.get("delegate_result")
             if not isinstance(delegate, dict):
                 return None
@@ -741,13 +787,33 @@ class TerminalSessionManager:
             session.update_activity()
             return session
 
-        await self._initialize_agent_session(
-            session=session,
-            workspace_path=workspace_path,
-        )
+        try:
+            await self._initialize_agent_session(
+                session=session,
+                workspace_path=workspace_path,
+            )
+        except asyncio.CancelledError:
+            await self._retire_failed_agent_session(session)
+            raise
+        except Exception:
+            await self._retire_failed_agent_session(session)
+            raise
         session._drowai_initialized = True
         session.update_activity()
         return session
+
+    async def _retire_failed_agent_session(self, session: TerminalSession) -> None:
+        """Bound cleanup for a provider terminal that failed during initialization."""
+        try:
+            async with asyncio.timeout(SHELL_SESSION_CLEANUP_TIMEOUT_SEC):
+                await self.close_session(session.session_id)
+        except (TimeoutError, asyncio.CancelledError):
+            pass
+        finally:
+            session.is_active = False
+            session.socket = None
+            if self._registry.get(session.session_id) is session:
+                self._registry.remove(session.session_id)
 
     async def _initialize_agent_session(
         self,
@@ -820,28 +886,31 @@ class TerminalSessionManager:
             db = SessionLocal()
             try:
                 runtime_operations = RuntimeOperationService(db)
-                status_result = await runtime_operations.run_for_context(
-                    context=runtime_context,
-                    operation="get_runtime_status",
-                    call=lambda provider, request: provider.get_runtime_status(request),
-                    metadata={"wait_for_result": True, "wait_timeout_seconds": 5.0},
-                )
-                container_status = status_result.metadata.get("delegate_result") if status_result.ok else "unknown"
-                open_result = await runtime_operations.run_for_context(
-                    context=runtime_context,
-                    operation="open_terminal_session",
-                    call=lambda provider, request: provider.open_terminal_session(request),
-                    payload={"shell": "/bin/bash", "cols": cols, "rows": rows},
-                    metadata={"wait_for_result": True, "wait_timeout_seconds": 5.0},
+
+                async def _dispatch_terminal_operation(
+                    *,
+                    operation: str,
+                    call,
+                    payload: dict[str, Any] | None = None,
+                    metadata: dict[str, Any] | None = None,
+                ):
+                    return await runtime_operations.run_for_context(
+                        context=runtime_context,
+                        operation=operation,
+                        call=call,
+                        payload=payload,
+                        metadata=metadata,
+                    )
+
+                open_result = await self._open_terminal_when_runtime_ready(
+                    task_id=task_id,
+                    dispatch=_dispatch_terminal_operation,
+                    shell="/bin/bash",
+                    cols=cols,
+                    rows=rows,
                 )
             finally:
                 db.close()
-            if not self._is_runtime_accessible_status(container_status):
-                raise Exception(
-                    f"Runtime for task {task_id} not running (status: {container_status})"
-                )
-            if not open_result.ok:
-                raise RuntimeError(open_result.error_message or "Failed to open terminal session")
             delegate = open_result.metadata.get("delegate_result")
             if not isinstance(delegate, dict):
                 raise RuntimeError("Terminal provider returned invalid session metadata")
@@ -943,10 +1012,20 @@ class TerminalSessionManager:
         timeout: float | None = None,
     ) -> bytes:
         """Read bytes from an active terminal session through provider I/O."""
+        return (await self.read_output_result(session_id, size, timeout=timeout)).data
+
+    async def read_output_result(
+        self,
+        session_id: str,
+        size: int = 4096,
+        *,
+        timeout: float | None = None,
+    ) -> TerminalReadResult:
+        """Read terminal output with provider success/failure details."""
         session = self._registry.get(session_id)
         provider_ref = self._session_provider_ref(session) if session else None
         if not session or not session.is_active or provider_ref is None:
-            return b""
+            return TerminalReadResult(ok=False, error_code="terminal_session_unavailable")
         payload: dict[str, Any] = {"size": size, "timeout": timeout}
         if session.socket is not None:
             payload["socket"] = session.socket
@@ -962,7 +1041,10 @@ class TerminalSessionManager:
             payload=payload,
         )
         if not result.ok:
-            return b""
+            return TerminalReadResult(
+                ok=False,
+                error_code=result.error_code or "runtime_transport_failed",
+            )
         delegate = result.metadata.get("delegate_result")
         if isinstance(delegate, dict):
             next_cursor = delegate.get("next_cursor", delegate.get("cursor"))
@@ -972,13 +1054,18 @@ class TerminalSessionManager:
                 except (TypeError, ValueError):
                     pass
             data = delegate.get("data", b"")
+            truncated = bool(delegate.get("truncated", False))
             if isinstance(data, bytes):
                 session.update_activity()
-                return data
+                return TerminalReadResult(ok=True, data=data, truncated=truncated)
             if isinstance(data, str):
                 session.update_activity()
-                return data.encode()
-        return b""
+                return TerminalReadResult(
+                    ok=True,
+                    data=data.encode(),
+                    truncated=truncated,
+                )
+        return TerminalReadResult(ok=True, data=b"")
 
     async def _run_session_provider_operation(
         self,
@@ -1020,18 +1107,128 @@ class TerminalSessionManager:
             return session.socket
         return session.exec_id
 
+    async def _open_terminal_when_runtime_ready(
+        self,
+        *,
+        task_id: int,
+        dispatch,
+        shell: str,
+        cols: int,
+        rows: int,
+    ):
+        """Wait for transient runtime startup only inside the terminal-open deadline."""
+        loop = asyncio.get_running_loop()
+        deadline_at = loop.time() + _TERMINAL_OPEN_DEADLINE_SEC
+        last_status: Any = "unknown"
+
+        while True:
+            remaining = deadline_at - loop.time()
+            if remaining <= 0:
+                raise RuntimeError(
+                    self._runtime_readiness_deadline_message(task_id, last_status)
+                )
+            wait_timeout = min(5.0, max(0.0, remaining))
+            status_result = await dispatch(
+                operation="get_runtime_status",
+                call=lambda provider, request: provider.get_runtime_status(request),
+                metadata={
+                    "wait_for_result": True,
+                    "wait_timeout_seconds": wait_timeout,
+                },
+            )
+            last_status = (
+                status_result.metadata.get("delegate_result")
+                if getattr(status_result, "ok", False)
+                else "unknown"
+            )
+            if self._is_runtime_accessible_status(last_status):
+                break
+            if self._is_runtime_definitively_unavailable_status(last_status):
+                raise RuntimeError(
+                    f"Runtime for task {task_id} is not available for terminal open "
+                    f"(status: {self._format_runtime_status(last_status)})"
+                )
+
+            remaining = deadline_at - loop.time()
+            if remaining <= 0:
+                raise RuntimeError(
+                    self._runtime_readiness_deadline_message(task_id, last_status)
+                )
+            await asyncio.sleep(min(_TERMINAL_READINESS_POLL_INTERVAL_SEC, remaining))
+
+        remaining = deadline_at - loop.time()
+        if remaining <= 0:
+            raise RuntimeError(
+                self._runtime_readiness_deadline_message(task_id, last_status)
+            )
+        open_result = await dispatch(
+            operation="open_terminal_session",
+            call=lambda provider, request: provider.open_terminal_session(request),
+            payload={"shell": shell, "cols": cols, "rows": rows},
+            metadata={
+                "wait_for_result": True,
+                "wait_timeout_seconds": min(5.0, max(0.0, remaining)),
+            },
+        )
+        if not getattr(open_result, "ok", False):
+            raise RuntimeError(
+                getattr(open_result, "error_message", None)
+                or "Failed to open terminal session"
+            )
+        return open_result
+
     @staticmethod
     def _is_runtime_accessible_status(status_payload: Any) -> bool:
+        return bool(
+            TerminalSessionManager._runtime_status_values(status_payload)
+            & _TERMINAL_READY_RUNTIME_STATUSES
+        )
+
+    @staticmethod
+    def _is_runtime_definitively_unavailable_status(status_payload: Any) -> bool:
+        values = TerminalSessionManager._runtime_status_values(status_payload)
+        if not values:
+            return False
+        if values & _TERMINAL_READY_RUNTIME_STATUSES:
+            return False
+        if values & _TERMINAL_TRANSIENT_RUNTIME_STATUSES:
+            return False
+        return bool(values & _TERMINAL_UNAVAILABLE_RUNTIME_STATUSES)
+
+    @staticmethod
+    def _runtime_status_values(status_payload: Any) -> set[str]:
         if isinstance(status_payload, str):
-            return status_payload in {"running", "paused"}
+            return {status_payload.strip().lower()}
         if isinstance(status_payload, dict):
-            container_status = str(status_payload.get("container_status") or "").lower()
-            job_status = str(status_payload.get("job_status") or "").lower()
-            if container_status in {"running", "paused"}:
-                return True
-            if job_status in {"running", "paused"}:
-                return True
-        return False
+            values: set[str] = set()
+            for key in (
+                "container_status",
+                "job_status",
+                "status",
+                "runtime_job_status",
+                "startup_phase",
+            ):
+                value = status_payload.get(key)
+                if value is not None:
+                    values.add(str(value).strip().lower())
+            return values
+        return set()
+
+    @staticmethod
+    def _format_runtime_status(status_payload: Any) -> str:
+        values = sorted(
+            value or "unknown"
+            for value in TerminalSessionManager._runtime_status_values(status_payload)
+        )
+        return ",".join(values) if values else "unknown"
+
+    @staticmethod
+    def _runtime_readiness_deadline_message(task_id: int, last_status: Any) -> str:
+        return (
+            f"Runtime for task {task_id} did not become ready for terminal open "
+            f"before the {_TERMINAL_OPEN_DEADLINE_SEC:g}s deadline "
+            f"(last status: {TerminalSessionManager._format_runtime_status(last_status)})"
+        )
 
     async def attach_agent_listener(
         self,

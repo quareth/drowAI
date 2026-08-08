@@ -46,6 +46,7 @@ _RUNTIME_IDENTITY_METADATA_FIELDS = (
     "runner_id",
     "execution_site_id",
     "user_id",
+    "execution_owner_id",
 )
 
 

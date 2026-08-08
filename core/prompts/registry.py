@@ -150,6 +150,16 @@ class PromptRegistry:
             family="subagent_runtime",
             filename="user.txt",
         )
+        self.register_template_id(
+            "shell_capability_profile_utility",
+            family="shell_capability_profiles",
+            filename="utility.txt",
+        )
+        self.register_template_id(
+            "shell_capability_profile_assessment",
+            family="shell_capability_profiles",
+            filename="assessment.txt",
+        )
 
     def _register_builtin_builders(self) -> None:
         # Keep imports local to avoid import-time cycles for tests that only use TemplateLoader.

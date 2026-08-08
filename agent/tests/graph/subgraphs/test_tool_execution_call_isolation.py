@@ -26,10 +26,21 @@ from backend.services.runtime_provider.contracts import (
     RuntimeOperationStatus,
     build_runtime_result,
 )
+from runtime_shared import shell_session_port
+from runtime_shared.shell_capabilities import ShellCapability
+from runtime_shared.shell_session_contracts import (
+    ShellExecRequest,
+    ShellProcessStatus,
+    ShellSessionIdentity,
+    ShellSessionUpdate,
+    ShellWriteRequest,
+)
 from tests.tool_execution_module_helper import patch_tool_execution_attr
 
 
 TOOL_ID = "information_gathering.network_discovery.nmap"
+RUNNER_TOOL_ID = TOOL_ID
+RUNNER_TOOL_PARAMS = {"target": "10.0.0.1", "ports": "80"}
 
 
 @dataclass
@@ -67,6 +78,57 @@ class _StubCompressionResult:
     def __init__(self, compact_output: _StubCompactResult) -> None:
         self.compact_output = compact_output
         self.usage_record = None
+
+
+class _FakeShellSessionService:
+    def __init__(self, update: ShellSessionUpdate) -> None:
+        self.update = update
+        self.exec_calls: list[tuple[ShellSessionIdentity, ShellExecRequest]] = []
+        self.write_calls: list[tuple[ShellSessionIdentity, ShellWriteRequest]] = []
+
+    async def execute(
+        self,
+        *,
+        identity: ShellSessionIdentity,
+        request: ShellExecRequest,
+        capability: ShellCapability = ShellCapability.ASSESSMENT,
+    ) -> ShellSessionUpdate:
+        self.exec_calls.append((identity, request))
+        return self.update
+
+    async def get_session_capability(
+        self,
+        *,
+        identity: ShellSessionIdentity,
+        public_session_id: str,
+    ) -> ShellCapability | None:
+        return ShellCapability.ASSESSMENT
+
+    async def write_stdin(
+        self,
+        *,
+        identity: ShellSessionIdentity,
+        request: ShellWriteRequest,
+    ) -> ShellSessionUpdate:
+        self.write_calls.append((identity, request))
+        return self.update
+
+    async def close_owner_sessions(
+        self,
+        *,
+        tenant_id: int,
+        task_id: int,
+        execution_owner_id: str,
+    ) -> None:
+        return None
+
+    async def close_task_sessions(
+        self,
+        *,
+        tenant_id: int,
+        task_id: int,
+    ) -> None:
+        return None
 
 
 class _PortEchoCoordinator:
@@ -279,8 +341,8 @@ def _runner_cancelled_state() -> InteractiveState:
                 "actor_id": "langgraph",
                 "tool_plan_prepared": True,
                 "planner_plan": {
-                    "selected_tools": ["shell.exec"],
-                    "tool_parameters": {"shell.exec": {"command": "echo cancel"}},
+                    "selected_tools": [RUNNER_TOOL_ID],
+                    "tool_parameters": {RUNNER_TOOL_ID: RUNNER_TOOL_PARAMS},
                     "execution_strategy": "sequential",
                     "reasoning": "",
                     "expected_outcome": "",
@@ -292,8 +354,8 @@ def _runner_cancelled_state() -> InteractiveState:
                         "tool_calls": [
                             {
                                 "tool_call_id": "tc_shell",
-                                "tool_id": "shell.exec",
-                                "parameters": {"command": "echo cancel"},
+                                "tool_id": RUNNER_TOOL_ID,
+                                "parameters": RUNNER_TOOL_PARAMS,
                                 "intent": "runner lane",
                             }
                         ],
@@ -327,8 +389,8 @@ def _runner_parallel_cancelled_state() -> InteractiveState:
                 "actor_id": "langgraph",
                 "tool_plan_prepared": True,
                 "planner_plan": {
-                    "selected_tools": ["shell.exec", "shell.exec"],
-                    "tool_parameters": {"shell.exec": {"command": "echo cancel"}},
+                    "selected_tools": [RUNNER_TOOL_ID, RUNNER_TOOL_ID],
+                    "tool_parameters": {RUNNER_TOOL_ID: RUNNER_TOOL_PARAMS},
                     "execution_strategy": "parallel",
                     "reasoning": "",
                     "expected_outcome": "",
@@ -340,14 +402,14 @@ def _runner_parallel_cancelled_state() -> InteractiveState:
                         "tool_calls": [
                             {
                                 "tool_call_id": "tc_shell_a",
-                                "tool_id": "shell.exec",
-                                "parameters": {"command": "echo cancel a"},
+                                "tool_id": RUNNER_TOOL_ID,
+                                "parameters": RUNNER_TOOL_PARAMS,
                                 "intent": "runner lane",
                             },
                             {
                                 "tool_call_id": "tc_shell_b",
-                                "tool_id": "shell.exec",
-                                "parameters": {"command": "echo cancel b"},
+                                "tool_id": RUNNER_TOOL_ID,
+                                "parameters": {"target": "10.0.0.2", "ports": "443"},
                                 "intent": "runner lane",
                             },
                         ],
@@ -425,7 +487,7 @@ def _cached_cancelled_entry() -> Dict[str, Any]:
     return {
         "last_tool_result_compact": {
             "schema_version": "2.0",
-            "tool": "shell.exec",
+            "tool": RUNNER_TOOL_ID,
             "status": "cancelled",
             "success": False,
             "exit_code": 130,
@@ -440,17 +502,17 @@ def _cached_cancelled_entry() -> Dict[str, Any]:
             "compression": {"source": "deterministic"},
         },
         "last_tool_result": {
-            "tool": "shell.exec",
+            "tool": RUNNER_TOOL_ID,
             "status": "cancelled",
             "success": False,
             "stderr": "Tool command result waiter was cancelled.",
             "exit_code": 130,
             "metadata": {"error_code": "TOOL_RESULT_CANCELLED"},
-            "parameters": {"command": "echo cancel"},
+            "parameters": RUNNER_TOOL_PARAMS,
         },
         "action_record": {
-            "tool_id": "shell.exec",
-            "params": {"command": "echo cancel"},
+            "tool_id": RUNNER_TOOL_ID,
+            "params": RUNNER_TOOL_PARAMS,
             "turn_sequence": 1,
         },
         "tool_execution_history": [],
@@ -458,7 +520,7 @@ def _cached_cancelled_entry() -> Dict[str, Any]:
         "observation_text": "runner cancelled",
         "reasoning_additions": ["runner cancelled"],
         "exec_record": {
-            "args": {"command": "echo cancel"},
+            "args": RUNNER_TOOL_PARAMS,
             "status": "cancelled",
             "observation": "runner cancelled",
             "reasoning": "runner cancelled",
@@ -880,28 +942,51 @@ async def test_mixed_lane_batch_uses_batch_executor_and_per_call_authorities(
 
     from agent.graph.subgraphs.tool_execution import run_tool_execution
 
-    result = await run_tool_execution(
-        _mixed_lane_runner_state().as_graph_state(),
-        context=GraphRuntimeContext(
-            task_id=88,
-            user_id=7,
-            tenant_id=3,
-            runtime_placement_mode="runner",
-            workspace_id="task-88",
-            actor_type="agent",
-            actor_id="langgraph",
-            workspace_path=str(tmp_path),
-            model="model",
-        ),
+    shell_service = _FakeShellSessionService(
+        ShellSessionUpdate(
+            success=True,
+            status="success",
+            process_status=ShellProcessStatus.COMPLETED,
+            session_id=None,
+            stdout="runner-ok",
+            stderr="",
+            exit_code=0,
+            stdin_available=False,
+            truncated=False,
+            duration_ms=1,
+            summary="shell completed",
+        )
     )
+    previous_shell_service_resolver = shell_session_port._shell_session_service_resolver
+    shell_session_port.set_shell_session_service_resolver(lambda: shell_service)
+    try:
+        result = await run_tool_execution(
+            _mixed_lane_runner_state().as_graph_state(),
+            context=GraphRuntimeContext(
+                task_id=88,
+                user_id=7,
+                tenant_id=3,
+                runtime_placement_mode="runner",
+                workspace_id="task-88",
+                actor_type="agent",
+                actor_id="langgraph",
+                execution_owner_id="main:turn-mixed-lane",
+                workspace_path=str(tmp_path),
+                model="model",
+            ),
+        )
+    finally:
+        shell_session_port._shell_session_service_resolver = (
+            previous_shell_service_resolver
+        )
 
-    assert len(runner_requests) == 1
-    assert runner_requests[0].payload["tool"] == "shell.exec"
-    assert call_order == [
-        ("runner", "shell.exec"),
-        ("local", "knowledge.cve_lookup"),
-        ("local", "artifact.search"),
-    ]
+    assert runner_requests == []
+    assert len(shell_service.exec_calls) == 1
+    shell_identity, shell_request = shell_service.exec_calls[0]
+    assert shell_identity.runtime_placement_mode == "runner"
+    assert shell_identity.execution_owner_id == "main:turn-mixed-lane"
+    assert shell_request.command == "echo runner"
+    assert call_order == []
 
     updated = InteractiveState.from_mapping(result)
     call_ids = [
@@ -1215,24 +1300,47 @@ async def test_resume_uses_approved_subset_without_reprompt_or_extra_dispatch(
 
     from agent.graph.subgraphs.tool_execution import run_tool_execution
 
-    result = await run_tool_execution(
-        state.as_graph_state(),
-        context=GraphRuntimeContext(
-            task_id=88,
-            user_id=7,
-            tenant_id=3,
-            runtime_placement_mode="runner",
-            workspace_id="task-88",
-            actor_type="agent",
-            actor_id="langgraph",
-            workspace_path=str(tmp_path),
-            model="model",
-        ),
+    shell_service = _FakeShellSessionService(
+        ShellSessionUpdate(
+            success=True,
+            status="success",
+            process_status=ShellProcessStatus.COMPLETED,
+            session_id=None,
+            stdout="runner-ok",
+            stderr="",
+            exit_code=0,
+            stdin_available=False,
+            truncated=False,
+            duration_ms=1,
+            summary="shell completed",
+        )
     )
+    previous_shell_service_resolver = shell_session_port._shell_session_service_resolver
+    shell_session_port.set_shell_session_service_resolver(lambda: shell_service)
+    try:
+        result = await run_tool_execution(
+            state.as_graph_state(),
+            context=GraphRuntimeContext(
+                task_id=88,
+                user_id=7,
+                tenant_id=3,
+                runtime_placement_mode="runner",
+                workspace_id="task-88",
+                actor_type="agent",
+                actor_id="langgraph",
+                execution_owner_id="main:turn-mixed-lane",
+                workspace_path=str(tmp_path),
+                model="model",
+            ),
+        )
+    finally:
+        shell_session_port._shell_session_service_resolver = (
+            previous_shell_service_resolver
+        )
 
-    assert len(provider_calls) == 1
-    assert provider_calls[0].payload["tool"] == "shell.exec"
-    assert provider_calls[0].payload["command_id"] == "tc_shell"
+    assert provider_calls == []
+    assert len(shell_service.exec_calls) == 1
+    assert shell_service.exec_calls[0][1].command == "echo runner"
     assert local_calls == []
 
     updated = InteractiveState.from_mapping(result)

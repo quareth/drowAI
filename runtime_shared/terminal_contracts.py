@@ -46,3 +46,13 @@ class TerminalSessionSnapshot:
     session_name: str
     runtime_job_id: str | None = None
     container_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TerminalReadResult:
+    """Typed result for provider terminal reads."""
+
+    ok: bool
+    data: bytes = b""
+    error_code: str | None = None
+    truncated: bool = False

@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from time import monotonic
 from typing import Any, Dict, Optional
 
+from pydantic import ValidationError
+
 from agent.config import AgentConfig
 from agent.executor import EnhancedCommandExecutor
 from agent.logger import AgentLogger
@@ -43,6 +45,22 @@ from ..subgraphs.tool_execution_runtime.runner_command_orchestration import (
 )
 from ..utils.llm_resolver import DEFAULT_MODEL
 from .tool_interface import ToolInterface, normalize_tool_arguments
+from runtime_shared.shell_session_contracts import (
+    ShellExecRequest,
+    ShellProcessStatus,
+    ShellSessionErrorCode,
+    ShellSessionIdentity,
+    ShellSessionUpdate,
+    ShellWriteRequest,
+)
+from runtime_shared.shell_session_port import get_shell_session_service
+from runtime_shared.shell_capabilities import (
+    SHELL_EXEC_TOOL_ID,
+    SHELL_SESSION_START_TOOL_IDS,
+    SHELL_WRITE_STDIN_TOOL_ID,
+    ShellCapability,
+    resolve_shell_start_capability,
+)
 
 from backend.services.runtime_provider.contracts import (
     RuntimeActorType,
@@ -237,9 +255,10 @@ class GraphToolExecutor:
         if unsupported_payload is not None:
             return unsupported_payload
         runtime_placement_mode = dispatch_decision.runtime_placement_mode
-        requires_local_executor = (
-            dispatch_decision.authority != "container_runner_transport"
-        )
+        requires_local_executor = dispatch_decision.authority not in {
+            "container_runner_transport",
+            "runtime_session_control",
+        }
         is_parallel_call = execution_strategy == "parallel"
         parallel_pty_identity = (
             derive_parallel_pty_identity(
@@ -332,12 +351,15 @@ class GraphToolExecutor:
             runtime_placement_mode=runtime_placement_mode,
             tenant_id=request.get("tenant_id") or (context.tenant_id if context else None),
             task_id=request.get("task_id") or (context.task_id if context else None),
+            execution_owner_id=request.get("execution_owner_id")
+            or (context.execution_owner_id if context else None),
             runtime_metadata={
                 "workspace_id": request.get("workspace_id")
                 or (context.workspace_id if context else None),
                 "runner_id": request.get("runner_id") or (context.runner_id if context else None),
                 "execution_site_id": request.get("execution_site_id")
                 or (context.execution_site_id if context else None),
+                "workspace_path": workspace_path,
             },
         )
         return await dispatch_tool_call_by_lane(
@@ -362,7 +384,245 @@ class GraphToolExecutor:
                 parallel_pty_identity=parallel_pty_identity,
                 allow_pty=allow_pty,
             ),
+            execute_session=lambda decision, lane_input: self._execute_runtime_session_tool_call(
+                request=request,
+                decision=decision,
+                dispatch_input=lane_input,
+            ),
         )
+
+    async def _execute_runtime_session_tool_call(
+        self,
+        *,
+        request: Dict[str, Any],
+        decision: ToolLaneDispatchDecision,
+        dispatch_input: ToolCallDispatchInput,
+    ) -> Dict[str, Any]:
+        """Execute a shell-session tool call through the runtime-shared service port."""
+        identity = self._build_shell_session_identity(dispatch_input=dispatch_input)
+        try:
+            session_request = self._build_shell_session_request(
+                tool_id=str(request["tool"]),
+                parameters=dispatch_input.normalized_parameters,
+            )
+        except ValidationError as exc:
+            message = f"Invalid shell-session request: {exc}"
+            return self._shell_session_error_payload(
+                tool_id=str(request["tool"]),
+                message=message,
+                status="validation_error",
+                error_code="validation_error",
+                decision=decision,
+                dispatch_input=dispatch_input,
+            )
+        except ValueError as exc:
+            message = str(exc)
+            return self._shell_session_error_payload(
+                tool_id=str(request["tool"]),
+                message=message,
+                status="unsupported_shell_session_tool",
+                error_code="unsupported_shell_session_tool",
+                decision=decision,
+                dispatch_input=dispatch_input,
+            )
+
+        service = get_shell_session_service()
+        originating_capability: ShellCapability | None = None
+        if isinstance(session_request, ShellExecRequest):
+            originating_capability = resolve_shell_start_capability(request["tool"])
+            if str(request["tool"]) == SHELL_EXEC_TOOL_ID:
+                originating_capability = ShellCapability.ASSESSMENT
+            if originating_capability is None:
+                return self._shell_session_error_payload(
+                    tool_id=str(request["tool"]),
+                    message=f"Unsupported shell-session start tool `{request['tool']}`.",
+                    status="unsupported_shell_session_tool",
+                    error_code="unsupported_shell_session_tool",
+                    decision=decision,
+                    dispatch_input=dispatch_input,
+                )
+            update = await service.execute(
+                identity=identity,
+                request=session_request,
+                capability=originating_capability,
+            )
+        else:
+            originating_capability = await service.get_session_capability(
+                identity=identity,
+                public_session_id=session_request.session_id,
+            )
+            update = await service.write_stdin(identity=identity, request=session_request)
+
+        return self._shell_session_update_payload(
+            tool_id=str(request["tool"]),
+            update=update,
+            decision=decision,
+            dispatch_input=dispatch_input,
+            originating_capability=originating_capability,
+        )
+
+    @staticmethod
+    def _build_shell_session_identity(
+        *,
+        dispatch_input: ToolCallDispatchInput,
+    ) -> ShellSessionIdentity:
+        """Project lane-validated runtime metadata into service authority context."""
+        runtime_metadata = dispatch_input.runtime_metadata or {}
+        workspace_id = runtime_metadata.get("workspace_id")
+        execution_owner_id = dispatch_input.execution_owner_id
+        workspace_path = runtime_metadata.get("workspace_path")
+        if not isinstance(workspace_path, str):
+            workspace_path = None
+        runner_id = runtime_metadata.get("runner_id")
+        if not isinstance(runner_id, str):
+            runner_id = None
+        execution_site_id = runtime_metadata.get("execution_site_id")
+        if not isinstance(execution_site_id, str):
+            execution_site_id = None
+
+        return ShellSessionIdentity(
+            tenant_id=int(dispatch_input.tenant_id),
+            task_id=int(dispatch_input.task_id),
+            execution_owner_id=str(execution_owner_id).strip(),
+            runtime_placement_mode=dispatch_input.runtime_placement_mode,
+            workspace_id=str(workspace_id).strip(),
+            workspace_path=workspace_path,
+            runner_id=runner_id,
+            execution_site_id=execution_site_id,
+        )
+
+    @staticmethod
+    def _build_shell_session_request(
+        *,
+        tool_id: str,
+        parameters: Any,
+    ) -> ShellExecRequest | ShellWriteRequest:
+        """Convert normalized graph parameters into a typed shell-session request."""
+        normalized = dict(parameters or {})
+        if tool_id in SHELL_SESSION_START_TOOL_IDS:
+            return ShellExecRequest(**normalized)
+        if tool_id == SHELL_WRITE_STDIN_TOOL_ID:
+            return ShellWriteRequest(**normalized)
+        raise ValueError(f"Unsupported shell-session tool `{tool_id}`.")
+
+    @staticmethod
+    def _shell_session_error_payload(
+        *,
+        tool_id: str,
+        message: str,
+        status: str,
+        error_code: str,
+        decision: ToolLaneDispatchDecision,
+        dispatch_input: ToolCallDispatchInput,
+    ) -> Dict[str, Any]:
+        """Return a structured shell-session adapter failure payload."""
+        update = ShellSessionUpdate(
+            success=False,
+            status="error",
+            process_status=None,
+            session_id=None,
+            stdout="",
+            stderr=message,
+            exit_code=None,
+            stdin_available=False,
+            truncated=False,
+            duration_ms=0,
+            summary=message,
+            error_code=(
+                ShellSessionErrorCode(error_code)
+                if error_code in {code.value for code in ShellSessionErrorCode}
+                else None
+            ),
+        )
+        payload = GraphToolExecutor._shell_session_update_payload(
+            tool_id=tool_id,
+            update=update,
+            decision=decision,
+            dispatch_input=dispatch_input,
+        )
+        payload["status"] = status
+        payload["metadata"]["error_code"] = error_code
+        return payload
+
+    @staticmethod
+    def _shell_session_update_payload(
+        *,
+        tool_id: str,
+        update: ShellSessionUpdate,
+        decision: ToolLaneDispatchDecision,
+        dispatch_input: ToolCallDispatchInput,
+        originating_capability: ShellCapability | None = None,
+    ) -> Dict[str, Any]:
+        """Map a shell-session update to the graph tool-result payload shape."""
+        process_status = (
+            update.process_status.value
+            if isinstance(update.process_status, ShellProcessStatus)
+            else update.process_status
+        )
+        error_code = (
+            update.error_code.value
+            if isinstance(update.error_code, ShellSessionErrorCode)
+            else update.error_code
+        )
+        stdout = update.stdout or ""
+        stderr = update.stderr or ""
+        stdout_excerpt = stdout
+        stderr_excerpt = stderr[:STDERR_SNIPPET]
+        summary = update.summary.strip() or (
+            stdout_excerpt or stderr_excerpt or "Shell session update completed."
+        )
+        duration = max(0.0, update.duration_ms / 1000.0)
+        metadata: Dict[str, Any] = {
+            "route_policy": {
+                "selected_lane": decision.lane,
+                "selected_authority": decision.authority,
+            },
+            "runtime_session": {
+                "tool_call_id": str(dispatch_input.tool_call_id or ""),
+                "tool_batch_id": str(dispatch_input.tool_batch_id or ""),
+                "authority": decision.authority,
+                "process_status": process_status,
+                "session_id": update.session_id,
+                "stdin_available": update.stdin_available,
+                "truncated": update.truncated,
+                "error_code": error_code,
+            },
+        }
+        if error_code:
+            metadata["error_code"] = error_code
+        if originating_capability is not None:
+            metadata["runtime_session"]["originating_capability"] = (
+                originating_capability.value
+            )
+
+        status = "success" if update.success else "failed"
+        if error_code == ShellSessionErrorCode.SHELL_RUNTIME_UNAVAILABLE.value:
+            status = ShellSessionErrorCode.SHELL_RUNTIME_UNAVAILABLE.value
+        elif update.process_status is ShellProcessStatus.TIMED_OUT:
+            status = "failed"
+
+        return {
+            "tool": tool_id,
+            "success": bool(update.success),
+            "stdout": stdout,
+            "stderr": stderr,
+            "stdout_excerpt": stdout_excerpt,
+            "stderr_excerpt": stderr_excerpt,
+            "exit_code": update.exit_code,
+            "observation": summary,
+            "approval_granted": True,
+            "approval_reason": None,
+            "approval_metadata": {},
+            "duration": duration,
+            "metadata": metadata,
+            "status": status,
+            "process_status": process_status,
+            "session_id": update.session_id,
+            "stdin_available": update.stdin_available,
+            "truncated": update.truncated,
+            "summary": summary,
+            "error_code": error_code,
+        }
 
     async def _execute_local_tool_call(
         self,

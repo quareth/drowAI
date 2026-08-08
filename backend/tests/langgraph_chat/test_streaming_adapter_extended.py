@@ -352,6 +352,25 @@ class TestToolEventProcessing:
         assert result["metadata"]["ind"] == stream_consts.TOOL_PHASE_INDEX
         assert "Executing nmap" in result["content"]
 
+    def test_shell_tool_start_exposes_sanitized_command_for_live_display(self, adapter):
+        """Shell cards receive display text without persisting or exposing secrets."""
+        result = adapter.process_streaming_event(
+            {
+                "type": "tool_start",
+                "tool": "shell.utility",
+                "conversation_id": "conv-1",
+                "turn_id": "turn-1",
+                "parameters": {
+                    "command": "TOKEN=secret touch /workspace/boris.txt",
+                },
+            }
+        )
+
+        assert result is not None
+        assert result["metadata"]["command_display"] == (
+            "TOKEN=<REDACTED> touch /workspace/boris.txt"
+        )
+
     def test_adapter_processes_tool_batch_start(self, adapter):
         event = {
             "type": "tool_batch_start",
@@ -645,6 +664,46 @@ class TestToolEventProcessing:
         assert mock_persist.call_args.kwargs["reserved_message_id"] == 101
         assert mock_persist.call_args.kwargs["tool_call_info"]["persisted_marker"] is True
 
+    def test_transient_tool_end_streams_compact_output_without_persisting_tool_call(
+        self,
+        adapter,
+    ):
+        """Utility output stays available to the live card but out of chat history."""
+        event = {
+            "type": "tool_end",
+            "tool": "shell.utility",
+            "tool_call_id": "call-transient-1",
+            "conversation_id": "conv-1",
+            "turn_id": "turn-1",
+            "status": "success",
+            "output_persistence": "transient",
+            "compact_tool_result": {
+                "schema_version": "2.0",
+                "tool": "shell.utility",
+                "status": "success",
+                "success": True,
+                "summary": "Created /workspace/boris.txt.",
+                "key_findings": [],
+                "errors": [],
+                "report_recommendations": [],
+                "structured_signals": [],
+                "decision_evidence": [],
+                "lossiness_risk": "low",
+            },
+        }
+        state_container = Mock()
+        state_container.reserved_message_id = 101
+
+        with patch.object(adapter._tool_call_snapshot_service, "persist_snapshot") as mock_persist:
+            result = adapter.process_streaming_event(event, state_container=state_container)
+
+        assert result["metadata"]["output_persistence"] == "transient"
+        assert result["metadata"]["compact_tool_result"]["summary"] == (
+            "Created /workspace/boris.txt."
+        )
+        state_container.add_tool_call.assert_not_called()
+        mock_persist.assert_not_called()
+
     @pytest.mark.parametrize(
         ("reserved_message_id", "tool_call_id"),
         [
@@ -705,6 +764,7 @@ class TestToolEventProcessing:
             "conversation_id": "conv-1",
             "turn_id": "turn-1",
             "status": "success",
+            "process_status": "running",
             "duration": 2.0,
         }
         
@@ -713,6 +773,7 @@ class TestToolEventProcessing:
             
             # Verify metric was incremented
             mock_inc.assert_called_with("langgraph_tool_ends_processed")
+            assert result["metadata"]["process_status"] == "running"
 
     def test_build_tool_event_sequence_has_contract_metadata(self):
         """Synthetic tool events should carry step_type/ind like live events."""
@@ -731,6 +792,35 @@ class TestToolEventProcessing:
         assert delta_event["metadata"]["ind"] == stream_consts.TOOL_PHASE_INDEX
         assert end_event["metadata"]["step_type"] == stream_consts.STEP_TOOL_END
         assert end_event["metadata"]["ind"] == stream_consts.TOOL_PHASE_INDEX
+
+    @pytest.mark.parametrize(
+        ("process_status", "expected_status"),
+        [
+            ("running", "running"),
+            ("completed", "success"),
+            ("timed_out", "timed_out"),
+            ("terminated", "terminated"),
+        ],
+    )
+    def test_build_tool_event_sequence_preserves_shell_process_status(
+        self,
+        process_status: str,
+        expected_status: str,
+    ) -> None:
+        events = build_tool_event_sequence(
+            "shell.exec",
+            {
+                "status": "success",
+                "success": True,
+                "process_status": process_status,
+                "summary": "shell update",
+            },
+            conversation_id="conv-1",
+            turn_id="turn-1",
+        )
+
+        assert events[-1]["metadata"]["process_status"] == process_status
+        assert events[-1]["metadata"]["status"] == expected_status
 
 
 class TestEventSchemaCompatibility:

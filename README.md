@@ -59,6 +59,10 @@ Development updates currently live in the [changelog](CHANGELOG.md) and the
 The implemented tool registry and the LLM-facing tool catalog are intentionally
 not the same thing.
 
+> **Alpha shell notice:** The LLM can currently invoke general-purpose shell
+> commands allowed by runtime policy. Skill-based guidance for reserving shell
+> access for utility and supporting work is not yet implemented.
+
 - **Current LLM-visible toolset:** tools completed for model planning and
   self-selection, including wired parsing, normalized result projection, and
   knowledge/evidence-layer integration. See

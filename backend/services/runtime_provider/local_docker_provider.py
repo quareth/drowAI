@@ -883,7 +883,10 @@ class LocalDockerRuntimeProvider(TaskExecutionRuntimeProvider):
         timeout = request.payload.get("timeout")
         read_coro = loop.sock_recv(raw_sock, size)
         if timeout is not None:
-            data = await asyncio.wait_for(read_coro, timeout=float(timeout))
+            try:
+                data = await asyncio.wait_for(read_coro, timeout=float(timeout))
+            except asyncio.TimeoutError:
+                return {"success": True, "data": b""}
         else:
             data = await read_coro
         return {"success": True, "data": data}

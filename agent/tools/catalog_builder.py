@@ -10,6 +10,41 @@ from __future__ import annotations
 import logging
 from typing import Any, List
 
+from .universal_agent_tools import UNIVERSAL_AGENT_TOOL_IDS
+
+
+_UNIVERSAL_AGENT_TOOL_ID_SET: frozenset[str] = frozenset(UNIVERSAL_AGENT_TOOL_IDS)
+
+
+def limit_catalog_preserving_universal_tools(
+    tool_ids: List[str],
+    max_tools_limit: int,
+) -> List[str]:
+    """Limit catalog size while keeping registered universal tools available."""
+    if max_tools_limit <= 0:
+        return list(tool_ids)
+
+    limited_tools = list(tool_ids[:max(1, max_tools_limit)])
+    universal_tools = [
+        tool_id for tool_id in UNIVERSAL_AGENT_TOOL_IDS if tool_id in tool_ids
+    ]
+    missing_universal_tools = [
+        tool_id for tool_id in universal_tools if tool_id not in limited_tools
+    ]
+    if not missing_universal_tools:
+        return limited_tools
+
+    retained_tools = [*limited_tools, *missing_universal_tools]
+    total_limit = max(1, max_tools_limit, len(universal_tools))
+    while len(retained_tools) > total_limit:
+        for index in range(len(retained_tools) - 1, -1, -1):
+            if retained_tools[index] not in _UNIVERSAL_AGENT_TOOL_ID_SET:
+                del retained_tools[index]
+                break
+        else:
+            break
+    return retained_tools
+
 
 def build_full_tool_catalog(config: Any, *, logger: logging.Logger) -> List[str]:
     """Build complete visible tool catalog without capability filtering."""
@@ -46,7 +81,10 @@ def build_full_tool_catalog(config: Any, *, logger: logging.Logger) -> List[str]
         except (TypeError, ValueError, AttributeError):
             pass
 
-    limited_catalog = valid_tools[:max_tools_limit] if max_tools_limit > 0 else valid_tools
+    limited_catalog = limit_catalog_preserving_universal_tools(
+        valid_tools,
+        max_tools_limit,
+    )
     logger.info(
         "[PLANNER_CATALOG] Providing %d tools to planner "
         "(from %d available, limit=%d)",

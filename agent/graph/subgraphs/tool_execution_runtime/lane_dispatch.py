@@ -53,6 +53,7 @@ class ToolCallDispatchInput:
     runtime_placement_mode: str | None
     tenant_id: int | None = None
     task_id: int | None = None
+    execution_owner_id: str | None = None
     runtime_metadata: Mapping[str, Any] | None = None
 
 
@@ -168,6 +169,47 @@ def missing_runtime_placement_payload(*, tool_id: str, message: str) -> dict[str
     )
 
 
+def _missing_shell_session_identity_fields(
+    dispatch_input: ToolCallDispatchInput,
+) -> list[str]:
+    """Return shell-session identity fields missing before provider dispatch."""
+    missing: list[str] = []
+    if dispatch_input.tenant_id is None:
+        missing.append("tenant_id")
+    if dispatch_input.task_id is None:
+        missing.append("task_id")
+    if (
+        not isinstance(dispatch_input.execution_owner_id, str)
+        or not dispatch_input.execution_owner_id.strip()
+    ):
+        missing.append("execution_owner_id")
+    runtime_metadata = dispatch_input.runtime_metadata or {}
+    workspace_id = runtime_metadata.get("workspace_id")
+    if not isinstance(workspace_id, str) or not workspace_id.strip():
+        missing.append("workspace_id")
+    return missing
+
+
+def missing_shell_session_identity_payload(
+    *,
+    tool_id: str,
+    decision: ToolLaneDispatchDecision,
+    missing_fields: list[str],
+) -> dict[str, Any]:
+    """Return a fail-closed payload for missing shell-session identity."""
+    missing_text = ", ".join(missing_fields)
+    return _dispatch_error_payload(
+        tool_id=tool_id,
+        decision=decision,
+        message=(
+            "tool execution runtime context is missing shell-session identity "
+            f"field(s): {missing_text}."
+        ),
+        status="missing_shell_session_identity",
+        error_code="missing_shell_session_identity",
+    )
+
+
 async def dispatch_tool_call_by_lane(
     *,
     dispatch_input: ToolCallDispatchInput,
@@ -176,6 +218,10 @@ async def dispatch_tool_call_by_lane(
         Awaitable[dict[str, Any]],
     ],
     execute_runner: Callable[
+        [ToolLaneDispatchDecision, ToolCallDispatchInput],
+        Awaitable[dict[str, Any]],
+    ],
+    execute_session: Callable[
         [ToolLaneDispatchDecision, ToolCallDispatchInput],
         Awaitable[dict[str, Any]],
     ],
@@ -196,7 +242,18 @@ async def dispatch_tool_call_by_lane(
     if unsupported_payload is not None:
         return unsupported_payload
 
-    if decision.authority == "container_runner_transport":
+    if decision.lane == "runtime_session_scoped":
+        missing_fields = _missing_shell_session_identity_fields(dispatch_input)
+        if missing_fields:
+            return missing_shell_session_identity_payload(
+                tool_id=dispatch_input.tool_id,
+                decision=decision,
+                missing_fields=missing_fields,
+            )
+
+    if decision.authority == "runtime_session_control":
+        result = await execute_session(decision, dispatch_input)
+    elif decision.authority == "container_runner_transport":
         result = await execute_runner(decision, dispatch_input)
     else:
         result = await execute_local(decision, dispatch_input)

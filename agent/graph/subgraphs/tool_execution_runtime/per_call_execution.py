@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
 
+from agent.tool_runtime.output_persistence_policy import resolve_output_persistence
+
 from agent.execution_strategy import ExecutionStrategy
 from agent.tool_runtime.batch.types import ToolBatch, ToolCall, ToolCallResult, ToolCallStatus
 
@@ -327,6 +329,7 @@ def build_run_one_call_callback(
             )
 
         call_request = _clone_request_for_call(request, call_metadata)
+        persistence_decision = resolve_output_persistence(tool_name)
         execution_id = deps["record_provenance_execution_start_service"](
             get_provenance_service_fn=deps["_get_provenance_service"],
             request=call_request,
@@ -341,6 +344,7 @@ def build_run_one_call_callback(
             workspace_path=workspace_path,
             logger=deps["logger"],
             safe_inc_fn=deps["safe_inc"],
+            persistence_decision=persistence_decision,
         )
         persisted_artifact_refs = []
 
@@ -359,8 +363,14 @@ def build_run_one_call_callback(
                     should_persist_artifact_outputs_fn=deps["_should_persist_artifact_outputs"],
                     logger=deps["logger"],
                     safe_inc_fn=deps["safe_inc"],
+                    persistence_decision=persistence_decision,
                 )
             raise
+
+        persistence_decision = resolve_output_persistence(
+            str(outcome.tool_id or tool_name),
+            outcome.result if isinstance(outcome.result, Mapping) else None,
+        )
 
         dr_tool_for_display: Optional[str] = None
         dr_command_display: Optional[str] = None
@@ -383,6 +393,7 @@ def build_run_one_call_callback(
             save_tool_output_artifact_fn=deps["save_tool_output_artifact"],
             safe_inc_fn=deps["safe_inc"],
             logger=deps["logger"],
+            persistence_decision=persistence_decision,
         )
         artifact_workspace_path = deps["resolve_execution_artifact_workspace_service"](
             workspace_path=workspace_path,
@@ -413,6 +424,7 @@ def build_run_one_call_callback(
                 collect_provenance_artifact_refs_fn=deps["_collect_provenance_artifact_refs"],
                 logger=deps["logger"],
                 safe_inc_fn=deps["safe_inc"],
+                persistence_decision=persistence_decision,
             )
 
         projection = await deps["project_result_state_service"](
@@ -445,6 +457,7 @@ def build_run_one_call_callback(
             safe_gauge_fn=deps["safe_gauge"],
             config=config,
             apply_to_state=False,
+            persistence_decision=persistence_decision,
         )
         compact_result_dict = dict(projection["compact_result_dict"])
         deterministic_compact_result = projection.get("deterministic_compact_result_dict")
@@ -460,7 +473,10 @@ def build_run_one_call_callback(
         outcome_by_call_id[tool_call_id] = outcome
         execution_id_by_call_id[tool_call_id] = execution_id
 
-        if (call_facts.capability or "").lower() == "deep_reasoning":
+        if (
+            (call_facts.capability or "").lower() == "deep_reasoning"
+            and persistence_decision.retain_durable_output
+        ):
             dr_execution_by_call_id[tool_call_id] = {
                 "iteration": call_dr_iteration or 1,
                 "tool": str(
@@ -515,6 +531,7 @@ def build_run_one_call_callback(
                 if isinstance(deterministic_compact_result, Mapping)
                 else None
             ),
+            persistence_decision=persistence_decision,
         )
 
         observation_by_call_id[tool_call_id] = observation_text

@@ -180,6 +180,9 @@ http_probe = "web_mapping"
     assert definition.kind == "web_assessment"
     assert profile.tool_ids == (
         "information_gathering.web_enumeration.http_request",
+        "shell.utility",
+        "shell.assessment",
+        "shell.write_stdin",
     )
     assert assignment.suggested_capabilities == ("web_mapping",)
     assert AgentAssignment.model_validate(assignment.model_dump()) == assignment

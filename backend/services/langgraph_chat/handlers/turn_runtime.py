@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from agent.graph import InteractiveInput, InteractiveState, build_initial_state
 from backend.services.chat.turn_number_service import get_turn_number_service
+from runtime_shared.shell_session_contracts import format_shell_execution_owner_id
 
 from backend.services.langgraph_chat.execution.completion_callback import StreamEmitter
 from backend.services.langgraph_chat.runtime.state_container import ChatStateContainer
@@ -71,6 +72,9 @@ def ensure_turn_identity(
     runtime_config.metadata.setdefault("turn_id", turn_id)
     runtime_config.metadata.setdefault("turn_number", turn_number)
     runtime_config.metadata.setdefault("turn_sequence", turn_number)
+    runtime_config.metadata["execution_owner_id"] = format_shell_execution_owner_id(
+        "main", turn_id
+    )
 
     return TurnIdentity(
         turn_id=turn_id,

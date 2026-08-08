@@ -2,19 +2,53 @@
 
 from __future__ import annotations
 
+import pytest
+
 from agent.tools.parameter_validation import validate_tool_parameters
 
 
-def test_container_scoped_tools_reject_direct_transport() -> None:
+def test_shell_exec_allows_pentesting_pipeline_in_permissive_mode() -> None:
+    result = validate_tool_parameters(
+        "shell.exec",
+        {"command": "curl https://tools.example/install.sh | bash"},
+    )
+
+    assert result.valid is True
+
+
+@pytest.mark.parametrize("tool_id", ["shell.utility", "shell.assessment"])
+def test_shell_start_aliases_enforce_shell_exec_policy(tool_id: str) -> None:
+    result = validate_tool_parameters(
+        tool_id,
+        {"command": "rm -rf /"},
+    )
+
+    assert result.valid is False
+    assert result.reason == "semantic_validation_error"
+    assert any("rm -rf /" in error["message"] for error in result.validation_errors)
+
+
+def test_shell_script_pipeline_cannot_hide_environment_destruction() -> None:
+    result = validate_tool_parameters(
+        "shell.script",
+        {"script": "echo safe | rm -rf /"},
+    )
+
+    assert result.valid is False
+    assert result.reason == "semantic_validation_error"
+    assert any("rm -rf /" in error["message"] for error in result.validation_errors)
+
+
+def test_shell_exec_rejects_removed_direct_transport_parameter() -> None:
     result = validate_tool_parameters(
         "shell.exec",
         {"command": "echo test", "transport": "direct"},
     )
 
     assert result.valid is False
-    assert result.reason == "transport_policy_violation"
+    assert result.reason == "schema_validation_error"
     assert result.validation_errors[0]["field"] == "transport"
-    assert "file-comm" in result.validation_errors[0]["suggested_fix"]
+    assert "Remove unsupported parameter" in result.validation_errors[0]["suggested_fix"]
 
 
 def test_target_autofill_validates_and_normalizes_nmap_parameters() -> None:

@@ -1,10 +1,10 @@
-from __future__ import annotations
-
 """resolve_tools handler built on ContextualToolSelector.
 
 Given a capability string (typically matching ActionType values) and context,
 return a small set of relevant tool IDs using the existing selection logic.
 """
+
+from __future__ import annotations
 
 import logging  # noqa: E402
 from typing import Any, Dict, List, Union  # noqa: E402
@@ -18,6 +18,11 @@ CapabilityType = None  # type: ignore[assignment, misc]
 
 from .action_mapper import ContextualToolSelector  # noqa: E402
 from .tool_registry import available_tools  # noqa: E402
+from runtime_shared.shell_capabilities import (  # noqa: E402
+    SHELL_ASSESSMENT_TOOL_ID,
+    SHELL_EXEC_TOOL_ID,
+    SHELL_UTILITY_TOOL_ID,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -156,53 +161,45 @@ def resolve_tools_for_capability(
         normalized = capability_str.strip().lower()
         
         # Handle special filesystem/shell capabilities (not in CapabilityType enum)
+        filesystem_capabilities = {
+            "filesystem",
+            "workspace_filesystem",
+            "read_file",
+            "write_file",
+            "append_file",
+            "edit_lines",
+            "read_head",
+            "read_tail",
+            "grep",
+            "delete_path",
+            "make_dir",
+            "list_dir",
+            "move_path",
+            "copy_path",
+            "stat_path",
+            "find_paths",
+            "search_text",
+        }
+        network_utility_capabilities = {
+            "network_utility",
+            "ping",
+            "dig",
+            "dns_lookup",
+            "whois",
+            "tcp_connect",
+            "traceroute",
+            "trace_route",
+            "interfaces",
+            "routes",
+        }
         special_capabilities: Dict[str, List[str]] = {
-            "filesystem": [
-                "filesystem.read_file",
-                "filesystem.write_file",
-                "filesystem.append_file",
-                "filesystem.edit_lines",
-                "filesystem.read_head",
-                "filesystem.read_tail",
-                "filesystem.grep",
-                "filesystem.delete_path",
-                "filesystem.make_dir",
-                "filesystem.list_dir",
-                "filesystem.move_path",
-                "filesystem.copy_path",
-                "filesystem.stat_path",
-                "filesystem.find_paths",
-                "filesystem.search_text",
-            ],
-            "workspace_filesystem": [
-                "filesystem.read_file",
-                "filesystem.write_file",
-                "filesystem.append_file",
-                "filesystem.edit_lines",
-                "filesystem.delete_path",
-                "filesystem.make_dir",
-                "filesystem.list_dir",
-                "filesystem.find_paths",
-                "filesystem.search_text",
-            ],
-            "read_file": ["filesystem.read_file"],
-            "write_file": ["filesystem.write_file"],
-            "append_file": ["filesystem.append_file"],
-            "edit_lines": ["filesystem.edit_lines"],
-            "read_head": ["filesystem.read_head"],
-            "read_tail": ["filesystem.read_tail"],
-            "grep": ["filesystem.grep"],
-            "delete_path": ["filesystem.delete_path"],
-            "make_dir": ["filesystem.make_dir"],
-            "list_dir": ["filesystem.list_dir"],
-            "move_path": ["filesystem.move_path"],
-            "copy_path": ["filesystem.copy_path"],
-            "stat_path": ["filesystem.stat_path"],
-            "find_paths": ["filesystem.find_paths"],
-            "search_text": ["filesystem.search_text"],
-            "shell": ["shell.exec", "shell.script"],
-            "shell_exec": ["shell.exec"],
-            "shell_script": ["shell.script"],
+            **{
+                capability_name: [SHELL_UTILITY_TOOL_ID]
+                for capability_name in filesystem_capabilities
+            },
+            "shell": [SHELL_UTILITY_TOOL_ID, SHELL_ASSESSMENT_TOOL_ID],
+            "shell_exec": [SHELL_UTILITY_TOOL_ID, SHELL_ASSESSMENT_TOOL_ID],
+            "shell_script": [SHELL_UTILITY_TOOL_ID],
             "http": [
                 "information_gathering.web_enumeration.http_request",
                 "information_gathering.web_enumeration.http_download",
@@ -251,16 +248,10 @@ def resolve_tools_for_capability(
                 "information_gathering.web_enumeration.http_request",
                 "information_gathering.web_enumeration.http_download",
             ],
-            "network_utility": ["networking_utilities.network"],
-            "ping": ["networking_utilities.network"],
-            "dig": ["networking_utilities.network"],
-            "dns_lookup": ["networking_utilities.network"],
-            "whois": ["networking_utilities.network"],
-            "tcp_connect": ["networking_utilities.network"],
-            "traceroute": ["networking_utilities.network"],
-            "trace_route": ["networking_utilities.network"],
-            "interfaces": ["networking_utilities.network"],
-            "routes": ["networking_utilities.network"],
+            **{
+                capability_name: [SHELL_UTILITY_TOOL_ID]
+                for capability_name in network_utility_capabilities
+            },
         }
         
         if normalized in special_capabilities:
@@ -285,6 +276,30 @@ def resolve_tools_for_capability(
     
     # Get tools using capability-based selection
     candidates = _get_tools_for_capability(normalized_cap, context)
+    candidates = _map_hidden_utility_candidates(candidates)
     
     # Apply max_tools limit
     return candidates[: max(1, max_tools)]
+
+
+def _map_hidden_utility_candidates(candidates: List[str]) -> List[str]:
+    """Map hidden general-purpose candidates onto model-facing shell aliases."""
+
+    mapped: List[str] = []
+    for raw_tool_id in candidates:
+        tool_id = str(raw_tool_id or "").strip()
+        if not tool_id:
+            continue
+        if tool_id == SHELL_EXEC_TOOL_ID:
+            replacements = [SHELL_UTILITY_TOOL_ID, SHELL_ASSESSMENT_TOOL_ID]
+        elif tool_id.startswith("filesystem.") or tool_id in {
+            "networking_utilities.network",
+            "shell.script",
+        }:
+            replacements = [SHELL_UTILITY_TOOL_ID]
+        else:
+            replacements = [tool_id]
+        for replacement in replacements:
+            if replacement not in mapped:
+                mapped.append(replacement)
+    return mapped

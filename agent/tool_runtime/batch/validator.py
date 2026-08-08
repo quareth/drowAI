@@ -268,15 +268,12 @@ class BatchValidator:
         normalized_calls: list[ToolCall] = []
         action_target = ctx.get("action_target")
         logger = ctx.get("logger")
-        max_shell_command_chars = ctx.get("max_shell_command_chars")
         for call in batch.tool_calls:
             kwargs: dict[str, Any] = {
                 "validation_stage": "execution",
                 "action_target": str(action_target) if action_target else None,
                 "logger": logger,
             }
-            if isinstance(max_shell_command_chars, int) and max_shell_command_chars > 0:
-                kwargs["max_shell_command_chars"] = max_shell_command_chars
             result = validator(call.tool_id, dict(call.parameters), **kwargs)
             if not getattr(result, "valid", False):
                 return batch, f"invalid_parameters:{call.tool_id}"

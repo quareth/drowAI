@@ -18,6 +18,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from runtime_shared.shell_session_contracts import format_shell_execution_owner_id
 
 from agent.graph.context.builder import (
     METADATA_CONTEXT_BUNDLE_KEY,
@@ -31,6 +32,7 @@ from agent.subagents.contracts import AgentAssignment, AgentKind, AgentRuntimeId
 from agent.subagents.definition import SubagentDefinition
 from agent.subagents.runtime.profile import (
     SubagentToolProfile,
+    effective_subagent_tool_profile,
     resolve_subagent_tool_profile,
 )
 
@@ -116,12 +118,19 @@ class SubagentRuntimeState(BaseModel):
             raise ValueError("assignment.agent_kind must match definition.kind")
         if definition is not None and assignment.agent_id != definition.id:
             raise ValueError("assignment.agent_id must match definition.id")
-        if isinstance(tool_profile, SubagentToolProfileState):
-            profile_state = tool_profile
-        elif tool_profile is not None:
-            profile_state = SubagentToolProfileState.from_profile(tool_profile)
+        if definition is None:
+            if isinstance(tool_profile, SubagentToolProfileState):
+                profile_state = tool_profile
+            elif tool_profile is not None:
+                profile_state = SubagentToolProfileState.from_profile(tool_profile)
+            else:
+                profile_state = SubagentToolProfileState()
         else:
-            profile_state = SubagentToolProfileState()
+            effective_profile = effective_subagent_tool_profile(
+                definition,
+                tool_profile,
+            )
+            profile_state = SubagentToolProfileState.from_profile(effective_profile)
 
         return cls(
             assignment=assignment,
@@ -417,6 +426,9 @@ def _graph_runtime_context_from_subagent_state(
                 bool,
             )
             else None
+        ),
+        execution_owner_id=format_shell_execution_owner_id(
+            "subagent", subagent.agent_run_id
         ),
     ).model_dump()
     payload.pop("credential_ref", None)

@@ -211,8 +211,9 @@ runner-control router:
 - `WS   /api/runner-control/channel`
 
 Managed runner processes start the control-plane client with `drowai_runner run`.
-The channel carries `task.start`, runtime lifecycle events, terminal operations,
-tool commands, and artifact messages. Terminal message types are:
+The channel carries `task.start`, `runtime.started`, `tool.command`,
+`artifact.manifest`, `artifact.upload.request`, `artifact.upload.complete`,
+terminal operations, and artifact messages. Terminal message types are:
 
 - `terminal.open`
 - `terminal.input`
@@ -227,6 +228,12 @@ Durable terminal operation jobs use `terminal.open`, `terminal.input`,
 requested session id. Successful open results bind the terminal session to the
 task/runtime-job route before frames are accepted. Successful close results
 clear the session buffers and remove the binding.
+
+Runner delivery progress and validated operation results are independent,
+monotonic observations. A result may terminalize an assigned runtime job before
+delivery or ACK bookkeeping completes; later transport updates are idempotent
+and cannot regress the terminal result. Runtime-job transitions lock and refresh
+the durable row before applying either observation.
 
 Live stream-mode terminal input and resize messages reuse the runner websocket
 channel but do not create a new durable runtime job. Their ACKs are consumed by

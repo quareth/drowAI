@@ -13,36 +13,23 @@ as the prompt-facing subset, not the complete implemented tool registry.
 Inclusion indicates functional agent wiring; it does not by itself represent
 broad runtime or release certification.
 
-Current count: 30 tools.
+Current count: 17 tools.
 
 - `exploitation_tools.metasploit.inspect_module`
 - `exploitation_tools.metasploit.run_exploit`
 - `exploitation_tools.metasploit.search_modules`
-- `filesystem.append_file`
-- `filesystem.copy_path`
-- `filesystem.delete_path`
-- `filesystem.edit_lines`
-- `filesystem.find_paths`
-- `filesystem.grep`
-- `filesystem.list_dir`
-- `filesystem.make_dir`
-- `filesystem.move_path`
-- `filesystem.read_file`
-- `filesystem.read_head`
-- `filesystem.read_tail`
-- `filesystem.search_text`
-- `filesystem.stat_path`
-- `filesystem.write_file`
 - `information_gathering.dns.amass`
 - `information_gathering.network_discovery.fping`
 - `information_gathering.network_discovery.nmap`
 - `information_gathering.web_enumeration.http_download`
 - `information_gathering.web_enumeration.http_request`
-- `networking_utilities.network`
 - `service_access.ftp_download`
 - `service_access.ftp_list`
 - `service_access.ftp_login`
 - `service_access.ssh_login`
+- `shell.assessment`
+- `shell.utility`
+- `shell.write_stdin`
 - `sniffing_spoofing.network_sniffers.tshark`
 - `web_applications.web_crawlers.ffuf`
 

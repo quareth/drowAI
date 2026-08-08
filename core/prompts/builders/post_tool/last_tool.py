@@ -332,8 +332,8 @@ def extract_last_tool_sections(
             output_info = (
                 f"Output condensed ({chars_truncated:,} chars omitted). "
                 "If key evidence is still missing and the saved path is available, "
-                "use a visible filesystem read/search tool with bounded scope. "
-                "Do not default to full reads."
+                "retrieve only the bounded portion needed to close that gap. "
+                "Do not default to reading the entire saved output."
                 f"\nSaved output path: `{artifact_path}`"
             )
         else:

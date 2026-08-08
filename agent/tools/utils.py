@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import re
-import shlex
 from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import ValidationError
 
 from .schemas import ToolResult
 from agent.models import ExecutionResult
+from runtime_shared.durable_secret_masking.detectors import (
+    detect_durable_secret_spans,
+)
 from .exceptions import ToolValidationError
 from .tool_registry import get_tool, tool_exists
 
@@ -21,6 +23,61 @@ _MASSCAN_EXTRA_PARAM_SUGGESTIONS: Dict[str, str] = {
     "banner": "Use 'banners' instead of 'banner'",
     "ping": "Use 'host_discovery' instead of 'ping' (default|ping_only|no_ping)",
 }
+
+_REDACTED_COMMAND_VALUE = "<REDACTED>"
+_SHELL_VALUE_PATTERN = r'''(?:"(?:\\.|[^"\\])*"|'[^']*'|[^\s;&|<>]+)'''
+_SENSITIVE_COMMAND_KEY_MARKERS = (
+    "password",
+    "passwd",
+    "pwd",
+    "token",
+    "secret",
+    "api_key",
+    "apikey",
+    "private_key",
+    "access_key",
+    "credential",
+    "cookie",
+    "bearer",
+)
+_SENSITIVE_COMMAND_FLAGS = (
+    "--user",
+    "-u",
+    "--oauth2-bearer",
+    "--pass",
+    "--proxy-user",
+)
+_SENSITIVE_HEADER_NAMES = frozenset(
+    {
+        "authorization",
+        "proxy-authorization",
+        "cookie",
+        "set-cookie",
+        "x-api-key",
+        "x-auth-token",
+    }
+)
+_ENV_ASSIGNMENT_RE = re.compile(
+    rf"(?i)(?P<prefix>(?<![A-Za-z0-9_])(?P<name>[A-Za-z_][A-Za-z0-9_]*)=)"
+    rf"(?P<value>{_SHELL_VALUE_PATTERN})"
+)
+_SENSITIVE_FLAG_VALUE_RE = re.compile(
+    rf"(?i)(?P<prefix>(?<![A-Za-z0-9_-])(?:{'|'.join(re.escape(flag) for flag in _SENSITIVE_COMMAND_FLAGS)})\s+)"
+    rf"(?P<value>{_SHELL_VALUE_PATTERN})"
+)
+_SENSITIVE_FLAG_EQUALS_RE = re.compile(
+    rf"(?i)(?P<prefix>(?<![A-Za-z0-9_-])(?:{'|'.join(re.escape(flag) for flag in _SENSITIVE_COMMAND_FLAGS)})=)"
+    rf"(?P<value>{_SHELL_VALUE_PATTERN})"
+)
+_SSHPASS_VALUE_RE = re.compile(
+    rf"(?i)(?P<prefix>\bsshpass\s+-p\s+)(?P<value>{_SHELL_VALUE_PATTERN})"
+)
+_HEADER_VALUE_RE = re.compile(
+    rf"(?i)(?P<prefix>(?<!\S)(?:--header|-H|-h)\s+)(?P<value>{_SHELL_VALUE_PATTERN})"
+)
+_URL_CREDENTIAL_RE = re.compile(
+    r"(?i)(?P<prefix>https?://)[^/\s:@]+:[^@\s]+@"
+)
 
 
 def safe_inc_metric(name: str, value: int = 1) -> None:
@@ -75,73 +132,70 @@ def generate_fix_suggestion(error: Dict[str, Any]) -> str:
     return f"Check value for '{loc}'"
 
 
+def _redact_shell_value(value: str) -> str:
+    """Replace a shell value while retaining its surrounding quote characters."""
+    if len(value) >= 2 and value[0] in {"'", '"'} and value[-1] == value[0]:
+        return f"{value[0]}{_REDACTED_COMMAND_VALUE}{value[-1]}"
+    return _REDACTED_COMMAND_VALUE
+
+
+def _redact_match_value(match: re.Match[str]) -> str:
+    """Preserve a matched option prefix and redact only its value."""
+    return f"{match.group('prefix')}{_redact_shell_value(match.group('value'))}"
+
+
+def _redact_sensitive_assignment(match: re.Match[str]) -> str:
+    """Redact values assigned to credential-shaped environment names."""
+    name = match.group("name").lower()
+    if not any(marker in name for marker in _SENSITIVE_COMMAND_KEY_MARKERS):
+        return match.group(0)
+    return _redact_match_value(match)
+
+
+def _redact_sensitive_header(match: re.Match[str]) -> str:
+    """Redact sensitive header content without changing shell quoting."""
+    value = match.group("value")
+    quote = value[0] if len(value) >= 2 and value[0] in {"'", '"'} and value[-1] == value[0] else ""
+    content = value[1:-1] if quote else value
+    name, separator, header_value = content.partition(":")
+    if not separator or name.strip().lower() not in _SENSITIVE_HEADER_NAMES:
+        return match.group(0)
+    leading = header_value[: len(header_value) - len(header_value.lstrip())]
+    trailing = header_value[len(header_value.rstrip()) :]
+    redacted = f"{name}:{leading}{_REDACTED_COMMAND_VALUE}{trailing}"
+    return f"{match.group('prefix')}{quote}{redacted}{quote}"
+
+
+def _redact_detected_secret_spans(command: str) -> str:
+    """Apply shared durable-secret detection while preserving surrounding text."""
+    matches = detect_durable_secret_spans(command)
+    if not matches:
+        return command
+    pieces: list[str] = []
+    cursor = 0
+    for match in matches:
+        pieces.append(command[cursor : match.start])
+        pieces.append(_REDACTED_COMMAND_VALUE)
+        cursor = match.end
+    pieces.append(command[cursor:])
+    return "".join(pieces)
+
+
 def sanitize_command_text(command: str) -> str:
-    """Redact credential-bearing shell arguments before logging or persistence."""
+    """Redact command secrets without normalizing valid shell syntax."""
     if not command:
         return command
 
-    try:
-        tokens = shlex.split(command)
-    except Exception:
-        redacted = re.sub(r"(?i)(\bsshpass\s+-p\s+)([^\s]+)", r"\1<REDACTED>", command)
-        command = redacted
-        redacted = re.sub(r"(?i)(--user\s+)([^\s]+)", r"\1<REDACTED>", command)
-        redacted = re.sub(r"(?i)(--oauth2-bearer\s+)([^\s]+)", r"\1<REDACTED>", redacted)
-        redacted = re.sub(r"(?i)(--pass\s+)([^\s]+)", r"\1<REDACTED>", redacted)
-        redacted = re.sub(r"(?i)(https?://)([^/\s:@]+):([^@\s]+)@", r"\1<REDACTED>@", redacted)
-        return redacted
-
-    redacted_flags = {"--user", "-u", "--oauth2-bearer", "--pass", "--proxy-user"}
-    header_prefixes = {
-        "authorization:",
-        "proxy-authorization:",
-        "cookie:",
-        "set-cookie:",
-        "x-api-key:",
-        "x-auth-token:",
-    }
-    sanitized: list[str] = []
-    idx = 0
-    while idx < len(tokens):
-        token = tokens[idx]
-        lower = token.lower()
-        if lower == "sshpass" and idx + 2 < len(tokens) and tokens[idx + 1] == "-p":
-            sanitized.extend([token, tokens[idx + 1], "<REDACTED>"])
-            idx += 3
-            continue
-        if lower in redacted_flags:
-            sanitized.append(token)
-            if idx + 1 < len(tokens):
-                sanitized.append("<REDACTED>")
-                idx += 2
-                continue
-            idx += 1
-            continue
-
-        if lower in {"--header", "-h", "-H"}:
-            sanitized.append(token)
-            if idx + 1 < len(tokens):
-                header_value = tokens[idx + 1]
-                header_lower = header_value.lower().strip()
-                if any(header_lower.startswith(prefix) for prefix in header_prefixes):
-                    key = (
-                        header_value.split(":", 1)[0].strip()
-                        if ":" in header_value
-                        else header_value.strip()
-                    )
-                    sanitized.append(f"{key}: <REDACTED>")
-                else:
-                    sanitized.append(header_value)
-                idx += 2
-                continue
-            idx += 1
-            continue
-
-        token = re.sub(r"(?i)^(https?://)([^/\s:@]+):([^@\s]+)@", r"\1<REDACTED>@", token)
-        sanitized.append(token)
-        idx += 1
-
-    return shlex.join(sanitized)
+    sanitized = _ENV_ASSIGNMENT_RE.sub(_redact_sensitive_assignment, command)
+    sanitized = _SSHPASS_VALUE_RE.sub(_redact_match_value, sanitized)
+    sanitized = _SENSITIVE_FLAG_EQUALS_RE.sub(_redact_match_value, sanitized)
+    sanitized = _SENSITIVE_FLAG_VALUE_RE.sub(_redact_match_value, sanitized)
+    sanitized = _HEADER_VALUE_RE.sub(_redact_sensitive_header, sanitized)
+    sanitized = _URL_CREDENTIAL_RE.sub(
+        lambda match: f"{match.group('prefix')}{_REDACTED_COMMAND_VALUE}@",
+        sanitized,
+    )
+    return _redact_detected_secret_spans(sanitized)
 
 
 def attach_execution_result_extras(

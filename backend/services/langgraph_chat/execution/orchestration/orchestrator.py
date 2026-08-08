@@ -17,6 +17,7 @@ from backend.services.chat.turn_identity_resolver import (
     resolve_turn_identity_from_reserved_message_best_effort,
 )
 from backend.services.langgraph_chat import AgentMode, ChatInputs, ExecutionMode
+from runtime_shared.shell_session_contracts import format_shell_execution_owner_id
 from backend.services.langgraph_chat.compression.context_models import (
     CompressionRequiredError,
 )
@@ -58,6 +59,7 @@ from backend.services.langgraph_chat.checkpoint.turn_workflow_service import (
     start_turn_workflow_best_effort,
 )
 from backend.services.llm_provider.runtime_config_service import LLMRuntimeConfigService
+from runtime_shared.shell_session_port import get_shell_session_service
 
 if TYPE_CHECKING:
     from backend.services.langgraph_chat.execution.turn_service import (
@@ -65,6 +67,9 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
+_SHELL_OWNER_CLEANUP_STATUSES = frozenset(
+    {"completed", "failed", "cancelled", "declined"}
+)
 
 
 @dataclass
@@ -96,6 +101,45 @@ def _is_checkpoint_retry_resume(identity: Optional[Mapping[str, Any]]) -> bool:
         retry_mode == "checkpoint"
         and _positive_int(identity.get("retry_attempt")) is not None
     )
+
+
+def _main_execution_owner_id(turn_id: Optional[str]) -> Optional[str]:
+    """Return the shell-session owner id for a concrete main-agent turn."""
+    if not isinstance(turn_id, str):
+        return None
+    normalized = turn_id.strip()
+    if not normalized:
+        return None
+    return format_shell_execution_owner_id("main", normalized)
+
+
+async def _close_main_owner_shell_sessions_for_status(
+    *,
+    tenant_id: Optional[int],
+    task_id: int,
+    turn_id: Optional[str],
+    run_status: str,
+) -> None:
+    """Close main-owner shell sessions at terminal graph boundaries."""
+    if run_status not in _SHELL_OWNER_CLEANUP_STATUSES:
+        return
+    execution_owner_id = _main_execution_owner_id(turn_id)
+    if tenant_id is None or execution_owner_id is None:
+        return
+    try:
+        await get_shell_session_service().close_owner_sessions(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            execution_owner_id=execution_owner_id,
+        )
+    except Exception:
+        logger.warning(
+            "shell_session.main_owner_cleanup_failed task_id=%s owner=%s status=%s",
+            task_id,
+            execution_owner_id,
+            run_status,
+            exc_info=True,
+        )
 
 
 def _runtime_selection_from_metadata(
@@ -623,6 +667,12 @@ class TurnExecutionOrchestrator:
                     pass
                 logger.exception("LangGraph-backed generation failed")
         finally:
+            await _close_main_owner_shell_sessions_for_status(
+                tenant_id=tenant_id,
+                task_id=task_id,
+                turn_id=turn_id,
+                run_status=run_status,
+            )
             if turn_id:
                 lifecycle.end_run(task_id=task_id, turn_id=turn_id, status=run_status)
             service._turn_stream_publisher.set_streaming_inactive(
@@ -1124,6 +1174,13 @@ class TurnExecutionOrchestrator:
                         turn_id=lifecycle_turn_id,
                     )
         finally:
+            if not parent_continuation_pending:
+                await _close_main_owner_shell_sessions_for_status(
+                    tenant_id=tenant_id,
+                    task_id=task_id,
+                    turn_id=lifecycle_turn_id,
+                    run_status=lifecycle_status,
+                )
             if lifecycle_turn_id and not parent_continuation_pending:
                 lifecycle.end_run(
                     task_id=task_id, turn_id=lifecycle_turn_id, status=lifecycle_status
@@ -1542,6 +1599,12 @@ class TurnExecutionOrchestrator:
                 turn_id=lifecycle_turn_id,
             )
         finally:
+            await _close_main_owner_shell_sessions_for_status(
+                tenant_id=tenant_id,
+                task_id=task_id,
+                turn_id=lifecycle_turn_id,
+                run_status=lifecycle_status,
+            )
             if lifecycle_turn_id:
                 lifecycle.end_run(
                     task_id=task_id, turn_id=lifecycle_turn_id, status=lifecycle_status

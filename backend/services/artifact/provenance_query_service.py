@@ -523,7 +523,7 @@ class ArtifactProvenanceQueryService:
                     "reason": "execution_not_found",
                 }
                 continue
-            results[tool_call_id] = self._build_raw_output_payload(execution.artifacts)
+            results[tool_call_id] = self._build_raw_output_payload(execution)
 
         return {"results": results, "missing": missing}
 
@@ -617,8 +617,9 @@ class ArtifactProvenanceQueryService:
         }
 
     @staticmethod
-    def _build_raw_output_payload(artifacts: list[ExecutionArtifact]) -> Dict[str, Any]:
+    def _build_raw_output_payload(execution: ToolExecution) -> Dict[str, Any]:
         """Build frontend-ready raw output state from execution artifacts."""
+        artifacts = execution.artifacts
         command_artifact = next((artifact for artifact in artifacts if artifact.artifact_kind == "command"), None)
         stdout_artifact = next((artifact for artifact in artifacts if artifact.artifact_kind == "stdout"), None)
         stderr_artifact = next((artifact for artifact in artifacts if artifact.artifact_kind == "stderr"), None)
@@ -627,7 +628,16 @@ class ArtifactProvenanceQueryService:
         stdout_artifact_id = str(stdout_artifact.id) if stdout_artifact is not None else None
         stderr_artifact_id = str(stderr_artifact.id) if stderr_artifact is not None else None
 
-        if command_artifact is None and stdout_artifact is None and stderr_artifact is None:
+        mechanical_status = ArtifactProvenanceQueryService._mechanical_execution_status(
+            status=execution.status,
+            exit_code=execution.exit_code,
+        )
+        if (
+            command_artifact is None
+            and stdout_artifact is None
+            and stderr_artifact is None
+            and not mechanical_status
+        ):
             return {
                 "status": "not_available",
                 "reason": "missing_output_artifacts",
@@ -643,7 +653,7 @@ class ArtifactProvenanceQueryService:
         has_any_inline_content = any(
             content is not None for content in (command_text, stdout_text, stderr_text)
         )
-        if not has_any_inline_content:
+        if not has_any_inline_content and not mechanical_status:
             return {
                 "status": "not_available",
                 "reason": "artifact_content_unavailable",
@@ -656,6 +666,8 @@ class ArtifactProvenanceQueryService:
             command_text=command_text,
             stdout_text=stdout_text,
             stderr_text=stderr_text,
+            execution_status=execution.status,
+            exit_code=execution.exit_code,
         )
         return {
             "status": "ready",
@@ -671,6 +683,8 @@ class ArtifactProvenanceQueryService:
         command_text: Optional[str],
         stdout_text: Optional[str],
         stderr_text: Optional[str],
+        execution_status: Optional[str] = None,
+        exit_code: Optional[int] = None,
     ) -> str:
         """Compose shell-like terminal output text from command/stdout/stderr artifacts."""
         normalized_command = str(command_text or "").strip()
@@ -684,11 +698,40 @@ class ArtifactProvenanceQueryService:
             blocks.append(ArtifactProvenanceQueryService._strip_trailing_newlines(normalized_stdout))
         if normalized_stderr:
             blocks.append(ArtifactProvenanceQueryService._strip_trailing_newlines(normalized_stderr))
+        mechanical_status = ArtifactProvenanceQueryService._mechanical_execution_status(
+            status=execution_status,
+            exit_code=exit_code,
+        )
+        if mechanical_status:
+            blocks.append(mechanical_status)
 
         output = "\n".join(blocks)
         if output and (normalized_stdout.endswith("\n") or normalized_stderr.endswith("\n")):
             output += "\n"
         return output
+
+    @staticmethod
+    def _mechanical_execution_status(
+        *,
+        status: Optional[str],
+        exit_code: Optional[int],
+    ) -> str:
+        """Return a stable terminal footer when output alone cannot show failure."""
+        if exit_code is not None and exit_code != 0:
+            return f"[process exited with code {exit_code}]"
+        normalized_status = str(status or "").strip().lower()
+        if normalized_status in {
+            "error",
+            "failed",
+            "failure",
+            "timed_out",
+            "timeout",
+            "cancelled",
+            "canceled",
+            "terminated",
+        }:
+            return f"[execution status: {normalized_status}]"
+        return ""
 
     @staticmethod
     def _normalize_terminal_text(value: Optional[str]) -> str:

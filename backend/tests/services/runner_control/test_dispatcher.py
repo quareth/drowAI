@@ -75,6 +75,24 @@ class _CommitAwareTransport(RunnerOutboundTransport):
         return DispatchAttemptResult(delivered=True, acked=True)
 
 
+class _CompletingTransport(RunnerOutboundTransport):
+    def __init__(self, *, db: Session, tenant_id: int, runtime_job_id: uuid.UUID) -> None:
+        self._db = db
+        self._tenant_id = tenant_id
+        self._runtime_job_id = runtime_job_id
+
+    async def send(self, envelope, *, timeout_seconds: float) -> DispatchAttemptResult:
+        del envelope, timeout_seconds
+        RuntimeJobService(self._db).complete_runtime_job_from_result(
+            tenant_id=self._tenant_id,
+            runtime_job_id=self._runtime_job_id,
+            next_status="succeeded",
+            result_json={"source": "runner_event", "result": {"job_status": "running"}},
+        )
+        self._db.commit()
+        return DispatchAttemptResult(delivered=True, acked=True)
+
+
 class _RaisingTransport(RunnerOutboundTransport):
     def __init__(self, *, message: str) -> None:
         self._message = message
@@ -244,6 +262,81 @@ def test_dispatcher_delivers_cross_pod_enqueued_message_and_records_ack(tmp_path
     assert "message_id=outbound-1" in caplog.text
     assert "correlation_id=corr-101" in caplog.text
     assert secret not in caplog.text
+
+
+def test_dispatcher_does_not_regress_result_received_before_send_returns(tmp_path: Path) -> None:
+    enqueue_db, dispatch_db = _build_shared_sessions(tmp_path)
+    result_db = Session(bind=dispatch_db.get_bind(), autoflush=False)
+    tenant, runner = _seed_runner(enqueue_db)
+    runtime_job_id = uuid.uuid4()
+    enqueue_db.add(
+        RuntimeJob(
+            id=runtime_job_id,
+            tenant_id=tenant.id,
+            task_id=102,
+            runner_id=runner.id,
+            execution_site_id=runner.execution_site_id,
+            job_type="runtime.status",
+            status="assigned",
+            idempotency_key=f"result-before-ack-{runtime_job_id}",
+        )
+    )
+    enqueue_store = DBRunnerCoordinationStore(enqueue_db, pod_id="pod-a")
+    enqueue_store.enqueue_outbound_message(
+        tenant_id=tenant.id,
+        runner_id=runner.id,
+        message_id="result-before-ack",
+        message_type="runtime.status",
+        payload_json={"operation": "runtime.status", "params": {}},
+        idempotency_key="result-before-ack",
+        runtime_job_id=runtime_job_id,
+        task_id=102,
+        correlation_id="corr-result-before-ack",
+    )
+    enqueue_db.commit()
+
+    dispatch_store = DBRunnerCoordinationStore(dispatch_db, pod_id="pod-b")
+    now = datetime.now(tz=UTC)
+    dispatch_store.claim_connection_lease(
+        tenant_id=tenant.id,
+        runner_id=runner.id,
+        pod_id="pod-b",
+        connection_id="conn-b",
+        lease_expires_at=now + timedelta(seconds=60),
+        last_seen_at=now,
+    )
+    dispatch_db.commit()
+
+    result = asyncio.run(
+        RunnerOutboundDispatcher(
+            dispatch_db,
+            coordination_store=dispatch_store,
+            pod_id="pod-b",
+            metrics=_MetricsStub(),
+        ).dispatch_for_connection(
+            tenant_id=tenant.id,
+            runner_id=runner.id,
+            connection_id="conn-b",
+            transport=_CompletingTransport(
+                db=result_db,
+                tenant_id=tenant.id,
+                runtime_job_id=runtime_job_id,
+            ),
+        )
+    )
+    dispatch_db.commit()
+
+    assert result.delivered_count == 1
+    assert result.acked_count == 1
+    enqueue_db.expire_all()
+    runtime_job = enqueue_db.get(RuntimeJob, runtime_job_id)
+    assert runtime_job is not None
+    assert runtime_job.status == "succeeded"
+    assert runtime_job.result_json == {
+        "source": "runner_event",
+        "result": {"job_status": "running"},
+    }
+    result_db.close()
 
 
 def test_tool_command_dispatch_uses_raw_payload_while_durable_rows_are_masked(tmp_path: Path) -> None:

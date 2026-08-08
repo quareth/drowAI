@@ -148,6 +148,7 @@ def build_metadata(
         turn_id=turn_id,
         turn_sequence=turn_sequence,
         reserved_message_id=reserved_message_id,
+        execution_owner_id=metadata_source.get("execution_owner_id"),
     )
     runtime_context_payload = runtime_context.model_dump()
     runtime_context_payload.pop("credential_ref", None)

@@ -28,9 +28,14 @@ def test_subagent_runtime_system_prompt_uses_versioned_canonical_guidance() -> N
         ),
         boundary_rules=(
             "Use only the targets, objective, scope, and constraints in the assignment context.",
-            "Do not exploit, authenticate, mutate files, run shells, manage agents, or request credentials.",
+            "Do not exploit, authenticate, mutate files unless explicitly allowed by assignment and tool scope, manage agents, or request credentials.",
         ),
         max_committed_tools_per_batch=3,
+        callable_tool_ids=(
+            "shell.utility",
+            "shell.assessment",
+            "shell.write_stdin",
+        ),
     )
 
     assert_golden("subagent_runtime__system.txt", prompt)
@@ -43,6 +48,8 @@ def test_subagent_runtime_system_prompt_uses_versioned_canonical_guidance() -> N
     assert "Never repeat an equivalent successful tool call" in prompt
     assert "When more evidence is required, call between 1 and 3" in prompt
     assert "Selector Decision" not in prompt
+    assert prompt.count("Use shell.utility for ordinary") == 1
+    assert prompt.count("Use shell.assessment for commands") == 1
 
 
 def test_subagent_runtime_user_prompt_injects_assignment_tools_observations_and_limits() -> None:

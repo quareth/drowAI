@@ -13,13 +13,26 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Optional
 
+from agent.tool_runtime.backend_tool_policy import is_runtime_session_scoped_tool
 from runtime_shared.file_comm_contracts import (
     TOOL_TIMEOUT_EXIT_CODE,
     TOOL_TIMEOUT_FAILURE_CATEGORY,
 )
+from runtime_shared.shell_session_contracts import (
+    SHELL_SESSION_CLEANUP_TIMEOUT_SEC,
+    SHELL_SESSION_CONTROL_TIMEOUT_SEC,
+    SHELL_SESSION_DEFAULT_YIELD_TIME_MS,
+    SHELL_SESSION_MAX_YIELD_TIME_MS,
+    SHELL_SESSION_PREPARATION_TIMEOUT_SEC,
+)
+from runtime_shared.shell_capabilities import (
+    SHELL_SESSION_START_TOOL_IDS,
+    SHELL_WRITE_STDIN_TOOL_ID,
+)
 
 DEFAULT_TOOL_TIMEOUT_SECONDS = 600.0
 DEFAULT_TOOL_TIMEOUT_GRACE_SECONDS = 5.0
+DEFAULT_SHELL_SESSION_TERMINAL_IO_GRACE_SECONDS = 2.0
 
 WHOLE_OPERATION_TIMEOUT_FIELDS: tuple[str, ...] = (
     "execution_timeout",
@@ -33,6 +46,7 @@ WHOLE_OPERATION_TIMEOUT_FIELDS: tuple[str, ...] = (
 _CANONICAL_DEFAULT_ENV = "TOOL_TIMEOUT_DEFAULT_SECONDS"
 _CANONICAL_MAX_ENV = "TOOL_TIMEOUT_MAX_SECONDS"
 _CANONICAL_GRACE_ENV = "TOOL_TIMEOUT_GRACE_SECONDS"
+_SHELL_SESSION_TERMINAL_IO_GRACE_ENV = "SHELL_SESSION_TERMINAL_IO_GRACE_SEC"
 _LEGACY_DEFAULT_ENVS = (
     "TOOL_EXECUTION_TIMEOUT",
     "NMAP_TIMEOUT",
@@ -52,6 +66,17 @@ def _coerce_positive_seconds(value: Any) -> Optional[float]:
     return parsed
 
 
+def _coerce_non_negative_seconds(value: Any) -> Optional[float]:
+    """Return a non-negative seconds value or ``None`` when invalid."""
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed) or parsed < 0:
+        return None
+    return parsed
+
+
 def _read_first_positive_env(names: tuple[str, ...]) -> tuple[Optional[float], Optional[str]]:
     """Return the first positive env value with the env name that supplied it."""
     for name in names:
@@ -64,12 +89,39 @@ def _read_first_positive_env(names: tuple[str, ...]) -> tuple[Optional[float], O
     return None, None
 
 
+def _read_first_non_negative_env(
+    names: tuple[str, ...],
+) -> tuple[Optional[float], Optional[str]]:
+    """Return the first non-negative env value with the env name that supplied it."""
+    for name in names:
+        raw = os.getenv(name)
+        if raw is None:
+            continue
+        parsed = _coerce_non_negative_seconds(raw)
+        if parsed is not None:
+            return parsed, name
+    return None, None
+
+
 def _config_value(config: Any, *names: str) -> tuple[Optional[float], Optional[str]]:
     """Return the first positive config attribute with its attribute name."""
     for name in names:
         if config is None or not hasattr(config, name):
             continue
         parsed = _coerce_positive_seconds(getattr(config, name))
+        if parsed is not None:
+            return parsed, name
+    return None, None
+
+
+def _non_negative_config_value(
+    config: Any, *names: str
+) -> tuple[Optional[float], Optional[str]]:
+    """Return the first non-negative config attribute with its attribute name."""
+    for name in names:
+        if config is None or not hasattr(config, name):
+            continue
+        parsed = _coerce_non_negative_seconds(getattr(config, name))
         if parsed is not None:
             return parsed, name
     return None, None
@@ -118,9 +170,13 @@ class ToolTimeoutConfig:
     default_seconds: float = DEFAULT_TOOL_TIMEOUT_SECONDS
     max_seconds: float = DEFAULT_TOOL_TIMEOUT_SECONDS
     grace_seconds: float = DEFAULT_TOOL_TIMEOUT_GRACE_SECONDS
+    shell_session_terminal_io_grace_seconds: float = (
+        DEFAULT_SHELL_SESSION_TERMINAL_IO_GRACE_SECONDS
+    )
     default_source: str = "default"
     max_source: str = "default"
     grace_source: str = "default"
+    shell_session_terminal_io_grace_source: str = "default"
 
     @classmethod
     def from_runtime_config(cls, config: Any = None) -> "ToolTimeoutConfig":
@@ -175,13 +231,41 @@ class ToolTimeoutConfig:
             grace_seconds = DEFAULT_TOOL_TIMEOUT_GRACE_SECONDS
             grace_source = "default"
 
+        shell_session_terminal_io_grace_seconds, shell_grace_source = (
+            _read_first_non_negative_env((_SHELL_SESSION_TERMINAL_IO_GRACE_ENV,))
+        )
+        if shell_session_terminal_io_grace_seconds is not None:
+            shell_grace_source = str(
+                shell_grace_source or _SHELL_SESSION_TERMINAL_IO_GRACE_ENV
+            )
+        if shell_session_terminal_io_grace_seconds is None:
+            shell_session_terminal_io_grace_seconds, shell_grace_source = (
+                _non_negative_config_value(
+                    config,
+                    "shell_session_terminal_io_grace_seconds",
+                    "shell_session_terminal_io_grace_sec",
+                    "terminal_io_grace_seconds",
+                    "terminal_io_grace_sec",
+                )
+            )
+        if shell_session_terminal_io_grace_seconds is None:
+            shell_session_terminal_io_grace_seconds = (
+                DEFAULT_SHELL_SESSION_TERMINAL_IO_GRACE_SECONDS
+            )
+            shell_grace_source = "default"
+
         return cls(
             default_seconds=max(1.0, min(default_seconds, max_seconds)),
             max_seconds=max_seconds,
             grace_seconds=max(0.0, grace_seconds),
+            shell_session_terminal_io_grace_seconds=max(
+                0.0,
+                shell_session_terminal_io_grace_seconds,
+            ),
             default_source=str(default_source or "default"),
             max_source=str(max_source or "default"),
             grace_source=str(grace_source or "default"),
+            shell_session_terminal_io_grace_source=str(shell_grace_source or "default"),
         )
 
 
@@ -288,6 +372,12 @@ class ToolTimeoutPolicy:
     ) -> ToolTimeoutPlan:
         """Compute the timeout plan for one tool invocation."""
         raw_parameters = dict(parameters or {})
+        if is_runtime_session_scoped_tool(tool_id):
+            return self._resolve_shell_session_timeout(
+                tool_id=tool_id,
+                raw_parameters=raw_parameters,
+            )
+
         supported_fields = _schema_fields_for_tool(tool_id)
 
         requested_value = _coerce_positive_seconds(override_deadline_seconds)
@@ -339,6 +429,64 @@ class ToolTimeoutPolicy:
             stripped_timeout_fields=tuple(stripped_fields),
         )
 
+    def _resolve_shell_session_timeout(
+        self,
+        *,
+        tool_id: str,
+        raw_parameters: Mapping[str, Any],
+    ) -> ToolTimeoutPlan:
+        """Resolve bounded wait policy for one shell-session invocation."""
+        raw_yield_ms = raw_parameters.get("yield_time_ms")
+        yield_ms = _coerce_non_negative_seconds(raw_yield_ms)
+        requested_seconds: Optional[float] = None
+        requested_field: Optional[str] = None
+        source = "default:yield_time_ms"
+        if yield_ms is None:
+            yield_ms = float(SHELL_SESSION_DEFAULT_YIELD_TIME_MS)
+        else:
+            requested_seconds = yield_ms / 1000.0
+            yield_ms = min(yield_ms, float(SHELL_SESSION_MAX_YIELD_TIME_MS))
+            requested_field = "yield_time_ms"
+            source = "parameter:yield_time_ms"
+
+        yield_seconds = max(0.0, yield_ms / 1000.0)
+        preparation_seconds = (
+            SHELL_SESSION_PREPARATION_TIMEOUT_SEC
+            if tool_id in SHELL_SESSION_START_TOOL_IDS
+            else 0.0
+        )
+        control_seconds = (
+            SHELL_SESSION_CONTROL_TIMEOUT_SEC
+            if tool_id == SHELL_WRITE_STDIN_TOOL_ID and bool(raw_parameters.get("chars"))
+            else 0.0
+        )
+        deadline_seconds = preparation_seconds + control_seconds + yield_seconds
+        native_timeout_seconds = max(1, int(math.ceil(deadline_seconds)))
+
+        return ToolTimeoutPlan(
+            tool_id=str(tool_id),
+            deadline_seconds=deadline_seconds,
+            native_timeout_seconds=native_timeout_seconds,
+            normalized_parameters=dict(raw_parameters),
+            source=source,
+            requested_timeout_seconds=requested_seconds,
+            requested_timeout_field=requested_field,
+            native_timeout_field=None,
+            max_timeout_seconds=(
+                preparation_seconds + SHELL_SESSION_MAX_YIELD_TIME_MS / 1000.0
+                + control_seconds
+            ),
+            default_timeout_seconds=(
+                preparation_seconds + SHELL_SESSION_DEFAULT_YIELD_TIME_MS / 1000.0
+                + control_seconds
+            ),
+            grace_seconds=max(
+                self._config.shell_session_terminal_io_grace_seconds,
+                SHELL_SESSION_CLEANUP_TIMEOUT_SEC,
+            ),
+            stripped_timeout_fields=(),
+        )
+
     @staticmethod
     def _select_native_timeout_field(
         supported_fields: set[str],
@@ -384,6 +532,7 @@ def ensure_timeout_metadata(metadata: Mapping[str, Any] | None) -> dict[str, Any
 
 
 __all__ = [
+    "DEFAULT_SHELL_SESSION_TERMINAL_IO_GRACE_SECONDS",
     "DEFAULT_TOOL_TIMEOUT_GRACE_SECONDS",
     "DEFAULT_TOOL_TIMEOUT_SECONDS",
     "TOOL_TIMEOUT_EXIT_CODE",

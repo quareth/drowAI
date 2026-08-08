@@ -8,6 +8,31 @@ The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Main agents and subagents can run provider-backed interactive shell commands,
+  continue yielded sessions with exact input or polling, and receive bounded,
+  task-isolated output with lifecycle cleanup.
+
+### Changed
+
+- Shell commands now use explicit utility or assessment aliases; utility commands
+  and compact results remain visible for the immediate response without becoming
+  reusable assessment evidence.
+- Interactive shell policy now reserves hard blocks for obvious environment
+  destruction, shutdown, resource exhaustion, and container escape while
+  permitting pentesting workflows in the default permissive mode.
+- The inert `SHELL_EXEC_MAX_COMMAND_CHARS` agent setting has been retired;
+  command length alone remains accepted and no replacement limit was added.
+
+### Fixed
+
+- Interactive shell sessions now preserve concurrent session limits, honor
+  bounded startup and input timing, report managed-output loss as truncation,
+  normalize split terminal controls, tolerate managed-runner results that arrive
+  before delivery acknowledgements, and present yielded commands as live sessions
+  instead of active tool calls.
+
 ### Security
 
 - Updated cryptography, Undici, and PostCSS to patched releases that address

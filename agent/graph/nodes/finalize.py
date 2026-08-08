@@ -75,6 +75,7 @@ from core.llm import (
     wait_for_with_timeout,
 )
 from core.prompts.builders.finalize import build_finalize_prompts
+from core.prompts.builders.post_tool.evidence import read_compact_evidence
 
 from ._finalize_helpers import resolve_simple_tool_retry_context
 from .node_utils import _usage_to_dict, normalize_stream_chunk
@@ -104,6 +105,16 @@ def _collect_simple_tool_context(
     facts = interactive.facts
     metadata = facts.ensure_metadata()
     synthesized = dict(metadata.get("synthesized_output") or {})
+    if not synthesized:
+        evidence = read_compact_evidence(metadata, prefer_runtime=True)
+        if evidence is not None and evidence.rows:
+            compact = evidence.rows[0].get("compact_tool_result")
+            if isinstance(compact, Mapping):
+                synthesized = dict(compact)
+                synthesized["vulnerabilities"] = list(compact.get("errors") or [])
+                synthesized["next_actions"] = list(
+                    compact.get("report_recommendations") or []
+                )
     last_result = dict(metadata.get("last_tool_result") or {})
 
     retry_context = resolve_simple_tool_retry_context(metadata, synthesized)

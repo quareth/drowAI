@@ -13,31 +13,19 @@ from __future__ import annotations
 
 from typing import Any, Iterable, List
 
+from .universal_agent_tools import UNIVERSAL_AGENT_TOOL_IDS
+
 _VISIBLE_TOOL_IDS: frozenset[str] = frozenset(
     {
-        "filesystem.append_file",
-        "filesystem.copy_path",
-        "filesystem.delete_path",
-        "filesystem.edit_lines",
-        "filesystem.find_paths",
-        "filesystem.grep",
-        "filesystem.list_dir",
-        "filesystem.make_dir",
-        "filesystem.move_path",
-        "filesystem.read_file",
-        "filesystem.read_head",
-        "filesystem.read_tail",
-        "filesystem.search_text",
-        "filesystem.stat_path",
-        "filesystem.write_file",
+        *UNIVERSAL_AGENT_TOOL_IDS,
         "exploitation_tools.metasploit.inspect_module",
+        "exploitation_tools.metasploit.run_exploit",
         "exploitation_tools.metasploit.search_modules",
         "information_gathering.dns.amass",
         "information_gathering.network_discovery.fping",
         "information_gathering.network_discovery.nmap",
         "information_gathering.web_enumeration.http_download",
         "information_gathering.web_enumeration.http_request",
-        "networking_utilities.network",
         "service_access.ftp_download",
         "service_access.ftp_list",
         "service_access.ftp_login",

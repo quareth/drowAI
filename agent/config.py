@@ -84,7 +84,6 @@ class AgentConfig:
     use_llm_tool_calls: bool = True
     max_tools_exposed: int = 3
     tool_call_timeout: int = PLANNER_TOOL_CALL_TIMEOUT_SEC
-    shell_exec_max_command_chars: int = 320
     tool_choice_mode: str = "auto"  # auto|required
     
     # Todo completion guardrails (Phase 1.1)
@@ -183,9 +182,6 @@ class AgentConfig:
         cfg.max_tools_exposed = int(os.getenv("MAX_TOOLS_EXPOSED", str(cfg.max_tools_exposed)))
         cfg.tool_call_timeout = read_llm_timeout_planner_parameter_resolution_sec(
             cfg.tool_call_timeout,
-        )
-        cfg.shell_exec_max_command_chars = int(
-            os.getenv("SHELL_EXEC_MAX_COMMAND_CHARS", str(cfg.shell_exec_max_command_chars))
         )
         # Todo completion guardrails from env
         cfg.max_todo_attempts = int(os.getenv("MAX_TODO_ATTEMPTS", str(cfg.max_todo_attempts)))

@@ -17,6 +17,7 @@ from agent.providers.llm.core.base import ToolCall, ToolCallResult
 from agent.graph.nodes.post_tool_reasoning.node import _update_active_decision_memory
 from agent.graph.state import FactsState, InteractiveState, TodoItem, TodoStatus, TraceState
 from agent.graph.utils.todo_stall_guard import TODO_STALL_METADATA_KEY
+from core.prompts.builders.post_tool.evidence import register_runtime_compact_evidence
 
 
 DecisionCall = Callable[..., Awaitable[PostToolReasoningOutput]]
@@ -206,6 +207,80 @@ def test_detect_empty_output() -> None:
     detected, category = node._detect_tool_failure(state)
     assert detected is True
     assert category == "empty_output"
+
+
+@pytest.mark.asyncio
+async def test_runtime_only_utility_evidence_reaches_ptr_without_checkpoint_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch_id = "tb-runtime-only-ptr"
+    compact = {
+        "schema_version": "2.0",
+        "tool": "shell.utility",
+        "status": "success",
+        "success": True,
+        "exit_code": 0,
+        "summary": "Created /workspace/boris.txt.",
+        "key_findings": [],
+        "errors": [],
+        "report_recommendations": [],
+        "structured_signals": [],
+        "decision_evidence": [],
+        "lossiness_risk": "low",
+    }
+    register_runtime_compact_evidence(
+        {
+            "tool_batch_id": batch_id,
+            "status": "completed",
+            "success": True,
+            "results": [
+                {
+                    "tool_call_id": "tc-runtime-only-ptr",
+                    "tool_id": "shell.utility",
+                    "status": "success",
+                    "success": True,
+                    "compact_tool_result": compact,
+                }
+            ],
+        },
+        single_compact=compact,
+    )
+    captured: Dict[str, str] = {}
+
+    async def fake_decision_call(**kwargs: Any) -> PostToolReasoningOutput:
+        captured["user_prompt"] = kwargs["user_prompt"]
+        return PostToolReasoningOutput(
+            observation="The requested workspace file was created successfully.",
+            next_action="finalize",
+            action_reasoning="The requested utility action completed successfully.",
+            tool_intent=None,
+            user_goal_achieved=True,
+            todo_progress=[],
+            effective_next_goal=None,
+            failure_detected=False,
+            failure_category=None,
+            retry_suggested=False,
+        )
+
+    _install_route_client(monkeypatch, fake_decision_call)
+    state = _make_state(
+        {"tool_batch_id": batch_id, "turn_sequence": 1},
+        capability="simple_tool_execution",
+        message="Create boris.txt in /workspace",
+    )
+
+    update = await node.post_tool_reasoning(
+        state,
+        context=None,
+        config={},
+        writer=None,
+    )
+    updated = InteractiveState.from_mapping(update)
+
+    assert "Created /workspace/boris.txt." in captured["user_prompt"]
+    assert "synthesized_output" not in updated.facts.metadata
+    assert "working_memory" not in updated.facts.metadata
+    assert updated.trace.observations == []
 
 
 def test_retry_budget_tracking() -> None:

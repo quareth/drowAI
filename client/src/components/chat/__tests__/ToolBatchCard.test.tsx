@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ToolBatchCard } from "@/components/chat/ToolBatchCard";
@@ -289,6 +289,45 @@ describe("ToolBatchCard", () => {
     expect(screen.queryByText("Running")).toBeNull();
   });
 
+  it("presents shell process states independently from generic tool success", () => {
+    const messages: ChatMessage[] = [
+      makeMsg({
+        id: "batch-start",
+        metadata: {
+          step_type: "tool_batch_start",
+          tool_batch_id: "tb_shell_states",
+          tool_calls: [
+            { tool_call_id: "tc_running", tool_id: "shell.exec" },
+            { tool_call_id: "tc_completed", tool_id: "shell.write_stdin" },
+            { tool_call_id: "tc_timeout", tool_id: "shell.exec" },
+          ],
+        },
+      }),
+      ...[
+        ["tc_running", "success", "running"],
+        ["tc_completed", "success", "completed"],
+        ["tc_timeout", "error", "timed_out"],
+      ].map(([toolCallId, status, processStatus]) =>
+        makeMsg({
+          id: `end-${toolCallId}`,
+          metadata: {
+            step_type: "tool_end",
+            tool_call_id: toolCallId,
+            tool_name: "shell.exec",
+            status,
+            process_status: processStatus,
+          },
+        }),
+      ),
+    ];
+
+    render(<ToolBatchCard messages={messages} groupKey="shell-states" />);
+
+    expect(screen.getByText("Session running")).toBeTruthy();
+    expect(screen.getByText("Completed")).toBeTruthy();
+    expect(screen.getByText("Timed out")).toBeTruthy();
+  });
+
   it("renders terminal batch rows when no per-tool events were emitted", () => {
     const messages: ChatMessage[] = [
       makeMsg({
@@ -317,5 +356,60 @@ describe("ToolBatchCard", () => {
     render(<ToolBatchCard messages={messages} groupKey="grp4" />);
 
     expect(screen.getByTestId("tool-batch-card-grp4-row-tc_rejected")).not.toBeNull();
+  });
+
+  it("renders transient compact output from the tool-end event", () => {
+    mocked.useToolRawOutputMock.mockReturnValue({
+      state: { status: "not_available", reason: "missing_output_artifacts" },
+      status: "not_available",
+      isLoading: false,
+      isReady: false,
+      isNotAvailable: true,
+      isError: false,
+    });
+    const messages = [
+      makeMsg({
+        id: "utility-start",
+        metadata: {
+          step_type: "tool_start",
+          tool_batch_id: "tb-utility",
+          tool_call_id: "tc-utility",
+          tool_name: "shell.utility",
+          command_display: "touch /workspace/boris.txt",
+        },
+      }),
+      makeMsg({
+        id: "utility-end",
+        metadata: {
+          step_type: "tool_end",
+          tool_batch_id: "tb-utility",
+          tool_call_id: "tc-utility",
+          tool_name: "shell.utility",
+          status: "success",
+          output_persistence: "transient",
+          compact_tool_result: {
+            schema_version: "2.0",
+            tool: "shell.utility",
+            status: "success",
+            success: true,
+            summary: "Created /workspace/boris.txt.",
+            key_findings: [],
+            errors: [],
+            report_recommendations: [],
+            structured_signals: [],
+            decision_evidence: [],
+            lossiness_risk: "low",
+          },
+        },
+      }),
+    ];
+
+    render(<ToolBatchCard messages={messages} groupKey="utility" taskId={40} />);
+    fireEvent.click(screen.getByRole("button", { name: "Toggle tool output" }));
+
+    expect(screen.getByTestId("tool-batch-card-utility-row-tc-utility-terminal").textContent).toBe(
+      "$ touch /workspace/boris.txt\nCreated /workspace/boris.txt.",
+    );
+    expect(screen.queryByText(/Raw output unavailable/)).toBeNull();
   });
 });

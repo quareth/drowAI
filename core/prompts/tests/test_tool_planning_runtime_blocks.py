@@ -173,3 +173,25 @@ def test_tool_planning_prompts_render_referenced_prior_turns_once() -> None:
     assert params_prompt.count("Referenced Prior Turns:") == 1
     assert "Run the service enumeration step." in select_prompt
     assert "Run the service enumeration step." in params_prompt
+
+
+def test_native_tool_call_shared_guidance_includes_minimal_shell_session_rules() -> None:
+    builder = ToolPlanningPromptBuilder()
+
+    guidance = builder.build_native_tool_call_shared_guidance(
+        max_committed_tools_per_batch=3,
+    )
+
+    assert "Use shell.utility or shell.assessment to start a command" in guidance
+    assert "Use shell.exec to start a command." not in guidance
+    assert 'process_status "running"' in guidance
+    assert "retain the exact returned session_id" in guidance
+    assert 'shell.write_stdin with chars="" to poll' in guidance
+    assert 'chars="\\u0003" to interrupt' in guidance
+    assert 'explicit "\\n" for line-oriented input' in guidance
+    assert "Never invent, alter, or reuse a session_id from another result." in guidance
+    assert "command-purpose" not in guidance
+    assert "trust tier" not in guidance.lower()
+    assert "capability routing" not in guidance
+    assert "utility inventory" not in guidance
+    assert "program-specific" not in guidance

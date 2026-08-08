@@ -133,6 +133,7 @@ def test_request_context_strips_raw_secret_and_carries_provider_metadata() -> No
                 workspace_id="task-5",
                 actor_type="agent",
                 actor_id="langgraph",
+                execution_owner_id="main:turn-provider-tool-test",
                 workspace_path="/workspace",
                 provider="openai",
                 model="gpt-5.2",
@@ -150,6 +151,10 @@ def test_request_context_strips_raw_secret_and_carries_provider_metadata() -> No
     assert request.llm_runtime_selection is not None
     assert coordinator_config.tenant_id == 3
     assert coordinator_config.openai_api_key is None
+    assert request.metadata["execution_owner_id"] == "main:turn-provider-tool-test"
+    assert request.metadata["graph_runtime_context"]["execution_owner_id"] == (
+        "main:turn-provider-tool-test"
+    )
 
 
 def test_request_context_runner_mode_does_not_require_workspace_path() -> None:
@@ -262,6 +267,7 @@ def test_wired_metadata_path_projects_runtime_identity_for_executor_request() ->
             "actor_id": "langgraph",
             "runner_id": "runner-1",
             "execution_site_id": "site-1",
+            "execution_owner_id": "main:turn-provider-tool-test",
             METADATA_CONTEXT_BUNDLE_KEY: _empty_context_bundle(),
         },
     )
@@ -300,6 +306,7 @@ def test_wired_metadata_path_projects_runtime_identity_for_executor_request() ->
     assert executor.last_request["actor_id"] == "langgraph"
     assert executor.last_request["runner_id"] == "runner-1"
     assert executor.last_request["execution_site_id"] == "site-1"
+    assert executor.last_request["execution_owner_id"] == "main:turn-provider-tool-test"
 
 
 def test_coordinator_graph_request_omits_raw_secret_and_preserves_runtime_ref() -> None:
@@ -340,7 +347,9 @@ def test_coordinator_graph_request_omits_raw_secret_and_preserves_runtime_ref() 
 
 
 @pytest.mark.asyncio
-async def test_runner_container_lane_dispatches_per_call_via_send_tool_command(monkeypatch) -> None:
+async def test_shell_session_missing_owner_fails_before_runner_provider_dispatch(
+    monkeypatch,
+) -> None:
     calls: list[Any] = []
 
     class _Provider:
@@ -410,18 +419,11 @@ async def test_runner_container_lane_dispatches_per_call_via_send_tool_command(m
         context=context,
     )
 
-    assert result["success"] is True
-    assert result["status"] == "success"
-    assert len(calls) == 1
-    assert calls[0].operation == "send_tool_command"
-    assert calls[0].payload["tool"] == "shell.exec"
-    assert calls[0].payload["command_id"] == "call-1"
-    assert calls[0].payload["wait_for_result"] is True
-    assert calls[0].metadata["wait_for_result"] is True
-    assert calls[0].payload["timeout_policy"] == {
-        "deadline_seconds": 5.0,
-        "grace_seconds": 1.0,
-    }
+    assert result["success"] is False
+    assert result["status"] == "missing_shell_session_identity"
+    assert result["metadata"]["error_code"] == "missing_shell_session_identity"
+    assert "execution_owner_id" in result["stderr"]
+    assert calls == []
     assert provided_executor._execute_single_tool.call_count == 0
 
 
@@ -474,8 +476,8 @@ async def test_runner_container_lane_forwards_env_enabled_pty_transport(monkeypa
 
     await executor.execute_tool(
         {
-            "tool": "shell.exec",
-            "parameters": {"command": "echo ok"},
+            "tool": "shell.script",
+            "parameters": {"script": "echo ok"},
             "task_id": 5,
             "user_id": 7,
             "tenant_id": 3,
@@ -529,7 +531,7 @@ async def test_runner_container_lane_uses_control_plane_workspace_for_command_pr
             self.logger = None
 
         def _tool_to_shell_command(self, _tool_id: str, parameters: Dict[str, Any]) -> str:
-            return str(parameters["command"])
+            return str(parameters["script"])
 
     def _get_executor(
         self,
@@ -556,8 +558,8 @@ async def test_runner_container_lane_uses_control_plane_workspace_for_command_pr
     executor = GraphToolExecutor()
     result = await executor.execute_tool(
         {
-            "tool": "shell.exec",
-            "parameters": {"command": "echo ok"},
+            "tool": "shell.script",
+            "parameters": {"script": "echo ok"},
             "task_id": 5,
             "user_id": 7,
             "tenant_id": 3,
@@ -567,7 +569,7 @@ async def test_runner_container_lane_uses_control_plane_workspace_for_command_pr
             "actor_id": "langgraph",
             "tool_call_id": "call-1",
             "timeout_plan": {
-                "tool_id": "shell.exec",
+                "tool_id": "shell.script",
                 "deadline_seconds": 5.0,
                 "grace_seconds": 1.0,
             },
@@ -635,7 +637,7 @@ async def test_runner_container_lane_materializes_enriched_artifacts_in_runtime(
             self.logger = None
 
         def _tool_to_shell_command(self, _tool_id: str, parameters: Dict[str, Any]) -> str:
-            return str(parameters["command"])
+            return str(parameters["script"])
 
     def _get_executor(
         self,
@@ -675,8 +677,8 @@ async def test_runner_container_lane_materializes_enriched_artifacts_in_runtime(
     executor = GraphToolExecutor()
     result = await executor.execute_tool(
         {
-            "tool": "shell.exec",
-            "parameters": {"command": "echo ok", "transport": "file-comm"},
+            "tool": "shell.script",
+            "parameters": {"script": "echo ok", "transport": "file-comm"},
             "task_id": 5,
             "user_id": 7,
             "tenant_id": 3,
@@ -686,7 +688,7 @@ async def test_runner_container_lane_materializes_enriched_artifacts_in_runtime(
             "actor_id": "langgraph",
             "tool_call_id": "call-artifact",
             "timeout_plan": {
-                "tool_id": "shell.exec",
+                "tool_id": "shell.script",
                 "deadline_seconds": 5.0,
                 "grace_seconds": 1.0,
             },
@@ -707,7 +709,7 @@ async def test_runner_container_lane_materializes_enriched_artifacts_in_runtime(
     assert any(path.startswith("artifacts/") and path.endswith("_tool.txt") for path in result["artifacts"])
     assert result["metadata"]["parsed"] is True
     assert result["metadata"]["artifact_materialization"]["status"] == "succeeded"
-    assert result["command_text"] == "bash -c 'echo ok'"
+    assert result["command_text"].startswith("bash /workspace/scripts/script_")
     written_paths = [write.payload["path"] for write in writes]
     assert "artifacts/nmap.xml" in written_paths
     assert any(path.startswith("artifacts/") and path.endswith("_tool.txt") for path in written_paths)
@@ -756,8 +758,8 @@ async def test_runner_container_lane_ack_only_result_is_not_treated_as_success(m
 
     result = await executor.execute_tool(
         {
-            "tool": "shell.exec",
-            "parameters": {"command": "echo ok"},
+            "tool": "shell.script",
+            "parameters": {"script": "echo ok"},
             "task_id": 5,
             "user_id": 7,
             "tenant_id": 3,
@@ -767,7 +769,7 @@ async def test_runner_container_lane_ack_only_result_is_not_treated_as_success(m
             "actor_id": "langgraph",
             "tool_call_id": "call-1",
             "timeout_plan": {
-                "tool_id": "shell.exec",
+                "tool_id": "shell.script",
                 "deadline_seconds": 5.0,
                 "native_timeout_seconds": 5,
                 "source": "test",
@@ -824,8 +826,8 @@ async def test_runner_container_lane_preserves_cancelled_delegate_status(monkeyp
 
     result = await executor.execute_tool(
         {
-            "tool": "shell.exec",
-            "parameters": {"command": "echo ok"},
+            "tool": "shell.script",
+            "parameters": {"script": "echo ok"},
             "task_id": 5,
             "user_id": 7,
             "tenant_id": 3,
@@ -834,7 +836,7 @@ async def test_runner_container_lane_preserves_cancelled_delegate_status(monkeyp
             "actor_type": "agent",
             "actor_id": "langgraph",
             "tool_call_id": "call-1",
-            "timeout_plan": {"tool_id": "shell.exec", "deadline_seconds": 5.0, "grace_seconds": 1.0},
+            "timeout_plan": {"tool_id": "shell.script", "deadline_seconds": 5.0, "grace_seconds": 1.0},
         },
         context=GraphRuntimeContext(
             task_id=5,
@@ -905,8 +907,8 @@ async def test_runner_container_lane_routes_via_provider_and_management_tools_fa
 
     shell_response = await executor.execute_tool(
         {
-            "tool": "shell.exec",
-            "parameters": {"command": "echo runner"},
+            "tool": "shell.script",
+            "parameters": {"script": "echo runner"},
             "tool_call_id": "call-1",
             "task_id": 5,
             "user_id": 7,
@@ -917,7 +919,7 @@ async def test_runner_container_lane_routes_via_provider_and_management_tools_fa
             "actor_id": "langgraph",
             "tool_batch_id": "batch-1",
             "timeout_plan": {
-                "tool_id": "shell.exec",
+                "tool_id": "shell.script",
                 "deadline_seconds": 5.0,
                 "grace_seconds": 1.0,
             },
@@ -967,7 +969,7 @@ async def test_runner_container_lane_routes_via_provider_and_management_tools_fa
         assert response["status"] == request["expected_status"]
 
     assert len(runner_calls) == 1
-    assert runner_calls[0].payload["tool"] == "shell.exec"
+    assert runner_calls[0].payload["tool"] == "shell.script"
     assert provided_executor._execute_single_tool.call_count == 0
     assert {response["metadata"]["route_policy"]["selected_transport"] for response in unsupported_responses} == {
         "blocked-pre-dispatch"
@@ -1053,11 +1055,11 @@ async def test_runner_container_lane_missing_identity_fails_before_provider(monk
 
     result = await executor.execute_tool(
         {
-            "tool": "shell.exec",
-            "parameters": {"command": "echo ok"},
+            "tool": "shell.script",
+            "parameters": {"script": "echo ok"},
             "runtime_placement_mode": "runner",
             "tool_call_id": "call-1",
-            "timeout_plan": {"tool_id": "shell.exec", "deadline_seconds": 5.0, "grace_seconds": 1.0},
+            "timeout_plan": {"tool_id": "shell.script", "deadline_seconds": 5.0, "grace_seconds": 1.0},
         },
         context=GraphRuntimeContext(task_id=5, user_id=7, runtime_placement_mode="runner"),
     )

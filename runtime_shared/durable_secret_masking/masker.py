@@ -6,6 +6,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .detectors import detect_durable_secret_spans
+from runtime_shared.shell_capabilities import SHELL_SESSION_TOOL_IDS
 
 MASK_PREFIX = "<DURABLE_SECRET_MASK"
 _SENSITIVE_KEY_PARTS = frozenset(
@@ -54,6 +55,17 @@ _RUNNER_CONTROL_SOURCES_ALLOWING_TERMINAL_SESSION_IDS = frozenset(
         "runtime_job_runner_event_result",
     }
 )
+_SHELL_RESULT_SOURCES_ALLOWING_PUBLIC_SESSION_IDS = frozenset(
+    {
+        "last_tool_result",
+        "last_tool_result_compact",
+        "last_tool_result_compact_batch",
+    }
+)
+_SHELL_RESULT_TOOL_IDS = frozenset(
+    {*SHELL_SESSION_TOOL_IDS, "shell_exec", "shell_write_stdin"}
+)
+_PUBLIC_SHELL_SESSION_ID_PREFIX = "shs_"
 _TERMINAL_MESSAGE_TYPES = frozenset(
     {
         "terminal_open",
@@ -82,8 +94,10 @@ def mask_durable_secrets(value: Any, *, source: str | None = None) -> Any:
     return _mask_value(
         value,
         parent_key="",
+        path=(),
         source=_normalize_context(source),
         terminal_context=False,
+        shell_result_context=False,
     )
 
 
@@ -91,11 +105,17 @@ def _mask_value(
     value: Any,
     *,
     parent_key: str,
+    path: tuple[str, ...],
     source: str,
     terminal_context: bool,
+    shell_result_context: bool,
 ) -> Any:
     if isinstance(value, Mapping):
         next_terminal_context = terminal_context or _is_runner_terminal_mapping(
+            value=value,
+            source=source,
+        )
+        next_shell_result_context = shell_result_context or _is_shell_session_result_mapping(
             value=value,
             source=source,
         )
@@ -103,8 +123,10 @@ def _mask_value(
             str(key): _mask_value(
                 child,
                 parent_key=str(key),
+                path=(*path, str(key)),
                 source=source,
                 terminal_context=next_terminal_context,
+                shell_result_context=next_shell_result_context,
             )
             for key, child in value.items()
         }
@@ -114,8 +136,10 @@ def _mask_value(
             _mask_value(
                 item,
                 parent_key=parent_key,
+                path=path,
                 source=source,
                 terminal_context=terminal_context,
+                shell_result_context=shell_result_context,
             )
             for item in value
         ]
@@ -124,18 +148,28 @@ def _mask_value(
             _mask_value(
                 item,
                 parent_key=parent_key,
+                path=path,
                 source=source,
                 terminal_context=terminal_context,
+                shell_result_context=shell_result_context,
             )
             for item in value
         )
     if isinstance(value, str):
+        if _should_preserve_public_shell_session_id(
+            value=value,
+            parent_key=parent_key,
+            shell_result_context=shell_result_context,
+        ):
+            return value
         if _should_preserve_terminal_session_id(
             parent_key=parent_key,
             source=source,
             terminal_context=terminal_context,
         ):
             return value
+        if _is_positional_secret(path, value):
+            return _placeholder("secret")
         if _is_sensitive_key(parent_key) and not _is_safe_marker(value):
             return _mask_text(value) if _contains_detectable_secret(value) else _placeholder("secret")
         return _mask_text(value)
@@ -176,6 +210,48 @@ def _should_preserve_terminal_session_id(
     if source not in _RUNNER_CONTROL_SOURCES_ALLOWING_TERMINAL_SESSION_IDS:
         return False
     return _normalize_context(parent_key) == "session_id"
+
+
+def _should_preserve_public_shell_session_id(
+    *,
+    value: str,
+    parent_key: str,
+    shell_result_context: bool,
+) -> bool:
+    if not shell_result_context:
+        return False
+    if _normalize_context(parent_key) != "session_id":
+        return False
+    return value.startswith(_PUBLIC_SHELL_SESSION_ID_PREFIX)
+
+
+def _is_shell_session_result_mapping(*, value: Mapping[str, Any], source: str) -> bool:
+    if source not in _SHELL_RESULT_SOURCES_ALLOWING_PUBLIC_SESSION_IDS:
+        return False
+    tool_id = _normalize_context(value.get("tool") or value.get("tool_id"))
+    if tool_id not in _SHELL_RESULT_TOOL_IDS:
+        return False
+    return any(
+        key in value
+        for key in (
+            "process_status",
+            "stdin_available",
+            "exit_code",
+            "stdout",
+            "stderr",
+            "summary",
+            "error_code",
+        )
+    )
+
+
+def _is_positional_secret(path: tuple[str, ...], value: str) -> bool:
+    normalized_path = tuple(_normalize_context(part) for part in path)
+    if "env" in normalized_path:
+        return True
+    if normalized_path and normalized_path[-1] == "chars":
+        return bool(value)
+    return False
 
 
 def _is_runner_terminal_mapping(*, value: Mapping[str, Any], source: str) -> bool:

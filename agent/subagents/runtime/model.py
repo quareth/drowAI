@@ -134,6 +134,11 @@ async def run_subagent_model_turn(
                     ownership_boundary=definition.ownership_boundary,
                     boundary_rules=boundary_rules,
                     max_committed_tools_per_batch=max_committed_calls,
+                    callable_tool_ids=(
+                        tuple(spec.tool_id for spec in tool_specs)
+                        if can_call_tools
+                        else ()
+                    ),
                 ),
                 prompt_builder.build_user_prompt(
                     display_name=definition.display_name,

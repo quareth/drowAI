@@ -72,7 +72,10 @@ Commit rules:
 - Pick only candidates that advance the CURRENT in-progress step or nearest pending step; ignore weak candidates.
 - Each called tool must come from the Candidate Tools section of the current turn input.
 - If a previous attempt failed, use corrected parameters that address the failed attempt described in the Previous Tool Executed section.
-- For shell.exec, configure only the immediate objective; do not embed future contingencies in one command.
+- Use shell.utility or shell.assessment to start a command according to the Shell Capability Profiles. If it returns process_status "running", retain the exact returned session_id for continuation.
+- Use shell.write_stdin with chars="" to poll, chars="\u0003" to interrupt, and explicit "\n" for line-oriented input because no newline is added automatically.
+- Never invent, alter, or reuse a session_id from another result.
+- For shell.utility or shell.assessment, configure only the immediate objective; do not embed future contingencies in one command.
 - Do NOT add optional parameters the active directive or Turn Execution Brief's resolved intent or explicit constraints do not mention.
 - Do NOT assume or guess parameter values.
 - Preserve the active directive or Turn Execution Brief explicit constraints exactly: target, explicit tool semantics, and ports.

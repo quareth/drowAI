@@ -36,7 +36,10 @@ from ..tools.service_matcher import ServiceInventory, ServiceInfo
 from ..tools.tool_call_specs import (
     build_function_tool_specs_for,
 )
-from ..tools.catalog_builder import build_full_tool_catalog
+from ..tools.catalog_builder import (
+    build_full_tool_catalog,
+    limit_catalog_preserving_universal_tools,
+)
 from ..tools.catalog_visibility import filter_visible_tool_ids
 from ..tools.capability_surface import render_capability_surface
 from ..tools.enhanced_tool_metadata import build_tool_catalog_entries
@@ -416,7 +419,10 @@ class EnhancedActionPlanner:
         if context.get("selected_categories"):
             return resolved_tools
         max_tools_for_llm = int(getattr(self.config, "max_tools_exposed", 3))
-        return resolved_tools[: max(1, max_tools_for_llm)]
+        return limit_catalog_preserving_universal_tools(
+            resolved_tools,
+            max(1, max_tools_for_llm),
+        )
 
     async def _try_llm_action_plan(self, action: Action, context: Dict[str, Any]) -> ActionPlan | None:
         """Attempt to have the LLM choose tools/count/strategy and params.
@@ -438,9 +444,6 @@ class EnhancedActionPlanner:
         capability_surface = render_capability_surface(limited_tool_list)
         max_tools = int(getattr(self.config, "max_tools_per_action", 3))
         max_committed = int(getattr(self.config, "max_committed_tools_per_batch", 1) or 1)
-        parameter_system_prompt = prompt_builder.build_tool_parameters_system_prompt(
-            max_committed_tools_per_batch=max_committed,
-        )
         selection_prompt = prompt_builder.build_select_tools_prompt(
             resolved_tools=limited_tool_list,
             catalog=tool_entries,
@@ -501,6 +504,10 @@ class EnhancedActionPlanner:
                 tool_batch=None,
             )
         specs, fn_map = build_function_tool_specs_for(selection.selected_tools)
+        parameter_system_prompt = prompt_builder.build_tool_parameters_system_prompt(
+            max_committed_tools_per_batch=max_committed,
+            callable_tool_ids=selection.selected_tools,
+        )
         artifact_file_metadata = build_artifact_file_metadata_for_prompt(
             selected_tools=selection.selected_tools,
             workspace_path=context.get("workspace_path"),

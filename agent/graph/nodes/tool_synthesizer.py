@@ -22,6 +22,7 @@ from agent.graph.state import InteractiveState
 from agent.graph.utils.goal_tracker import update_achieved_goals
 from agent.graph.utils.observation_deduplication import detect_tool_output_change
 from backend.services.metrics.utils import safe_inc
+from core.prompts.builders.post_tool.evidence import read_compact_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,13 @@ async def synthesize_tool_output(
     
     compact_result = metadata.get("last_tool_result_compact")
     if not isinstance(compact_result, Mapping):
+        runtime_evidence = read_compact_evidence(metadata, prefer_runtime=True)
+        if runtime_evidence is not None:
+            # Utility output is intentionally available only through the
+            # same-process evidence handoff. PTR and the finalizer consume it
+            # directly; copying it into synthesized state would make it
+            # durable at this checkpoint.
+            return interactive.as_graph_update()
         raise RuntimeError(
             "Missing last_tool_result_compact in compact-only mode. "
             "Tool execution must persist a compact envelope before synthesis."

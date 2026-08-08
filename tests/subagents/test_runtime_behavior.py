@@ -64,12 +64,15 @@ from agent.tool_runtime.batch.types import (
 )
 from agent.tools.tool_call_specs import make_function_name_for_tool
 from core.prompts.builders.subagent_runtime import SubagentRuntimePromptBuilder
+from runtime_shared.shell_capabilities import (
+    SHELL_ASSESSMENT_TOOL_ID,
+    SHELL_UTILITY_TOOL_ID,
+    SHELL_WRITE_STDIN_TOOL_ID,
+)
 
 
 FPING_TOOL_ID = "information_gathering.network_discovery.fping"
 NMAP_TOOL_ID = "information_gathering.network_discovery.nmap"
-
-
 class _FakeUsage:
     """Minimal usage value accepted by the shared graph usage converter."""
 
@@ -189,12 +192,53 @@ def _profile() -> SubagentToolProfile:
     )
 
 
+def _profile_with_universal_shell_tools() -> SubagentToolProfile:
+    return SubagentToolProfile(
+        tools=(
+            *(
+                spec
+                for spec in _profile().tools
+                if spec.tool_id
+                not in {
+                    SHELL_UTILITY_TOOL_ID,
+                    SHELL_ASSESSMENT_TOOL_ID,
+                    SHELL_WRITE_STDIN_TOOL_ID,
+                }
+            ),
+            SubagentToolSpec(
+                tool_id=SHELL_UTILITY_TOOL_ID,
+                display_name="shell.utility",
+                capabilities=(),
+            ),
+            SubagentToolSpec(
+                tool_id=SHELL_ASSESSMENT_TOOL_ID,
+                display_name="shell.assessment",
+                capabilities=(),
+            ),
+            SubagentToolSpec(
+                tool_id=SHELL_WRITE_STDIN_TOOL_ID,
+                display_name="shell.write_stdin",
+                capabilities=(),
+            ),
+        )
+    )
+
+
 def _generic_state() -> dict[str, Any]:
     return build_subagent_initial_state(
         definition=_pathfinder_definition(),
         assignment=_assignment(),
         graph_thread_id="child-thread-1",
         tool_profile=_profile(),
+    )
+
+
+def _generic_state_with_universal_shell_tools() -> dict[str, Any]:
+    return build_subagent_initial_state(
+        definition=_pathfinder_definition(),
+        assignment=_assignment(),
+        graph_thread_id="child-thread-shell-utilities",
+        tool_profile=_profile_with_universal_shell_tools(),
     )
 
 
@@ -484,12 +528,20 @@ def test_runtime_profile_resolves_definition_owned_tools() -> None:
 
     profile = resolve_subagent_tool_profile(definition, definition.tool_ids)
 
-    assert profile.tool_ids == definition.tool_ids
+    assert profile.tool_ids == (
+        *definition.tool_ids,
+        SHELL_UTILITY_TOOL_ID,
+        SHELL_ASSESSMENT_TOOL_ID,
+        SHELL_WRITE_STDIN_TOOL_ID,
+    )
     assert profile.capabilities_for_tool(FPING_TOOL_ID) == ("host_discovery",)
     assert profile.capabilities_for_tool(NMAP_TOOL_ID) == (
         "port_scanning",
         "service_enumeration",
     )
+    assert profile.capabilities_for_tool(SHELL_UTILITY_TOOL_ID) == ()
+    assert profile.capabilities_for_tool(SHELL_ASSESSMENT_TOOL_ID) == ()
+    assert profile.capabilities_for_tool(SHELL_WRITE_STDIN_TOOL_ID) == ()
 
 
 def test_runtime_initial_state_uses_generic_metadata_key() -> None:
@@ -511,7 +563,13 @@ def test_runtime_initial_state_uses_generic_metadata_key() -> None:
         definition=_pathfinder_definition(),
     )
     assert subagent_state.as_metadata() == metadata["subagent"]
-    assert subagent_state.tool_profile.tool_ids == (FPING_TOOL_ID, NMAP_TOOL_ID)
+    assert subagent_state.tool_profile.tool_ids == (
+        FPING_TOOL_ID,
+        NMAP_TOOL_ID,
+        SHELL_UTILITY_TOOL_ID,
+        SHELL_ASSESSMENT_TOOL_ID,
+        SHELL_WRITE_STDIN_TOOL_ID,
+    )
     assert metadata["graph_thread_id"] == "child-thread-1"
     assert metadata["parent_graph_thread_id"] == "parent-thread-1"
     assert bundle["conversation_id"] == "conversation-1"
@@ -676,6 +734,9 @@ async def test_runtime_model_records_generic_route_metadata_and_call_topology() 
     assert request["tool_ids"] == [
         FPING_TOOL_ID,
         NMAP_TOOL_ID,
+        SHELL_UTILITY_TOOL_ID,
+        SHELL_ASSESSMENT_TOOL_ID,
+        SHELL_WRITE_STDIN_TOOL_ID,
     ]
     assert request["kwargs"] == {
         "tool_choice": "auto",
@@ -690,6 +751,137 @@ async def test_runtime_model_records_generic_route_metadata_and_call_topology() 
         SUBAGENT_EXECUTION_STRATEGY_KEY in required
         for required in request["required"]
     )
+
+
+@pytest.mark.asyncio
+async def test_runtime_model_exposes_and_commits_universal_shell_utilities() -> None:
+    calls = [
+        _native_call(
+            SHELL_UTILITY_TOOL_ID,
+            parameters={"command": "printf ready"},
+            strategy="sequential",
+            intent="Start a bounded shell session for a quick runtime check.",
+        )
+    ]
+    llm = _FakeBuilderLLM(calls)
+
+    update = await run_subagent_model_turn(
+        _pathfinder_definition(),
+        _generic_state_with_universal_shell_tools(),
+        llm_resolver=lambda *_args, **_kwargs: llm,
+    )
+
+    request = _request_projection(llm.requests[0])
+    assert request["tool_ids"] == [
+        FPING_TOOL_ID,
+        NMAP_TOOL_ID,
+        SHELL_UTILITY_TOOL_ID,
+        SHELL_ASSESSMENT_TOOL_ID,
+        SHELL_WRITE_STDIN_TOOL_ID,
+    ]
+    assert SHELL_UTILITY_TOOL_ID in request["schemas_by_tool_id"]
+    assert SHELL_ASSESSMENT_TOOL_ID in request["schemas_by_tool_id"]
+    assert SHELL_WRITE_STDIN_TOOL_ID in request["schemas_by_tool_id"]
+    assert "Use shell.utility for ordinary operating-system" in request["system_prompt"]
+    assert "Use shell.assessment for commands whose purpose" in request["system_prompt"]
+    assert "Use shell.write_stdin with chars=\"\" to poll" in request["system_prompt"]
+    assert "run shells" not in request["system_prompt"]
+    assert "run shells" not in request["user_prompt"]
+    assert "Use shell.utility for ordinary operating-system" not in request["user_prompt"]
+    assert "Use shell.assessment for commands whose purpose" not in request["user_prompt"]
+    assert set(request["schemas_by_tool_id"][SHELL_UTILITY_TOOL_ID]["properties"]) >= {
+        "command",
+        "cwd",
+        "env",
+        "yield_time_ms",
+        "max_output_chars",
+        "max_runtime_sec",
+    }
+    assert set(
+        request["schemas_by_tool_id"][SHELL_WRITE_STDIN_TOOL_ID]["properties"]
+    ) >= {
+        "session_id",
+        "chars",
+        "yield_time_ms",
+        "max_output_chars",
+    }
+    metadata = update["facts"]["metadata"]
+    action = metadata[SUBAGENT_ACTION_METADATA_KEY]
+    assert action["route"] == "tool"
+    assert action["tool_ids"] == [SHELL_UTILITY_TOOL_ID]
+    assert update["facts"]["tool_candidates"] == request["tool_ids"]
+    assert metadata["planner_plan"]["tool_batch"]["tool_calls"][0]["tool_id"] == (
+        SHELL_UTILITY_TOOL_ID
+    )
+    assert metadata["planner_plan"]["tool_batch"]["tool_calls"][0]["parameters"] == {
+        "command": "printf ready",
+        "cwd": None,
+        "env": None,
+        "yield_time_ms": 10000,
+        "max_output_chars": 32000,
+        "max_runtime_sec": 120,
+    }
+
+
+@pytest.mark.asyncio
+async def test_runtime_model_commits_shell_write_stdin_for_running_shell_result() -> None:
+    public_session_id = "shs_subagent_continuation_123"
+    state = _generic_state_with_universal_shell_tools()
+    metadata = state["facts"]["metadata"]
+    metadata["last_tool_result"] = {
+        "tool": SHELL_UTILITY_TOOL_ID,
+        "success": True,
+        "status": "success",
+        "process_status": "running",
+        "session_id": public_session_id,
+        "stdout": "started",
+        "stderr": "",
+        "exit_code": None,
+        "stdin_available": True,
+        "truncated": False,
+        "summary": f"Command is still running; poll session {public_session_id}.",
+        "parameters": {"command": "sleep 1; printf done"},
+    }
+    metadata["last_tool_result_compact"] = {
+        "tool": SHELL_UTILITY_TOOL_ID,
+        "success": True,
+        "status": "success",
+        "process_status": "running",
+        "session_id": public_session_id,
+        "summary": f"Command is still running; poll session {public_session_id}.",
+    }
+    calls = [
+        _native_call(
+            SHELL_WRITE_STDIN_TOOL_ID,
+            parameters={
+                "session_id": public_session_id,
+                "chars": "",
+                "yield_time_ms": 1000,
+                "max_output_chars": 32000,
+            },
+            strategy="sequential",
+            intent="Poll the running shell session.",
+        )
+    ]
+    llm = _FakeBuilderLLM(calls)
+
+    update = await run_subagent_model_turn(
+        _pathfinder_definition(),
+        state,
+        llm_resolver=lambda *_args, **_kwargs: llm,
+    )
+
+    request = _request_projection(llm.requests[0])
+    assert SHELL_WRITE_STDIN_TOOL_ID in request["tool_ids"]
+    assert public_session_id in request["user_prompt"]
+    tool_call = update["facts"]["metadata"]["planner_plan"]["tool_batch"]["tool_calls"][0]
+    assert tool_call["tool_id"] == SHELL_WRITE_STDIN_TOOL_ID
+    assert tool_call["parameters"] == {
+        "session_id": public_session_id,
+        "chars": "",
+        "yield_time_ms": 1000,
+        "max_output_chars": 32000,
+    }
 
 
 @pytest.mark.asyncio
@@ -711,7 +903,13 @@ async def test_runtime_model_reconstructs_full_profile_after_committed_batch() -
     )
 
     assert after_fping["facts"]["tool_ids"] == [FPING_TOOL_ID]
-    assert after_fping["facts"]["tool_candidates"] == [FPING_TOOL_ID, NMAP_TOOL_ID]
+    assert after_fping["facts"]["tool_candidates"] == [
+        FPING_TOOL_ID,
+        NMAP_TOOL_ID,
+        SHELL_UTILITY_TOOL_ID,
+        SHELL_ASSESSMENT_TOOL_ID,
+        SHELL_WRITE_STDIN_TOOL_ID,
+    ]
 
     next_llm = _FakeBuilderLLM(
         [
@@ -730,7 +928,13 @@ async def test_runtime_model_reconstructs_full_profile_after_committed_batch() -
     )
 
     next_request = _request_projection(next_llm.requests[0])
-    assert next_request["tool_ids"] == [FPING_TOOL_ID, NMAP_TOOL_ID]
+    assert next_request["tool_ids"] == [
+        FPING_TOOL_ID,
+        NMAP_TOOL_ID,
+        SHELL_UTILITY_TOOL_ID,
+        SHELL_ASSESSMENT_TOOL_ID,
+        SHELL_WRITE_STDIN_TOOL_ID,
+    ]
     assert next_update["facts"]["metadata"][SUBAGENT_ACTION_METADATA_KEY][
         "tool_ids"
     ] == [NMAP_TOOL_ID]
@@ -871,6 +1075,8 @@ async def test_runtime_model_forces_text_handoff_when_iteration_budget_exhausted
         "temperature": 0.1,
         "max_tokens": 5000,
     }
+    assert "Use shell.utility for ordinary operating-system" not in request["system_prompt"]
+    assert "Use shell.assessment for commands whose purpose" not in request["system_prompt"]
     metadata = update["facts"]["metadata"]
     assert metadata[SUBAGENT_ACTION_METADATA_KEY]["route"] == "handoff"
     assert "subagent_observation_transcript" not in metadata
@@ -1251,10 +1457,10 @@ async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> Non
     assert baseline == {
         "one_tool_model_calls": 1,
         "multi_iteration_model_calls": 1,
-        "one_tool_serialized_state_chars": 9660,
-        "multi_iteration_serialized_state_chars": 10882,
-        "multi_iteration_prompt_chars": 11133,
-        "multi_iteration_prompt_tokens": 3977,
+        "one_tool_serialized_state_chars": 9808,
+        "multi_iteration_serialized_state_chars": 11030,
+        "multi_iteration_prompt_chars": 12592,
+        "multi_iteration_prompt_tokens": 4498,
         "bounded_parent_handoff_projection_chars": 501,
         "bounded_parent_handoff_render_chars": 281,
         "parent_handoff_projection_model_calls": 0,
@@ -1714,4 +1920,8 @@ def _request_projection(request: dict[str, Any]) -> dict[str, Any]:
         "kwargs": kwargs,
         "tool_ids": [tool.tool_id for tool in tools],
         "required": [tool.parameters_schema["required"] for tool in tools],
+        "schemas_by_tool_id": {
+            tool.tool_id: tool.parameters_schema
+            for tool in tools
+        },
     }

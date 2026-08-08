@@ -5,12 +5,22 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 import time
 import uuid
 from typing import TYPE_CHECKING, Optional
 
 from agent.tools.shell.contracts import ShellCommandResult
+from runtime_shared.shell_session_framing import (
+    EXIT_CODE_PATTERN,
+    PTY_EXIT_CODE_MARKER,
+    ShellSessionFramingError,
+    create_pty_command_frame,
+    parse_exit_code_from_combined_output,
+    parse_legacy_exit_code,
+    parse_marked_command_output,
+    strip_exit_code_marker,
+    strip_pty_artifacts,
+)
 from runtime_shared.metrics import safe_gauge
 from runtime_shared.terminal_contracts import (
     AGENT_PROMPT_ENV as PTY_PROMPT_ENV,
@@ -24,19 +34,6 @@ if TYPE_CHECKING:
     from backend.services.terminal.models import TerminalSession
 
 logger = logging.getLogger(__name__)
-
-PTY_EXIT_CODE_MARKER = "__DROWAI_EXIT_CODE__="
-
-# ANSI/CSI escape code pattern for stripping.
-# PTY output can include many CSI sequences beyond SGR color codes, e.g.:
-# - \x1b[32m (colors)
-# - \x1b[?2004h / \x1b[?2004l (bracketed paste mode toggles)
-# Use a broad CSI matcher: ESC [ (0–?)* (space–/)* (@–~)
-# Ref: ECMA-48 / VT100-compatible CSI sequences.
-ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
-
-# Exit code pattern for completion detection (pre-compiled for performance)
-EXIT_CODE_PATTERN = re.compile(r'__DROWAI_EXIT_CODE__=\d+')
 
 
 def _get_terminal_session_manager():
@@ -402,9 +399,7 @@ async def _execute_command_in_pty(
         PTYReadTimeoutError: If command output isn't received within timeout (carries partial output)
     """
     # Generate unique command ID to ensure we're reading THIS command's output
-    cmd_id = uuid.uuid4().hex[:8]
-    start_marker = f"__DROWAI_CMD_START_{cmd_id}__"
-    end_marker = f"__DROWAI_CMD_END_{cmd_id}__"
+    frame = create_pty_command_frame(command, command_id=uuid.uuid4().hex[:8])
     
     # Drain any stale data from PTY buffer before sending new command.
     # This prevents reading leftover output from previous commands.
@@ -415,25 +410,15 @@ async def _execute_command_in_pty(
         logger.error("[PTY] Session is not active or has no socket")
         raise PTYSessionNotAvailable("PTY session is not active")
     
-    # Build wrapped command with unique markers:
-    # 1. Print start marker (so we know where our command's output begins)
-    # 2. Run the actual command (with stderr redirected to stdout for capture)
-    # 3. Capture exit code
-    # 4. Print end marker with exit code
-    wrapped = (
-        f"printf '{start_marker}\\n'; "
-        f"{{ {command}; }} 2>&1; __drowai_ec=$?; "
-        f"printf '\\n{end_marker}={PTY_EXIT_CODE_MARKER}%s\\n' \"$__drowai_ec\"\n"
-    )
-    logger.debug(f"[PTY] Sending wrapped command ({len(wrapped)} bytes)")
-    if not await _write_session_input(session, wrapped.encode()):
+    logger.debug(f"[PTY] Sending wrapped command ({len(frame.wrapped_command)} bytes)")
+    if not await _write_session_input(session, frame.wrapped_command.encode()):
         raise PTYSessionNotAvailable("PTY session input provider rejected command write")
 
     # Read output until we see BOTH the end marker AND the prompt
     try:
         raw_combined = await _read_until_marker_and_prompt(
             session,
-            end_marker=end_marker,
+            end_marker=frame.end_marker,
             timeout_sec=timeout_sec,
         )
         logger.debug(f"[PTY] Successfully read {len(raw_combined)} bytes until markers")
@@ -446,13 +431,17 @@ async def _execute_command_in_pty(
         raise
 
     # Extract output between start and end markers
-    stdout_for_tools, exit_code = _parse_marked_output(raw_combined, start_marker, end_marker)
+    stdout_for_tools, exit_code = _parse_marked_output(
+        raw_combined,
+        frame.start_marker,
+        frame.end_marker,
+    )
     
     # Emit a warning when marker parsing yields unexpectedly empty output.
     if not stdout_for_tools and len(raw_combined) > 100:
         logger.warning(
             f"[PTY] Output extraction returned empty but raw_combined has "
-            f"{len(raw_combined)} bytes. start_marker={start_marker[:20]}, "
+            f"{len(raw_combined)} bytes. start_marker={frame.start_marker[:20]}, "
             f"raw_preview={raw_combined[:200]!r}"
         )
 
@@ -597,77 +586,26 @@ def _parse_marked_output(
     Returns:
         Tuple of (command_output, exit_code)
     """
-    # Clean ANSI codes
-    cleaned = ANSI_ESCAPE_PATTERN.sub("", raw_output)
-    cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
-
-    # PTY echoes the wrapped command (including marker strings). The echoed command can
-    # line-wrap based on terminal width, which can insert newlines and cause naive
-    # "search after first newline" heuristics to accidentally match markers inside the echo.
-    #
-    # Robust strategy:
-    # - Always take the *last* start_marker occurrence (printed marker should appear after the echo)
-    # - Then take the first end_marker *after* that start_marker
-    start_idx = cleaned.rfind(start_marker)
-    end_idx = cleaned.find(end_marker, start_idx) if start_idx != -1 else -1
-
-    logger.debug(f"[PTY] Marker positions: start_idx={start_idx}, end_idx={end_idx}, cleaned_len={len(cleaned)}")
-
-    if start_idx == -1 or end_idx == -1:
-        raise PTYOutputParseError(
-            f"Missing command markers (start_idx={start_idx}, end_idx={end_idx})",
-            raw_output=raw_output,
+    try:
+        command_output, exit_code = parse_marked_command_output(
+            raw_output,
+            start_marker,
+            end_marker,
         )
+    except ShellSessionFramingError as exc:
+        raise PTYOutputParseError(str(exc), raw_output=exc.raw_output) from exc
 
-    # Get output between markers (after start marker line, before end marker)
-    nl_idx = cleaned.find("\n", start_idx)
-    content_start = (nl_idx + 1) if nl_idx != -1 else (start_idx + len(start_marker))
-    if content_start >= end_idx:
-        raise PTYOutputParseError(
-            f"Invalid marker bounds (content_start={content_start}, end_idx={end_idx})",
-            raw_output=raw_output,
-        )
-
-    command_output = cleaned[content_start:end_idx].strip()
     logger.debug(
-        f"[PTY] Extracted output: content_start={content_start}, end_idx={end_idx}, output_len={len(command_output)}"
+        "[PTY] Extracted marker-bounded output: output_len=%s",
+        len(command_output),
     )
-
-    # Parse exit code from end marker line
-    # Format: __DROWAI_CMD_END_xxxx__=__DROWAI_EXIT_CODE__=N
-    end_line_start = end_idx
-    end_line_end = cleaned.find("\n", end_idx)
-    if end_line_end == -1:
-        end_line_end = len(cleaned)
-    end_line = cleaned[end_line_start:end_line_end]
-    match = re.search(rf"{re.escape(PTY_EXIT_CODE_MARKER)}(\d+)", end_line)
-    if not match:
-        raise PTYOutputParseError(
-            "Exit code marker missing or malformed in end marker line",
-            raw_output=raw_output,
-        )
-    exit_code = int(match.group(1))
-
     return command_output, exit_code
 
 
 def _parse_exit_code_from_combined_output(output: str) -> int:
     """Parse exit code from combined output containing PTY_EXIT_CODE_MARKER."""
     try:
-        cleaned = ANSI_ESCAPE_PATTERN.sub("", output)
-        cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
-        for line in cleaned.split("\n"):
-            line = line.strip()
-            if not line:
-                continue
-            if PTY_EXIT_CODE_MARKER in line:
-                # tolerate marker + prompt on same line
-                tail = line.split(PTY_EXIT_CODE_MARKER, 1)[1]
-                tail = tail.replace(PTY_PROMPT_MARKER, "").replace(PTY_PROMPT_ENV, "").strip()
-                if tail.isdigit():
-                    return int(tail)
-        # fallback to legacy parsing (best-effort)
-        return _parse_exit_code(output)
+        return parse_exit_code_from_combined_output(output)
     except Exception:
         return 1
 
@@ -675,15 +613,7 @@ def _parse_exit_code_from_combined_output(output: str) -> int:
 def _strip_exit_code_marker(output: str) -> str:
     """Remove the exit-code marker line from combined output."""
     try:
-        # Do not strip ANSI here; cleanup handles it. Just remove marker content.
-        normalized = output.replace("\r\n", "\n").replace("\r", "\n")
-        lines = normalized.split("\n")
-        kept: list[str] = []
-        for line in lines:
-            if PTY_EXIT_CODE_MARKER in line:
-                continue
-            kept.append(line)
-        return "\n".join(kept)
+        return strip_exit_code_marker(output)
     except Exception:
         return output
 
@@ -755,27 +685,7 @@ def _parse_exit_code(output: str) -> int:
         Exit code as integer (defaults to 1 if parsing fails)
     """
     try:
-        # Strip ANSI escape codes first (PTY output often has them)
-        cleaned = ANSI_ESCAPE_PATTERN.sub('', output)
-        
-        # Look for number before prompt
-        lines = cleaned.strip().split('\n')
-        for line in lines:
-            # Strip whitespace including \r from PTY
-            line = line.strip()
-            # Skip the echo command itself
-            if line.startswith("echo"):
-                continue
-            # Exit code can appear either on its own line ("0") or on the same
-            # line as the prompt marker ("__DROWAI_PROMPT__> 0").
-            normalized = line.replace(PTY_PROMPT_MARKER, "").replace(PTY_PROMPT_ENV, "").strip()
-            # Check for digit-only line (exit code)
-            if normalized and normalized.isdigit():
-                return int(normalized)
-        
-        # If no clear exit code found, default to 1 (error)
-        logger.warning(f"[PTY] Could not parse exit code from output: {repr(output[:100])}")
-        return 1
+        return parse_legacy_exit_code(output)
     except Exception as exc:
         logger.warning(f"[PTY] Error parsing exit code: {exc}")
         return 1
@@ -803,35 +713,7 @@ def _strip_pty_artifacts(output: str, command: str) -> str:
     Returns:
         Output with only PTY artifacts removed
     """
-    # Strip ANSI escape codes / CSI sequences
-    cleaned = ANSI_ESCAPE_PATTERN.sub('', output)
-
-    # Normalize CRLF/CR to LF
-    cleaned = cleaned.replace("\r\n", "\n").replace("\r", "\n")
-    
-    # Split into lines for targeted removal
-    lines = cleaned.split('\n')
-    
-    # Remove command echo (PTY echoes the command back, file-comm doesn't)
-    if lines and command and command in lines[0]:
-        lines = lines[1:]
-    
-    # Remove only prompt marker lines (our __DROWAI__ markers)
-    cleaned_lines = []
-    for line in lines:
-        # Skip lines that are ONLY prompt markers
-        if PTY_PROMPT_MARKER in line or PTY_PROMPT_ENV in line:
-            # Extract non-marker content if any
-            stripped = line.replace(PTY_PROMPT_MARKER, "").replace(PTY_PROMPT_ENV, "").strip()
-            if stripped and not stripped.startswith("__DROWAI"):
-                cleaned_lines.append(stripped)
-        elif "__DROWAI_CMD_" in line or "__DROWAI_EXIT_CODE__" in line:
-            # Skip our internal marker lines entirely
-            continue
-        else:
-                cleaned_lines.append(line)
-    
-    return '\n'.join(cleaned_lines)
+    return strip_pty_artifacts(output, command)
 
 
 def _cleanup_pty_output(output: str, command: str) -> str:
