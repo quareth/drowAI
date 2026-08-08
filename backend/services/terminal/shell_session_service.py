@@ -501,20 +501,23 @@ class ShellSessionService:
                     started_at,
                 )
             if result.truncated:
-                output.mark_provider_output_truncated()
-            if not result.data:
-                if yield_time_ms == 0 or self._clock() >= deadline:
-                    break
-                continue
-            record.last_activity_at = self._clock()
+                record.pending_utf8_bytes = b""
             try:
-                completion = output.ingest(self._decode_bytes(record, result.data))
+                completion = output.ingest(
+                    self._decode_bytes(record, result.data),
+                    provider_output_truncated=result.truncated,
+                )
             except ValueError:
                 return await self._fail_claimed_record(
                     record,
                     ShellSessionErrorCode.COMMAND_OUTPUT_INVALID,
                     started_at,
                 )
+            if not result.data:
+                if yield_time_ms == 0 or self._clock() >= deadline:
+                    break
+                continue
+            record.last_activity_at = self._clock()
             if completion is not None:
                 if terminate_after_window:
                     break

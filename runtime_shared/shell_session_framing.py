@@ -82,6 +82,7 @@ class StreamingPtyFramingParser:
     """Incrementally parse PTY command protocol records without transcripts."""
 
     _WAITING_FOR_START = "waiting_for_start"
+    _RECOVERING_AFTER_GAP = "recovering_after_gap"
     _COLLECTING_OUTPUT = "collecting_output"
     _COMPLETE = "complete"
     _ANSI_TEXT = "text"
@@ -126,9 +127,22 @@ class StreamingPtyFramingParser:
         """Start a public read window without carrying a separator into its delta."""
         self._pending_visible_newline = False
 
-    def ingest(self, raw_output: str) -> PtyFramingIngestResult:
-        """Consume provider output and return visible output or completion."""
-        if not raw_output or self._state == self._COMPLETE:
+    def ingest(
+        self,
+        raw_output: str,
+        *,
+        input_gap: bool = False,
+    ) -> PtyFramingIngestResult:
+        """Consume provider output and account for any preceding byte loss."""
+        if self._state == self._COMPLETE:
+            return PtyFramingIngestResult(stdout="")
+        if input_gap:
+            self._begin_gap_recovery()
+        if not raw_output:
+            if self._state == self._RECOVERING_AFTER_GAP:
+                raise ShellSessionFramingError(
+                    "Provider output was lost before the command start marker"
+                )
             return PtyFramingIngestResult(stdout="")
 
         produced: list[str] = []
@@ -155,9 +169,20 @@ class StreamingPtyFramingParser:
         line: str,
         produced: list[str],
     ) -> PtyFramingCompletion | None:
-        if self._state == self._WAITING_FOR_START:
+        if self._state in {
+            self._WAITING_FOR_START,
+            self._RECOVERING_AFTER_GAP,
+        }:
             if line == self._frame.start_marker:
                 self._state = self._COLLECTING_OUTPUT
+            elif (
+                self._state == self._RECOVERING_AFTER_GAP
+                and line.startswith(self._frame.end_marker)
+            ):
+                raise ShellSessionFramingError(
+                    "Command completion marker followed a lost start marker",
+                    raw_output=line,
+                )
             return None
 
         if self._state != self._COLLECTING_OUTPUT:
@@ -182,8 +207,16 @@ class StreamingPtyFramingParser:
         if not self._pending_line:
             return
 
-        if self._state == self._WAITING_FOR_START:
+        if self._state in {
+            self._WAITING_FOR_START,
+            self._RECOVERING_AFTER_GAP,
+        }:
             if self._frame.start_marker.startswith(self._pending_line):
+                return
+            if (
+                self._state == self._RECOVERING_AFTER_GAP
+                and self._is_exit_record_prefix(self._pending_line)
+            ):
                 return
             self._pending_line = ""
             return
@@ -204,6 +237,14 @@ class StreamingPtyFramingParser:
                 produced.append("\n")
                 self._pending_visible_newline = False
             produced.append(visible)
+
+    def _begin_gap_recovery(self) -> None:
+        """Reset partial decode state and require a valid framing boundary."""
+        self._pending_line = ""
+        self._pending_carriage_return = False
+        self._ansi_state = self._ANSI_TEXT
+        if self._state == self._WAITING_FOR_START:
+            self._state = self._RECOVERING_AFTER_GAP
 
     def _normalize_chunk(self, raw_output: str) -> str:
         """Normalize line endings without duplicating a split CRLF sequence."""

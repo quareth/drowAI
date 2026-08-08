@@ -231,3 +231,56 @@ def test_streaming_parser_preserves_spaces_split_across_reads() -> None:
     assert second.stdout == " continues"
     assert final.stdout == ""
     assert final.completion is not None
+
+
+def test_streaming_parser_resynchronizes_when_gap_retains_start_marker() -> None:
+    frame = create_pty_command_frame("printf output", command_id="gap-recovers")
+    parser = StreamingPtyFramingParser(frame)
+
+    result = parser.ingest(
+        "discarded prefix\n"
+        f"{frame.start_marker}\n"
+        "retained output\n"
+        f"{frame.end_marker}={PTY_EXIT_CODE_MARKER}0\n",
+        input_gap=True,
+    )
+
+    assert result.stdout == "retained output"
+    assert result.completion is not None
+    assert result.completion.exit_code == 0
+
+
+def test_streaming_parser_rejects_completion_after_gap_without_start_marker() -> None:
+    frame = create_pty_command_frame("printf output", command_id="gap-invalid")
+    parser = StreamingPtyFramingParser(frame)
+
+    with pytest.raises(ShellSessionFramingError):
+        parser.ingest(
+            "retained tail\n"
+            f"{frame.end_marker}={PTY_EXIT_CODE_MARKER}0\n",
+            input_gap=True,
+        )
+
+
+def test_streaming_parser_rejects_empty_gap_before_start_marker() -> None:
+    frame = create_pty_command_frame("printf output", command_id="gap-empty")
+    parser = StreamingPtyFramingParser(frame)
+
+    with pytest.raises(ShellSessionFramingError):
+        parser.ingest("", input_gap=True)
+
+
+def test_streaming_parser_allows_output_gap_after_start_marker() -> None:
+    frame = create_pty_command_frame("printf output", command_id="gap-after-start")
+    parser = StreamingPtyFramingParser(frame)
+    parser.ingest(f"{frame.start_marker}\ninitial output\n")
+
+    result = parser.ingest(
+        "retained tail\n"
+        f"{frame.end_marker}={PTY_EXIT_CODE_MARKER}0\n",
+        input_gap=True,
+    )
+
+    assert result.stdout == "\nretained tail"
+    assert result.completion is not None
+    assert result.completion.exit_code == 0

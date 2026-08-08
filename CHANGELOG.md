@@ -27,6 +27,8 @@ The format is based on
 
 ### Fixed
 
+- Managed interactive shell sessions now detect framing loss after provider
+  buffer truncation instead of leaving completed commands running until timeout.
 - Parallel tool batches now serialize operations targeting the same interactive
   shell session while preserving concurrency across independent sessions.
 - Durable interactive shell history now masks stdin values before persistence,

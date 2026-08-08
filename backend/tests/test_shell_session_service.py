@@ -812,6 +812,44 @@ async def test_provider_buffer_loss_sets_public_truncation_flag(
 
 
 @pytest.mark.asyncio
+async def test_provider_buffer_loss_before_start_returns_framing_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = FakeTerminalManager()
+    service = _service(manager)
+
+    async def _read_without_start(
+        session_id: str,
+        size: int = 4096,
+        *,
+        timeout: float | None = None,
+    ) -> TerminalReadResult:
+        del size, timeout
+        _start, end = manager.session_markers[session_id]
+        return TerminalReadResult(
+            ok=True,
+            data=(
+                "retained tail\n"
+                f"{end}={PTY_EXIT_CODE_MARKER}0\n"
+            ).encode(),
+            truncated=True,
+        )
+
+    monkeypatch.setattr(manager, "read_output_result", _read_without_start)
+
+    update = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(command="echo quick", yield_time_ms=0),
+    )
+
+    assert update.error_code is ShellSessionErrorCode.COMMAND_OUTPUT_INVALID
+    assert update.process_status is None
+    assert update.session_id is None
+    assert service._records == {}
+    assert manager.closed_sessions == ["terminal-1"]
+
+
+@pytest.mark.asyncio
 async def test_untruncated_output_remains_exact_above_head_tail_split() -> None:
     manager = FakeTerminalManager()
     service = _service(manager)

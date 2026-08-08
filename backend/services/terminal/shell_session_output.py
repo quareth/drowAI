@@ -102,10 +102,6 @@ class ShellSessionOutputAccumulator:
     def truncated(self) -> bool:
         return self._provider_output_truncated or self._bounded.truncated
 
-    def mark_provider_output_truncated(self) -> None:
-        """Record upstream byte loss without fabricating public output text."""
-        self._provider_output_truncated = True
-
     @property
     def retained_state_chars(self) -> int:
         """Return the helper-owned retained character count for safety tests."""
@@ -116,13 +112,20 @@ class ShellSessionOutputAccumulator:
         """Return the configured upper bound for helper-owned retained text."""
         return self._max_output_chars + self._parser.retained_state_limit_chars
 
-    def ingest(self, raw_output: str) -> PtyFramingCompletion | None:
-        """Consume decoded provider output and return completion when detected."""
-        if not raw_output:
-            return None
-
+    def ingest(
+        self,
+        raw_output: str,
+        *,
+        provider_output_truncated: bool = False,
+    ) -> PtyFramingCompletion | None:
+        """Consume provider output and its transport-loss signal atomically."""
+        if provider_output_truncated:
+            self._provider_output_truncated = True
         try:
-            result = self._parser.ingest(raw_output)
+            result = self._parser.ingest(
+                raw_output,
+                input_gap=provider_output_truncated,
+            )
         except Exception as exc:
             raise ValueError(str(exc)) from exc
         if result.stdout:
