@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Dict, List, Optional
 from pydantic import ValidationError
+from runtime_shared.shell_capabilities import canonical_shell_implementation_tool_id
 
 
 class PolicyEnforcement(str, Enum):
@@ -484,8 +485,9 @@ def validate_shell_tool_parameters(
     metric_hook: Optional[Callable[[str], None]] = None,
     logger: object = None,
 ) -> List[Dict[str, str]]:
-    """Validate strict shell tool parameters for ``shell.exec`` and ``shell.script``."""
-    if tool_id not in {"shell.exec", "shell.script"}:
+    """Validate shell parameters for implementation ids and model-facing aliases."""
+    canonical_tool_id = canonical_shell_implementation_tool_id(tool_id)
+    if canonical_tool_id not in {"shell.exec", "shell.script"}:
         return []
 
     try:
@@ -503,7 +505,7 @@ def validate_shell_tool_parameters(
 
         args = args_model(**dict(parameters or {}))
 
-        command_field = "command" if tool_id == "shell.exec" else "script"
+        command_field = "command" if canonical_tool_id == "shell.exec" else "script"
         command = str(getattr(args, command_field, "") or "")
         validation_errors = validate_shell_exec_command(
             command,

@@ -957,6 +957,7 @@ async def test_mixed_lane_batch_uses_batch_executor_and_per_call_authorities(
             summary="shell completed",
         )
     )
+    previous_shell_service_resolver = shell_session_port._shell_session_service_resolver
     shell_session_port.set_shell_session_service_resolver(lambda: shell_service)
     try:
         result = await run_tool_execution(
@@ -975,7 +976,9 @@ async def test_mixed_lane_batch_uses_batch_executor_and_per_call_authorities(
             ),
         )
     finally:
-        shell_session_port.clear_shell_session_service_resolver()
+        shell_session_port._shell_session_service_resolver = (
+            previous_shell_service_resolver
+        )
 
     assert runner_requests == []
     assert len(shell_service.exec_calls) == 1
@@ -1312,6 +1315,7 @@ async def test_resume_uses_approved_subset_without_reprompt_or_extra_dispatch(
             summary="shell completed",
         )
     )
+    previous_shell_service_resolver = shell_session_port._shell_session_service_resolver
     shell_session_port.set_shell_session_service_resolver(lambda: shell_service)
     try:
         result = await run_tool_execution(
@@ -1330,7 +1334,9 @@ async def test_resume_uses_approved_subset_without_reprompt_or_extra_dispatch(
             ),
         )
     finally:
-        shell_session_port.clear_shell_session_service_resolver()
+        shell_session_port._shell_session_service_resolver = (
+            previous_shell_service_resolver
+        )
 
     assert provider_calls == []
     assert len(shell_service.exec_calls) == 1

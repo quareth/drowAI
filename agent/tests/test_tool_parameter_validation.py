@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from agent.tools.parameter_validation import validate_tool_parameters
 
 
@@ -12,6 +14,18 @@ def test_shell_exec_allows_pentesting_pipeline_in_permissive_mode() -> None:
     )
 
     assert result.valid is True
+
+
+@pytest.mark.parametrize("tool_id", ["shell.utility", "shell.assessment"])
+def test_shell_start_aliases_enforce_shell_exec_policy(tool_id: str) -> None:
+    result = validate_tool_parameters(
+        tool_id,
+        {"command": "rm -rf /"},
+    )
+
+    assert result.valid is False
+    assert result.reason == "semantic_validation_error"
+    assert any("rm -rf /" in error["message"] for error in result.validation_errors)
 
 
 def test_shell_script_pipeline_cannot_hide_environment_destruction() -> None:

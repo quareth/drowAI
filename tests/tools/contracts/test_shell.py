@@ -47,13 +47,16 @@ class TestShellPolicySecurity:
     DENYLIST_COMMANDS = [
         ("shell.exec", "rm -rf /", "Destructive rm blocked"),
         ("shell.exec", "rm -rf /*", "Destructive rm wildcard blocked"),
-        ("shell.exec", "sudo su", "Privilege escalation blocked"),
-        ("shell.exec", "sudo -i", "Privilege escalation blocked"),
         ("shell.exec", "reboot", "System reboot blocked"),
         ("shell.exec", "shutdown now", "System shutdown blocked"),
-        ("shell.exec", "nc -l -p 8080", "Network listener blocked"),
         ("shell.exec", ":(){:|:&};:", "Fork bomb blocked"),
-        ("shell.exec", "passwd", "Password change blocked"),
+    ]
+
+    PERMISSIVE_PENTESTING_COMMANDS = [
+        ("shell.exec", "sudo su", "Privilege changes remain available in the runtime"),
+        ("shell.exec", "sudo -i", "Interactive privilege changes remain available"),
+        ("shell.exec", "nc -l -p 8080", "Assessment listeners remain available"),
+        ("shell.exec", "passwd", "Runtime password operations remain available"),
     ]
 
     ALLOWLIST_COMMANDS = [
@@ -77,6 +80,19 @@ class TestShellPolicySecurity:
         assert not result.allowed, f"{description}: {command} should be blocked"
         assert result.severity == "error"
         assert "denylist" in result.reason.lower()
+
+    @pytest.mark.parametrize(
+        "tool_id,command,description",
+        PERMISSIVE_PENTESTING_COMMANDS,
+    )
+    def test_pentesting_commands_are_not_hard_denied(
+        self, tool_id: str, command: str, description: str
+    ) -> None:
+        """Verify permissive mode reserves hard blocks for runtime hazards."""
+        policy = CommandPolicy(enforcement=PolicyEnforcement.PERMISSIVE)
+        result = policy.validate(command)
+
+        assert result.allowed, f"{description}: {command} should be allowed"
 
     @pytest.mark.parametrize("tool_id,command,description", ALLOWLIST_COMMANDS)
     def test_allowlist_commands_allowed(

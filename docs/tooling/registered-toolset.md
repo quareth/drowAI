@@ -5,7 +5,7 @@ These are code-defined `BaseTool` implementations. Some are intentionally hidden
 LLM-facing planner catalogs and remain available only to direct/internal runtime flows when
 policy and context allow them.
 
-Current count: 183 tools.
+Current count: 186 tools.
 
 ## artifact
 
@@ -159,8 +159,11 @@ Current count: 183 tools.
 
 ## shell
 
+- `shell.assessment`
 - `shell.exec`
 - `shell.script`
+- `shell.utility`
+- `shell.write_stdin`
 
 ## sniffing_spoofing
 

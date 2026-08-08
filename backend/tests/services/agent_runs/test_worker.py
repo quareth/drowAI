@@ -322,6 +322,9 @@ class _ShellDispatchingExecutor:
         self.request_owner_id = request.metadata["execution_owner_id"]
 
         service = _FakeShellSessionService()
+        previous_shell_service_resolver = (
+            shell_session_port._shell_session_service_resolver
+        )
         shell_session_port.set_shell_session_service_resolver(lambda: service)
         try:
             coordinator = ToolExecutionCoordinator(
@@ -331,7 +334,9 @@ class _ShellDispatchingExecutor:
             )
             outcome = await coordinator.run(request)
         finally:
-            shell_session_port.clear_shell_session_service_resolver()
+            shell_session_port._shell_session_service_resolver = (
+                previous_shell_service_resolver
+            )
 
         assert outcome.result["metadata"]["route_policy"]["selected_authority"] == (
             "runtime_session_control"

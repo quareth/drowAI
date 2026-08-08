@@ -15,8 +15,8 @@ def test_full_planner_catalog_uses_mvp_allowlist(monkeypatch) -> None:
         "agent.tools.tool_registry.available_tools",
         lambda: [
             "filesystem.read_file",
-            "filesystem.grep",
-            "filesystem.search_text",
+            "information_gathering.network_discovery.nmap",
+            "shell.utility",
         ],
     )
 
@@ -25,7 +25,10 @@ def test_full_planner_catalog_uses_mvp_allowlist(monkeypatch) -> None:
         logger=logging.getLogger(__name__),
     )
 
-    assert catalog == ["filesystem.read_file", "filesystem.grep", "filesystem.search_text"]
+    assert catalog == [
+        "information_gathering.network_discovery.nmap",
+        "shell.utility",
+    ]
 
 
 def test_full_planner_catalog_preserves_universal_shell_tools_under_default_cap(monkeypatch) -> None:
@@ -33,13 +36,13 @@ def test_full_planner_catalog_preserves_universal_shell_tools_under_default_cap(
     monkeypatch.setattr(
         "agent.tools.tool_registry.available_tools",
         lambda: [
-            "filesystem.read_file",
-            "filesystem.grep",
-            "filesystem.search_text",
-            "shell.script",
+            "information_gathering.network_discovery.nmap",
             "web_applications.web_crawlers.ffuf",
-            "shell.exec",
+            "shell.utility",
+            "shell.assessment",
             "shell.write_stdin",
+            "shell.exec",
+            "shell.script",
         ],
     )
 
@@ -48,7 +51,8 @@ def test_full_planner_catalog_preserves_universal_shell_tools_under_default_cap(
         logger=logging.getLogger(__name__),
     )
 
-    assert catalog == ["filesystem.read_file", "shell.exec", "shell.write_stdin"]
+    assert catalog == ["shell.utility", "shell.assessment", "shell.write_stdin"]
+    assert "shell.exec" not in catalog
     assert "shell.script" not in catalog
 
 
@@ -58,8 +62,10 @@ def test_category_planner_catalog_uses_mvp_allowlist(monkeypatch) -> None:
         "agent.tools.category_utils.get_tools_for_categories",
         lambda _categories: [
             "filesystem.read_file",
-            "filesystem.grep",
-            "filesystem.search_text",
+            "information_gathering.network_discovery.nmap",
+            "shell.utility",
+            "shell.assessment",
+            "shell.write_stdin",
         ],
     )
 
@@ -70,19 +76,28 @@ def test_category_planner_catalog_uses_mvp_allowlist(monkeypatch) -> None:
         get_full_tool_catalog_for_planner_fn=lambda _config: ["filesystem.read_file"],
     )
 
-    assert catalog == ["filesystem.read_file", "filesystem.grep", "filesystem.search_text"]
+    assert catalog == [
+        "information_gathering.network_discovery.nmap",
+        "shell.utility",
+        "shell.assessment",
+        "shell.write_stdin",
+    ]
 
 
-def test_category_planner_catalog_includes_networking_utilities(monkeypatch) -> None:
-    """Network utilities are always available in category-filtered catalogs."""
+def test_category_planner_catalog_uses_visible_shell_aliases(monkeypatch) -> None:
+    """Category catalogs expose shell aliases instead of hidden legacy utilities."""
     captured_categories = []
 
     def fake_get_tools_for_categories(categories):
         captured_categories.extend(categories)
         return [
             "filesystem.read_file",
+            "shell.utility",
+            "shell.assessment",
+            "shell.write_stdin",
             "shell.exec",
             "networking_utilities.network",
+            "information_gathering.network_discovery.nmap",
             "information_gathering.osint.whois",
         ]
 
@@ -99,6 +114,12 @@ def test_category_planner_catalog_includes_networking_utilities(monkeypatch) -> 
     )
 
     assert "networking_utilities" in captured_categories
-    assert "networking_utilities.network" in catalog
-    assert "shell.exec" in catalog
+    assert catalog == [
+        "shell.utility",
+        "shell.assessment",
+        "shell.write_stdin",
+        "information_gathering.network_discovery.nmap",
+    ]
+    assert "networking_utilities.network" not in catalog
+    assert "shell.exec" not in catalog
     assert "information_gathering.osint.whois" not in catalog

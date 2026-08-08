@@ -181,17 +181,19 @@ flowchart LR
 Tool execution boundaries:
 
 - Container-scoped tools use file-comm or PTY for local placement.
-- `shell.exec` and `shell.write_stdin` are universal runtime-session-scoped
-  tools. Their adapters validate public schemas and fail closed for direct
-  adapter execution; the graph dispatcher routes them through
-  `runtime_session_control`.
+- `shell.utility`, `shell.assessment`, and `shell.write_stdin` are universal
+  runtime-session-scoped tools. The two start aliases share the hidden
+  `shell.exec` implementation schema and command policy, while preserving their
+  distinct output-persistence semantics. Their adapters fail closed for direct
+  execution; the graph dispatcher routes them through `runtime_session_control`.
 - Runtime-session shell tools use `ShellSessionService` through the
   runtime-shared service port, then `TerminalSessionManager`, then the selected
-  runtime provider PTY implementation. `shell.exec` and `shell.write_stdin` do
-  not fall back to file-comm, host subprocess execution, or runner command
-  transport.
-- `shell.exec` starts a new provider-backed PTY session and may return a public
-  `shs_` continuation handle when the process is still running.
+  runtime provider PTY implementation. The model-facing shell aliases and
+  `shell.write_stdin` do not fall back to file-comm, host subprocess execution,
+  or runner command transport.
+- `shell.utility` or `shell.assessment` starts a new provider-backed PTY session
+  and may return a public `shs_` continuation handle when the process is still
+  running.
   `shell.write_stdin` uses that handle to poll, send exact input, or request
   interruption.
 - Shell-session result projection keeps only bounded public continuation fields
@@ -222,7 +224,9 @@ observations independently. The agent compact consumer never passes its
   visible to the model-facing catalog.
 - `agent/tools/universal_agent_tools.py` defines universal utilities appended
   to main-agent and subagent catalogs when the registered tool metadata is
-  visible. The current universal set is `shell.exec` and `shell.write_stdin`.
+  visible. The current universal set is `shell.utility`, `shell.assessment`, and
+  `shell.write_stdin`; the shared `shell.exec` implementation remains hidden
+  from model-facing catalogs.
 - Hidden tools may still be callable by internal runtime paths when policy
   allows them.
 - Catalog metadata can be warmed and cached for graph execution.
@@ -308,11 +312,11 @@ parent's wait/delegate/finalize policy.
   entrypoints and delegates transport internals to `agent/tool_runtime`.
 - File-comm uses `commands.jsonl`, `results.jsonl`, and lock files in the active
   workspace.
-- `shell.exec` and `shell.write_stdin` use provider-backed PTY sessions through
-  the runtime provider boundary. The process-local shell-session service owns
-  public handles, idle/deadline cleanup, owner cleanup for terminal main and
-  subagent runs, task retirement cleanup, and managed-runner disconnect handle
-  expiry.
+- `shell.utility`, `shell.assessment`, and `shell.write_stdin` use
+  provider-backed PTY sessions through the runtime provider boundary. The
+  process-local shell-session service owns public handles, idle/deadline
+  cleanup, owner cleanup for terminal main and subagent runs, task retirement
+  cleanup, and managed-runner disconnect handle expiry.
 - Legacy PTY use outside the shell-session tools remains policy- and
   capability-gated; parallel compatibility PTY calls use named internal
   sessions when enabled.

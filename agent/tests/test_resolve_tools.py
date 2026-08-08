@@ -6,6 +6,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from agent.graph.infrastructure.state_models import CapabilityType
+from agent.tools.enhanced_metadata_registry import get_enhanced_tool_metadata
 from agent.tools.resolve_tools import resolve_tools_for_capability
 
 
@@ -14,10 +15,17 @@ class DummyConfig:
 
 
 def test_resolve_tools_for_scan_ports():
+    assert (
+        get_enhanced_tool_metadata(
+            "information_gathering.network_discovery.nmap"
+        )
+        is not None
+    )
     context = {"current_phase": "enumeration"}
     out = resolve_tools_for_capability(CapabilityType.PORT_SCAN, context, DummyConfig())
     assert isinstance(out, list)
     assert 0 < len(out) <= 2
+    assert out[0] == "information_gathering.network_discovery.nmap"
 
 
 def test_resolve_tools_alias_handling():
