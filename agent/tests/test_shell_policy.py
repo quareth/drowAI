@@ -214,6 +214,51 @@ class TestDangerousCommands:
         result = permissive_policy.validate(command)
         assert not result.allowed, f"Dangerous command '{command}' should be blocked"
 
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "command rm -rf /*",
+            "command -p -- rm -fr /",
+            "/usr/bin/env rm -rf /*",
+            "env -- rm --recursive ~",
+            "env -i MODE=test command -p rm -Rf ~/*",
+            "env --unset=MODE rm -rf /",
+            "env -iS 'rm -rf /'",
+            "env --split-string='command rm --recursive /'",
+            "env -P /usr/bin rm -rf /*",
+            "env 'MODE-NAME=test' rm -rf /*",
+            "env -S 'MODE=test command rm -rf /'",
+            "env -- 'MODE-NAME=test' rm -rf ~/*",
+        ],
+    )
+    @pytest.mark.parametrize(
+        "enforcement",
+        [PolicyEnforcement.PERMISSIVE, PolicyEnforcement.STRICT],
+    )
+    def test_transparent_wrappers_cannot_bypass_recursive_removal_block(
+        self,
+        command: str,
+        enforcement: PolicyEnforcement,
+    ) -> None:
+        result = CommandPolicy(enforcement=enforcement).validate(command)
+
+        assert not result.allowed, command
+        assert result.matched_pattern == "recursive removal of runtime root/home"
+
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "command rm -rf ./generated-output",
+            "env MODE=test rm -rf /workspace/generated-output",
+        ],
+    )
+    def test_transparent_wrappers_preserve_task_local_cleanup(
+        self,
+        permissive_policy: CommandPolicy,
+        command: str,
+    ) -> None:
+        assert permissive_policy.validate(command).allowed
+
 
 class TestEnvVarConfiguration:
     """Test environment variable configuration."""

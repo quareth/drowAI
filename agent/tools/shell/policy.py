@@ -33,10 +33,131 @@ class PolicyResult:
 _PROTECTED_RECURSIVE_REMOVAL_TARGETS = frozenset({"/", "/*", "~", "~/*"})
 
 
+def _is_env_assignment(token: str) -> bool:
+    """Return whether ``env`` treats a token as an environment assignment."""
+    name, separator, _value = token.partition("=")
+    return bool(separator and name)
+
+
+def _unwrap_env_prefix(tokens: List[str]) -> List[str]:
+    """Return the executable portion of one parsed ``env`` invocation."""
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--":
+            index += 1
+            while index < len(tokens) and _is_env_assignment(tokens[index]):
+                index += 1
+            return tokens[index:]
+        if token == "-":
+            index += 1
+            continue
+        if token.startswith("--"):
+            signal_options = (
+                "--block-signal",
+                "--default-signal",
+                "--ignore-signal",
+            )
+            if token in {
+                "--ignore-environment",
+                "--null",
+                "--debug",
+                "--list-signal-handling",
+                *signal_options,
+            } or any(
+                token.startswith(f"{option}=") for option in signal_options
+            ):
+                index += 1
+                continue
+            if token in {"--unset", "--chdir", "--argv0"}:
+                if index + 1 >= len(tokens):
+                    return []
+                index += 2
+                continue
+            if token.startswith(("--unset=", "--chdir=", "--argv0=")):
+                index += 1
+                continue
+            if token == "--split-string":
+                if index + 1 >= len(tokens):
+                    return []
+                expanded = shlex.split(tokens[index + 1], posix=True)
+                tokens = ["env", *expanded, *tokens[index + 2 :]]
+                index = 1
+                continue
+            if token.startswith("--split-string="):
+                value = token.split("=", 1)[1]
+                expanded = shlex.split(value, posix=True)
+                tokens = ["env", *expanded, *tokens[index + 1 :]]
+                index = 1
+                continue
+            return []
+        if token.startswith("-"):
+            options = token[1:]
+            option_index = 0
+            while option_index < len(options):
+                option = options[option_index]
+                if option in {"0", "i", "v"}:
+                    option_index += 1
+                    continue
+                if option not in {"u", "C", "P", "S", "a"}:
+                    return []
+                attached_value = options[option_index + 1 :]
+                if attached_value:
+                    value = attached_value
+                    next_index = index + 1
+                elif index + 1 < len(tokens):
+                    value = tokens[index + 1]
+                    next_index = index + 2
+                else:
+                    return []
+                if option == "S":
+                    expanded = shlex.split(value, posix=True)
+                    tokens = ["env", *expanded, *tokens[next_index:]]
+                    index = 1
+                    break
+                index = next_index
+                break
+            else:
+                index += 1
+            continue
+        if _is_env_assignment(token):
+            index += 1
+            continue
+        break
+    return tokens[index:]
+
+
+def _unwrap_execution_prefixes(tokens: List[str]) -> List[str]:
+    """Remove bounded transparent ``command`` and ``env`` execution prefixes."""
+    remaining = list(tokens)
+    while remaining:
+        wrapper = os.path.basename(remaining[0]).lower()
+        if wrapper == "command":
+            index = 1
+            while index < len(remaining):
+                token = remaining[index]
+                if token == "--":
+                    index += 1
+                    break
+                if token == "-p":
+                    index += 1
+                    continue
+                if token.startswith("-"):
+                    return []
+                break
+            remaining = remaining[index:]
+            continue
+
+        if wrapper != "env":
+            break
+        remaining = _unwrap_env_prefix(remaining)
+    return remaining
+
+
 def _is_protected_recursive_removal(command: str) -> bool:
     """Return whether ``rm`` recursively targets the runtime root or home."""
     try:
-        tokens = shlex.split(command, posix=True)
+        tokens = _unwrap_execution_prefixes(shlex.split(command, posix=True))
     except Exception:
         return False
     if not tokens or os.path.basename(tokens[0]).lower() != "rm":

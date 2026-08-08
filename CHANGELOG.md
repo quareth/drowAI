@@ -27,6 +27,8 @@ The format is based on
 
 ### Fixed
 
+- Recursive root and home removal remains blocked when invoked through transparent
+  `command` or `env` wrappers, including nested options and assignments.
 - Assessment shell sessions now retain durable timeout evidence when their first
   continuation poll occurs after the configured runtime deadline.
 - Tool batch cards now preserve running, terminated, and timed-out shell process
