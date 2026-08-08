@@ -201,7 +201,17 @@ class ParentHandoffCoordinator:
 
                 if prepared.active_runs:
                     await self._registry.release_handoffs(claim.claim_id)
-                    return None
+                    version = await self._registry.state_version()
+                    await self._wait_for_relevant_registry_change(
+                        tenant_id=tenant_id,
+                        task_id=task_id,
+                        conversation_id=conversation_id,
+                        after_version=version,
+                        wait_timeout_seconds=wait_timeout_seconds,
+                        require_inactive=True,
+                    )
+                    wait_for_initial_handoff = True
+                    continue
 
                 claim_acknowledged = False
                 try:
