@@ -10,6 +10,7 @@ from __future__ import annotations
 import select
 
 from drowai_runner.docker_runtime import RunnerDockerRuntime
+from runtime_shared.docker_contracts import CONTAINER_WORKSPACE_PATH
 
 
 class _RunnerPtyAdapter:
@@ -47,6 +48,7 @@ class _RunnerPtyAdapter:
             stderr=True,
             privileged=True,
             user="root",
+            workdir=CONTAINER_WORKSPACE_PATH,
         )["Id"]
         sock = client.api.exec_start(
             exec_id,

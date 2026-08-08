@@ -5,9 +5,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import time
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
+from drowai_runner.control_channel.terminal.pty_adapter import _RunnerPtyAdapter
 from drowai_runner.docker_runtime import RunnerDockerRuntime, build_runner_container_config
 from runtime_shared.docker_contracts import DEFAULT_RESOURCE_LIMITS
 from runtime_shared.runtime_manifest import (
@@ -255,6 +258,24 @@ def test_runner_docker_runtime_supports_fake_client_lifecycle_and_manifest_probe
     assert container.stopped is True
     assert container.stop_timeout == 7
     assert container.removed is True
+
+
+def test_runner_persistent_pty_starts_in_container_workspace() -> None:
+    fake_client = MagicMock()
+    fake_client.containers.get.return_value = SimpleNamespace(id="container-22")
+    fake_client.api.exec_create.return_value = {"Id": "exec-22"}
+    fake_client.api.exec_start.return_value = MagicMock()
+    runtime = RunnerDockerRuntime(client_factory=lambda: fake_client)
+    adapter = _RunnerPtyAdapter(docker_runtime=runtime)
+
+    adapter.open_session(
+        container_id="container-22",
+        session_id="session-22",
+        cols=120,
+        rows=30,
+    )
+
+    assert fake_client.api.exec_create.call_args.kwargs["workdir"] == "/workspace"
 
 
 def test_runner_docker_runtime_refreshes_existing_tagged_image() -> None:

@@ -470,6 +470,34 @@ async def test_quick_command_returns_completed_update_and_closes_terminal() -> N
 
 
 @pytest.mark.asyncio
+async def test_local_host_workspace_is_translated_for_terminal_prepare() -> None:
+    manager = FakeTerminalManager()
+    host_workspace = "/host/project/agent/workspaces/task-11"
+    service = _service(
+        manager,
+        context=_context(
+            runtime_placement_mode="local",
+            workspace_path=host_workspace,
+            runner_id=None,
+            execution_site_id=None,
+        ),
+    )
+
+    update = await service.execute(
+        identity=_identity(
+            runtime_placement_mode="local",
+            workspace_path=host_workspace,
+            runner_id=None,
+            execution_site_id=None,
+        ),
+        request=ShellExecRequest(command="echo quick", yield_time_ms=0),
+    )
+
+    assert update.process_status is ShellProcessStatus.COMPLETED
+    assert manager.prepare_calls[0]["workspace_path"] == "/workspace"
+
+
+@pytest.mark.asyncio
 async def test_live_session_capability_is_owner_bound_and_removed_with_session() -> None:
     manager = FakeTerminalManager()
     service = _service(manager)

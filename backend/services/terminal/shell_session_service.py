@@ -21,6 +21,7 @@ from typing import Any
 
 from backend import config as backend_config
 from backend.services.metrics.utils import safe_gauge, safe_inc
+from runtime_shared.docker_contracts import CONTAINER_WORKSPACE_PATH
 from runtime_shared.shell_session_contracts import (
     SHELL_SESSION_CLEANUP_TIMEOUT_SEC,
     SHELL_SESSION_CONTROL_TIMEOUT_SEC,
@@ -157,7 +158,9 @@ class ShellSessionService:
     ) -> ShellSessionUpdate:
         """Start one PTY shell command and return its first bounded update."""
         started_at = self._clock()
-        context_error, workspace_path = await self._validate_runtime_context(identity)
+        context_error, terminal_workspace_path = await self._validate_runtime_context(
+            identity
+        )
         if context_error is not None:
             self._emit_operation_failed(identity, context_error)
             return self._error_update(
@@ -189,7 +192,7 @@ class ShellSessionService:
                 terminal_session = await self._prepare_reserved_terminal(
                     identity=identity,
                     request=request,
-                    workspace_path=workspace_path,
+                    terminal_workspace_path=terminal_workspace_path,
                     public_session_id=public_session_id,
                     frame=frame,
                     capability=capability,
@@ -598,7 +601,7 @@ class ShellSessionService:
         *,
         identity: ShellSessionIdentity,
         request: ShellExecRequest,
-        workspace_path: str | None,
+        terminal_workspace_path: str | None,
         public_session_id: str,
         frame: PtyCommandFrame,
         capability: ShellCapability,
@@ -608,7 +611,7 @@ class ShellSessionService:
         try:
             terminal_session = await self._terminal_manager.prepare_agent_session(
                 task_id=identity.task_id,
-                workspace_path=workspace_path,
+                workspace_path=terminal_workspace_path,
                 session_name=f"shell_{public_session_id}",
                 reset=True,
             )
@@ -808,12 +811,10 @@ class ShellSessionService:
                 == identity.execution_site_id
             )
         error = None if all(checks) else ShellSessionErrorCode.COMMAND_START_FAILED
-        workspace_path = (
-            str(context_workspace_path)
-            if context_workspace_path is not None
-            else identity.workspace_path
+        terminal_workspace_path = (
+            CONTAINER_WORKSPACE_PATH if error is None else None
         )
-        return error, workspace_path
+        return error, terminal_workspace_path
 
     @staticmethod
     def _default_runtime_context_resolver(identity: ShellSessionIdentity) -> Any:

@@ -61,3 +61,21 @@ async def test_facade_ensure_image_available_uses_patched_check_image_exists() -
     service._check_image_exists.assert_awaited_once()
     service.client.images.get.assert_not_called()
     assert any("found locally" in entry["message"] for entry in logs)
+
+
+@pytest.mark.asyncio
+async def test_facade_persistent_pty_starts_in_container_workspace() -> None:
+    service = UnifiedDockerService()
+    fake_client = MagicMock()
+    fake_container = MagicMock(id="container-7")
+    fake_client.containers.get.return_value = fake_container
+    fake_client.api.exec_create.return_value = {"Id": "exec-7"}
+    fake_client.api.exec_start.return_value = MagicMock()
+    service.client = fake_client
+    service.docker_available = True
+    service.api_mode = "sdk"
+
+    exec_id, _socket = await service.start_persistent_pty(7)
+
+    assert exec_id == "exec-7"
+    assert fake_client.api.exec_create.call_args.kwargs["workdir"] == "/workspace"

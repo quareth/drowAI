@@ -27,6 +27,8 @@ The format is based on
 
 ### Fixed
 
+- Interactive UI and agent terminals now start in the task runtime's
+  `/workspace` directory without changing runtime-service startup paths.
 - Mixed shell batches now keep utility output transient while post-tool
   reasoning selects and persists only durable assessment evidence.
 - Interactive shell sessions now preserve concurrent session limits, honor

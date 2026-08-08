@@ -19,6 +19,7 @@ import subprocess
 from typing import Any, Dict, List
 
 from backend.core.time_utils import format_iso, utc_now
+from runtime_shared.docker_contracts import CONTAINER_WORKSPACE_PATH
 
 from ..container_utils import get_container_name
 from .client import DockerClient
@@ -194,6 +195,7 @@ class ContainerExec:
             environment=None,
             privileged=True,
             user="root",
+            workdir=CONTAINER_WORKSPACE_PATH,
         )["Id"]
         sock = self.client.api.exec_start(
             exec_id, detach=False, tty=True, stream=True, socket=True, demux=False
