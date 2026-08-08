@@ -69,7 +69,6 @@ class DummyConfig:
     enforce_llm_tool_selection = False
     llm_tool_selection_timeout = 3
     use_llm_tool_calls = True
-    max_tools_exposed = 2
     tool_call_timeout = 3
     tool_timeout_default_seconds = 600
     tool_timeout_max_seconds = 600

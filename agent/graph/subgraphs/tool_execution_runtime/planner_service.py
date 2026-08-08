@@ -21,7 +21,6 @@ from agent.tool_runtime.batch.plan_view import (
 from agent.tool_runtime.artifact_file_metadata import (
     collect_artifact_file_ref_candidates,
 )
-from agent.tools.catalog_builder import limit_catalog_preserving_universal_tools
 
 
 def _serialize_tool_batch(batch: _ToolBatch) -> Dict[str, Any]:
@@ -674,6 +673,7 @@ def get_full_tool_catalog_for_planner(
     logger: Any,
 ) -> List[str]:
     """Get complete tool catalog for LLM-based selection."""
+    _ = config
     try:
         from agent.tools.catalog_visibility import visible_available_tools
     except ImportError:
@@ -701,23 +701,12 @@ def get_full_tool_catalog_for_planner(
         )
         valid_tools = all_tools
 
-    max_tools_limit = 10
-    if config is not None:
-        try:
-            max_tools_limit = int(getattr(config, "max_tools_exposed", 10))
-        except (TypeError, ValueError, AttributeError):
-            pass
-
-    limited_catalog = limit_catalog_preserving_universal_tools(
-        valid_tools,
-        max_tools_limit,
-    )
     logger.info(
-        f"[PLANNER_CONTEXT] Providing {len(limited_catalog)} tools to planner "
-        f"(from {len(all_tools)} available, limit={max_tools_limit})"
+        f"[PLANNER_CONTEXT] Providing all {len(valid_tools)} visible tools to planner "
+        f"(from {len(all_tools)} available)"
     )
-    logger.debug(f"[PLANNER_CONTEXT] Catalog tools: {limited_catalog}")
-    return limited_catalog
+    logger.debug(f"[PLANNER_CONTEXT] Catalog tools: {valid_tools}")
+    return valid_tools
 
 
 def _filter_hidden_catalog_tools(tools: List[str], *, logger: Any) -> List[str]:

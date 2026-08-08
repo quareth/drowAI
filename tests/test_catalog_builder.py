@@ -3,32 +3,33 @@
 from __future__ import annotations
 
 import logging
-from types import SimpleNamespace
-
-from agent.config import AgentConfig
 from agent.tools.catalog_builder import build_full_tool_catalog
 
 
-def test_build_full_tool_catalog_filters_and_limits(monkeypatch) -> None:
+def test_build_full_tool_catalog_filters_without_limiting_visible_tools(monkeypatch) -> None:
     monkeypatch.setattr(
         "agent.tools.tool_registry.available_tools",
         lambda: [
             "shell.utility",
             "shell.assessment",
             "shell.write_stdin",
+            "information_gathering.network_discovery.nmap",
             "filesystem.read_file",
             "filesystem.grep",
-            "web_applications.web_crawlers.ffuf",
         ],
     )
-    config = SimpleNamespace(max_tools_exposed=2)
 
-    result = build_full_tool_catalog(config, logger=logging.getLogger(__name__))
+    result = build_full_tool_catalog(logger=logging.getLogger(__name__))
 
-    assert result == ["shell.utility", "shell.assessment", "shell.write_stdin"]
+    assert result == [
+        "shell.utility",
+        "shell.assessment",
+        "shell.write_stdin",
+        "information_gathering.network_discovery.nmap",
+    ]
 
 
-def test_default_bounded_catalog_preserves_universal_shell_tools(monkeypatch) -> None:
+def test_default_catalog_preserves_all_visible_tools(monkeypatch) -> None:
     monkeypatch.setattr(
         "agent.tools.tool_registry.available_tools",
         lambda: [
@@ -40,15 +41,18 @@ def test_default_bounded_catalog_preserves_universal_shell_tools(monkeypatch) ->
             "shell.utility",
             "shell.assessment",
             "shell.write_stdin",
+            "information_gathering.network_discovery.nmap",
         ],
     )
 
-    result = build_full_tool_catalog(AgentConfig(), logger=logging.getLogger(__name__))
+    result = build_full_tool_catalog(logger=logging.getLogger(__name__))
 
     assert result == [
+        "web_applications.web_crawlers.ffuf",
         "shell.utility",
         "shell.assessment",
         "shell.write_stdin",
+        "information_gathering.network_discovery.nmap",
     ]
     assert "shell.script" not in result
 
@@ -58,9 +62,7 @@ def test_build_full_tool_catalog_no_valid_ids_falls_back(monkeypatch) -> None:
         "agent.tools.tool_registry.available_tools",
         lambda: ["metadata", "capabilities", "registry"],
     )
-    config = SimpleNamespace(max_tools_exposed=10)
-
-    result = build_full_tool_catalog(config, logger=logging.getLogger(__name__))
+    result = build_full_tool_catalog(logger=logging.getLogger(__name__))
 
     assert result == []
 
@@ -77,9 +79,7 @@ def test_build_full_tool_catalog_includes_visible_service_access(monkeypatch) ->
             "shell.script",
         ],
     )
-    config = SimpleNamespace(max_tools_exposed=10)
-
-    result = build_full_tool_catalog(config, logger=logging.getLogger(__name__))
+    result = build_full_tool_catalog(logger=logging.getLogger(__name__))
 
     assert result == [
         "shell.utility",

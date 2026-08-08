@@ -296,14 +296,6 @@ def build_tool_catalog(
         tool_context["current_phase"] = metadata["current_phase"]
 
     max_tools = limit
-    if max_tools is None:
-        try:
-            if config and hasattr(config, "max_tools_exposed"):
-                max_tools = int(getattr(config, "max_tools_exposed"))
-            else:
-                max_tools = int(metadata.get("max_tools_exposed", 3))
-        except Exception:
-            max_tools = 3
 
     candidate_ids: List[str] = []
     primary_capability: Optional[str] = None

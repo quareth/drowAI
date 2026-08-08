@@ -36,10 +36,7 @@ from ..tools.service_matcher import ServiceInventory, ServiceInfo
 from ..tools.tool_call_specs import (
     build_function_tool_specs_for,
 )
-from ..tools.catalog_builder import (
-    build_full_tool_catalog,
-    limit_catalog_preserving_universal_tools,
-)
+from ..tools.catalog_builder import build_full_tool_catalog
 from ..tools.catalog_visibility import filter_visible_tool_ids
 from ..tools.capability_surface import render_capability_surface
 from ..tools.enhanced_tool_metadata import build_tool_catalog_entries
@@ -384,16 +381,16 @@ class EnhancedActionPlanner:
         context: Dict[str, Any],
         user_message: str,
     ) -> List[str]:
-        """Resolve, expose, and limit the planner tool catalog for LLM selection."""
+        """Resolve and expose the visible planner tool catalog for LLM selection."""
         resolved_tools = context.get("resolved_tools", [])
         if not isinstance(resolved_tools, list):
             resolved_tools = list(resolved_tools or [])
         resolved_tools = [str(tool_id) for tool_id in resolved_tools if tool_id]
         if not resolved_tools:
-            resolved_tools = build_full_tool_catalog(self.config, logger=self._log)
+            resolved_tools = build_full_tool_catalog(logger=self._log)
 
         if not resolved_tools:
-            resolved_tools = build_full_tool_catalog(self.config, logger=self._log)
+            resolved_tools = build_full_tool_catalog(logger=self._log)
         if not resolved_tools:
             raise RuntimeError("No tools available for LLM selection")
 
@@ -416,13 +413,7 @@ class EnhancedActionPlanner:
         if not resolved_tools:
             raise RuntimeError("No visible tools available for LLM selection")
 
-        if context.get("selected_categories"):
-            return resolved_tools
-        max_tools_for_llm = int(getattr(self.config, "max_tools_exposed", 3))
-        return limit_catalog_preserving_universal_tools(
-            resolved_tools,
-            max(1, max_tools_for_llm),
-        )
+        return resolved_tools
 
     async def _try_llm_action_plan(self, action: Action, context: Dict[str, Any]) -> ActionPlan | None:
         """Attempt to have the LLM choose tools/count/strategy and params.

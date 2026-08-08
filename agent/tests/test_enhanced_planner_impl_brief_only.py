@@ -49,7 +49,6 @@ class _BriefOnlyDummyConfig:
     enforce_llm_tool_selection = False
     llm_tool_selection_timeout = 5
     use_llm_tool_calls = True
-    max_tools_exposed = 2
     tool_call_timeout = 5
 
 
@@ -448,8 +447,8 @@ def test_llm_catalog_filters_hidden_tools() -> None:
     assert "filesystem.read_file" not in visible
 
 
-def test_llm_catalog_preserves_universal_tools_through_final_cap() -> None:
-    """Universal shell tools survive the direct planner's final LLM cap."""
+def test_llm_catalog_does_not_cap_visible_mission_tools() -> None:
+    """Direct planning retains visible mission tools alongside shell tools."""
     planner = EnhancedActionPlanner(_BriefOnlyDummyConfig(), llm_client=_BriefOnlyFakeLLM("artifact.search"))
     context: Dict[str, Any] = {
         "resolved_tools": [
@@ -461,6 +460,8 @@ def test_llm_catalog_preserves_universal_tools_through_final_cap() -> None:
             "shell.utility",
             "shell.assessment",
             "shell.write_stdin",
+            "information_gathering.network_discovery.nmap",
+            "web_applications.web_crawlers.ffuf",
         ],
         "artifact_tool_exposure": {
             "allow_search": True,
@@ -476,7 +477,13 @@ def test_llm_catalog_preserves_universal_tools_through_final_cap() -> None:
         user_message="search prior outputs",
     )
 
-    assert visible == ["shell.utility", "shell.assessment", "shell.write_stdin"]
+    assert visible == [
+        "shell.utility",
+        "shell.assessment",
+        "shell.write_stdin",
+        "information_gathering.network_discovery.nmap",
+        "web_applications.web_crawlers.ffuf",
+    ]
     assert "artifact.search" not in visible
     assert "shell.script" not in visible
 
@@ -496,7 +503,7 @@ def test_llm_catalog_does_not_fallback_to_raw_registry_tools(monkeypatch) -> Non
     }
     monkeypatch.setattr(
         "agent.reasoning.enhanced_planner_impl.build_full_tool_catalog",
-        lambda _config, *, logger: [],
+        lambda *, logger: [],
     )
     with pytest.raises(RuntimeError, match="No tools available for LLM selection"):
         planner._resolve_tool_catalog_for_llm(

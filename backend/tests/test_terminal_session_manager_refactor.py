@@ -196,7 +196,41 @@ async def test_read_output_result_preserves_idle_local_read_success(
     assert result.ok is True
     assert result.data == b""
     assert result.error_code is None
+    assert result.eof is False
     assert payloads == [{"size": 4096, "timeout": timeout, "socket": reader}]
+
+
+@pytest.mark.asyncio
+async def test_read_output_result_preserves_provider_eof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = TerminalSessionManager()
+    session = TerminalSession(
+        session_id="session-eof",
+        task_id=1,
+        user_id=0,
+        container_name="task-1",
+        connection_type="docker_exec",
+        exec_id="provider-session-eof",
+    )
+    manager.sessions[session.session_id] = session
+
+    monkeypatch.setattr(
+        manager,
+        "_run_session_provider_operation",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                ok=True,
+                metadata={"delegate_result": {"data": b"", "eof": True}},
+            )
+        ),
+    )
+
+    result = await manager.read_output_result(session.session_id)
+
+    assert result.ok is True
+    assert result.data == b""
+    assert result.eof is True
 
 
 @pytest.mark.asyncio

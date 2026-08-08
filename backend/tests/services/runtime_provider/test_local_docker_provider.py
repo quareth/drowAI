@@ -401,6 +401,7 @@ def test_terminal_read_output_idle_zero_timeout_is_successful_empty_read():
     assert result.accepted is True
     assert result.status == RuntimeOperationStatus.SUCCEEDED
     assert result.metadata["delegate_result"]["data"] == b""
+    assert result.metadata["delegate_result"]["eof"] is False
 
 
 def test_terminal_read_output_buffered_zero_timeout_reads_immediately():
@@ -440,3 +441,24 @@ def test_terminal_read_output_idle_positive_timeout_is_successful_empty_read():
     assert result.accepted is True
     assert result.status == RuntimeOperationStatus.SUCCEEDED
     assert result.metadata["delegate_result"]["data"] == b""
+    assert result.metadata["delegate_result"]["eof"] is False
+
+
+def test_terminal_read_output_reports_closed_socket_eof():
+    provider = LocalDockerRuntimeProvider(
+        docker_service=_StubDockerService(),
+        workspace_manager=_StubWorkspaceManager(),
+    )
+    reader, writer = socket.socketpair()
+    writer.close()
+    try:
+        request = _request("read_terminal_output", socket=reader, size=16, timeout=0.5)
+
+        result = asyncio.run(provider.read_terminal_output(request))
+    finally:
+        reader.close()
+
+    assert result.accepted is True
+    assert result.status == RuntimeOperationStatus.SUCCEEDED
+    assert result.metadata["delegate_result"]["data"] == b""
+    assert result.metadata["delegate_result"]["eof"] is True

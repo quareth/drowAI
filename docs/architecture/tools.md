@@ -127,8 +127,9 @@ Catalog rules:
   `catalog_visibility.py`.
 - Hidden tools can remain implemented and internally callable.
 - Artifact DB tools are intentionally hidden from LLM-facing planning prompts.
-- `build_full_tool_catalog()` caps prompt exposure with
-  `AgentConfig.max_tools_exposed`.
+- Full-catalog fallback planning receives every tool allowed by
+  `catalog_visibility.py`; explicit action and batch limits constrain execution,
+  not catalog visibility.
 - `render_capability_surface()` derives broad prompt-facing capability families
   from the visible tool list, not from every implemented tool.
 

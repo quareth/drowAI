@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import logging
-from types import SimpleNamespace
-
 import agent.graph.builders  # noqa: F401
+from agent.config import AgentConfig
 from agent.graph.subgraphs.tool_execution_runtime import planner_service
 
 
@@ -21,7 +20,7 @@ def test_full_planner_catalog_uses_mvp_allowlist(monkeypatch) -> None:
     )
 
     catalog = planner_service.get_full_tool_catalog_for_planner(
-        SimpleNamespace(max_tools_exposed=10),
+        AgentConfig(),
         logger=logging.getLogger(__name__),
     )
 
@@ -31,8 +30,8 @@ def test_full_planner_catalog_uses_mvp_allowlist(monkeypatch) -> None:
     ]
 
 
-def test_full_planner_catalog_preserves_universal_shell_tools_under_default_cap(monkeypatch) -> None:
-    """Universal shell utilities survive the bounded runtime planner catalog."""
+def test_full_planner_catalog_keeps_mission_and_universal_tools(monkeypatch) -> None:
+    """Fallback planning receives every visible mission and universal tool."""
     monkeypatch.setattr(
         "agent.tools.tool_registry.available_tools",
         lambda: [
@@ -47,11 +46,17 @@ def test_full_planner_catalog_preserves_universal_shell_tools_under_default_cap(
     )
 
     catalog = planner_service.get_full_tool_catalog_for_planner(
-        SimpleNamespace(max_tools_exposed=3),
+        AgentConfig(),
         logger=logging.getLogger(__name__),
     )
 
-    assert catalog == ["shell.utility", "shell.assessment", "shell.write_stdin"]
+    assert catalog == [
+        "information_gathering.network_discovery.nmap",
+        "web_applications.web_crawlers.ffuf",
+        "shell.utility",
+        "shell.assessment",
+        "shell.write_stdin",
+    ]
     assert "shell.exec" not in catalog
     assert "shell.script" not in catalog
 
@@ -71,7 +76,7 @@ def test_category_planner_catalog_uses_mvp_allowlist(monkeypatch) -> None:
 
     catalog = planner_service.get_category_filtered_catalog(
         ["filesystem"],
-        SimpleNamespace(max_tools_exposed=10),
+        AgentConfig(),
         logger=logging.getLogger(__name__),
         get_full_tool_catalog_for_planner_fn=lambda _config: ["filesystem.read_file"],
     )
@@ -108,7 +113,7 @@ def test_category_planner_catalog_uses_visible_shell_aliases(monkeypatch) -> Non
 
     catalog = planner_service.get_category_filtered_catalog(
         ["information_gathering"],
-        SimpleNamespace(max_tools_exposed=10),
+        AgentConfig(),
         logger=logging.getLogger(__name__),
         get_full_tool_catalog_for_planner_fn=lambda _config: ["filesystem.read_file"],
     )

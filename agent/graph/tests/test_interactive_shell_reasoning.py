@@ -127,7 +127,7 @@ async def test_main_agent_planner_commits_shell_write_stdin_for_running_shell() 
         workspace_path="/workspace",
     )
     llm = _PlannerContinuationLLM(public_session_id)
-    config = AgentConfig(openai_api_key=None, max_tools_exposed=2)
+    config = AgentConfig(openai_api_key=None)
     config.llm_client_resolver = lambda: llm  # type: ignore[attr-defined]
 
     await ensure_action_plan(

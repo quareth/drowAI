@@ -22,7 +22,6 @@ class _Config:
     default_execution_strategy = "sequential"
     llm_tool_selection_timeout = 5
     tool_call_timeout = 5
-    max_tools_exposed = 2
 
 
 class _Selector:

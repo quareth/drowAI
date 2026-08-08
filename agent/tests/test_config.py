@@ -32,6 +32,19 @@ def test_load_from_env_defaults(monkeypatch):
     assert cfg.tool_call_timeout == PLANNER_TOOL_CALL_TIMEOUT_SEC == LLM_TIMEOUT_PLANNER_PARAMETER_RESOLUTION_SEC == 120
 
 
+@pytest.mark.parametrize("retired_value", ["3", "not-a-number"])
+def test_load_from_env_ignores_retired_tool_exposure_limit(
+    monkeypatch,
+    retired_value,
+):
+    monkeypatch.setenv("OPENAI_API_KEY", "key")
+    monkeypatch.setenv("MAX_TOOLS_EXPOSED", retired_value)
+
+    cfg = AgentConfig.load_from_env()
+
+    assert not hasattr(cfg, "max_tools_exposed")
+
+
 @pytest.mark.parametrize("retired_value", ["420", "not-a-number"])
 def test_load_from_env_ignores_retired_shell_exec_length_setting(
     monkeypatch,

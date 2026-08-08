@@ -41,6 +41,15 @@ def test_terminal_read_result_distinguishes_idle_success_from_failure() -> None:
     assert idle.data == b""
     assert idle.error_code is None
     assert idle.truncated is False
+    assert idle.eof is False
     assert failure.ok is False
     assert failure.data == b""
     assert failure.error_code == "runtime_transport_failed"
+
+
+def test_terminal_read_result_distinguishes_eof_from_idle_success() -> None:
+    eof = TerminalReadResult(ok=True, eof=True)
+
+    assert eof.ok is True
+    assert eof.data == b""
+    assert eof.eof is True

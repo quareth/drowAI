@@ -62,6 +62,8 @@ class FakeTerminalManager:
         self.session_counter = 0
         self.session_markers: dict[str, tuple[str, str]] = {}
         self.fail_read = False
+        self.eof_read = False
+        self.read_result_calls = 0
 
     async def prepare_agent_session(self, **kwargs):
         self.prepare_calls.append(kwargs)
@@ -173,8 +175,11 @@ class FakeTerminalManager:
         timeout: float | None = None,
     ) -> TerminalReadResult:
         del size, timeout
+        self.read_result_calls += 1
         if self.fail_read:
             return TerminalReadResult(ok=False, error_code="provider_lost")
+        if self.eof_read:
+            return TerminalReadResult(ok=True, eof=True)
         queue = self.queues.get(session_id, [])
         if queue:
             return TerminalReadResult(ok=True, data=queue.pop(0))
@@ -1264,6 +1269,25 @@ async def test_provider_read_failure_returns_structured_error_and_closes() -> No
     assert update.error_code is ShellSessionErrorCode.RUNTIME_TRANSPORT_FAILED
     assert update.stdout == ""
     assert manager.closed_sessions == ["terminal-1"]
+
+
+@pytest.mark.asyncio
+async def test_provider_eof_returns_transport_error_and_closes() -> None:
+    manager = FakeTerminalManager()
+    service = _service(manager)
+    manager.eof_read = True
+
+    update = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(command="delayed", yield_time_ms=100),
+    )
+
+    assert update.error_code is ShellSessionErrorCode.RUNTIME_TRANSPORT_FAILED
+    assert update.process_status is None
+    assert update.session_id is None
+    assert update.stdin_available is False
+    assert manager.closed_sessions == ["terminal-1"]
+    assert manager.read_result_calls == 1
 
 
 @pytest.mark.asyncio

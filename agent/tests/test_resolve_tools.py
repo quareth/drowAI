@@ -11,7 +11,7 @@ from agent.tools.resolve_tools import resolve_tools_for_capability
 
 
 class DummyConfig:
-    max_tools_exposed = 2
+    max_tools_per_action = 2
 
 
 def test_resolve_tools_for_scan_ports():

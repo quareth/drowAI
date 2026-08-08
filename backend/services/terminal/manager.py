@@ -1055,15 +1055,22 @@ class TerminalSessionManager:
                     pass
             data = delegate.get("data", b"")
             truncated = bool(delegate.get("truncated", False))
+            eof = bool(delegate.get("eof", False))
             if isinstance(data, bytes):
                 session.update_activity()
-                return TerminalReadResult(ok=True, data=data, truncated=truncated)
+                return TerminalReadResult(
+                    ok=True,
+                    data=data,
+                    truncated=truncated,
+                    eof=eof,
+                )
             if isinstance(data, str):
                 session.update_activity()
                 return TerminalReadResult(
                     ok=True,
                     data=data.encode(),
                     truncated=truncated,
+                    eof=eof,
                 )
         return TerminalReadResult(ok=True, data=b"")
 

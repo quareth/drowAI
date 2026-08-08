@@ -119,7 +119,7 @@ def resolve_tools_for_capability(
     context: Dict[str, Any] | None = None,
     config: Any | None = None,
 ) -> List[str]:
-    """Resolve a ranked, limited list of tool IDs for a given capability.
+    """Resolve a ranked list of tool IDs for a given capability.
 
     Approach:
     - Normalize capability string to CapabilityType enum
@@ -130,18 +130,17 @@ def resolve_tools_for_capability(
     Args:
         capability: CapabilityType enum or string (will be normalized to CapabilityType)
         context: Optional context dict for tool selection
-        config: Optional config object with max_tools_exposed attribute
+        config: Optional agent configuration for capability selection
     
     Returns:
         List of tool IDs, empty list if no tools available or capability doesn't require tools
     """
     context = dict(context or {})
     
-    # Determine max_tools limit
     max_tools = None
-    if config is not None and hasattr(config, "max_tools_exposed"):
+    if config is not None and hasattr(config, "max_tools_per_action"):
         try:
-            max_tools = int(getattr(config, "max_tools_exposed"))
+            max_tools = int(getattr(config, "max_tools_per_action"))
         except Exception:
             max_tools = None
     if max_tools is None:

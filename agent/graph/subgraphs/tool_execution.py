@@ -523,10 +523,10 @@ def _get_category_filtered_catalog(categories: List[str], config: Optional[Agent
     
     Args:
         categories: List of category names to include
-        config: Agent configuration with max_tools_exposed setting
+        config: Agent configuration used by planner catalog resolution
     
     Returns:
-        List of tool IDs from specified categories (limited by config)
+        List of visible tool IDs from the selected categories
     """
     return get_category_filtered_catalog_service(
         categories,
@@ -543,10 +543,10 @@ def _get_full_tool_catalog_for_planner(config: Optional[AgentConfig]) -> List[st
     enabling true LLM-centric tool selection.
     
     Args:
-        config: Agent configuration with max_tools_exposed setting
+        config: Agent configuration used by planner catalog resolution
     
     Returns:
-        List of tool IDs (limited by config for token budget)
+        Complete list of visible tool IDs
     """
     return get_full_tool_catalog_for_planner_service(config, logger=logger)
 

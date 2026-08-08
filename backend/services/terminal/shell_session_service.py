@@ -468,8 +468,18 @@ class ShellSessionService:
                 timeout=read_timeout,
             )
             if not isinstance(result, TerminalReadResult):
-                result = TerminalReadResult(ok=True, data=getattr(result, "data", b""))
+                result = TerminalReadResult(
+                    ok=True,
+                    data=getattr(result, "data", b""),
+                    eof=bool(getattr(result, "eof", False)),
+                )
             if not result.ok:
+                return await self._fail_claimed_record(
+                    record,
+                    ShellSessionErrorCode.RUNTIME_TRANSPORT_FAILED,
+                    started_at,
+                )
+            if result.eof:
                 return await self._fail_claimed_record(
                     record,
                     ShellSessionErrorCode.RUNTIME_TRANSPORT_FAILED,

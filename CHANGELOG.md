@@ -27,6 +27,11 @@ The format is based on
 
 ### Fixed
 
+- Fallback tool planning now receives every visible mission tool instead of
+  collapsing to only universal shell tools; the obsolete `MAX_TOOLS_EXPOSED`
+  setting is now ignored.
+- Local interactive shell sessions now report unexpected PTY socket closure as
+  a transport failure instead of leaving a phantom running session to poll.
 - Zero-yield local shell polls now consume already-buffered terminal output
   without blocking, so completed commands can report completion immediately.
 - Interactive shell output now preserves valid text and command completion
