@@ -32,6 +32,8 @@ The format is based on
   setting is now ignored.
 - Local interactive shell sessions now report unexpected PTY socket closure as
   a transport failure instead of leaving a phantom running session to poll.
+- Interactive shell continuations now reject stale runtime bindings after task
+  runner reassignment without forwarding input to the previous runner.
 - Zero-yield local shell polls now consume already-buffered terminal output
   without blocking, so completed commands can report completion immediately.
 - Interactive shell output now preserves valid text and command completion

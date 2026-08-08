@@ -253,6 +253,18 @@ class ShellSessionService:
     ) -> ShellSessionUpdate:
         """Poll, write exact input to, or interrupt an existing shell session."""
         started_at = self._clock()
+        context_error, _ = await self._validate_runtime_context(identity)
+        if context_error is not None:
+            error_code = ShellSessionErrorCode.SESSION_UNAVAILABLE
+            self._emit_operation_failed(
+                identity,
+                error_code,
+                public_session_id=request.session_id,
+            )
+            return self._error_update(
+                error_code=error_code,
+                duration_ms=self._duration_ms(started_at),
+            )
         record, error_code = await self._claim_existing_record(
             identity=identity,
             public_session_id=request.session_id,
@@ -329,7 +341,10 @@ class ShellSessionService:
         normalized_id = str(public_session_id or "").strip()
         async with self._lock:
             record = self._records.get(normalized_id)
-            if record is None or not self._same_owner(record.identity, identity):
+            if record is None or not self._same_session_identity(
+                record.identity,
+                identity,
+            ):
                 return None
             now = self._clock()
             if self._is_deadline_expired(record, now) or self._is_idle_expired(
@@ -579,7 +594,10 @@ class ShellSessionService:
         normalized_id = str(public_session_id or "").strip()
         async with self._lock:
             record = self._records.get(normalized_id)
-            if record is None or not self._same_owner(record.identity, identity):
+            if record is None or not self._same_session_identity(
+                record.identity,
+                identity,
+            ):
                 return None, ShellSessionErrorCode.SESSION_UNAVAILABLE
             now = self._clock()
             if self._is_deadline_expired(record, now):
@@ -946,6 +964,14 @@ class ShellSessionService:
             and left.task_id == right.task_id
             and left.execution_owner_id == right.execution_owner_id
         )
+
+    @staticmethod
+    def _same_session_identity(
+        left: ShellSessionIdentity,
+        right: ShellSessionIdentity,
+    ) -> bool:
+        """Return whether a continuation targets the stored runtime binding."""
+        return left == right
 
     def _is_deadline_expired(self, record: ShellSessionRecord, now: float) -> bool:
         return now >= record.deadline_at

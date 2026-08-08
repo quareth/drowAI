@@ -1120,6 +1120,49 @@ async def test_foreign_owner_and_task_get_session_unavailable_without_output() -
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
+    ("continuation_identity", "chars"),
+    [
+        (_identity(), ""),
+        (
+            _identity(runner_id="runner-2", execution_site_id="site-2"),
+            "whoami\n",
+        ),
+    ],
+)
+async def test_runtime_reassignment_rejects_stale_session_without_terminal_io(
+    continuation_identity: ShellSessionIdentity,
+    chars: str,
+) -> None:
+    manager = FakeTerminalManager()
+    runtime_context = _context()
+    service = _service(manager, context=runtime_context)
+    first = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(command="delayed", yield_time_ms=0),
+    )
+    assert first.session_id is not None
+    reads_before = manager.read_result_calls
+    writes_before = list(manager.sent_inputs)
+
+    runtime_context.runner_id = "runner-2"
+    runtime_context.execution_site_id = "site-2"
+    update = await service.write_stdin(
+        identity=continuation_identity,
+        request=ShellWriteRequest(
+            session_id=first.session_id,
+            chars=chars,
+            yield_time_ms=0,
+        ),
+    )
+
+    assert update.error_code is ShellSessionErrorCode.SESSION_UNAVAILABLE
+    assert update.session_id is None
+    assert manager.read_result_calls == reads_before
+    assert manager.sent_inputs == writes_before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
     ("field", "bad_value"),
     [
         ("tenant_id", 8),
