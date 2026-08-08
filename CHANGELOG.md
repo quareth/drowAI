@@ -27,6 +27,8 @@ The format is based on
 
 ### Fixed
 
+- Assessment shell sessions now retain durable timeout evidence when their first
+  continuation poll occurs after the configured runtime deadline.
 - Tool batch cards now preserve running, terminated, and timed-out shell process
   states when the aggregate batch result arrives.
 - Successful quiet shell polls now refresh session activity without extending

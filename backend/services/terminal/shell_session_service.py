@@ -336,7 +336,7 @@ class ShellSessionService:
         identity: ShellSessionIdentity,
         public_session_id: str,
     ) -> ShellCapability | None:
-        """Return the capability of an owned live session without claiming it."""
+        """Return immutable capability provenance for an owned session record."""
 
         normalized_id = str(public_session_id or "").strip()
         async with self._lock:
@@ -344,11 +344,6 @@ class ShellSessionService:
             if record is None or not self._same_session_identity(
                 record.identity,
                 identity,
-            ):
-                return None
-            now = self._clock()
-            if self._is_deadline_expired(record, now) or self._is_idle_expired(
-                record, now
             ):
                 return None
             return record.originating_capability

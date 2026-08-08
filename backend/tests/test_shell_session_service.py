@@ -1540,10 +1540,18 @@ async def test_deadline_expiry_poll_returns_timed_out_and_closes() -> None:
             yield_time_ms=0,
             max_runtime_sec=1,
         ),
+        capability=ShellCapability.ASSESSMENT,
     )
 
     assert first.session_id is not None
     clock.advance(2)
+    assert (
+        await service.get_session_capability(
+            identity=_identity(),
+            public_session_id=first.session_id,
+        )
+        is ShellCapability.ASSESSMENT
+    )
     update = await service.write_stdin(
         identity=_identity(),
         request=ShellWriteRequest(session_id=first.session_id, yield_time_ms=0),
@@ -1557,6 +1565,13 @@ async def test_deadline_expiry_poll_returns_timed_out_and_closes() -> None:
     assert first.session_id not in service._records
     assert b"\x03" in [payload for _session, payload in manager.sent_inputs]
     assert manager.closed_sessions == ["terminal-1"]
+    assert (
+        await service.get_session_capability(
+            identity=_identity(),
+            public_session_id=first.session_id,
+        )
+        is None
+    )
 
 
 @pytest.mark.asyncio
