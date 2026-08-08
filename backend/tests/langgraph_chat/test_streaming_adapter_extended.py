@@ -664,6 +664,55 @@ class TestToolEventProcessing:
         assert mock_persist.call_args.kwargs["reserved_message_id"] == 101
         assert mock_persist.call_args.kwargs["tool_call_info"]["persisted_marker"] is True
 
+    def test_durable_tool_end_masks_cached_stdin_before_state_and_snapshot_persistence(
+        self,
+        adapter,
+    ):
+        """Interactive stdin must not survive in durable tool-call arguments."""
+        secret_input = "assessment-password\n"
+        tool_call_id = "call-write-stdin-1"
+        state_container = ChatStateContainer(reserved_message_id=101)
+
+        adapter.process_streaming_event(
+            {
+                "type": "tool_start",
+                "tool": "shell.write_stdin",
+                "tool_call_id": tool_call_id,
+                "conversation_id": "conv-1",
+                "turn_id": "turn-1",
+                "parameters": {
+                    "session_id": "shs_assessment_1",
+                    "chars": secret_input,
+                    "max_tokens": 512,
+                },
+            },
+            state_container=state_container,
+        )
+
+        with patch.object(adapter._tool_call_snapshot_service, "persist_snapshot") as mock_persist:
+            adapter.process_streaming_event(
+                {
+                    "type": "tool_end",
+                    "tool": "shell.write_stdin",
+                    "tool_call_id": tool_call_id,
+                    "conversation_id": "conv-1",
+                    "turn_id": "turn-1",
+                    "status": "success",
+                    "output_persistence": "durable",
+                },
+                state_container=state_container,
+            )
+
+        stored_arguments = state_container.get_tool_calls()[0]["tool_arguments"]
+        snapshot_arguments = mock_persist.call_args.kwargs["tool_call_info"][
+            "tool_arguments"
+        ]
+        assert stored_arguments["chars"] == "<DURABLE_SECRET_MASK:secret>"
+        assert snapshot_arguments["chars"] == "<DURABLE_SECRET_MASK:secret>"
+        assert stored_arguments["max_tokens"] == 512
+        assert secret_input not in repr(state_container.get_tool_calls())
+        assert secret_input not in repr(mock_persist.call_args.kwargs)
+
     def test_transient_tool_end_streams_compact_output_without_persisting_tool_call(
         self,
         adapter,

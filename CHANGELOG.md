@@ -27,6 +27,8 @@ The format is based on
 
 ### Fixed
 
+- Durable interactive shell history now masks stdin values before persistence,
+  preventing credentials entered during assessment sessions from reaching the database.
 - Fallback tool planning now receives every visible mission tool instead of
   collapsing to only universal shell tools; the obsolete `MAX_TOOLS_EXPOSED`
   setting is now ignored.

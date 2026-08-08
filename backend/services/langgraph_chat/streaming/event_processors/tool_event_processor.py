@@ -29,6 +29,7 @@ from agent.graph.contracts.streaming_constants import (
 )
 from agent.tools.utils import resolve_command_text_for_execution
 from backend.services.metrics.utils import safe_inc
+from runtime_shared.durable_secret_masking import mask_durable_secrets
 from runtime_shared.shell_capabilities import SHELL_SESSION_START_TOOL_IDS
 
 from backend.services.langgraph_chat.streaming.event_processors.snapshot_service import (
@@ -257,12 +258,16 @@ class ToolEventProcessor:
                 cached_params = state_container.get_tool_call_parameters(tool_call_id)
                 if cached_params:
                     parameters = cached_params
+            durable_parameters = mask_durable_secrets(
+                parameters if isinstance(parameters, dict) else {},
+                source="tool_call_arguments",
+            )
             tool_call_info: dict[str, Any] = {
                 "tool_call_id": tool_call_id,
                 "tool_batch_id": tool_batch_id,
                 "tool_id": None,
                 "tool_name": str(tool),
-                "tool_arguments": parameters if isinstance(parameters, dict) else {},
+                "tool_arguments": durable_parameters,
                 "tool_result": normalized_compact_tool_result,
             }
             normalized_sub_turn_index = self._coerce_non_negative_int(sub_turn_index)
