@@ -27,6 +27,8 @@ The format is based on
 
 ### Fixed
 
+- Zero-yield local shell polls now consume already-buffered terminal output
+  without blocking, so completed commands can report completion immediately.
 - Interactive shell output now preserves valid text and command completion
   after invalid UTF-8 bytes instead of falsely timing out completed commands.
 - Interactive UI and agent terminals now start in the task runtime's

@@ -881,14 +881,22 @@ class LocalDockerRuntimeProvider(TaskExecutionRuntimeProvider):
             pass
         size = int(request.payload.get("size", 4096))
         timeout = request.payload.get("timeout")
-        read_coro = loop.sock_recv(raw_sock, size)
-        if timeout is not None:
+        timeout_seconds = float(timeout) if timeout is not None else None
+        if timeout_seconds is not None and timeout_seconds <= 0:
             try:
-                data = await asyncio.wait_for(read_coro, timeout=float(timeout))
+                data = raw_sock.recv(size)
+            except (BlockingIOError, InterruptedError):
+                data = b""
+        elif timeout_seconds is not None:
+            try:
+                data = await asyncio.wait_for(
+                    loop.sock_recv(raw_sock, size),
+                    timeout=timeout_seconds,
+                )
             except asyncio.TimeoutError:
                 return {"success": True, "data": b""}
         else:
-            data = await read_coro
+            data = await loop.sock_recv(raw_sock, size)
         return {"success": True, "data": data}
 
     def _resize_terminal_session(self, request: RuntimeOperationRequest) -> dict[str, Any]:

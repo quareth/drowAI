@@ -403,6 +403,26 @@ def test_terminal_read_output_idle_zero_timeout_is_successful_empty_read():
     assert result.metadata["delegate_result"]["data"] == b""
 
 
+def test_terminal_read_output_buffered_zero_timeout_reads_immediately():
+    provider = LocalDockerRuntimeProvider(
+        docker_service=_StubDockerService(),
+        workspace_manager=_StubWorkspaceManager(),
+    )
+    reader, writer = socket.socketpair()
+    try:
+        writer.sendall(b"ready\n")
+        request = _request("read_terminal_output", socket=reader, size=16, timeout=0.0)
+
+        result = asyncio.run(provider.read_terminal_output(request))
+    finally:
+        reader.close()
+        writer.close()
+
+    assert result.accepted is True
+    assert result.status == RuntimeOperationStatus.SUCCEEDED
+    assert result.metadata["delegate_result"]["data"] == b"ready\n"
+
+
 def test_terminal_read_output_idle_positive_timeout_is_successful_empty_read():
     provider = LocalDockerRuntimeProvider(
         docker_service=_StubDockerService(),
