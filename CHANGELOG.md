@@ -38,6 +38,11 @@ The format is based on
 - Updated cryptography, Undici, and PostCSS to patched releases that address
   dependency security advisories.
 
+### Fixed
+
+- ANSI-formatted ffuf results no longer create invalid Knowledge identities or
+  block task deletion after evidence is safely archived.
+
 ## [0.3.0] - 2026-08-04
 
 ### Added

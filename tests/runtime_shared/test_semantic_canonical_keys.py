@@ -8,6 +8,7 @@ from runtime_shared.semantic.canonical_keys import (
     build_host_dns_key,
     build_host_ip_key,
     build_relationship_edge_key,
+    canonicalize_subject_key,
 )
 
 
@@ -34,6 +35,40 @@ def test_relationship_edge_key_normalizes_relationship_type_and_endpoint_keys() 
         )
         == "relationship.edge:host.dns:app.example.com:resolves_to:host.ip:2001:db8::1"
     )
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    (
+        (
+            " WEB.PATH:HTTPS://[2001:DB8::1]/reports/final%20report ",
+            "web.path:https://[2001:db8::1]/reports/final%20report",
+        ),
+        (
+            "web.path:https://example.test/a~b!$&'()*+,;=@c",
+            "web.path:https://example.test/a~b!$&'()*+,;=@c",
+        ),
+    ),
+)
+def test_subject_key_canonicalization_preserves_canonical_url_characters(
+    value: str,
+    expected: str,
+) -> None:
+    assert canonicalize_subject_key(value) == expected
+
+
+@pytest.mark.parametrize(
+    "value",
+    (
+        "web.path:https://example.test/\x1b[2kadmin",
+        "web.path:https://example.test/admin path",
+        "web.path:https://example.test/<admin>",
+        "",
+    ),
+)
+def test_subject_key_canonicalization_rejects_unsafe_values(value: str) -> None:
+    with pytest.raises(ValueError):
+        canonicalize_subject_key(value)
 
 
 @pytest.mark.parametrize(
