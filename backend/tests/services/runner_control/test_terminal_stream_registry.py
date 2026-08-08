@@ -148,14 +148,9 @@ def test_terminal_stream_registry_reports_loss_when_no_frame_bytes_remain(
     assert result.truncated is True
 
 
-def test_terminal_stream_registry_pushes_known_frames_to_registered_sink() -> None:
+def test_terminal_stream_registry_ingest_has_one_buffered_delivery_path() -> None:
     registry = RunnerTerminalStreamRegistry()
     runner_id = uuid4()
-    pushed: list[dict[str, object]] = []
-
-    async def _sink(**kwargs) -> bool:
-        pushed.append(dict(kwargs))
-        return True
 
     registry.register_stream(
         tenant_id=1,
@@ -163,7 +158,7 @@ def test_terminal_stream_registry_pushes_known_frames_to_registered_sink() -> No
         task_id=9,
         session_id="sess-1",
     )
-    registry.register_frame_sink(_sink)
+    assert not hasattr(registry, "register_frame_sink")
 
     assert asyncio.run(
         registry.ingest_stream_frame(
@@ -184,15 +179,18 @@ def test_terminal_stream_registry_pushes_known_frames_to_registered_sink() -> No
         )
     )
 
-    assert pushed == [
-        {
-            "tenant_id": 1,
-            "runner_id": runner_id,
-            "task_id": 9,
-            "provider_session_id": "sess-1",
-            "data": b"hello",
-        }
-    ]
+    result = asyncio.run(
+        registry.read_stream_output_result(
+            tenant_id=1,
+            runner_id=runner_id,
+            task_id=9,
+            session_id="sess-1",
+            size=64,
+            timeout=0,
+        )
+    )
+    assert result.ok is True
+    assert result.data == b"hello"
 
 
 def test_terminal_stream_registry_consumes_stream_ack_without_persistence_path() -> None:

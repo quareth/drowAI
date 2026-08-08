@@ -31,7 +31,6 @@ _MAX_BUFFER_BYTES = 512 * 1024
 _MAX_FRAME_BYTES = RUNNER_TERMINAL_FRAME_MAX_BYTES
 
 ChannelSender = Callable[[RunnerEnvelope], Awaitable[None]]
-FrameSink = Callable[..., Awaitable[bool]]
 
 
 @dataclass(slots=True)
@@ -188,19 +187,7 @@ class RunnerTerminalStreamRegistry:
     def __init__(self) -> None:
         self._channels: dict[tuple[int, UUID], _ChannelBinding] = {}
         self._buffers: dict[tuple[int, UUID, int, str], _StreamBuffer] = {}
-        self._frame_sink: FrameSink | None = None
         self._lock = RLock()
-
-    def register_frame_sink(self, sink: FrameSink) -> None:
-        """Register the active backend terminal-session frame sink."""
-        with self._lock:
-            self._frame_sink = sink
-
-    def unregister_frame_sink(self, sink: FrameSink) -> None:
-        """Unregister the active frame sink when it matches the provided sink."""
-        with self._lock:
-            if self._frame_sink is sink:
-                self._frame_sink = None
 
     def register_channel(
         self,
@@ -331,31 +318,14 @@ class RunnerTerminalStreamRegistry:
         session_id: str,
         data: str,
     ) -> bool:
-        """Append a frame and push it directly to the terminal manager when possible."""
-        encoded = str(data or "").encode("utf-8", errors="replace")
-        accepted = self.append_stream_frame(
+        """Append a known frame once for delivery through the stream reader."""
+        return self.append_stream_frame(
             tenant_id=tenant_id,
             runner_id=runner_id,
             task_id=task_id,
             session_id=session_id,
-            data=encoded.decode("utf-8", errors="replace"),
+            data=data,
         )
-        if not accepted:
-            return False
-        with self._lock:
-            sink = self._frame_sink
-        if sink is not None:
-            try:
-                await sink(
-                    tenant_id=int(tenant_id),
-                    runner_id=runner_id,
-                    task_id=int(task_id),
-                    provider_session_id=str(session_id).strip(),
-                    data=encoded,
-                )
-            except Exception:
-                pass
-        return True
 
     async def read_stream_output(
         self,
@@ -465,7 +435,6 @@ def get_runner_terminal_stream_registry() -> RunnerTerminalStreamRegistry:
 
 __all__ = [
     "CloudTerminalStreamClient",
-    "FrameSink",
     "RunnerTerminalStreamRegistry",
     "TERMINAL_STREAM_CAPABILITY",
     "get_runner_terminal_stream_registry",

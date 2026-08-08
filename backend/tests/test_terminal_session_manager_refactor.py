@@ -639,11 +639,13 @@ async def test_runner_terminal_read_advances_cursor_between_polls(
 
 
 @pytest.mark.asyncio
-async def test_provider_stream_frame_fans_out_without_polling() -> None:
-    """Pushed cloud terminal frames should use the manager replay/listener path directly."""
+async def test_managed_stream_reader_delivers_each_frame_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Buffered managed frames should use the normal manager reader exactly once."""
     manager = TerminalSessionManager()
     session = TerminalSession(
-        session_id="term-push",
+        session_id="term-managed-reader",
         task_id=42,
         user_id=7,
         container_name="runner-task-42",
@@ -651,57 +653,27 @@ async def test_provider_stream_frame_fans_out_without_polling() -> None:
         exec_id="runner-session-42",
         stream_mode=True,
     )
+    manager.sessions[session.session_id] = session
     sent: list[bytes] = []
+    timeouts: list[float | None] = []
 
     class _WebSocket:
         async def send_bytes(self, payload: bytes) -> None:
             sent.append(payload)
 
     session.listeners.add(_WebSocket())
-    manager.sessions[session.session_id] = session
-
-    accepted = await manager.ingest_provider_stream_frame(
-        tenant_id=1,
-        runner_id="runner-1",
-        task_id=42,
-        provider_session_id="runner-session-42",
-        data=b"hello\n",
-    )
-
-    assert accepted is True
-    assert sent == [b"hello\n"]
-    assert list(session.output_buffer) == [b"hello\n"]
-    assert session.buffer_bytes == len(b"hello\n")
-
-
-@pytest.mark.asyncio
-async def test_initial_stream_drain_waits_for_first_prompt_frame(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Initial stream drain should tolerate runner prompt frames arriving just after open."""
-    manager = TerminalSessionManager()
-    session = TerminalSession(
-        session_id="term-initial-drain",
-        task_id=42,
-        user_id=7,
-        container_name="runner-task-42",
-        connection_type="docker_exec",
-        exec_id="runner-session-42",
-        stream_mode=True,
-    )
-    manager.sessions[session.session_id] = session
-    timeouts: list[float | None] = []
-    chunks = [b"prompt> ", b""]
 
     async def _fake_read_output(_session_id: str, _size: int, *, timeout: float | None = None) -> bytes:
         timeouts.append(timeout)
-        return chunks.pop(0)
+        session.is_active = False
+        return b"prompt> "
 
     monkeypatch.setattr(manager, "read_output", _fake_read_output)
 
-    await manager._drain_initial_stream_buffer(session)
+    await manager._pty_reader(session)
 
-    assert timeouts == [1.0, 0.0]
+    assert timeouts == [0.5]
+    assert sent == [b"prompt> "]
     assert list(session.output_buffer) == [b"prompt> "]
     assert session.buffer_bytes == len(b"prompt> ")
 
@@ -714,6 +686,10 @@ async def test_create_user_session_with_authorized_task_uses_tenant_scoped_runti
     manager = TerminalSessionManager()
     authorized_task = SimpleNamespace(id=88, tenant_id=701)
     calls: list[str] = []
+    readers: list[str] = []
+
+    class _PushStream:
+        push_frames = True
 
     class _FakeRuntimeOperations:
         def __init__(self, _db):
@@ -731,7 +707,7 @@ async def test_create_user_session_with_authorized_task_uses_tenant_scoped_runti
                 metadata={
                     "delegate_result": {
                         "exec_id": "exec-88",
-                        "socket": object(),
+                        "socket": _PushStream(),
                         "container_name": "task-88",
                     }
                 },
@@ -742,6 +718,7 @@ async def test_create_user_session_with_authorized_task_uses_tenant_scoped_runti
             raise AssertionError("run_user_task_operation should not be used with authorized_task")
 
     async def _noop_reader(_session):
+        readers.append("buffered_reader")
         return None
 
     monkeypatch.setattr(manager, "_validate_task_ownership", lambda *_args: (_ for _ in ()).throw(AssertionError))
@@ -754,6 +731,8 @@ async def test_create_user_session_with_authorized_task_uses_tenant_scoped_runti
     assert session is not None
     assert session.task_id == 88
     assert calls == ["get_runtime_status", "open_terminal_session"]
+    await asyncio.sleep(0)
+    assert readers == ["buffered_reader"]
     await manager.close_session(session.session_id)
 
 

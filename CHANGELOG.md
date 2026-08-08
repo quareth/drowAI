@@ -27,6 +27,8 @@ The format is based on
 
 ### Fixed
 
+- Managed-runner terminal frames now use one buffered-reader delivery path,
+  preventing duplicate live output and replay history.
 - Recursive root and home removal remains blocked when invoked through transparent
   `command` or `env` wrappers, including nested options and assignments.
 - Assessment shell sessions now retain durable timeout evidence when their first

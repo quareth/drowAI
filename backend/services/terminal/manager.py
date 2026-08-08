@@ -336,10 +336,7 @@ class TerminalSessionManager:
                 socket=sock,
             )
             self._registry.set(session)
-            if session.stream_mode:
-                session.reader_task = asyncio.create_task(self._drain_initial_stream_buffer(session))
-            else:
-                session.reader_task = asyncio.create_task(self._pty_reader(session))
+            session.reader_task = asyncio.create_task(self._pty_reader(session))
             logger.info(
                 "Created terminal session %s for user %s, task %s (PTY)",
                 session_id,
@@ -413,44 +410,6 @@ class TerminalSessionManager:
             pass
         except Exception as exc:
             logger.error("PTY reader task error for %s: %s", session.session_id, exc)
-
-    async def _drain_initial_stream_buffer(self, session: TerminalSession) -> None:
-        """Drain frames that arrived between provider open and session registration."""
-        try:
-            timeout = 1.0
-            while session.is_active:
-                chunk = await self.read_output(session.session_id, 4096, timeout=timeout)
-                if not chunk:
-                    return
-                await self._handle_output_chunk(session, chunk)
-                timeout = 0.0
-        except asyncio.CancelledError:
-            pass
-        except Exception as exc:
-            logger.debug("Initial stream drain failed for %s: %s", session.session_id, exc)
-
-    async def ingest_provider_stream_frame(
-        self,
-        *,
-        tenant_id: int,
-        runner_id: object,
-        task_id: int,
-        provider_session_id: str,
-        data: bytes,
-    ) -> bool:
-        """Append and fan out a pushed provider frame for an active terminal session."""
-        del tenant_id, runner_id
-        normalized_provider_session_id = str(provider_session_id or "").strip()
-        if not normalized_provider_session_id:
-            return False
-        for session in list(self._registry.sessions.values()):
-            if not session.is_active or int(session.task_id) != int(task_id):
-                continue
-            if session.exec_id != normalized_provider_session_id and session.session_id != normalized_provider_session_id:
-                continue
-            await self._handle_output_chunk(session, bytes(data))
-            return True
-        return False
 
     async def _handle_output_chunk(self, session: TerminalSession, chunk: bytes) -> None:
         """Update replay state and fan terminal output to active websocket listeners."""
@@ -1348,12 +1307,3 @@ class TerminalSessionManager:
 
 
 terminal_session_manager = TerminalSessionManager()
-
-try:
-    from backend.services.runner_control.terminal_stream_registry import get_runner_terminal_stream_registry
-
-    get_runner_terminal_stream_registry().register_frame_sink(
-        terminal_session_manager.ingest_provider_stream_frame
-    )
-except Exception:
-    logger.debug("Cloud terminal stream frame sink registration skipped.", exc_info=True)
