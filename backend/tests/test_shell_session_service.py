@@ -692,6 +692,39 @@ async def test_delayed_command_yields_public_session_id_and_later_completes() ->
 
 
 @pytest.mark.asyncio
+async def test_default_attached_command_waits_past_internal_yield_boundary() -> None:
+    manager = FakeTerminalManager()
+    clock = MutableClock()
+    original_read = manager.read_output_result
+
+    async def read_and_advance_after_empty(*args, **kwargs):
+        result = await original_read(*args, **kwargs)
+        if not result.data:
+            clock.advance(11.0)
+        return result
+
+    manager.read_output_result = read_and_advance_after_empty
+    service = ShellSessionService(
+        terminal_manager=manager,
+        config=_config(),
+        runtime_context_resolver=lambda _identity: _context(),
+        clock=clock,
+    )
+
+    update = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(command="delayed"),
+    )
+
+    assert update.process_status is ShellProcessStatus.COMPLETED
+    assert update.session_id is None
+    assert update.exit_code == 0
+    assert update.stdout == "started\ndone"
+    assert service._records == {}
+    assert manager.closed_sessions == ["terminal-1"]
+
+
+@pytest.mark.asyncio
 async def test_local_provider_bound_quick_command_completes_without_session_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

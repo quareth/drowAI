@@ -21,7 +21,9 @@ from runtime_shared.file_comm_contracts import (
 from runtime_shared.shell_session_contracts import (
     SHELL_SESSION_CLEANUP_TIMEOUT_SEC,
     SHELL_SESSION_CONTROL_TIMEOUT_SEC,
+    SHELL_SESSION_DEFAULT_MAX_RUNTIME_SEC,
     SHELL_SESSION_DEFAULT_YIELD_TIME_MS,
+    SHELL_SESSION_MAX_RUNTIME_SEC,
     SHELL_SESSION_MAX_YIELD_TIME_MS,
     SHELL_SESSION_PREPARATION_TIMEOUT_SEC,
 )
@@ -437,6 +439,50 @@ class ToolTimeoutPolicy:
     ) -> ToolTimeoutPlan:
         """Resolve bounded wait policy for one shell-session invocation."""
         raw_yield_ms = raw_parameters.get("yield_time_ms")
+        preparation_seconds = (
+            SHELL_SESSION_PREPARATION_TIMEOUT_SEC
+            if tool_id in SHELL_SESSION_START_TOOL_IDS
+            else 0.0
+        )
+        if tool_id in SHELL_SESSION_START_TOOL_IDS and raw_yield_ms is None:
+            requested_runtime_seconds = _coerce_positive_seconds(
+                raw_parameters.get("max_runtime_sec")
+            )
+            runtime_seconds = min(
+                requested_runtime_seconds or SHELL_SESSION_DEFAULT_MAX_RUNTIME_SEC,
+                float(SHELL_SESSION_MAX_RUNTIME_SEC),
+            )
+            deadline_seconds = preparation_seconds + runtime_seconds
+            return ToolTimeoutPlan(
+                tool_id=str(tool_id),
+                deadline_seconds=deadline_seconds,
+                native_timeout_seconds=max(1, int(math.ceil(deadline_seconds))),
+                normalized_parameters=dict(raw_parameters),
+                source=(
+                    "parameter:max_runtime_sec"
+                    if requested_runtime_seconds is not None
+                    else "default:max_runtime_sec"
+                ),
+                requested_timeout_seconds=requested_runtime_seconds,
+                requested_timeout_field=(
+                    "max_runtime_sec"
+                    if requested_runtime_seconds is not None
+                    else None
+                ),
+                native_timeout_field=None,
+                max_timeout_seconds=(
+                    preparation_seconds + SHELL_SESSION_MAX_RUNTIME_SEC
+                ),
+                default_timeout_seconds=(
+                    preparation_seconds + SHELL_SESSION_DEFAULT_MAX_RUNTIME_SEC
+                ),
+                grace_seconds=max(
+                    self._config.shell_session_terminal_io_grace_seconds,
+                    SHELL_SESSION_CLEANUP_TIMEOUT_SEC,
+                ),
+                stripped_timeout_fields=(),
+            )
+
         yield_ms = _coerce_non_negative_seconds(raw_yield_ms)
         requested_seconds: Optional[float] = None
         requested_field: Optional[str] = None
@@ -450,11 +496,6 @@ class ToolTimeoutPolicy:
             source = "parameter:yield_time_ms"
 
         yield_seconds = max(0.0, yield_ms / 1000.0)
-        preparation_seconds = (
-            SHELL_SESSION_PREPARATION_TIMEOUT_SEC
-            if tool_id in SHELL_SESSION_START_TOOL_IDS
-            else 0.0
-        )
         control_seconds = (
             SHELL_SESSION_CONTROL_TIMEOUT_SEC
             if tool_id == SHELL_WRITE_STDIN_TOOL_ID and bool(raw_parameters.get("chars"))

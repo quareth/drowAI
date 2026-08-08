@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import hashlib
 import inspect
 import logging
+import math
 import secrets
 import shlex
 import time
@@ -208,9 +209,16 @@ class ShellSessionService:
                 ):
                     raise RuntimeError("send_terminal_input failed")
 
+            yield_time_ms = request.yield_time_ms
+            if yield_time_ms is None:
+                remaining_runtime_ms = math.ceil(
+                    max(0.0, record.deadline_at - self._clock()) * 1000.0
+                )
+                yield_time_ms = max(1, remaining_runtime_ms)
+
             return await self._read_update(
                 record=record,
-                yield_time_ms=request.yield_time_ms,
+                yield_time_ms=yield_time_ms,
                 max_output_chars=request.max_output_chars,
                 started_at=started_at,
             )

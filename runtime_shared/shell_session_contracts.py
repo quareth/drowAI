@@ -154,11 +154,14 @@ class ShellExecRequest(BaseModel):
         default_factory=dict,
         description="Additional bounded environment variables for the runtime command.",
     )
-    yield_time_ms: int = Field(
-        default=SHELL_SESSION_DEFAULT_YIELD_TIME_MS,
+    yield_time_ms: int | None = Field(
+        default=None,
         ge=0,
         le=SHELL_SESSION_MAX_YIELD_TIME_MS,
-        description="Maximum invocation wait for output or process completion.",
+        description=(
+            "Explicit interactive yield window. Omit to keep the invocation "
+            "attached until the process reaches a terminal state."
+        ),
     )
     max_output_chars: int = Field(
         default=SHELL_SESSION_DEFAULT_MAX_OUTPUT_CHARS,

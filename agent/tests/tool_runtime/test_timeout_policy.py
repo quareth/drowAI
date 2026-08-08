@@ -15,6 +15,8 @@ from agent.tools import BaseTool, BaseToolArgs, ToolResult, register_tool
 from runtime_shared.shell_session_contracts import (
     SHELL_SESSION_CLEANUP_TIMEOUT_SEC,
     SHELL_SESSION_CONTROL_TIMEOUT_SEC,
+    SHELL_SESSION_DEFAULT_MAX_RUNTIME_SEC,
+    SHELL_SESSION_MAX_RUNTIME_SEC,
     SHELL_SESSION_PREPARATION_TIMEOUT_SEC,
 )
 
@@ -209,6 +211,28 @@ def test_shell_session_exec_timeout_uses_yield_wait_not_process_lifetime():
     assert plan.native_timeout_field is None
     assert plan.normalized_parameters["max_runtime_sec"] == 180
     assert plan.stripped_timeout_fields == ()
+
+
+def test_shell_session_exec_without_yield_waits_for_process_lifetime() -> None:
+    plan = _policy(default=25, max_seconds=300).resolve(
+        tool_id="shell.exec",
+        parameters={
+            "command": "sleep 120",
+            "max_runtime_sec": 180,
+        },
+    )
+
+    assert plan.deadline_seconds == SHELL_SESSION_PREPARATION_TIMEOUT_SEC + 180
+    assert plan.grace_seconds == SHELL_SESSION_CLEANUP_TIMEOUT_SEC
+    assert plan.requested_timeout_field == "max_runtime_sec"
+    assert plan.native_timeout_field is None
+    assert plan.default_timeout_seconds == (
+        SHELL_SESSION_PREPARATION_TIMEOUT_SEC
+        + SHELL_SESSION_DEFAULT_MAX_RUNTIME_SEC
+    )
+    assert plan.max_timeout_seconds == (
+        SHELL_SESSION_PREPARATION_TIMEOUT_SEC + SHELL_SESSION_MAX_RUNTIME_SEC
+    )
 
 
 def test_shell_session_write_timeout_uses_yield_wait():

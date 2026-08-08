@@ -52,6 +52,8 @@ def test_shell_exec_schema_matches_session_contract_surface() -> None:
         "idempotent",
         "redact_output",
     } & _schema_fields(ShellExecArgs)
+    assert ShellExecArgs(command="sleep 20").yield_time_ms is None
+    assert ShellExecArgs(command="sleep 20", yield_time_ms=500).yield_time_ms == 500
 
 
 def test_shell_exec_uses_shared_env_limits() -> None:

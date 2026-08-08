@@ -96,6 +96,18 @@ def test_shell_request_contracts_json_round_trip() -> None:
     ).model_dump(mode="json") == write_request.model_dump(mode="json")
 
 
+def test_shell_start_omits_yield_for_attached_execution_by_default() -> None:
+    request = ShellExecRequest(command="sleep 20")
+
+    assert request.yield_time_ms is None
+
+
+def test_shell_start_accepts_explicit_interactive_yield_window() -> None:
+    request = ShellExecRequest(command="sleep 20", yield_time_ms=10_000)
+
+    assert request.yield_time_ms == 10_000
+
+
 def test_shell_session_update_supports_nullable_fields_and_deterministic_summary() -> None:
     update = ShellSessionUpdate(
         success=True,
