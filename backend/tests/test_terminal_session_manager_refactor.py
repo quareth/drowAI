@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import time
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 from types import SimpleNamespace
@@ -16,8 +17,13 @@ from fastapi import HTTPException
 import pytest
 
 import backend.services.terminal.manager as terminal_manager_module
+from backend.database import SessionLocal
 from backend.core.time_utils import utc_now
 from backend.services import terminal_session_manager as legacy_terminal_module
+from backend.services.chat.shell_session_lifecycle_projector import (
+    ShellSessionLifecycleProjector,
+)
+from backend.services.streaming.in_memory_hub import get_in_memory_stream_hub
 from backend.services.terminal.contracts import (
     AGENT_PROMPT_ENV,
     AGENT_PROMPT_MARKER,
@@ -49,6 +55,11 @@ def test_terminal_session_manager_facade_reexports_public_surface() -> None:
 def test_terminal_session_manager_facade_binds_shell_session_service() -> None:
     """Backend facade import should bind the process-local shell session port."""
     assert isinstance(legacy_terminal_module.shell_session_service, ShellSessionService)
+    projector = legacy_terminal_module.shell_session_service._lifecycle_projector
+    assert isinstance(projector, ShellSessionLifecycleProjector)
+    assert projector._session_factory is SessionLocal
+    assert projector._stream_hub_provider is get_in_memory_stream_hub
+    assert projector._wall_clock is time.time
     assert get_shell_session_service() is legacy_terminal_module.shell_session_service
 
 

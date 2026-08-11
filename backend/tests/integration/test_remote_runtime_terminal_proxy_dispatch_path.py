@@ -48,6 +48,7 @@ from backend.services.terminal.shell_session_service import (
     ShellSessionService,
     ShellSessionServiceConfig,
 )
+from backend.tests.test_shell_session_service import _noop_lifecycle_projector
 from drowai_runner.cloud_client import RunnerCloudClient
 from drowai_runner.config import RunnerConfig
 from drowai_runner.control_channel.identity.models import CloudChannelIdentity
@@ -843,6 +844,7 @@ def test_remote_runtime_terminal_operations_route_through_provider_dispatcher_an
         terminal_manager = TerminalSessionManager()
         shell_service = ShellSessionService(
             terminal_manager=terminal_manager,
+            lifecycle_projector=_noop_lifecycle_projector(),
             config=ShellSessionServiceConfig(
                 max_active_per_owner=8,
                 max_active_per_task=16,

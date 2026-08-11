@@ -21,6 +21,9 @@ from backend.database import Base
 from backend.models.chat import ChatMessage, ChatTurnEvent
 from backend.models.core import Task, User
 from backend.services.metrics import metrics
+from backend.services.chat.shell_session_lifecycle_projector import (
+    ShellSessionLifecycleProjector,
+)
 from backend.services.chat.transcript_query_service import ChatTranscriptQueryService
 from backend.services.langgraph_chat.checkpoint.turn_workflow_service import TurnWorkflowService
 from backend.services.runtime_provider import RuntimeCallScope
@@ -30,6 +33,7 @@ from backend.services.terminal.shell_session_service import (
     ShellSessionService,
     ShellSessionServiceConfig,
 )
+from backend.services.terminal.contracts import ShellSessionTerminalEvent
 from agent.graph.subgraphs.tool_execution_runtime.result_state_projection import (
     preserve_shell_session_result_fields,
 )
@@ -214,6 +218,32 @@ class FakeTerminalManager:
     async def close_session(self, session_id: str) -> bool:
         self.closed_sessions.append(session_id)
         return True
+
+
+class NoopShellSessionLifecycleProjector:
+    """Test projector for shell mechanics tests that must not touch DB or streams."""
+
+    async def project_terminal_event(
+        self,
+        event: ShellSessionTerminalEvent,
+    ) -> None:
+        del event
+
+
+def _noop_lifecycle_projector() -> NoopShellSessionLifecycleProjector:
+    return NoopShellSessionLifecycleProjector()
+
+
+def _real_lifecycle_projector(
+    *,
+    session_factory,
+    hub: RecordingStreamHub,
+) -> ShellSessionLifecycleProjector:
+    return ShellSessionLifecycleProjector(
+        session_factory=session_factory,
+        stream_hub_provider=lambda: hub,
+        wall_clock=time.time,
+    )
 
 
 class GatedPrepareTerminalManager(FakeTerminalManager):
@@ -418,6 +448,7 @@ def _provider_bound_service(
     )
     service = ShellSessionService(
         terminal_manager=manager,
+        lifecycle_projector=_noop_lifecycle_projector(),
         config=_config(terminal_io_grace_sec=0),
         runtime_context_resolver=lambda _identity: _context(
             runtime_placement_mode=runtime_placement_mode,
@@ -479,6 +510,7 @@ def _service(
 ) -> ShellSessionService:
     return ShellSessionService(
         terminal_manager=terminal_manager,
+        lifecycle_projector=_noop_lifecycle_projector(),
         config=config or _config(),
         runtime_context_resolver=lambda _identity: context or _context(),
     )
@@ -799,6 +831,7 @@ async def test_default_attached_command_waits_past_internal_yield_boundary() -> 
     manager.read_output_result = read_and_advance_after_empty
     service = ShellSessionService(
         terminal_manager=manager,
+        lifecycle_projector=_noop_lifecycle_projector(),
         config=_config(),
         runtime_context_resolver=lambda _identity: _context(),
         clock=clock,
@@ -832,6 +865,7 @@ async def test_quiet_attached_command_does_not_yield_running_on_read_interval() 
     manager.read_output_result = read_and_advance_after_empty
     service = ShellSessionService(
         terminal_manager=manager,
+        lifecycle_projector=_noop_lifecycle_projector(),
         config=_config(),
         runtime_context_resolver=lambda _identity: _context(),
         clock=clock,
@@ -862,6 +896,7 @@ async def test_output_arrival_returns_one_output_available_delta_after_quiescenc
     manager.read_output_result = read_and_advance_after_empty
     service = ShellSessionService(
         terminal_manager=manager,
+        lifecycle_projector=_noop_lifecycle_projector(),
         config=_config(output_quiescence_sec=0.1),
         runtime_context_resolver=lambda _identity: _context(),
         clock=clock,
@@ -944,6 +979,7 @@ async def test_write_stdin_waits_past_empty_yield_until_meaningful_boundary() ->
     manager.read_output_result = read_and_advance_after_post_input_empty
     service = ShellSessionService(
         terminal_manager=manager,
+        lifecycle_projector=_noop_lifecycle_projector(),
         config=_config(),
         runtime_context_resolver=lambda _identity: _context(),
         clock=clock,
@@ -1929,6 +1965,7 @@ async def test_initial_quiet_boundary_keeps_session_active_before_idle_expiry() 
     clock = MutableClock()
     service = ShellSessionService(
         terminal_manager=manager,
+        lifecycle_projector=_noop_lifecycle_projector(),
         config=_config(idle_timeout_sec=1),
         runtime_context_resolver=lambda _identity: _context(),
         clock=clock,
@@ -1956,6 +1993,7 @@ async def test_quiet_boundary_does_not_extend_hard_runtime_deadline() -> None:
     clock = MutableClock()
     service = ShellSessionService(
         terminal_manager=manager,
+        lifecycle_projector=_noop_lifecycle_projector(),
         config=_config(idle_timeout_sec=1),
         runtime_context_resolver=lambda _identity: _context(),
         clock=clock,
@@ -1987,6 +2025,7 @@ async def test_idle_expiry_closes_through_common_cleanup_path() -> None:
     clock = MutableClock()
     service = ShellSessionService(
         terminal_manager=manager,
+        lifecycle_projector=_noop_lifecycle_projector(),
         config=_config(idle_timeout_sec=1),
         runtime_context_resolver=lambda _identity: _context(),
         clock=clock,
@@ -2014,6 +2053,7 @@ async def test_deadline_expiry_poll_returns_timed_out_and_closes() -> None:
     clock = MutableClock()
     service = ShellSessionService(
         terminal_manager=manager,
+        lifecycle_projector=_noop_lifecycle_projector(),
         config=_config(),
         runtime_context_resolver=lambda _identity: _context(),
         clock=clock,
@@ -2065,6 +2105,7 @@ async def test_stale_cleanup_uses_monotonic_idle_expiry() -> None:
     clock = MutableClock()
     service = ShellSessionService(
         terminal_manager=manager,
+        lifecycle_projector=_noop_lifecycle_projector(),
         config=_config(idle_timeout_sec=1, termination_grace_sec=0),
         runtime_context_resolver=lambda _identity: _context(),
         clock=clock,
@@ -2093,6 +2134,7 @@ async def test_stale_cleanup_uses_monotonic_hard_runtime_expiry() -> None:
     clock = MutableClock()
     service = ShellSessionService(
         terminal_manager=manager,
+        lifecycle_projector=_noop_lifecycle_projector(),
         config=_config(idle_timeout_sec=300, termination_grace_sec=0),
         runtime_context_resolver=lambda _identity: _context(),
         clock=clock,
@@ -2137,6 +2179,10 @@ async def test_task_cleanup_persists_canonical_terminal_turn_event(monkeypatch) 
         manager = FakeTerminalManager()
         service = ShellSessionService(
             terminal_manager=manager,
+            lifecycle_projector=_real_lifecycle_projector(
+                session_factory=session_factory,
+                hub=hub,
+            ),
             config=_config(termination_grace_sec=0),
             runtime_context_resolver=lambda _identity: _context(
                 tenant_id=tenant_id,
@@ -2219,6 +2265,10 @@ async def test_cleanup_terminal_event_replaces_originating_shell_card(monkeypatc
         manager = FakeTerminalManager()
         service = ShellSessionService(
             terminal_manager=manager,
+            lifecycle_projector=_real_lifecycle_projector(
+                session_factory=session_factory,
+                hub=hub,
+            ),
             config=_config(termination_grace_sec=0),
             runtime_context_resolver=lambda _identity: _context(
                 tenant_id=tenant_id,
@@ -2343,6 +2393,10 @@ async def test_cleanup_terminal_event_uses_session_origin_without_existing_row(
         manager = FakeTerminalManager()
         service = ShellSessionService(
             terminal_manager=manager,
+            lifecycle_projector=_real_lifecycle_projector(
+                session_factory=session_factory,
+                hub=hub,
+            ),
             config=_config(termination_grace_sec=0),
             runtime_context_resolver=lambda _identity: _context(
                 tenant_id=tenant_id,
@@ -2416,6 +2470,10 @@ async def test_idle_cleanup_persists_and_publishes_terminal_turn_event(monkeypat
         clock = MutableClock()
         service = ShellSessionService(
             terminal_manager=manager,
+            lifecycle_projector=_real_lifecycle_projector(
+                session_factory=session_factory,
+                hub=hub,
+            ),
             config=_config(idle_timeout_sec=1, termination_grace_sec=0),
             runtime_context_resolver=lambda _identity: _context(
                 tenant_id=tenant_id,

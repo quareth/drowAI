@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from pathlib import Path
 
 from backend.core import logging as backend_logging
-from backend.core.logging import RedactingFormatter, safe_log_message
+from backend.core.logging import (
+    RedactingFormatter,
+    safe_identifier_fingerprint,
+    safe_log_message,
+)
 
 
 def test_redacting_formatter_masks_bearer_tokens() -> None:
@@ -33,6 +38,15 @@ def test_safe_log_message_normalizes_and_redacts() -> None:
     assert "abc12345" not in message
     assert "\n" not in message
     assert "<redacted>" in message
+
+
+def test_safe_identifier_fingerprint_preserves_existing_digest_contract() -> None:
+    identifier = "main:turn-123/session:abc"
+    expected = hashlib.blake2s(identifier.encode("utf-8"), digest_size=8).hexdigest()
+
+    assert safe_identifier_fingerprint("") == "none"
+    assert safe_identifier_fingerprint(identifier) == expected
+    assert identifier not in safe_identifier_fingerprint(identifier)
 
 
 def test_configure_backend_logging_writes_to_file(tmp_path: Path, monkeypatch) -> None:

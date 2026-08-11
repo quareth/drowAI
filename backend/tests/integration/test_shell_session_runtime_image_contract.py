@@ -21,6 +21,7 @@ from backend.services.terminal.shell_session_service import (
     ShellSessionService,
     ShellSessionServiceConfig,
 )
+from backend.tests.test_shell_session_service import _noop_lifecycle_projector
 from drowai_runner.control_channel.terminal.pty_adapter import _RunnerPtyAdapter
 from drowai_runner.docker_runtime import RunnerDockerRuntime
 from drowai_runner.job_store import initialize_runner_job_store
@@ -215,6 +216,7 @@ def test_runtime_image_installed_command_completes_through_public_shell_contract
         )
         shell_service = ShellSessionService(
             terminal_manager=terminal_manager,
+            lifecycle_projector=_noop_lifecycle_projector(),
             config=ShellSessionServiceConfig(
                 max_active_per_owner=2,
                 max_active_per_task=4,

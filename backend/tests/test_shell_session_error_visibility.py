@@ -14,6 +14,7 @@ from backend.tests.test_shell_session_service import (
     _config,
     _context,
     _identity,
+    _noop_lifecycle_projector,
     _service,
 )
 from runtime_shared.shell_session_contracts import (
@@ -55,6 +56,7 @@ async def test_runtime_context_resolution_failure_is_visible_as_runtime_unavaila
 
     service = ShellSessionService(
         terminal_manager=manager,
+        lifecycle_projector=_noop_lifecycle_projector(),
         config=_config(),
         runtime_context_resolver=unavailable_context,
     )
@@ -106,7 +108,7 @@ async def test_silent_nonzero_command_returns_exit_detail_in_stderr() -> None:
     )
 
     assert update.success is False
-    assert update.process_status is ShellProcessStatus.COMPLETED
+    assert update.process_status is ShellProcessStatus.FAILED
     assert update.exit_code == 7
     assert update.stdout == ""
     assert update.stderr == "Command exited with code 7."
