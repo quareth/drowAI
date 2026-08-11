@@ -6,6 +6,7 @@ import re
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from .....state import InteractiveState
+from ......tools.tool_registry import tool_exists
 
 _TARGET_TOKEN_PATTERN = re.compile(
     r"\b\d{1,3}(?:\.\d{1,3}){3}\b|\b(?:[a-zA-Z0-9-]{1,63}\.)+[a-zA-Z]{2,}\b"
@@ -146,12 +147,18 @@ def _extract_expected_targets(interactive: InteractiveState) -> List[str]:
         expected.extend(str(value) for value in hinted_targets if value)
 
     message = interactive.facts.message or ""
-    expected.extend(_TARGET_TOKEN_PATTERN.findall(message))
+    expected.extend(
+        token
+        for token in _TARGET_TOKEN_PATTERN.findall(message)
+        if not tool_exists(token.lower())
+    )
     for candidate in _RELATIONAL_TARGET_PATTERN.findall(message):
         token = candidate.strip().lower()
         if token in {"the", "a", "an", "tool", "port", "ports"}:
             continue
-        if token == "localhost" or "." in token or ":" in token:
+        if (
+            token == "localhost" or "." in token or ":" in token
+        ) and not tool_exists(token):
             expected.append(token)
     return _dedupe_preserve([_normalize_target_token(value) for value in expected if value])
 
@@ -205,4 +212,3 @@ def _extract_executed_ports(
             ports.append(str(target_port))
 
     return _dedupe_preserve(ports)
-
