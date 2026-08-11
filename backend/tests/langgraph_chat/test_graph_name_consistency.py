@@ -59,11 +59,19 @@ def test_subagent_topology_contains_the_canonical_child_route() -> None:
         "model",
         "approval_gate",
         "dispatch_tool",
+        "tool_execution_session",
+        "terminal_session_compressor",
         "tool_synthesizer",
         "observation",
         "handoff",
     }
     assert ("initialize", "model") in graph.edges
+    assert ("approval_gate", "dispatch_tool") in graph.edges
+    dispatch_branch = graph.branches["dispatch_tool"]["route_after_tool_dispatch"]
+    assert dispatch_branch.ends == {
+        "execution_session": "tool_execution_session",
+        "terminal": "tool_synthesizer",
+    }
     assert ("handoff", "__end__") in graph.edges
 
 

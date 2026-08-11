@@ -168,7 +168,7 @@ def build_parent_handoff_graph(
     wire_direct_tool_action_path(
         graph,
         route_after_prepare_tool_plan=_route_after_prepare_tool_plan,
-        tool_synthesizer_target="prepare_direct_tool_context",
+        terminal_target="prepare_direct_tool_context",
         conditional=conditional,
     )
     graph.add_edge("prepare_direct_tool_context", "post_action_reasoning")

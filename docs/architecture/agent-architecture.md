@@ -194,8 +194,9 @@ Tool execution boundaries:
 - `shell.utility` or `shell.assessment` starts a new provider-backed PTY session
   and may return a public `shs_` continuation handle when the process is still
   running.
-  `shell.write_stdin` uses that handle to poll, send exact input, or request
-  interruption.
+  `shell.write_stdin` uses that handle only for exact non-empty input or
+  interruption. Runtime-owned waits for additional output stay below the
+  model-visible tool boundary.
 - Shell-session result projection keeps only bounded public continuation fields
   needed by the next model turn: `process_status`, public `session_id`,
   nullable `exit_code`, `stdin_available`, bounded `stdout`/`stderr`,

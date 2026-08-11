@@ -150,3 +150,70 @@ def test_simple_finalizer_reads_runtime_only_utility_evidence_without_state_writ
 
     assert context["synthesized"]["summary"] == "Created /workspace/boris.txt."
     assert state.facts.metadata == {"tool_batch_id": batch_id}
+
+
+def test_runtime_only_completion_supersedes_stale_synthesized_output() -> None:
+    batch_id = "tb-runtime-only-completed-session"
+    started_compact = {
+        "tool": "shell.utility",
+        "status": "success",
+        "success": True,
+        "process_status": "running",
+        "summary": "The command is still running.",
+    }
+    compact = {
+        "tool": "shell.write_stdin",
+        "status": "success",
+        "success": True,
+        "process_status": "completed",
+        "summary": "Command completed successfully: RECEIVED=hello.",
+        "key_findings": ["RECEIVED=hello"],
+        "errors": [],
+        "report_recommendations": [],
+    }
+    register_runtime_compact_evidence(
+        {
+            "tool_batch_id": batch_id,
+            "execution_session_aggregate": True,
+            "status": "completed",
+            "success": True,
+            "results": [
+                {
+                    "tool_call_id": "tc-runtime-only-started-session",
+                    "tool_id": "shell.utility",
+                    "status": "success",
+                    "success": True,
+                    "compact_tool_result": started_compact,
+                },
+                {
+                    "tool_call_id": "tc-runtime-only-completed-session",
+                    "tool_id": "shell.write_stdin",
+                    "status": "success",
+                    "success": True,
+                    "compact_tool_result": compact,
+                }
+            ],
+        },
+        single_compact=compact,
+    )
+    state = InteractiveState(
+        facts=FactsState(
+            task_id=1,
+            message="Continue the interactive session.",
+            capability="simple_tool_execution",
+            metadata={
+                "tool_batch_id": batch_id,
+                "synthesized_output": {
+                    "status": "unavailable_capability",
+                    "success": False,
+                    "summary": "No suitable tool was available.",
+                },
+            },
+        ),
+        trace=TraceState(),
+    )
+
+    context = _collect_simple_tool_context(state, context=None)
+
+    assert context["synthesized"]["success"] is True
+    assert context["synthesized"]["summary"] == compact["summary"]

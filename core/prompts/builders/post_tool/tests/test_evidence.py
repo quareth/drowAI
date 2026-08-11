@@ -196,3 +196,86 @@ def test_reasoning_selection_marks_runtime_only_evidence_non_durable():
     assert view is not None
     assert is_durable is False
     assert view.rows[0]["tool_call_id"] == "tc-runtime-only"
+
+
+def test_reasoning_selection_preserves_long_terminal_session_aggregate():
+    batch_id = "tb-long-terminal-session"
+    running_rows = [
+        {
+            "tool_call_id": f"tc-running-{index}",
+            "tool_id": "shell.write_stdin",
+            "status": "success",
+            "success": True,
+            "compact_tool_result": {
+                "tool": "shell.write_stdin",
+                "summary": f"running step {index}",
+                "stdout": f"progress-{index}\n",
+                "process_status": "running",
+                "session_status": "active",
+                "session_id": "shs-long",
+            },
+        }
+        for index in range(12)
+    ]
+    terminal_row = {
+        "tool_call_id": "tc-terminal",
+        "tool_id": "shell.write_stdin",
+        "status": "success",
+        "success": True,
+        "compact_tool_result": {
+            "tool": "shell.write_stdin",
+            "summary": "Calculator returned all requested values.",
+            "stdout": "7\n42\n50\n50\n",
+            "input": "quit\n",
+            "process_status": "completed",
+            "session_status": "closed",
+            "session_id": None,
+            "exit_code": 0,
+        },
+    }
+    register_runtime_compact_evidence(
+        {
+            "tool_batch_id": batch_id,
+            "execution_session_aggregate": True,
+            "status": "completed",
+            "success": True,
+            "results": [*running_rows, terminal_row],
+            "deferred_followups": [],
+        },
+        single_compact=terminal_row["compact_tool_result"],
+    )
+
+    view, is_durable = select_compact_evidence_for_reasoning(
+        {"tool_batch_id": batch_id}
+    )
+
+    assert view is not None
+    assert is_durable is False
+    expected_call_ids = [
+        *(f"tc-running-{index}" for index in range(12)),
+        "tc-terminal",
+    ]
+    assert [row["tool_call_id"] for row in view.rows] == expected_call_ids
+    assert [row["tool_call_id"] for row in view.raw["results"]] == expected_call_ids
+    assert {
+        row["compact_tool_result"]["session_id"] for row in view.rows[:-1]
+    } == {"shs-long"}
+    terminal = view.rows[-1]["compact_tool_result"]
+    assert terminal["process_status"] == "completed"
+    assert terminal["session_status"] == "closed"
+    assert terminal["exit_code"] == 0
+    assert terminal["input"] == "quit\n"
+    assert terminal["stdout"] == "7\n42\n50\n50\n"
+
+
+def test_reasoning_selection_keeps_ordinary_batch_rows_and_failure_semantics():
+    metadata = {"last_tool_result_compact_batch": _batch_metadata(success=False)}
+
+    view, is_durable = select_compact_evidence_for_reasoning(metadata)
+
+    assert view is not None
+    assert is_durable is True
+    assert [row["tool_call_id"] for row in view.rows] == ["tc-1", "tc-2"]
+    assert view.status == "completed_with_errors"
+    assert view.success is False
+    assert len(view.failed_rows) == 1

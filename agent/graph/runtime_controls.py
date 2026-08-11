@@ -13,6 +13,7 @@ from typing import Any
 
 CURRENT_TURN_RUNTIME_CONTROLS_KEY = "current_turn_runtime_controls"
 ACTIVE_EXECUTION_CONTROL_KEY = "active_execution"
+EXECUTION_SESSION_CONTROL_KEY = "execution_session"
 
 
 def read_current_turn_runtime_controls(
@@ -57,6 +58,9 @@ def ensure_current_turn_runtime_controls(
         active_execution = existing.get(ACTIVE_EXECUTION_CONTROL_KEY)
         if isinstance(active_execution, Mapping):
             controls[ACTIVE_EXECUTION_CONTROL_KEY] = dict(active_execution)
+        execution_session = existing.get(EXECUTION_SESSION_CONTROL_KEY)
+        if isinstance(execution_session, Mapping):
+            controls[EXECUTION_SESSION_CONTROL_KEY] = dict(execution_session)
     metadata[CURRENT_TURN_RUNTIME_CONTROLS_KEY] = controls
     return controls
 
@@ -96,7 +100,7 @@ def set_active_execution_control(
     if active_execution is None:
         controls.pop(ACTIVE_EXECUTION_CONTROL_KEY, None)
         return
-    controls[ACTIVE_EXECUTION_CONTROL_KEY] = {
+    active_payload = {
         "originating_tool_id": str(
             active_execution.get("originating_tool_id") or ""
         ).strip(),
@@ -107,13 +111,75 @@ def set_active_execution_control(
         "session_id": str(active_execution.get("session_id") or "").strip(),
         "stdin_available": bool(active_execution.get("stdin_available")),
     }
+    for key in ("originating_tool_call_id", "originating_tool_batch_id"):
+        normalized = str(active_execution.get(key) or "").strip()
+        if normalized:
+            active_payload[key] = normalized
+    controls[ACTIVE_EXECUTION_CONTROL_KEY] = active_payload
+
+
+def read_execution_session_control(
+    metadata: Mapping[str, Any],
+) -> Mapping[str, Any] | None:
+    """Return the active caller-agnostic execution-session identity."""
+
+    controls = read_current_turn_runtime_controls(metadata)
+    if controls is None:
+        return None
+    session = controls.get(EXECUTION_SESSION_CONTROL_KEY)
+    if not isinstance(session, Mapping):
+        return None
+    sequence_id = str(session.get("sequence_id") or "").strip()
+    originating_tool_id = str(session.get("originating_tool_id") or "").strip()
+    if not sequence_id or not originating_tool_id:
+        return None
+    return session
+
+
+def set_execution_session_control(
+    metadata: MutableMapping[str, Any],
+    *,
+    turn_sequence: int,
+    sequence_id: str | None,
+    originating_tool_id: str | None = None,
+    originating_tool_call_id: str | None = None,
+    originating_tool_batch_id: str | None = None,
+) -> None:
+    """Set or clear an output-free execution-session control envelope."""
+
+    controls = ensure_current_turn_runtime_controls(
+        metadata,
+        turn_sequence=turn_sequence,
+    )
+    if sequence_id is None:
+        controls.pop(EXECUTION_SESSION_CONTROL_KEY, None)
+        return
+    normalized_sequence_id = str(sequence_id).strip()
+    normalized_tool_id = str(originating_tool_id or "").strip()
+    if not normalized_sequence_id or not normalized_tool_id:
+        raise ValueError("Execution session requires sequence and originating tool ids")
+    session_payload = {
+        "sequence_id": normalized_sequence_id,
+        "originating_tool_id": normalized_tool_id,
+    }
+    for key, raw_value in (
+        ("originating_tool_call_id", originating_tool_call_id),
+        ("originating_tool_batch_id", originating_tool_batch_id),
+    ):
+        normalized = str(raw_value or "").strip()
+        if normalized:
+            session_payload[key] = normalized
+    controls[EXECUTION_SESSION_CONTROL_KEY] = session_payload
 
 
 __all__ = [
     "ACTIVE_EXECUTION_CONTROL_KEY",
     "CURRENT_TURN_RUNTIME_CONTROLS_KEY",
+    "EXECUTION_SESSION_CONTROL_KEY",
     "ensure_current_turn_runtime_controls",
     "read_active_execution_control",
     "read_current_turn_runtime_controls",
+    "read_execution_session_control",
     "set_active_execution_control",
+    "set_execution_session_control",
 ]

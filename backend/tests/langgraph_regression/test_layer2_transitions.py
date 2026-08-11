@@ -88,9 +88,16 @@ def test_deep_reasoning_graph_prepare_tool_transition_exists() -> None:
 
     assert "prepare_tool_plan" in nodes
     assert ("select_categories", "prepare_tool_plan") in edges
-    # DR flow: prepare_tool_plan -> approval_gate -> dispatch_tool (shared HITL contract)
-    assert ("prepare_tool_plan", "approval_gate") in edges
+    prepare_branch = graph.branches["prepare_tool_plan"][
+        "_route_after_prepare_tool_plan"
+    ]
+    assert prepare_branch.ends["approval_gate"] == "approval_gate"
     assert ("approval_gate", "dispatch_tool") in edges
+    dispatch_branch = graph.branches["dispatch_tool"]["route_after_tool_dispatch"]
+    assert dispatch_branch.ends == {
+        "execution_session": "tool_execution_session",
+        "terminal": "tool_synthesizer",
+    }
     assert ("select_categories", "dispatch_tool") not in edges
 
 

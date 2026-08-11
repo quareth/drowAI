@@ -321,7 +321,10 @@ flowchart TD
     PrepRoute --> post_tool_reasoning
     articulation --> approval_gate
     approval_gate --> dispatch_tool
+    dispatch_tool --> tool_execution_session
     dispatch_tool --> tool_synthesizer
+    tool_execution_session --> terminal_session_compressor
+    terminal_session_compressor --> tool_synthesizer
     tool_synthesizer --> post_tool_reasoning
     post_tool_reasoning --> decision_router
     decision_router --> select_tool_categories
@@ -343,8 +346,11 @@ Important boundaries:
   to post-tool reasoning.
 - `articulation` runs only for the first attempt; retries go directly to the
   approval gate.
-- `approval_gate` interrupts when approval is required.
-- `dispatch_tool` executes only after approval.
+- `approval_gate` and `dispatch_tool` retain their existing ownership of
+  approval and initial execution. Only a genuinely running result enters the
+  execution session for raw bounded continuation until the process is terminal.
+- `terminal_session_compressor` is a no-op for ordinary terminal tools and
+  compresses a completed interactive aggregate once before synthesis and PTR.
 - `post_tool_reasoning` emits candidate decisions; `decision_router` is the
   deterministic route authority.
 
@@ -378,7 +384,10 @@ flowchart TD
     prepare_tool_plan --> approval_gate
     prepare_tool_plan --> post_tool_reasoning
     approval_gate --> dispatch_tool
+    dispatch_tool --> tool_execution_session
     dispatch_tool --> tool_synthesizer
+    tool_execution_session --> terminal_session_compressor
+    terminal_session_compressor --> tool_synthesizer
     tool_synthesizer --> post_tool_reasoning
     post_tool_reasoning --> observation_adapter
     observation_adapter --> decision_router
@@ -394,8 +403,9 @@ Important boundaries:
   `handle_unavailable_tools`.
 - Plan review can interrupt for human approval when HITL interrupts are enabled.
 - Tool approval still keys off autonomy mode, not plan routing alone.
-- Tool execution uses the same shared approval/dispatch/synthesizer/PTR path as
-  simple-tool.
+- Tool execution uses the same shared approval and dispatch path as
+  simple-tool. Ordinary terminal results go directly to synthesis; only running
+  results enter execution-session continuation and aggregate compression.
 - `observation_adapter` converts post-tool findings into compact observations
   before returning to `decision_router`.
 - PTR obtains optional visible narration and exactly one internal `ptr_commit`
@@ -415,7 +425,10 @@ flowchart TD
     model --> approval_gate
     model --> handoff
     approval_gate --> dispatch_tool
+    dispatch_tool --> tool_execution_session
     dispatch_tool --> tool_synthesizer
+    tool_execution_session --> terminal_session_compressor
+    terminal_session_compressor --> tool_synthesizer
     tool_synthesizer --> observation
     observation --> model
     handoff --> END
@@ -428,8 +441,10 @@ Important boundaries:
 - `model` builds the versioned `subagent_runtime` prompt, binds all
   definition-visible native tools with runtime scheduling metadata, and routes
   either to shared tool execution or directly to handoff text.
-- `approval_gate`, `dispatch_tool`, and `tool_synthesizer` reuse the existing
-  shared tool execution subgraph.
+- `approval_gate` and `dispatch_tool` reuse the existing initial-execution
+  boundary. A running result alone enters `tool_execution_session`; terminal
+  aggregate compression and compact synthesis occur afterward, before
+  observation.
 - `observation` syncs the completed tool-iteration budget from canonical
   `working_memory.current_turn_phases` records before returning to the same
   model session.
@@ -460,7 +475,10 @@ flowchart TD
     prepare_tool_plan --> prepare_direct_tool_context
     articulation --> approval_gate
     approval_gate --> dispatch_tool
+    dispatch_tool --> tool_execution_session
     dispatch_tool --> tool_synthesizer
+    tool_execution_session --> terminal_session_compressor
+    terminal_session_compressor --> tool_synthesizer
     tool_synthesizer --> prepare_direct_tool_context
     prepare_direct_tool_context --> post_action_reasoning
     think_more --> post_action_reasoning
@@ -485,8 +503,10 @@ Important boundaries:
   `post_tool_reasoning` node under its post-action role.
 - If parent PAR chooses a direct tool, the graph reuses the same
   `select_tool_categories -> prepare_tool_plan -> approval_gate ->
-  dispatch_tool -> tool_synthesizer` path as the simple-tool graph, then marks
-  the next reasoning input as `post_action_outcome_source="direct_tool"`.
+  dispatch_tool` path as the simple-tool graph. Ordinary terminal work proceeds
+  directly to synthesis; running work passes through `tool_execution_session`
+  and `terminal_session_compressor` first. The graph then marks the next reasoning input as
+  `post_action_outcome_source="direct_tool"`.
 - `delegate_subagent` and `wait_for_subagents` are backend-owned coordination
   outcomes. The graph records the router outcome and stops at `END`; the
   coordinator validates follow-up handoffs through the shared ownership policy
@@ -537,8 +557,19 @@ Shared sequence:
 
 ```text
 select categories -> prepare_tool_plan -> approval_gate -> dispatch_tool
-  -> tool_synthesizer -> post_tool_reasoning
+  -> ordinary terminal: tool_synthesizer -> post_tool_reasoning
+  -> running: tool_execution_session -> terminal_session_compressor
+              -> tool_synthesizer -> post_tool_reasoning
 ```
+
+The execution-session subgraph begins only after approval and initial dispatch
+produce a genuine `process_status=running` result. It owns collection and raw
+bounded interactive continuation only, bypassing tool-output compression while
+the process remains live. Once the same process reaches a
+terminal state, the caller-level compressor sends the accumulated terminal
+result through the existing `compress_tool_output()` entrypoint exactly once.
+Ordinary terminal tools keep their existing dispatch-time compression, so the
+caller-level node returns without recompressing them. PTR itself is unchanged.
 
 Runtime responsibilities under the subgraph:
 

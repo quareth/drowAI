@@ -26,6 +26,7 @@ class _PendingObservation:
 
     chunks: List[str]
     sub_turn_index: Optional[int] = None
+    stream_sequence: Optional[int] = None
 
 
 @dataclass
@@ -35,6 +36,7 @@ class _StoredObservation:
     content: str
     phase_sequence: int
     sub_turn_index: Optional[int] = None
+    stream_sequence: Optional[int] = None
 
 
 @dataclass
@@ -47,6 +49,7 @@ class _PendingReasoning:
     section_name: Optional[str] = None
     sub_turn_index: Optional[int] = None
     started_at: Optional[float] = None
+    stream_sequence: Optional[int] = None
 
 
 @dataclass
@@ -60,6 +63,7 @@ class _StoredReasoningSection:
     sub_turn_index: Optional[int] = None
     started_at: Optional[float] = None
     ended_at: Optional[float] = None
+    stream_sequence: Optional[int] = None
 
 
 def _coerce_timestamp(value: Any) -> Optional[float]:
@@ -99,6 +103,7 @@ class ChatStateContainer:
         self._current_observation: Optional[_PendingObservation] = None
         self._tool_calls: List[ToolCallInfo] = []
         self._tool_call_params: Dict[str, Dict[str, Any]] = {}
+        self._tool_stream_sequences: Dict[str, int] = {}
         self._tool_call_counter = 0
         self._phase_sequence_counter = 0
         self._used_phase_sequences: set[int] = set()
@@ -216,6 +221,7 @@ class ChatStateContainer:
                     sub_turn_index=self._current_reasoning.sub_turn_index,
                     started_at=self._current_reasoning.started_at,
                     ended_at=resolved_ended_at,
+                    stream_sequence=self._current_reasoning.stream_sequence,
                 )
             )
         self._current_reasoning = None
@@ -264,6 +270,8 @@ class ChatStateContainer:
                     section["started_at"] = stored.started_at
                 if stored.ended_at is not None:
                     section["ended_at"] = stored.ended_at
+                if stored.stream_sequence is not None:
+                    section["sequence"] = stored.stream_sequence
                 sections.append(section)
             return sections
 
@@ -278,6 +286,7 @@ class ChatStateContainer:
                     content=observation_text,
                     phase_sequence=self._claim_phase_sequence_locked(),
                     sub_turn_index=self._current_observation.sub_turn_index,
+                    stream_sequence=self._current_observation.stream_sequence,
                 )
             )
         self._current_observation = None
@@ -364,10 +373,28 @@ class ChatStateContainer:
         with self._lock:
             stored = dict(tool_call)
             tool_call_id = stored.get("tool_call_id")
+            replace_existing = bool(stored.pop("replace_existing_lifecycle", False))
             if tool_call_id:
                 cached_params = self._tool_call_params.get(str(tool_call_id))
                 if cached_params and not stored.get("tool_arguments"):
                     stored["tool_arguments"] = dict(cached_params)
+                stream_sequence = self._tool_stream_sequences.get(str(tool_call_id))
+                if stream_sequence is not None:
+                    stored["sequence"] = stream_sequence
+                if replace_existing:
+                    existing = self._find_tool_call_locked(str(tool_call_id))
+                    if existing is not None:
+                        turn_index = existing.get("turn_index")
+                        phase_sequence = existing.get("phase_sequence")
+                        tool_arguments = existing.get("tool_arguments")
+                        existing.update(stored)
+                        if tool_arguments and not existing.get("tool_arguments"):
+                            existing["tool_arguments"] = tool_arguments
+                        if turn_index is not None:
+                            existing["turn_index"] = turn_index
+                        if phase_sequence is not None:
+                            existing["phase_sequence"] = phase_sequence
+                        return dict(existing)
             if stored.get("turn_index") is None:
                 stored["turn_index"] = self._tool_call_counter
             stored["phase_sequence"] = self._claim_phase_sequence_locked(
@@ -376,6 +403,64 @@ class ChatStateContainer:
             self._tool_call_counter += 1
             self._tool_calls.append(stored)
             return stored
+
+    def record_stream_event(self, event: Dict[str, Any]) -> None:
+        """Attach the backend-assigned task-stream sequence to persisted activity."""
+        stream_sequence = event.get("sequence")
+        if (
+            not isinstance(stream_sequence, int)
+            or isinstance(stream_sequence, bool)
+            or stream_sequence < 0
+        ):
+            return
+        event_object = event.get("obj")
+        activity = event_object if isinstance(event_object, dict) else event
+        metadata = activity.get("metadata")
+        if not isinstance(metadata, dict):
+            return
+        step_type = str(metadata.get("step_type") or activity.get("type") or "")
+        tool_call_id = str(metadata.get("tool_call_id") or "").strip()
+        with self._lock:
+            if step_type.startswith("reasoning"):
+                if self._current_reasoning is not None:
+                    current = self._current_reasoning.stream_sequence
+                    if current is None or stream_sequence < current:
+                        self._current_reasoning.stream_sequence = stream_sequence
+                elif self._reasoning_sections:
+                    latest = self._reasoning_sections[-1]
+                    if (
+                        latest.stream_sequence is None
+                        or stream_sequence < latest.stream_sequence
+                    ):
+                        latest.stream_sequence = stream_sequence
+                return
+            if step_type.startswith("observation"):
+                if self._current_observation is not None:
+                    current = self._current_observation.stream_sequence
+                    if current is None or stream_sequence < current:
+                        self._current_observation.stream_sequence = stream_sequence
+                elif self._observations:
+                    latest = self._observations[-1]
+                    if (
+                        latest.stream_sequence is None
+                        or stream_sequence < latest.stream_sequence
+                    ):
+                        latest.stream_sequence = stream_sequence
+                return
+            if step_type.startswith("tool") and tool_call_id:
+                existing_sequence = self._tool_stream_sequences.get(tool_call_id)
+                if existing_sequence is None or stream_sequence < existing_sequence:
+                    self._tool_stream_sequences[tool_call_id] = stream_sequence
+                existing = self._find_tool_call_locked(tool_call_id)
+                if existing is not None:
+                    existing["sequence"] = self._tool_stream_sequences[tool_call_id]
+
+    def _find_tool_call_locked(self, tool_call_id: str) -> Optional[ToolCallInfo]:
+        """Return the stored tool call matching ``tool_call_id`` while locked."""
+        for stored in self._tool_calls:
+            if str(stored.get("tool_call_id") or "") == tool_call_id:
+                return stored
+        return None
 
     def record_tool_call_start(self, tool_call_id: Optional[str], parameters: Any) -> None:
         """Record tool parameters when tool_start is emitted."""
@@ -425,6 +510,8 @@ class ChatStateContainer:
                 }
                 if section.sub_turn_index is not None:
                     token["sub_turn_index"] = section.sub_turn_index
+                if section.stream_sequence is not None:
+                    token["sequence"] = section.stream_sequence
                 tokens.append(token)
             return tokens
 

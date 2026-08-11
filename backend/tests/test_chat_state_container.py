@@ -131,6 +131,56 @@ def test_phase_sequence_monotonic_across_interleaved_detail_events():
     assert observation_sequences == [1, 3]
 
 
+def test_task_stream_sequence_is_preserved_for_persisted_activity():
+    """Every persisted activity keeps its backend-assigned stream position."""
+    container = ChatStateContainer()
+
+    container.start_reasoning(section_name="intent", identity_scope="turn-1")
+    container.record_stream_event(
+        {
+            "sequence": 8,
+            "obj": {
+                "type": "reasoning_start",
+                "metadata": {"step_type": "reasoning_start"},
+            },
+        }
+    )
+    container.append_reasoning("Thinking")
+    container.end_reasoning()
+
+    container.record_tool_call_start("call-1", {})
+    container.record_stream_event(
+        {
+            "sequence": 13,
+            "obj": {
+                "type": "tool_start",
+                "metadata": {
+                    "step_type": "tool_start",
+                    "tool_call_id": "call-1",
+                },
+            },
+        }
+    )
+    container.add_tool_call({"tool_call_id": "call-1", "tool_name": "shell"})
+
+    container.start_observation(sub_turn_index=0)
+    container.record_stream_event(
+        {
+            "sequence": 32,
+            "obj": {
+                "type": "observation_start",
+                "metadata": {"step_type": "observation_start"},
+            },
+        }
+    )
+    container.append_observation("Observed")
+    container.end_observation()
+
+    assert container.get_reasoning_sections()[0]["sequence"] == 8
+    assert container.get_tool_calls()[0]["sequence"] == 13
+    assert container.get_observation_tokens()[0]["sequence"] == 32
+
+
 # --- Structured reasoning section tests ---
 
 

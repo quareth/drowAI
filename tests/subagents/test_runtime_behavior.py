@@ -43,6 +43,7 @@ from agent.subagents.runtime.model import (
     SUBAGENT_EXECUTION_STRATEGY_KEY,
     SUBAGENT_FORCED_FINAL_METADATA_KEY,
     SUBAGENT_RESULT_METADATA_KEY,
+    SubagentActionSelectionError,
     record_subagent_observation_and_budget,
     run_subagent_model_turn,
 )
@@ -63,6 +64,7 @@ from agent.tool_runtime.batch.types import (
     ToolCallStatus,
 )
 from agent.tools.tool_call_specs import make_function_name_for_tool
+from core.prompts.builders.post_tool.evidence import register_runtime_compact_evidence
 from core.prompts.builders.subagent_runtime import SubagentRuntimePromptBuilder
 from runtime_shared.shell_capabilities import (
     SHELL_ASSESSMENT_TOOL_ID,
@@ -784,7 +786,8 @@ async def test_runtime_model_exposes_and_commits_universal_shell_utilities() -> 
     assert SHELL_WRITE_STDIN_TOOL_ID in request["schemas_by_tool_id"]
     assert "Use shell.utility for ordinary operating-system" in request["system_prompt"]
     assert "Use shell.assessment for commands whose purpose" in request["system_prompt"]
-    assert "Use shell.write_stdin with chars=\"\" to poll" in request["system_prompt"]
+    assert "shell interaction coordinator owns waiting for autonomous output" in request["system_prompt"]
+    assert "Do not use shell.write_stdin with empty chars to poll" in request["system_prompt"]
     assert "run shells" not in request["system_prompt"]
     assert "run shells" not in request["user_prompt"]
     assert "Use shell.utility for ordinary operating-system" not in request["user_prompt"]
@@ -817,14 +820,14 @@ async def test_runtime_model_exposes_and_commits_universal_shell_utilities() -> 
         "command": "printf ready",
         "cwd": None,
         "env": None,
-        "yield_time_ms": 10000,
+        "yield_time_ms": None,
         "max_output_chars": 32000,
         "max_runtime_sec": 120,
     }
 
 
 @pytest.mark.asyncio
-async def test_runtime_model_commits_shell_write_stdin_for_running_shell_result() -> None:
+async def test_runtime_model_rejects_empty_write_poll_for_running_shell_result() -> None:
     public_session_id = "shs_subagent_continuation_123"
     state = _generic_state_with_universal_shell_tools()
     metadata = state["facts"]["metadata"]
@@ -860,28 +863,24 @@ async def test_runtime_model_commits_shell_write_stdin_for_running_shell_result(
                 "max_output_chars": 32000,
             },
             strategy="sequential",
-            intent="Poll the running shell session.",
+            intent="Attempt an invalid empty wait on the running shell session.",
         )
     ]
     llm = _FakeBuilderLLM(calls)
 
-    update = await run_subagent_model_turn(
-        _pathfinder_definition(),
-        state,
-        llm_resolver=lambda *_args, **_kwargs: llm,
-    )
+    with pytest.raises(
+        SubagentActionSelectionError,
+        match="String should have at least 1 character",
+    ):
+        await run_subagent_model_turn(
+            _pathfinder_definition(),
+            state,
+            llm_resolver=lambda *_args, **_kwargs: llm,
+        )
 
     request = _request_projection(llm.requests[0])
     assert SHELL_WRITE_STDIN_TOOL_ID in request["tool_ids"]
     assert public_session_id in request["user_prompt"]
-    tool_call = update["facts"]["metadata"]["planner_plan"]["tool_batch"]["tool_calls"][0]
-    assert tool_call["tool_id"] == SHELL_WRITE_STDIN_TOOL_ID
-    assert tool_call["parameters"] == {
-        "session_id": public_session_id,
-        "chars": "",
-        "yield_time_ms": 1000,
-        "max_output_chars": 32000,
-    }
 
 
 @pytest.mark.asyncio
@@ -1123,6 +1122,26 @@ def test_runtime_syncs_completed_execution_budget_from_tool_phase_memory() -> No
     assert third["facts"]["iterations"] == 2
     assert "subagent_completed_iteration_markers" not in third["facts"]["metadata"]
     assert "subagent_observation_transcript" not in third["facts"]["metadata"]
+
+
+def test_runtime_counts_each_transient_execution_session_once() -> None:
+    state = _generic_state_with_universal_shell_tools()
+    state["facts"]["metadata"]["tool_batch_id"] = "batch-utility-terminal-1"
+
+    first = record_subagent_observation_and_budget(_pathfinder_definition(), state)
+    duplicate = record_subagent_observation_and_budget(
+        _pathfinder_definition(),
+        first,
+    )
+    duplicate["facts"]["metadata"]["tool_batch_id"] = "batch-utility-terminal-2"
+    second = record_subagent_observation_and_budget(
+        _pathfinder_definition(),
+        duplicate,
+    )
+
+    assert first["facts"]["iterations"] == 1
+    assert duplicate["facts"]["iterations"] == 1
+    assert second["facts"]["iterations"] == 2
 
 
 @pytest.mark.asyncio
@@ -1459,8 +1478,8 @@ async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> Non
         "multi_iteration_model_calls": 1,
         "one_tool_serialized_state_chars": 9808,
         "multi_iteration_serialized_state_chars": 11030,
-        "multi_iteration_prompt_chars": 12592,
-        "multi_iteration_prompt_tokens": 4498,
+        "multi_iteration_prompt_chars": 13025,
+        "multi_iteration_prompt_tokens": 4653,
         "bounded_parent_handoff_projection_chars": 501,
         "bounded_parent_handoff_render_chars": 281,
         "parent_handoff_projection_model_calls": 0,
@@ -1764,6 +1783,90 @@ def test_runtime_completion_marks_nested_partial_batch_row_as_partial() -> None:
     assert result["limitations"] == [
         f"Tool call {NMAP_TOOL_ID} (tc-nmap-partial) reported partial."
     ]
+
+
+def test_subagent_previous_tool_context_uses_complete_terminal_session_aggregate() -> None:
+    batch_id = "batch-subagent-long-terminal-session"
+    running_rows = [
+        {
+            "tool_call_id": f"tc-running-{index}",
+            "tool_id": SHELL_WRITE_STDIN_TOOL_ID,
+            "status": "success",
+            "success": True,
+            "compact_tool_result": {
+                "tool": SHELL_WRITE_STDIN_TOOL_ID,
+                "summary": f"running step {index}",
+                "stdout": f"progress-{index}\n",
+                "process_status": "running",
+                "session_status": "active",
+                "session_id": "shs-subagent-long",
+            },
+        }
+        for index in range(12)
+    ]
+    terminal_row = {
+        "tool_call_id": "tc-terminal",
+        "tool_id": SHELL_WRITE_STDIN_TOOL_ID,
+        "status": "success",
+        "success": True,
+        "compact_tool_result": {
+            "tool": SHELL_WRITE_STDIN_TOOL_ID,
+            "summary": "Calculator returned all requested values.",
+            "stdout": "7\n42\n50\n50\n",
+            "input": "quit\n",
+            "process_status": "completed",
+            "session_status": "closed",
+            "session_id": None,
+            "exit_code": 0,
+        },
+    }
+    register_runtime_compact_evidence(
+        {
+            "tool_batch_id": batch_id,
+            "execution_session_aggregate": True,
+            "status": "completed",
+            "success": True,
+            "results": [*running_rows, terminal_row],
+            "deferred_followups": [],
+        },
+        single_compact=terminal_row["compact_tool_result"],
+    )
+    interactive = InteractiveState.from_mapping(
+        _generic_state_with_universal_shell_tools()
+    )
+    interactive.facts.metadata["tool_batch_id"] = batch_id
+
+    context = runtime_model._build_previous_tool_context(interactive)
+
+    result = context["last_tool_result"]
+    expected_call_ids = [
+        *(f"tc-running-{index}" for index in range(12)),
+        "tc-terminal",
+    ]
+    assert [row["tool_call_id"] for row in result["results"]] == expected_call_ids
+    assert {
+        row["compact_tool_result"]["session_id"]
+        for row in result["results"][:-1]
+    } == {"shs-subagent-long"}
+    terminal = result["results"][-1]["compact_tool_result"]
+    assert terminal["process_status"] == "completed"
+    assert terminal["session_status"] == "closed"
+    assert terminal["exit_code"] == 0
+    assert terminal["input"] == "quit\n"
+    assert terminal["stdout"] == "7\n42\n50\n50\n"
+    assert "tc-running-11" in json.dumps(context)
+
+    prompt = SubagentRuntimePromptBuilder().build_user_prompt(
+        display_name="Pathfinder",
+        assignment={"objective": "Complete one interactive calculator session."},
+        tool_ids=[SHELL_WRITE_STDIN_TOOL_ID],
+        previous_tool_summary=context,
+    )
+
+    assert '"tool_call_id": "tc-terminal"' in prompt
+    assert '"process_status": "completed"' in prompt
+    assert '"session_status": "closed"' in prompt
+    assert '"input": "quit\\n"' in prompt
 
 
 def test_subagent_parent_handoff_baseline_is_bounded_result_projection() -> None:

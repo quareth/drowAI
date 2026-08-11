@@ -292,6 +292,7 @@ def build_planner_context(
         resolved_tools = iter_non_artifact_tools(fallback_tools)
 
     active_execution = read_active_execution_control(metadata)
+    runtime_continuation_tool = ""
     if active_execution is not None:
         continuation_tool_id = str(
             active_execution.get("continuation_tool_id") or ""
@@ -299,6 +300,7 @@ def build_planner_context(
         session_id = str(active_execution.get("session_id") or "").strip()
         prior_intent = tool_intent if isinstance(tool_intent, Mapping) else {}
         resolved_tools = [continuation_tool_id]
+        runtime_continuation_tool = continuation_tool_id
         tool_intent = {
             "description": str(
                 prior_intent.get("description")
@@ -420,6 +422,7 @@ def build_planner_context(
         "task_id": request.task_id,
         "tool_intent": tool_intent if tool_intent else None,
         "resolved_tools": resolved_tools,
+        "runtime_continuation_tool": runtime_continuation_tool,
         "selected_categories": selected_categories,
         "artifact_tool_exposure": artifact_tool_exposure_metadata,
         "artifact_file_refs": collect_artifact_file_ref_candidates(metadata),

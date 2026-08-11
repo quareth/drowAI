@@ -548,6 +548,12 @@ def test_running_utility_projection_retains_only_active_execution_control() -> N
                 "stdin_available": True,
                 "stdout": sentinel,
                 "exit_code": None,
+                "metadata": {
+                    "runtime_session": {
+                        "tool_call_id": "tc-running-utility",
+                        "tool_batch_id": "tb-running-utility",
+                    }
+                },
             },
             summary=sentinel,
             duration=10.0,
@@ -586,6 +592,8 @@ def test_running_utility_projection_retains_only_active_execution_control() -> N
     assert controls["unavailable_tools"] == ["missing.tool"]
     assert controls["active_execution"] == {
         "originating_tool_id": "shell.utility",
+        "originating_tool_call_id": "tc-running-utility",
+        "originating_tool_batch_id": "tb-running-utility",
         "continuation_tool_id": "shell.write_stdin",
         "process_status": "running",
         "session_id": public_session_id,

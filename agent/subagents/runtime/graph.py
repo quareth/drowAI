@@ -4,7 +4,7 @@ Purpose
 -------
 Wire the generic child graph from a declarative subagent definition while
 reusing the existing shared working-memory, approval, tool execution,
-compact synthesis, and checkpoint infrastructure.
+interactive continuation, and checkpoint infrastructure.
 
 Responsibility boundary
 -----------------------
@@ -27,11 +27,18 @@ from agent.graph.builders.common_edges import (
     wrap_with_context_async,
 )
 from agent.graph.infrastructure.state_models import GraphRuntimeContext
+from agent.graph.nodes.terminal_session_compressor import (
+    compress_terminal_execution_session_output,
+)
 from agent.graph.nodes.tool_synthesizer import synthesize_tool_output
 from agent.graph.state import InteractiveState
 from agent.graph.subgraphs.tool_execution import (
     approval_gate_node,
     dispatch_tool_execution_node,
+)
+from agent.graph.subgraphs.tool_execution_session import (
+    build_tool_execution_session_subgraph,
+    route_after_tool_dispatch,
 )
 from agent.subagents.definition import SubagentDefinition
 from agent.subagents.runtime.complete import complete_subagent_result
@@ -127,6 +134,14 @@ def build_subagent_state_graph(definition: SubagentDefinition) -> StateGraph:
         wrap_with_context_async(dispatch_tool_execution_node),
     )
     graph.add_node(
+        "tool_execution_session",
+        build_tool_execution_session_subgraph(),
+    )
+    graph.add_node(
+        "terminal_session_compressor",
+        wrap_with_context_async(compress_terminal_execution_session_output),
+    )
+    graph.add_node(
         "tool_synthesizer",
         wrap_with_context_async(synthesize_tool_output),
     )
@@ -152,7 +167,16 @@ def build_subagent_state_graph(definition: SubagentDefinition) -> StateGraph:
         },
     )
     graph.add_edge("approval_gate", "dispatch_tool")
-    graph.add_edge("dispatch_tool", "tool_synthesizer")
+    graph.add_conditional_edges(
+        "dispatch_tool",
+        with_interactive_state(route_after_tool_dispatch),
+        {
+            "execution_session": "tool_execution_session",
+            "terminal": "tool_synthesizer",
+        },
+    )
+    graph.add_edge("tool_execution_session", "terminal_session_compressor")
+    graph.add_edge("terminal_session_compressor", "tool_synthesizer")
     graph.add_edge("tool_synthesizer", "observation")
     graph.add_edge("observation", "model")
     graph.add_edge("handoff", END)

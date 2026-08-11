@@ -7,9 +7,12 @@ No capability-specific logic, no streaming, no state mutation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Tuple
 
-from core.prompts.builders.post_tool.evidence import read_compact_evidence
+from core.prompts.builders.post_tool.evidence import (
+    compact_tool_result_for_reasoning,
+    select_compact_evidence_for_reasoning,
+)
 
 if TYPE_CHECKING:
     from ...state import InteractiveState
@@ -129,8 +132,8 @@ def build_failure_context_from_state(state: InteractiveState) -> FailureContext:
     metadata = state.facts.safe_metadata
     synthesized_output = metadata.get("synthesized_output", {}) or {}
     last_tool_result = metadata.get("last_tool_result", {}) or {}
-    evidence = read_compact_evidence(metadata, prefer_runtime=True)
-    compact_result = _primary_compact_from_evidence(evidence, metadata)
+    evidence, _ = select_compact_evidence_for_reasoning(metadata)
+    compact_result = _compact_from_reasoning_evidence(evidence, metadata)
     batch_failure_text = _batch_failure_text(evidence)
     
     # Compact-only mode: prefer compact and synthesized signals.
@@ -175,13 +178,13 @@ def build_failure_context_from_state(state: InteractiveState) -> FailureContext:
     )
 
 
-def _primary_compact_from_evidence(evidence: Any, metadata: dict) -> dict:
-    if evidence is not None and getattr(evidence, "rows", None):
-        first = evidence.rows[0]
-        if isinstance(first, dict):
-            compact = first.get("compact_tool_result")
-            if isinstance(compact, dict):
-                return compact
+def _compact_from_reasoning_evidence(
+    evidence: Any,
+    metadata: Mapping[str, Any],
+) -> dict:
+    compact = compact_tool_result_for_reasoning(evidence)
+    if compact:
+        return dict(compact)
     compact = metadata.get("last_tool_result_compact", {}) or {}
     return compact if isinstance(compact, dict) else {}
 

@@ -1926,6 +1926,58 @@ async def test_compress_tool_output_short_shell_output_skips_llm_and_marks_reaso
 
 
 @pytest.mark.asyncio
+async def test_short_shell_failure_preserves_verbatim_output_for_ptr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Threshold-bypassed output must retain actionable stdout and stderr."""
+    from agent.context.tool_processor import UniversalToolProcessor
+
+    monkeypatch.setattr(UniversalToolProcessor, "_LLM_BYPASS_MAX_CHARS", 1200)
+    monkeypatch.setattr(UniversalToolProcessor, "_LLM_BYPASS_MAX_LINES", 40)
+
+    class _ShouldNotCallLLM:
+        model = "gpt-4o-mini"
+
+        async def chat_with_usage(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+            raise AssertionError("LLM should not be called for short shell command output")
+
+    stdout = (
+        "┏━(Message from Kali developers)\n"
+        "Reading package lists...\n"
+        "E: Unable to locate package bc\n"
+    )
+    stderr = "Command exited with code 100."
+
+    result = await compress_tool_output(
+        tool_name="shell.utility",
+        raw_result=_base_raw_result(
+            status="error",
+            success=False,
+            exit_code=100,
+            stdout=stdout,
+            stderr=stderr,
+        ),
+        artifact_path=None,
+        execution_id="exec-short-failure",
+        llm_client=_ShouldNotCallLLM(),
+    )
+
+    compact = result.compact_output
+    assert compact.compression is not None
+    assert compact.compression.fallback_reason == "llm_threshold_bypass"
+    assert f"stdout:\n{stdout.strip()}" in compact.decision_evidence
+    assert f"stderr:\n{stderr}" in compact.decision_evidence
+
+    from core.prompts.builders.post_tool.last_tool import extract_last_tool_sections
+
+    sections = extract_last_tool_sections(
+        {"last_tool_result_compact": compact.to_dict()},
+        SimpleNamespace(selected_tool="shell.utility", tool_parameters={}),
+    )
+    assert "E: Unable to locate package bc" in sections["decision_evidence"]
+
+
+@pytest.mark.asyncio
 async def test_compress_tool_output_bypasses_llm_for_bounded_non_text_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

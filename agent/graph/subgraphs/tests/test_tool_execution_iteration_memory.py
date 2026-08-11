@@ -195,6 +195,7 @@ def _run_projection(
     tool_name: str = "nmap",
     memory_reduce_tool_result_fn: Any = _identity_bundle,
     append_tool_snapshot: bool = True,
+    compress_tool_output_fn: Any = None,
 ) -> Dict[str, Any]:
     """Drive ``project_result_state`` with pure-Python fakes.
 
@@ -221,7 +222,7 @@ def _run_projection(
     }
 
     interactive = interactive or _StubInteractive()
-    compress_mock = AsyncMock(
+    compress_mock = compress_tool_output_fn or AsyncMock(
         return_value=_StubCompressionResult(
             _StubCompactResult(compact_payload),
             usage_record=compression_usage_record,
@@ -271,6 +272,53 @@ def _run_projection(
             logger=_StubLogger(),
         )
     return projection
+
+
+def test_running_shell_session_projection_does_not_call_compressor() -> None:
+    """Live PTY coordination must keep raw bounded output out of compression."""
+
+    compressor = AsyncMock(side_effect=AssertionError("compressor must not run"))
+    outcome = _StubOutcome(
+        tool_id="shell.utility",
+        parameters={"command": "bc -q"},
+        result={
+            "tool": "shell.utility",
+            "status": "success",
+            "success": True,
+            "process_status": "running",
+            "session_status": "active",
+            "interaction_boundary": "output_available",
+            "session_id": "shs-live-projection",
+            "stdout": "READY\n",
+            "stderr": "",
+            "exit_code": None,
+            "stdin_available": True,
+            "truncated": False,
+            "summary": "Command is still running.",
+        },
+        summary="Command is still running.",
+    )
+    facts = _StubFacts(
+        metadata={"turn_sequence": 7},
+        selected_tool="shell.utility",
+        tool_parameters={"command": "bc -q"},
+    )
+
+    projection = _run_projection(
+        facts=facts,
+        outcome=outcome,
+        tool_name="shell.utility",
+        append_tool_snapshot=False,
+        compress_tool_output_fn=compressor,
+    )
+
+    compressor.assert_not_awaited()
+    compact = projection["compact_result_dict"]
+    assert compact["compression"] is None
+    assert compact["process_status"] == "running"
+    assert compact["session_status"] == "active"
+    assert compact["stdout"] == "READY\n"
+    assert compact["stderr"] == ""
 
 
 def _build_projection(

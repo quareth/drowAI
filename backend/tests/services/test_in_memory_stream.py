@@ -20,6 +20,20 @@ def stream_hub(monkeypatch: pytest.MonkeyPatch) -> InMemoryStreamHub:
 
 
 @pytest.mark.asyncio
+async def test_publish_returns_assigned_packet_without_subscribers(
+    stream_hub: InMemoryStreamHub,
+) -> None:
+    published = await stream_hub.publish(
+        1300,
+        {"type": "status", "content": "live", "metadata": {}},
+    )
+
+    assert published is not None
+    assert published["sequence"] == 1
+    assert published["obj"]["content"] == "live"
+
+
+@pytest.mark.asyncio
 async def test_publish_queue_overflow_records_disconnect_metrics(
     stream_hub: InMemoryStreamHub,
     monkeypatch: pytest.MonkeyPatch,

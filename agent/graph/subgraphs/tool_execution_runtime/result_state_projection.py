@@ -38,6 +38,8 @@ from agent.tool_runtime.output_persistence_policy import OutputPersistenceDecisi
 
 SHELL_SESSION_COMPACT_RESULT_KEYS = (
     "process_status",
+    "session_status",
+    "interaction_boundary",
     "session_id",
     "exit_code",
     "stdin_available",
@@ -108,7 +110,16 @@ def preserve_shell_session_result_fields(
     resolved_tool = str(raw_result.get("tool") or raw_result.get("tool_id") or tool_name)
     if resolved_tool not in SHELL_SESSION_TOOL_IDS:
         return projected
-    if not any(key in raw_result for key in ("process_status", "stdin_available", "session_id")):
+    if not any(
+        key in raw_result
+        for key in (
+            "process_status",
+            "session_status",
+            "interaction_boundary",
+            "stdin_available",
+            "session_id",
+        )
+    ):
         return projected
 
     for key in SHELL_SESSION_COMPACT_RESULT_KEYS:
@@ -125,6 +136,54 @@ def preserve_shell_session_result_fields(
             )
             projected["summary"] = summary
     return projected
+
+
+def is_live_shell_session_result(
+    raw_result: Mapping[str, Any],
+    *,
+    tool_name: str,
+) -> bool:
+    """Return true when a shell tool yielded a process for direct coordination."""
+
+    resolved_tool = str(raw_result.get("tool") or raw_result.get("tool_id") or tool_name)
+    return (
+        resolved_tool in SHELL_SESSION_TOOL_IDS
+        and str(raw_result.get("process_status") or "").strip().lower() == "running"
+    )
+
+
+def project_live_shell_session_result(
+    raw_result: Mapping[str, Any],
+    *,
+    tool_name: str,
+    fallback_summary: str = "",
+) -> Dict[str, Any]:
+    """Build the raw bounded compact shape used only during live coordination."""
+
+    success = bool(raw_result.get("success", True))
+    status = str(raw_result.get("status") or ("success" if success else "error"))
+    summary = str(raw_result.get("summary") or fallback_summary or "").strip()
+    compact = {
+        "schema_version": "2.0",
+        "tool": tool_name,
+        "status": status,
+        "success": success,
+        "exit_code": raw_result.get("exit_code"),
+        "summary": summary,
+        "key_findings": [],
+        "errors": [] if success else ([summary] if summary else []),
+        "report_recommendations": [],
+        "structured_signals": [],
+        "decision_evidence": [],
+        "lossiness_risk": "high",
+        "artifact_refs": [],
+        "compression": None,
+    }
+    return preserve_shell_session_result_fields(
+        compact,
+        raw_result=raw_result,
+        tool_name=tool_name,
+    )
 
 
 def compact_observation_text(
@@ -560,15 +619,38 @@ def _update_active_execution_control(
         return
 
     originating_tool_id = tool_id
+    originating_tool_call_id = ""
+    originating_tool_batch_id = ""
+    runtime_session = tool_result.get("metadata")
+    runtime_session = (
+        runtime_session.get("runtime_session")
+        if isinstance(runtime_session, Mapping)
+        else None
+    )
+    if isinstance(runtime_session, Mapping):
+        originating_tool_call_id = str(
+            runtime_session.get("tool_call_id") or ""
+        ).strip()
+        originating_tool_batch_id = str(
+            runtime_session.get("tool_batch_id") or ""
+        ).strip()
     if tool_id == SHELL_WRITE_STDIN_TOOL_ID and existing is not None:
         originating_tool_id = str(
             existing.get("originating_tool_id") or tool_id
+        ).strip()
+        originating_tool_call_id = str(
+            existing.get("originating_tool_call_id") or originating_tool_call_id
+        ).strip()
+        originating_tool_batch_id = str(
+            existing.get("originating_tool_batch_id") or originating_tool_batch_id
         ).strip()
     set_active_execution_control(
         metadata,
         turn_sequence=turn_sequence,
         active_execution={
             "originating_tool_id": originating_tool_id,
+            "originating_tool_call_id": originating_tool_call_id,
+            "originating_tool_batch_id": originating_tool_batch_id,
             "continuation_tool_id": SHELL_WRITE_STDIN_TOOL_ID,
             "process_status": "running",
             "session_id": session_id,
@@ -661,73 +743,82 @@ async def project_result_state(
     """Project compact result and metadata updates into interactive state."""
     resolved_tool_id = str(outcome.tool_id or tool_name)
     graph_metadata: Dict[str, Any] = outcome.to_graph_metadata()
-    llm_client = None
-    try:
-        llm_client = resolve_llm_client_fn(
-            metadata,
-            runtime_context,
-            config=config,
-            role=ROLE_TOOL_OUTPUT_COMPRESSOR,
+    compression_result = None
+    if is_live_shell_session_result(outcome.result, tool_name=resolved_tool_id):
+        compact_result_dict = project_live_shell_session_result(
+            outcome.result,
+            tool_name=resolved_tool_id,
+            fallback_summary=str(outcome.summary or ""),
         )
-    except Exception as exc:
-        logger.warning(
-            "[TOOL_EXECUTION] Compact compression LLM unavailable; using deterministic fallback: %s",
-            exc,
-        )
+        deterministic_compact_result_dict = None
+    else:
+        llm_client = None
+        try:
+            llm_client = resolve_llm_client_fn(
+                metadata,
+                runtime_context,
+                config=config,
+                role=ROLE_TOOL_OUTPUT_COMPRESSOR,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[TOOL_EXECUTION] Compact compression LLM unavailable; using deterministic fallback: %s",
+                exc,
+            )
 
-    compression_started = time.perf_counter()
-    compression_raw_result = dict(outcome.result)
-    compression_raw_result["parameters"] = dict(outcome.parameters or {})
-    compression_raw_result["tool_call_id"] = tool_call_id
-    if tool_batch_id:
-        compression_raw_result["tool_batch_id"] = tool_batch_id
-    if tool_intent:
-        compression_raw_result["tool_intent"] = tool_intent
-    compression_result = await compress_tool_output_fn(
-        tool_name=resolved_tool_id,
-        raw_result=compression_raw_result,
-        artifact_path=artifact_path,
-        execution_id=str(execution_id) if execution_id is not None else None,
-        llm_client=llm_client,
-    )
-    compact_result = compression_result.compact_output
-    deterministic_compact_result = getattr(
-        compression_result,
-        "deterministic_compact_output",
-        None,
-    )
-    compression_duration_seconds = time.perf_counter() - compression_started
-    compact_size = compact_output_size_bytes_fn(compact_result)
-    record_compression_observability_metrics_fn(
-        source=compact_result.compression.source,
-        fallback_reason=compact_result.compression.fallback_reason,
-        duration_seconds=compression_duration_seconds,
-        compact_size_bytes=compact_size,
-        gauge_fn=safe_gauge_fn,
-        inc_fn=safe_inc_fn,
-    )
-    if compact_result.compression.source == "deterministic":
-        logger.warning(
-            "[TOOL_EXECUTION] Deterministic compact compression fallback triggered "
-            "(tool=%s reason=%s)",
-            resolved_tool_id,
-            compact_result.compression.fallback_reason or "unknown",
+        compression_started = time.perf_counter()
+        compression_raw_result = dict(outcome.result)
+        compression_raw_result["parameters"] = dict(outcome.parameters or {})
+        compression_raw_result["tool_call_id"] = tool_call_id
+        if tool_batch_id:
+            compression_raw_result["tool_batch_id"] = tool_batch_id
+        if tool_intent:
+            compression_raw_result["tool_intent"] = tool_intent
+        compression_result = await compress_tool_output_fn(
+            tool_name=resolved_tool_id,
+            raw_result=compression_raw_result,
+            artifact_path=artifact_path,
+            execution_id=str(execution_id) if execution_id is not None else None,
+            llm_client=llm_client,
         )
+        compact_result = compression_result.compact_output
+        deterministic_compact_result = getattr(
+            compression_result,
+            "deterministic_compact_output",
+            None,
+        )
+        compression_duration_seconds = time.perf_counter() - compression_started
+        compact_size = compact_output_size_bytes_fn(compact_result)
+        record_compression_observability_metrics_fn(
+            source=compact_result.compression.source,
+            fallback_reason=compact_result.compression.fallback_reason,
+            duration_seconds=compression_duration_seconds,
+            compact_size_bytes=compact_size,
+            gauge_fn=safe_gauge_fn,
+            inc_fn=safe_inc_fn,
+        )
+        if compact_result.compression.source == "deterministic":
+            logger.warning(
+                "[TOOL_EXECUTION] Deterministic compact compression fallback triggered "
+                "(tool=%s reason=%s)",
+                resolved_tool_id,
+                compact_result.compression.fallback_reason or "unknown",
+            )
 
-    compact_result_dict = preserve_shell_session_result_fields(
-        compact_result.to_dict(),
-        raw_result=outcome.result,
-        tool_name=resolved_tool_id,
-    )
-    deterministic_compact_result_dict = (
-        preserve_shell_session_result_fields(
-            deterministic_compact_result.to_dict(),
+        compact_result_dict = preserve_shell_session_result_fields(
+            compact_result.to_dict(),
             raw_result=outcome.result,
             tool_name=resolved_tool_id,
         )
-        if deterministic_compact_result is not None
-        else None
-    )
+        deterministic_compact_result_dict = (
+            preserve_shell_session_result_fields(
+                deterministic_compact_result.to_dict(),
+                raw_result=outcome.result,
+                tool_name=resolved_tool_id,
+            )
+            if deterministic_compact_result is not None
+            else None
+        )
     # Phase 9 Task 9.2: ``last_tool_result_compact`` is now authored as a
     # derived view of the per-call entry inside the batch-shaped metadata
     # (see ``batch_runner.write_compact_batch_metadata``). The projection
@@ -834,7 +925,9 @@ async def project_result_state(
         "artifact_refs_for_memory": artifact_refs_for_memory,
         "artifact_projection_metadata": artifact_projection_metadata,
         "resolved_tool_id": resolved_tool_id,
-        "compression_usage_record": compression_result.usage_record,
+        "compression_usage_record": (
+            compression_result.usage_record if compression_result is not None else None
+        ),
         "persistence_decision": persistence_decision,
     }
     if apply_to_state:
@@ -1151,6 +1244,9 @@ def project_trace_history_and_outbound_events(
                 "turn_id": turn_id,
                 "status": execution_status,
                 "process_status": process_status or None,
+                "session_status": compact_result_dict.get("session_status"),
+                "interaction_boundary": compact_result_dict.get("interaction_boundary"),
+                "session_id": compact_result_dict.get("session_id"),
                 "duration": execution_duration,
                 "exit_code": exit_code,
                 "summary": {
@@ -1208,6 +1304,8 @@ def project_trace_history_and_outbound_events(
             "status",
             "success",
             "process_status",
+            "session_status",
+            "interaction_boundary",
             "session_id",
             "exit_code",
             "stdin_available",

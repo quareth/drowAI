@@ -186,7 +186,11 @@ def test_native_tool_call_shared_guidance_includes_minimal_shell_session_rules()
     assert "Use shell.exec to start a command." not in guidance
     assert 'process_status "running"' in guidance
     assert "retain the exact returned session_id" in guidance
-    assert 'shell.write_stdin with chars="" to poll' in guidance
+    assert "shell interaction coordinator owns waiting for autonomous output" in guidance
+    assert "Do not use shell.write_stdin with empty chars to poll" in guidance
+    assert "Use shell.write_stdin only for explicit non-empty input" in guidance
+    assert "Do not repeat a tool call solely because process_status remains" in guidance
+    assert "send already-known required input" in guidance
     assert 'chars="\\u0003" to interrupt' in guidance
     assert 'explicit "\\n" for line-oriented input' in guidance
     assert "Never invent, alter, or reuse a session_id from another result." in guidance

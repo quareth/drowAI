@@ -110,8 +110,7 @@ def test_deep_reasoning_graph_routes_call_tool_through_prepare_node() -> None:
     edges = getattr(graph, "edges", set())
 
     assert "prepare_tool_plan" in nodes
-    assert "approval_gate" in nodes
-    assert "dispatch_tool" in nodes
+    assert "tool_execution_session" in nodes
     assert ("select_categories", "prepare_tool_plan") in edges
     assert (
         _route_after_prepare_tool_plan(
@@ -121,8 +120,9 @@ def test_deep_reasoning_graph_routes_call_tool_through_prepare_node() -> None:
         )
         == "approval_gate"
     )
-    assert ("approval_gate", "dispatch_tool") in edges
-    assert ("dispatch_tool", "tool_synthesizer") in edges
+    assert ("tool_execution_session", "terminal_session_compressor") in edges
+    assert ("terminal_session_compressor", "tool_synthesizer") in edges
+    assert ("tool_synthesizer", "post_tool_reasoning") in edges
     assert ("select_categories", "call_tool") not in edges
 
 

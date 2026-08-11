@@ -172,17 +172,26 @@ class LangGraphExecutor:
             if should_cancel and should_cancel():
                 raise GraphExecutionCancelled(GraphExecutionResult(final_state=None))
             
-            # ⚠️ CRITICAL: With multiple stream_mode, events come as (mode, data) tuples!
-            async for mode, chunk in compiled_graph.astream(
+            # Subgraph streaming keeps nested execution-session lifecycle events
+            # visible. Root ``values`` remain the only authoritative whole-graph
+            # state; nested ``values`` are local implementation snapshots.
+            async for streamed_event in compiled_graph.astream(
                 graph_input,
                 config=config,
                 stream_mode=["custom", "values"],  # custom for writer + values for checkpointing/interrupts
+                subgraphs=True,
             ):
+                if len(streamed_event) == 3:
+                    namespace, mode, chunk = streamed_event
+                else:
+                    namespace = ()
+                    mode, chunk = streamed_event
+                is_root_event = not namespace
                 if should_cancel and should_cancel():
                     logger.info("[EXECUTOR] Cancellation requested for task %s", task_id)
                     cancellation_state = (
                         chunk
-                        if mode == "values" and isinstance(chunk, dict)
+                        if mode == "values" and is_root_event and isinstance(chunk, dict)
                         else last_state
                     )
                     raise GraphExecutionCancelled(
@@ -197,7 +206,7 @@ class LangGraphExecutor:
                 event_count += 1
                 
                 # Handle VALUES mode events: full state dict after each node
-                if mode == "values":
+                if mode == "values" and is_root_event:
                     state_keys = list(chunk.keys()) if isinstance(chunk, dict) else []
                     log_streaming_event(task_id, event_count, "values", f"state_keys={len(state_keys)}")
                     logger.info(f"[EXECUTOR] Values event keys: {state_keys[:10]}")
@@ -230,15 +239,20 @@ class LangGraphExecutor:
                             
                             if processed_event:
                                 # Forward to stream hub for SSE/WebSocket delivery
-                                await self._forward_streaming_event(task_id, processed_event)
+                                await self._forward_streaming_event(
+                                    task_id,
+                                    processed_event,
+                                    state_container=state_container,
+                                )
                                 logger.info(f"[STREAMING] Forwarded custom event: {chunk.get('type')}")
                             else:
                                 logger.debug("[STREAMING] Custom event filtered by adapter")
                         else:
                             logger.debug("[STREAMING] No adapter configured")
 
-                # Unknown mode
-                else:
+                # Nested values are intentionally ignored; unknown root modes
+                # remain observable as configuration drift.
+                elif is_root_event:
                     diag.warning(f"EXECUTOR | Task {task_id} | Unknown stream mode: {mode}")
 
             diag.info(f"EXECUTOR | Task {task_id} | Stream loop completed | total_events={event_count}")
@@ -547,6 +561,8 @@ class LangGraphExecutor:
         self,
         task_id: int,
         event: Dict[str, Any],
+        *,
+        state_container: Optional[ChatStateContainer] = None,
     ) -> None:
         """Forward streaming event to stream hub.
         
@@ -555,10 +571,12 @@ class LangGraphExecutor:
             event: Processed event ready for delivery
         """
         try:
-            await self._stream_hub.publish(
+            published_event = await self._stream_hub.publish(
                 task_id=task_id,
                 event=event,
             )
+            if state_container is not None and published_event is not None:
+                state_container.record_stream_event(published_event)
             safe_inc("langgraph_streaming_events_forwarded")
         except Exception as exc:
             # Don't fail entire stream for forwarding errors

@@ -45,6 +45,9 @@ from agent.tools.builder_intent import split_builder_intent
 from agent.tools.tool_call_specs import build_function_tool_specs_for
 from agent.tools.tool_registry import get_tool
 from core.llm import LLM_TIMEOUT_PLANNER_PARAMETER_RESOLUTION_SEC, wait_for_with_timeout
+from core.prompts.builders.post_tool.evidence import (
+    select_compact_evidence_for_reasoning,
+)
 from core.prompts.builders.subagent_runtime import SubagentRuntimePromptBuilder
 
 
@@ -54,6 +57,7 @@ SUBAGENT_ACTION_METADATA_KEY = "subagent_action"
 SUBAGENT_RESULT_METADATA_KEY = "subagent_result"
 SUBAGENT_EXECUTION_STRATEGY_KEY = "_execution_strategy"
 SUBAGENT_FORCED_FINAL_METADATA_KEY = "subagent_forced_final"
+SUBAGENT_COUNTED_TOOL_BATCH_METADATA_KEY = "subagent_counted_tool_batch_id"
 
 _SUBAGENT_EXECUTION_STRATEGY_SCHEMA: dict[str, Any] = {
     "type": "string",
@@ -593,12 +597,20 @@ def _build_remaining_limits(
 
 
 def _build_previous_tool_context(interactive: InteractiveState) -> dict[str, Any]:
-    """Return latest compact result plus canonical phase memory for the prompt."""
+    """Return the terminal session result plus canonical phase memory."""
 
     metadata = interactive.facts.safe_metadata
-    compact = _bounded_mapping(interactive.facts.last_tool_result_compact) or (
-        _bounded_mapping(metadata.get("last_tool_result_compact"))
+    evidence, _ = select_compact_evidence_for_reasoning(metadata)
+    compact = (
+        dict(evidence.raw)
+        if evidence is not None
+        and evidence.raw.get("execution_session_aggregate") is True
+        else {}
     )
+    if not compact:
+        compact = _bounded_mapping(interactive.facts.last_tool_result_compact) or (
+            _bounded_mapping(metadata.get("last_tool_result_compact"))
+        )
     phase_memory = iteration_memory.render_phase_memory_section(
         dict(metadata),
         turn_sequence=_phase_memory_turn_sequence(metadata),
@@ -613,15 +625,25 @@ def _build_previous_tool_context(interactive: InteractiveState) -> dict[str, Any
 
 
 def _sync_completed_execution_iterations(interactive: InteractiveState) -> None:
-    """Set completed iterations from canonical tool phase records."""
+    """Count each terminal tool batch once, including transient sessions."""
 
-    tool_phase_count = _completed_tool_phase_count(interactive.facts.safe_metadata)
-    if tool_phase_count <= 0:
-        return
-    interactive.facts.iterations = max(
-        max(int(interactive.facts.iterations or 0), 0),
-        tool_phase_count,
-    )
+    metadata = interactive.facts.ensure_metadata()
+    completed = max(int(interactive.facts.iterations or 0), 0)
+    tool_phase_count = _completed_tool_phase_count(metadata)
+    batch_id = str(metadata.get("tool_batch_id") or "").strip()
+    counted_batch_id = str(
+        metadata.get(SUBAGENT_COUNTED_TOOL_BATCH_METADATA_KEY) or ""
+    ).strip()
+
+    if tool_phase_count > completed:
+        completed = tool_phase_count
+    elif batch_id and batch_id != counted_batch_id:
+        completed += 1
+
+    if batch_id:
+        metadata[SUBAGENT_COUNTED_TOOL_BATCH_METADATA_KEY] = batch_id
+    interactive.facts.metadata = metadata
+    interactive.facts.iterations = completed
 
 
 def _completed_tool_phase_count(metadata: Mapping[str, Any]) -> int:
@@ -656,6 +678,7 @@ def _clean_text(value: Any) -> str:
 
 __all__ = [
     "SUBAGENT_ACTION_METADATA_KEY",
+    "SUBAGENT_COUNTED_TOOL_BATCH_METADATA_KEY",
     "SUBAGENT_EXECUTION_STRATEGY_KEY",
     "SUBAGENT_FORCED_FINAL_METADATA_KEY",
     "SUBAGENT_RESULT_METADATA_KEY",

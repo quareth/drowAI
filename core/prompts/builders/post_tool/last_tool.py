@@ -51,7 +51,11 @@ from ._formatting import (
     get_field,
     truncate,
 )
-from .evidence import EvidenceView, read_compact_evidence
+from .evidence import (
+    EvidenceView,
+    preferred_compact_evidence_row,
+    read_compact_evidence,
+)
 
 LAST_TOOL_SECTION_HEADINGS: Mapping[str, str] = {
     "tool_executed": "Tool Executed",
@@ -81,6 +85,22 @@ def _combine_lane_sections(llm_body: str, deterministic_body: str) -> str:
         f"LLM lane:\n{llm_text}\n"
         f"Deterministic lane:\n{deterministic_text}"
     )
+
+
+def _format_terminal_session_output(compact: Mapping[str, Any]) -> str:
+    """Render one completed session's bounded stdout and stderr for PTR."""
+
+    parts: list[str] = []
+    summary = str(compact.get("summary") or "").strip()
+    stdout = str(compact.get("stdout") or "").strip()
+    stderr = str(compact.get("stderr") or "").strip()
+    if summary:
+        parts.append(summary)
+    if stdout:
+        parts.append(f"stdout:\n{stdout}")
+    if stderr:
+        parts.append(f"stderr:\n{stderr}")
+    return "\n\n".join(parts)
 
 
 def _resolve_tool_name(facts: Any, synthesized: Mapping[str, Any]) -> str:
@@ -205,11 +225,14 @@ def extract_last_tool_sections(
     compact_result: Mapping[str, Any] = {}
     deterministic_compact_result: Mapping[str, Any] = {}
     if evidence is not None and evidence.rows:
-        primary = evidence.rows[0].get("compact_tool_result")
+        selected_row = preferred_compact_evidence_row(evidence)
+        primary = selected_row.get("compact_tool_result") if selected_row else None
         if isinstance(primary, Mapping):
             compact_result = as_mapping(primary)
-        deterministic_primary = evidence.rows[0].get(
-            "deterministic_compact_tool_result"
+        deterministic_primary = (
+            selected_row.get("deterministic_compact_tool_result")
+            if selected_row
+            else None
         )
         if isinstance(deterministic_primary, Mapping):
             deterministic_compact_result = as_mapping(deterministic_primary)
@@ -255,10 +278,14 @@ def extract_last_tool_sections(
             lines.append("; ".join(parts))
         batch_tool_results = "\n".join(lines)
 
-    raw_summary = (
-        compact_result.get("summary")
-        or synthesized_view.get("summary")
-        or ""
+    terminal_session_output = (
+        _format_terminal_session_output(compact_result)
+        if evidence is not None
+        and evidence.raw.get("execution_session_aggregate") is True
+        else ""
+    )
+    raw_summary = terminal_session_output or (
+        compact_result.get("summary") or synthesized_view.get("summary") or ""
     )
     tool_output_summary = _combine_lane_sections(
         truncate(str(raw_summary), MAX_SUMMARY_CHARS),

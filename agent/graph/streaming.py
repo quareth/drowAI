@@ -207,13 +207,16 @@ def build_tool_event_sequence(
     if isinstance(process_status, str):
         process_status = process_status.strip().lower() or None
 
-    event_status = status
-    if process_status == "running":
-        event_status = "running"
-    elif process_status == "timed_out":
-        event_status = "timed_out"
-    elif process_status == "terminated":
-        event_status = "terminated"
+    lifecycle_metadata: Dict[str, Any] = {}
+    for lifecycle_key in ("session_status", "interaction_boundary", "session_id"):
+        value = summary.get(lifecycle_key)
+        if not isinstance(value, str):
+            runtime_session = summary.get("metadata", {}).get("runtime_session", {})
+            value = runtime_session.get(lifecycle_key) if isinstance(runtime_session, dict) else None
+        if isinstance(value, str):
+            value = value.strip() or None
+        if value is not None:
+            lifecycle_metadata[lifecycle_key] = value
 
     # Prefer synthesized output so users see formatted, LLM-processed results.
     if synthesized_output and synthesized_output.get("summary"):
@@ -230,6 +233,7 @@ def build_tool_event_sequence(
         "id": turn_identifier,
         "ind": TOOL_PHASE_INDEX,
         "process_status": process_status,
+        **lifecycle_metadata,
     }
 
     start_event = {
@@ -248,7 +252,7 @@ def build_tool_event_sequence(
         "metadata": {
             **base_metadata,
             "streaming": True,
-            "status": event_status,
+            "status": status,
             "step_type": STEP_TOOL_DELTA,
         },
     }
@@ -258,7 +262,7 @@ def build_tool_event_sequence(
         "metadata": {
             **base_metadata,
             "streaming": False,
-            "status": event_status,
+            "status": status,
             "step_type": STEP_TOOL_END,
         },
     }

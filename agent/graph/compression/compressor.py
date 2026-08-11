@@ -67,6 +67,23 @@ def _build_processor_input(raw_result: Mapping[str, Any]) -> str:
     return "\n".join(combined)
 
 
+def _threshold_bypass_raw_evidence(
+    raw_result: Mapping[str, Any],
+    *,
+    processed_reason: str,
+) -> List[str]:
+    """Preserve bounded raw streams when the processor skips LLM compression."""
+
+    if processed_reason != "llm_threshold_bypass":
+        return []
+    evidence: List[str] = []
+    for stream_name in ("stdout", "stderr"):
+        stream_text = str(raw_result.get(stream_name) or "").strip()
+        if stream_text:
+            evidence.append(f"{stream_name}:\n{stream_text}")
+    return evidence
+
+
 def _build_processor_metadata(
     *,
     status: str,
@@ -426,9 +443,11 @@ async def compress_tool_output(
         getattr(processed, "structured_signals", []) if processed else []
     )
     structured_signals = processed_structured_signals
-    processed_decision_evidence = (
-        list(getattr(processed, "decision_evidence", []) if processed else [])
-    )
+    processed_reason = _processed_analysis_reason(processed) if processed is not None else ""
+    processed_decision_evidence = _threshold_bypass_raw_evidence(
+        raw_result,
+        processed_reason=processed_reason,
+    ) + list(getattr(processed, "decision_evidence", []) if processed else [])
     decision_evidence = dedupe_string_list(processed_decision_evidence, limit=5)
     lossiness_risk = str(getattr(processed, "lossiness_risk", "") or "").strip()
     if lossiness_risk not in {"low", "medium", "high"}:
@@ -444,7 +463,6 @@ async def compress_tool_output(
     if not errors and not success and summary:
         errors = [summary]
 
-    processed_reason = _processed_analysis_reason(processed) if processed is not None else ""
     compression_source = "llm" if processor_used_llm else "deterministic"
     if fallback_reason is None:
         if llm_client is None and processor_ran:

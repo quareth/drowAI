@@ -140,19 +140,28 @@ def _build_tool_runbooks_section(
     return f"\nTool Runbooks:\n{tool_runbooks}\n" if tool_runbooks else ""
 
 
-def _bounded_jsonable(value: Any) -> Any:
+def _bounded_jsonable(value: Any, *, preserve_sequence: bool = False) -> Any:
     """Return prompt-safe JSON data with bounded prior-observation size."""
 
     if isinstance(value, Mapping):
         items = list(value.items())[:_MAX_PROMPT_MAPPING_ITEMS]
+        preserve_session_results = value.get("execution_session_aggregate") is True
         return {
-            str(item_key): _bounded_jsonable(item_value)
+            str(item_key): _bounded_jsonable(
+                item_value,
+                preserve_sequence=(
+                    preserve_session_results and str(item_key) == "results"
+                ),
+            )
             for item_key, item_value in items
         }
     if isinstance(value, tuple | list):
+        items = list(value)
+        if not preserve_sequence:
+            items = items[:_MAX_PROMPT_SEQUENCE_ITEMS]
         return [
             _bounded_jsonable(item)
-            for item in list(value)[:_MAX_PROMPT_SEQUENCE_ITEMS]
+            for item in items
         ]
     if isinstance(value, frozenset | set):
         return [

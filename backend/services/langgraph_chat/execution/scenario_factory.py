@@ -38,6 +38,7 @@ class ScenarioGraph:
         graph_input: Any,
         config: Optional[Dict[str, Any]] = None,
         stream_mode: Any = None,
+        subgraphs: bool = False,
     ) -> AsyncIterator[tuple[str, Any]]:
         """Yield scripted stream events in deterministic order.
 
@@ -46,9 +47,12 @@ class ScenarioGraph:
             config: Unused config payload, kept for LangGraph API parity.
             stream_mode: Requested stream mode(s). If provided, only matching
                 scripted events are yielded.
+            subgraphs: Accepted for LangGraph API parity. Scenario graphs have
+                no nested graphs, so their two-item event shape is unchanged.
         """
         _ = graph_input
         _ = config
+        _ = subgraphs
         script = _load_scenario_script(self._scenario_name)
         events = _resolve_script_events(
             scenario_name=self._scenario_name,
