@@ -7,15 +7,13 @@ codes for managed runner startup, health, runtime-info, and cleanup operations.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
-import fcntl
 import json
 import logging
 import os
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator, Sequence
+from typing import Sequence
 
 from drowai_runner.cleanup import RunnerCleanupService
 from drowai_runner.configure import configure_runner_toml
@@ -37,6 +35,10 @@ from drowai_runner.job_store import initialize_runner_job_store
 from drowai_runner.logging import configure_runner_logging
 from drowai_runner.logs_metrics import RunnerLogsMetricsAdapter
 from drowai_runner.operation_service import RunnerOperationService
+from drowai_runner.process_lock import (
+    parent_process_watchdog,
+    runner_process_lock as _runner_process_lock,
+)
 from drowai_runner.runtime_image import verify_runtime_info_payload
 from drowai_runner.terminal_proxy import RunnerTerminalProxy
 from drowai_runner.workspace import RunnerWorkspaceManager
@@ -49,33 +51,6 @@ EXIT_CONFIGURE_FAILED = 5
 EXIT_CLOUD_RUN_FAILED = 6
 EXIT_CLEANUP_FAILED = 7
 logger = logging.getLogger(__name__)
-
-
-@contextmanager
-def _runner_process_lock(runner_root: Path) -> Iterator[None]:
-    """Prevent two runner processes from sharing one local runtime root."""
-    lock_path = runner_root / "control" / "runner-process.lock"
-    lock_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_file = lock_path.open("a+", encoding="utf-8")
-    acquired = False
-    try:
-        try:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            acquired = True
-        except BlockingIOError as exc:
-            raise RunnerCloudClientError(
-                error_code="RUNNER_ALREADY_RUNNING",
-                message=f"Another runner process already owns runner_root `{runner_root}`.",
-            ) from exc
-        lock_file.seek(0)
-        lock_file.truncate()
-        lock_file.write(str(os.getpid()))
-        lock_file.flush()
-        yield
-    finally:
-        if acquired:
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-        lock_file.close()
 
 
 @dataclass(frozen=True, slots=True)
@@ -493,7 +468,7 @@ def runtime_info_command(config: RunnerConfig) -> int:
 def managed_run_command(config: RunnerConfig) -> int:
     """Run managed runner control-plane loop with deterministic error mapping."""
     try:
-        with _runner_process_lock(config.runner_root):
+        with _runner_process_lock(config.runner_root), parent_process_watchdog():
             logger.info("runner.cloud.start %s", _masked_runner_log(config))
             return run_cloud_mode(config)
     except RunnerCloudClientError as exc:

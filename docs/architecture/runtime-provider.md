@@ -214,7 +214,13 @@ Managed runner processes start the control-plane client with `drowai_runner run`
 One runner identity owns one active channel lease. A new channel atomically
 supersedes the prior lease and clears prior terminal state before acceptance;
 an old channel cannot resume its lease or remove the replacement stream route.
-The runner also rejects a second local process that uses the same runner root.
+The runner also rejects a second local process that uses the same runner root
+and publishes its PID, process-start identity, instance id, and launcher type
+under that kernel-held root lock. Standalone and distributed runners remain
+owned by their external supervisor. Runners launched by `scripts/local_dev.py`
+add a parent watchdog, allowing them to exit if the local launcher disappears;
+`local_dev.py down` stops only process identities verified as belonging to that
+local deployment.
 The channel carries `task.start`, `runtime.started`, `tool.command`,
 `artifact.manifest`, `artifact.upload.request`, `artifact.upload.complete`,
 terminal operations, and artifact messages. Terminal message types are:
