@@ -157,6 +157,7 @@ function buildParentTranscriptMessages(
             turn_id: run.parentTurnId,
             turn_sequence: parentMessage.metadata?.turn_sequence,
             sequence: run.firstSequence ?? undefined,
+            sequence_authority: "task_stream",
             ind: 1,
             step_type: "tool_start",
             subtype: AGENT_RUN_LIFECYCLE_SUBTYPE,
