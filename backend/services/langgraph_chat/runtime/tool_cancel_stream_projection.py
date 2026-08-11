@@ -32,8 +32,6 @@ _TOOL_STREAM_EVENT_TYPES = frozenset(
         "tool_batch_end",
     }
 )
-
-
 @dataclass(frozen=True)
 class ToolCancelStreamProjectionResult:
     """Summary of cancellation events projected to the live stream."""
@@ -273,6 +271,10 @@ class ChatToolCancelStreamProjectionService:
         duration = None
         if row.duration_ms is not None:
             duration = max(float(row.duration_ms) / 1000.0, 0.0)
+        lifecycle_metadata = ChatToolCancelStreamProjectionService._terminal_lifecycle_metadata(
+            row=row,
+            tool_name=tool_name,
+        )
         event_metadata: dict[str, Any] = {
             "subtype": "tool_end",
             "tool": tool_name,
@@ -282,14 +284,6 @@ class ChatToolCancelStreamProjectionService:
             "duration": duration if duration is not None else 0,
             "exit_code": row.exit_code,
             "summary": {},
-            "compact_tool_result": {
-                "schema_version": "2.0",
-                "tool": tool_name,
-                "status": "cancelled",
-                "exit_code": row.exit_code,
-                "summary": {},
-                "error": "user_cancelled",
-            },
             "error": "user_cancelled",
             "conversation_id": conversation_id,
             "conversationId": conversation_id,
@@ -305,9 +299,10 @@ class ChatToolCancelStreamProjectionService:
             "ind": TOOL_PHASE_INDEX,
             "failure_category": "user_cancelled",
             "cancellation_source": "chat_stop",
-            "process_state": cancellation.get("process_state") or "orphaned_until_terminal",
+            "process_state": cancellation.get("process_state") or "cancel_requested",
             "runtime_kill_attempted": bool(cancellation.get("runtime_kill_attempted")),
             "runtime_kill_supported": bool(cancellation.get("runtime_kill_supported")),
+            **lifecycle_metadata,
         }
         tool_batch_id = identity.tool_batch_id if identity and identity.tool_batch_id else metadata.get("tool_batch_id")
         if isinstance(tool_batch_id, str) and tool_batch_id.strip():
@@ -338,6 +333,8 @@ class ChatToolCancelStreamProjectionService:
         results: list[dict[str, Any]] = []
         calls: list[dict[str, Any]] = []
         completed = 0
+        failed = 0
+        cancelled = 0
         for identity in tool_calls:
             tool_call_id = identity.tool_call_id
             status = terminal_tool_statuses.get(tool_call_id)
@@ -346,8 +343,20 @@ class ChatToolCancelStreamProjectionService:
             normalized_status = status.lower()
             if normalized_status in {"success", "ok", "completed"}:
                 completed += 1
+            elif normalized_status in {"cancelled", "canceled", "cancel_requested", "stopped", "terminated"}:
+                cancelled += 1
+            else:
+                failed += 1
             row = row_by_call_id.get(tool_call_id)
             tool_name = identity.tool_name or (str(row.tool_name) if row is not None else "unknown")
+            lifecycle_metadata = (
+                ChatToolCancelStreamProjectionService._terminal_lifecycle_metadata(
+                    row=row,
+                    tool_name=tool_name,
+                )
+                if row is not None and normalized_status not in {"success", "ok", "completed"}
+                else {}
+            )
             results.append(
                 {
                     "tool_call_id": tool_call_id,
@@ -360,6 +369,7 @@ class ChatToolCancelStreamProjectionService:
                     "error": None
                     if normalized_status in {"success", "ok", "completed"}
                     else "user_cancelled",
+                    **lifecycle_metadata,
                 }
             )
             calls.append(
@@ -368,8 +378,14 @@ class ChatToolCancelStreamProjectionService:
                     "tool": tool_name,
                     "tool_name": tool_name,
                     "status": status,
+                    **lifecycle_metadata,
                 }
             )
+        aggregate_status = "completed"
+        if cancelled and not completed and not failed:
+            aggregate_status = "cancelled"
+        elif failed or cancelled:
+            aggregate_status = "completed_with_errors"
         conversation_id = (
             batch_identity.conversation_id
             if batch_identity and batch_identity.conversation_id
@@ -380,6 +396,10 @@ class ChatToolCancelStreamProjectionService:
             if batch_identity and batch_identity.turn_sequence is not None
             else first_identity.turn_sequence
         )
+        first_lifecycle_metadata = ChatToolCancelStreamProjectionService._terminal_lifecycle_metadata(
+            row=first_row,
+            tool_name=first_identity.tool_name or str(first_row.tool_name or "unknown"),
+        )
         metadata: dict[str, Any] = {
             "subtype": "tool_batch_end",
             "step_type": "tool_batch_end",
@@ -389,8 +409,8 @@ class ChatToolCancelStreamProjectionService:
             "tool_batch_total": len(tool_calls),
             "tool_calls": calls,
             "calls": calls,
-            "status": "cancelled",
-            "success": False,
+            "status": aggregate_status,
+            "success": aggregate_status == "completed",
             "completed": completed,
             "failed": max(len(tool_calls) - completed, 0),
             "results": results,
@@ -407,6 +427,7 @@ class ChatToolCancelStreamProjectionService:
             "ind": TOOL_PHASE_INDEX,
             "failure_category": "user_cancelled",
             "cancellation_source": "chat_stop",
+            **first_lifecycle_metadata,
         }
         return {
             "type": "tool_batch_end",
@@ -582,6 +603,54 @@ class ChatToolCancelStreamProjectionService:
         if isinstance(value, int):
             return value
         return None
+
+    @staticmethod
+    def _terminal_lifecycle_metadata(
+        *,
+        row: ToolExecution,
+        tool_name: str,
+    ) -> dict[str, Any]:
+        session_id = ChatToolCancelStreamProjectionService._read_string(row.command_id)
+        return {
+            "process_status": "terminated",
+            "session_status": "closed",
+            "interaction_boundary": "terminal",
+            "session_id": session_id,
+            "close_reason": "chat_stop",
+            "lifecycle_event": "shell_session_terminal",
+            "output_persistence": "transient",
+            "command_id": session_id,
+            "execution_id": str(row.id or "").strip() or None,
+            "compact_tool_result": ChatToolCancelStreamProjectionService._terminal_lifecycle_compact_result(
+                row=row,
+                tool_name=tool_name,
+            ),
+        }
+
+    @staticmethod
+    def _terminal_lifecycle_compact_result(
+        *,
+        row: ToolExecution,
+        tool_name: str,
+    ) -> dict[str, Any]:
+        session_id = ChatToolCancelStreamProjectionService._read_string(row.command_id)
+        return {
+            "schema_version": "2.0",
+            "tool": tool_name,
+            "status": "cancelled",
+            "success": False,
+            "exit_code": row.exit_code,
+            "summary": {},
+            "error": "user_cancelled",
+            "failure_category": "user_cancelled",
+            "process_status": "terminated",
+            "session_status": "closed",
+            "interaction_boundary": "terminal",
+            "session_id": session_id,
+            "close_reason": "chat_stop",
+            "lifecycle_event": "shell_session_terminal",
+            "output_persistence": "transient",
+        }
 
     @staticmethod
     def _is_cancelled_row(row: ToolExecution) -> bool:

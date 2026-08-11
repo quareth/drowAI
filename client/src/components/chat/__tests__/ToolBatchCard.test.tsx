@@ -4,6 +4,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ToolBatchCard } from "@/components/chat/ToolBatchCard";
 import type { ChatMessage } from "@/components/chat/types";
+import {
+  normalizeTranscriptItemsToSteps,
+  type ChatTranscriptItem,
+} from "@/hooks/chat-history-bootstrap";
 
 const mocked = vi.hoisted(() => ({
   useToolRawOutputMock: vi.fn(() => ({
@@ -262,6 +266,95 @@ describe("ToolBatchCard", () => {
     expect(screen.getByText(/Cancelled/)).toBeTruthy();
   });
 
+  it("keeps mixed chat-stop batch aggregate equal for live and replayed rows", () => {
+    const liveMessages: ChatMessage[] = [
+      makeMsg({
+        id: "live-start",
+        metadata: {
+          step_type: "tool_batch_start",
+          tool_batch_id: "tb_mixed_stop",
+          tool_calls: [
+            { tool_call_id: "tc_done", tool_id: "shell.exec" },
+            { tool_call_id: "tc_stop", tool_id: "shell.exec" },
+          ],
+        },
+      }),
+      makeMsg({
+        id: "live-done",
+        metadata: {
+          step_type: "tool_end",
+          tool_batch_id: "tb_mixed_stop",
+          tool_call_id: "tc_done",
+          tool_name: "shell.exec",
+          status: "completed",
+        },
+      }),
+      makeMsg({
+        id: "live-stop",
+        metadata: {
+          step_type: "tool_end",
+          tool_batch_id: "tb_mixed_stop",
+          tool_call_id: "tc_stop",
+          tool_name: "shell.exec",
+          status: "cancelled",
+        },
+      }),
+      makeMsg({
+        id: "live-batch-end",
+        metadata: {
+          step_type: "tool_batch_end",
+          tool_batch_id: "tb_mixed_stop",
+          status: "completed_with_errors",
+          results: [
+            { tool_call_id: "tc_done", tool: "shell.exec", status: "completed" },
+            { tool_call_id: "tc_stop", tool: "shell.exec", status: "cancelled" },
+          ],
+        },
+      }),
+    ];
+
+    const replayItems: ChatTranscriptItem[] = [
+      {
+        id: "replay-done",
+        kind: "tool",
+        turn_number: 3,
+        content: "{}",
+        metadata: {
+          tool_batch_id: "tb_mixed_stop",
+          tool_call_id: "tc_done",
+          tool_name: "shell.exec",
+          status: "completed",
+        },
+      },
+      {
+        id: "replay-stop",
+        kind: "tool",
+        turn_number: 3,
+        content: "Tool stopped",
+        metadata: {
+          tool_batch_id: "tb_mixed_stop",
+          tool_call_id: "tc_stop",
+          tool_name: "shell.exec",
+          status: "cancelled",
+        },
+      },
+    ];
+    const replayMessages = normalizeTranscriptItemsToSteps(42, replayItems).map((step, index) =>
+      makeMsg({
+        id: `replay-${index}`,
+        content: typeof step.content === "string" ? step.content : "",
+        metadata: step.metadata as Record<string, unknown>,
+      }),
+    );
+
+    const live = render(<ToolBatchCard messages={liveMessages} groupKey="live-mixed-stop" />);
+    expect(screen.getByText("Completed with errors")).toBeTruthy();
+    live.unmount();
+
+    render(<ToolBatchCard messages={replayMessages} groupKey="replay-mixed-stop" />);
+    expect(screen.getByText("Completed with errors")).toBeTruthy();
+  });
+
   it("renders cancelled tool rows as stopped instead of running", () => {
     const messages: ChatMessage[] = [
       makeMsg({
@@ -339,10 +432,10 @@ describe("ToolBatchCard", () => {
 
     render(<ToolBatchCard messages={messages} groupKey="shell-states" />);
 
-    expect(screen.getByText("Session running")).toBeTruthy();
-    expect(screen.getByText("Completed")).toBeTruthy();
-    expect(screen.getByText("Timed out")).toBeTruthy();
-    expect(screen.getByText("Stopped")).toBeTruthy();
+    expect(screen.getByText("Session active")).toBeTruthy();
+    expect(screen.getAllByText("Completed").length).toBeGreaterThan(0);
+    expect(screen.getByText("Process timed out")).toBeTruthy();
+    expect(screen.getByText("Process terminated")).toBeTruthy();
   });
 
   it("uses process status from batch-end-only shell rows", () => {
@@ -367,7 +460,60 @@ describe("ToolBatchCard", () => {
 
     render(<ToolBatchCard messages={messages} groupKey="shell-batch-only" />);
 
-    expect(screen.getByText("Session running")).toBeTruthy();
+    expect(screen.getByText("Completed")).toBeTruthy();
+    expect(screen.getByText("Session active")).toBeTruthy();
+  });
+
+  it("treats running shell lifecycle delta process state as authoritative", () => {
+    const messages: ChatMessage[] = [
+      makeMsg({
+        id: "shell-start",
+        metadata: {
+          step_type: "tool_start",
+          tool_batch_id: "tb_shell_progress",
+          tool_call_id: "tc_shell_progress",
+          tool_name: "shell.utility",
+        },
+      }),
+      makeMsg({
+        id: "shell-progress",
+        content: "progress line",
+        metadata: {
+          step_type: "tool_delta",
+          tool_batch_id: "tb_shell_progress",
+          tool_call_id: "tc_shell_progress",
+          tool_name: "shell.utility",
+          status: "success",
+          process_status: "running",
+          session_status: "active",
+          interaction_boundary: "output_available",
+          output_persistence: "transient",
+          shell_lifecycle_event: true,
+          compact_tool_result: {
+            schema_version: "2.0",
+            tool: "shell.utility",
+            status: "success",
+            success: true,
+            summary: "progress line",
+            key_findings: [],
+            errors: [],
+            report_recommendations: [],
+            structured_signals: [],
+            decision_evidence: [],
+            lossiness_risk: "high",
+          },
+        },
+      }),
+    ];
+
+    render(<ToolBatchCard messages={messages} groupKey="shell-progress" taskId={42} />);
+
+    expect(screen.getByText("Running")).toBeTruthy();
+    expect(screen.getByText("Session active")).toBeTruthy();
+    expect(screen.getByText("Agent reviewing output")).toBeTruthy();
+    expect(screen.getByTestId("tool-batch-card-shell-progress-row-tc_shell_progress-terminal").textContent).toBe(
+      "progress line",
+    );
   });
 
   it("renders terminal batch rows when no per-tool events were emitted", () => {

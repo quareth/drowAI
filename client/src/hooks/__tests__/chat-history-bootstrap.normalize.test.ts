@@ -101,6 +101,57 @@ describe("normalizeTranscriptItemsToSteps", () => {
     expect(endMeta.status).toBe("error");
   });
 
+  it("replays sanitized transient tool lifecycle metadata after refresh", () => {
+    const compactLifecycle = {
+      schema_version: "2.0",
+      tool: "shell.utility",
+      status: "success",
+      success: true,
+      exit_code: null,
+      summary: "",
+      key_findings: [],
+      errors: [],
+      report_recommendations: [],
+      structured_signals: [],
+      decision_evidence: [],
+      lossiness_risk: "high",
+      artifact_refs: [],
+      compression: null,
+    };
+    const items: ChatTranscriptItem[] = [
+      {
+        id: "call-transient",
+        kind: "tool",
+        turn_number: 11,
+        content: JSON.stringify(compactLifecycle),
+        metadata: {
+          tool_call_id: "call-transient",
+          tool_name: "shell.utility",
+          status: "success",
+          process_status: "running",
+          session_status: "active",
+          interaction_boundary: "output_available",
+          session_id: "shs-refresh-active",
+          output_persistence: "transient",
+          compact_tool_result: compactLifecycle,
+        },
+      },
+    ];
+
+    const steps = normalizeTranscriptItemsToSteps(99, items);
+    const endMeta = steps[1].metadata as Record<string, unknown>;
+
+    expect(endMeta.step_type).toBe("tool_end");
+    expect(endMeta.status).toBe("success");
+    expect(endMeta.process_status).toBe("running");
+    expect(endMeta.session_status).toBe("active");
+    expect(endMeta.interaction_boundary).toBe("output_available");
+    expect(endMeta.session_id).toBe("shs-refresh-active");
+    expect(endMeta.output_persistence).toBe("transient");
+    expect(endMeta.compact_tool_result).toEqual(compactLifecycle);
+    expect(JSON.stringify(endMeta)).not.toContain("Created /workspace/boris.txt.");
+  });
+
   it("preserves tool_batch_id on replayed tool lifecycle steps", () => {
     const items: ChatTranscriptItem[] = [
       {

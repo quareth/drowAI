@@ -18,7 +18,10 @@ import { cn } from "@/lib/utils";
 
 interface ExecutingToolCardProps {
   toolName: string;
-  status?: "executing" | "yielded" | "completed" | "failed" | "cancelled" | "terminated" | "timed_out";
+  status?: "executing" | "completed" | "failed" | "cancelled" | "terminated" | "timed_out";
+  sessionStatus?: "active" | "closed" | "unavailable" | string;
+  processStatus?: "running" | "completed" | "terminated" | "timed_out" | "failed" | string;
+  interactionBoundary?: "output_available" | "quiet_boundary" | "terminal" | string;
   taskId?: number | string;
   toolCallId?: string;
   /** Stable identifier so collapse/expand state persists across remounts. */
@@ -68,6 +71,9 @@ function getUnavailableMessage(reason: ToolRawOutputNotAvailableReason): string 
 export function ExecutingToolCard({
   toolName,
   status = "executing",
+  sessionStatus,
+  processStatus,
+  interactionBoundary,
   taskId,
   toolCallId,
   stateKey,
@@ -86,7 +92,6 @@ export function ExecutingToolCard({
   const hasCompactOutput = compactOutputText.length > 0;
 
   const isExecuting = status === "executing";
-  const isYielded = status === "yielded";
   const isCompleted = status === "completed";
   const isFailed = status === "failed";
   const isCancelled = status === "cancelled";
@@ -95,31 +100,66 @@ export function ExecutingToolCard({
 
   const statusLabel = isExecuting
     ? "Running"
-    : isYielded
-      ? "Session running"
-      : isCompleted
-        ? "Completed"
-        : isTimedOut
-          ? "Timed out"
-          : isCancelled || isTerminated
-            ? "Stopped"
-            : "Failed";
+    : isCompleted
+      ? "Completed"
+      : isTimedOut
+        ? "Timed out"
+        : isCancelled || isTerminated
+          ? "Stopped"
+          : "Failed";
   const statusColor = isExecuting
     ? "text-slate-400"
-    : isYielded
-      ? "text-sky-400"
-      : isCompleted
-        ? "text-emerald-400"
-        : isCancelled || isTerminated
-          ? "text-slate-400"
-          : "text-rose-400";
+    : isCompleted
+      ? "text-emerald-400"
+      : isCancelled || isTerminated
+        ? "text-slate-400"
+        : "text-rose-400";
 
   const rawOutput = useToolRawOutput({
     taskId,
     toolCallId,
     enabled: !isExecuting && isOpen && hasLookupIdentity && !hasCompactOutput,
   });
-  const canExpand = !isExecuting && (hasLookupIdentity || hasCompactOutput);
+  const canExpand = hasCompactOutput || (!isExecuting && hasLookupIdentity);
+  const normalizedSessionStatus =
+    typeof sessionStatus === "string" ? sessionStatus.trim().toLowerCase() : "";
+  const normalizedProcessStatus =
+    typeof processStatus === "string" ? processStatus.trim().toLowerCase() : "";
+  const normalizedBoundary =
+    typeof interactionBoundary === "string" ? interactionBoundary.trim().toLowerCase() : "";
+  const sessionProcessLabel = (() => {
+    if (normalizedSessionStatus === "closed" || normalizedBoundary === "terminal") {
+      return normalizedProcessStatus === "completed" ? "Process completed" : "Session closed";
+    }
+    if (normalizedProcessStatus === "timed_out") {
+      return "Process timed out";
+    }
+    if (normalizedProcessStatus === "terminated") {
+      return "Process terminated";
+    }
+    if (normalizedProcessStatus === "failed") {
+      return "Process failed";
+    }
+    if (normalizedSessionStatus === "unavailable") {
+      return "Session unavailable";
+    }
+    if (normalizedSessionStatus === "active" || normalizedProcessStatus === "running") {
+      return "Session active";
+    }
+    return "";
+  })();
+  const sessionActivityLabel = (() => {
+    if (normalizedSessionStatus !== "active" && normalizedProcessStatus !== "running") {
+      return "";
+    }
+    if (normalizedBoundary === "output_available") {
+      return "Agent reviewing output";
+    }
+    if (normalizedBoundary === "quiet_boundary") {
+      return "Agent deciding next input";
+    }
+    return "Process running";
+  })();
 
   const readyOutputText = hasCompactOutput
     ? compactOutputText
@@ -177,6 +217,16 @@ export function ExecutingToolCard({
             {formatToolName(toolName)}
           </span>
           <span className={`shrink-0 whitespace-nowrap text-[10px] font-medium ${statusColor}`}>{statusLabel}</span>
+          {sessionProcessLabel && (
+            <span className="shrink-0 whitespace-nowrap text-[10px] font-medium text-sky-400">
+              {sessionProcessLabel}
+            </span>
+          )}
+          {sessionActivityLabel && (
+            <span className="shrink-0 whitespace-nowrap text-[10px] font-medium text-slate-400">
+              {sessionActivityLabel}
+            </span>
+          )}
 
           {/* Retry badge */}
           {retryAttempt && retryMaxAttempts && (
@@ -204,17 +254,17 @@ export function ExecutingToolCard({
       </div>
 
       {/* Content - tool output */}
-      {isOpen && (
+      {(isOpen || (isExecuting && hasCompactOutput)) && (
         <div className="min-w-0 max-w-full border-t border-slate-800/70 bg-slate-950/80 px-3 py-2">
           {hasCompactOutput && (
             <ToolCardTerminalOutput
               outputText={compactOutputText}
-              isExpanded={isOpen}
+              isExpanded={isOpen || isExecuting}
               isReady
               testId={testId ? `${testId}-terminal` : undefined}
             />
           )}
-          {!hasCompactOutput && (rawOutput.state.status === "idle" || rawOutput.state.status === "loading") && (
+          {!hasCompactOutput && rawOutput.state.status === "loading" && (
             <div className="flex items-center gap-2 text-xs text-slate-400/90 font-mono">
               <Loader2 className="w-3 h-3 animate-spin" />
               <span>Loading raw output...</span>

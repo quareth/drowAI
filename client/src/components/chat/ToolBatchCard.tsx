@@ -33,7 +33,10 @@ interface BatchRowState {
   toolCallId: string;
   toolName: string;
   commandDisplay?: string;
-  status: "executing" | "yielded" | "completed" | "failed" | "cancelled" | "terminated" | "timed_out";
+  status: "executing" | "completed" | "failed" | "cancelled" | "terminated" | "timed_out";
+  sessionStatus?: string;
+  processStatus?: string;
+  interactionBoundary?: string;
   retryAttempt?: number;
   retryMaxAttempts?: number;
   compactToolResult?: CompactToolResult;
@@ -73,16 +76,8 @@ function readNumber(metadata: Record<string, unknown> | undefined, key: string):
 
 function deriveStatus(
   rawStatus: string | undefined,
-  processStatus?: string,
 ): BatchRowState["status"] {
   const lowered = (rawStatus ?? "").toLowerCase();
-  const process = (processStatus ?? "").toLowerCase();
-  if (process === "running") return "yielded";
-  if (process === "timed_out") return "timed_out";
-  if (process === "terminated") return "terminated";
-  if (process === "completed" && !["success", "ok", "completed"].includes(lowered)) {
-    return "failed";
-  }
   if (lowered === "success" || lowered === "ok" || lowered === "completed") {
     return "completed";
   }
@@ -98,6 +93,19 @@ function deriveStatus(
     return "cancelled";
   }
   return "failed";
+}
+
+function deriveLifecycleStatus(
+  rawStatus: string | undefined,
+  processStatus: string | undefined,
+): BatchRowState["status"] {
+  const normalizedProcess = (processStatus ?? "").toLowerCase();
+  if (normalizedProcess === "running") return "executing";
+  if (normalizedProcess === "completed") return "completed";
+  if (normalizedProcess === "timed_out") return "timed_out";
+  if (normalizedProcess === "terminated") return "terminated";
+  if (normalizedProcess === "failed") return "failed";
+  return deriveStatus(rawStatus);
 }
 
 function buildManifestIndex(messages: ChatMessage[]): Map<string, number> {
@@ -179,15 +187,20 @@ function buildRows(messages: ChatMessage[], manifest: Map<string, number>): Batc
           const rawStatus = typeof item.status === "string" ? item.status : undefined;
           const processStatus =
             typeof item.process_status === "string" ? item.process_status : undefined;
-          const existingProcessStatus = ["yielded", "terminated", "timed_out"].includes(
-            row.status,
-          );
-          const genericBatchStatus = ["success", "ok", "completed", "failed", "error"].includes(
-            (rawStatus ?? "").toLowerCase(),
-          );
-          if (processStatus || !existingProcessStatus || !genericBatchStatus) {
-            row.status = deriveStatus(rawStatus, processStatus);
+          if (processStatus) {
+            row.processStatus = processStatus;
           }
+          const sessionStatus =
+            typeof item.session_status === "string" ? item.session_status : undefined;
+          if (sessionStatus) {
+            row.sessionStatus = sessionStatus;
+          }
+          const interactionBoundary =
+            typeof item.interaction_boundary === "string" ? item.interaction_boundary : undefined;
+          if (interactionBoundary) {
+            row.interactionBoundary = interactionBoundary;
+          }
+          row.status = deriveStatus(rawStatus);
         });
       }
       return;
@@ -226,11 +239,16 @@ function buildRows(messages: ChatMessage[], manifest: Map<string, number>): Batc
       row.retryMaxAttempts = readNumber(metadata, "retry_max_attempts");
     }
 
-    if (stepType === "tool_end") {
-      row.status = deriveStatus(
-        readString(metadata, "status"),
-        readString(metadata, "process_status"),
-      );
+    if (stepType === "tool_delta" || stepType === "tool_end") {
+      const processStatus = readString(metadata, "process_status");
+      row.status =
+        stepType === "tool_delta" || metadata?.shell_lifecycle_event === true
+          ? deriveLifecycleStatus(readString(metadata, "status"), processStatus)
+          : deriveStatus(readString(metadata, "status"));
+      row.processStatus = processStatus ?? row.processStatus;
+      row.sessionStatus = readString(metadata, "session_status") ?? row.sessionStatus;
+      row.interactionBoundary =
+        readString(metadata, "interaction_boundary") ?? row.interactionBoundary;
       if (metadata?.output_persistence === "transient") {
         const compact = metadata.compact_tool_result;
         if (compact && typeof compact === "object") {
@@ -284,7 +302,7 @@ function deriveBatchAggregate(messages: ChatMessage[], rows: BatchRowState[]): B
   if (!allTerminal) return { status: "executing", strategy };
   const anyFailed = rows.some((r) => r.status === "failed" || r.status === "timed_out");
   const anyCancelled = rows.some((r) => r.status === "cancelled" || r.status === "terminated");
-  const anyCompleted = rows.some((r) => r.status === "completed" || r.status === "yielded");
+  const anyCompleted = rows.some((r) => r.status === "completed");
   if (anyCancelled && !anyCompleted && !anyFailed) {
     return { status: "cancelled", strategy };
   }
@@ -324,6 +342,9 @@ export function ToolBatchCard({ messages, groupKey, taskId }: ToolBatchCardProps
       <ExecutingToolCard
         toolName={only.toolName}
         status={only.status}
+        sessionStatus={only.sessionStatus}
+        processStatus={only.processStatus}
+        interactionBoundary={only.interactionBoundary}
         taskId={typeof taskId === "number" || typeof taskId === "string" ? taskId : undefined}
         toolCallId={only.toolCallId}
         stateKey={`${groupKey}-${only.toolCallId}`}
@@ -361,6 +382,9 @@ export function ToolBatchCard({ messages, groupKey, taskId }: ToolBatchCardProps
             key={row.toolCallId}
             toolName={row.toolName}
             status={row.status}
+            sessionStatus={row.sessionStatus}
+            processStatus={row.processStatus}
+            interactionBoundary={row.interactionBoundary}
             taskId={typeof taskId === "number" || typeof taskId === "string" ? taskId : undefined}
             toolCallId={row.toolCallId}
             stateKey={`${groupKey}-${row.toolCallId}`}

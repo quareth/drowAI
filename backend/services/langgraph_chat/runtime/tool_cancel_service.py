@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from backend.core.time_utils import utc_now
 from backend.models.provenance import ToolExecution
 from backend.repositories.tool_execution_repository import ToolExecutionRepository
+from backend.services.chat.turn_event_service import ChatTurnEventService
 from backend.services.runtime_provider.contracts import RuntimeActorType
 from backend.services.runtime_provider.operations import RuntimeOperationService
 
@@ -90,6 +91,10 @@ class ChatToolCancelProjectionService:
             reason=normalized_reason,
         )
         self._apply_runtime_metadata(rows=target_rows, runtime_metadata=runtime_metadata)
+        self._persist_canonical_terminal_events(
+            rows=target_rows,
+            runtime_metadata=runtime_metadata,
+        )
         process_state = str(runtime_metadata.get("process_state") or "orphaned_until_terminal")
         return ToolCancelProjectionResult(
             marked_count=len(rows),
@@ -192,13 +197,13 @@ class ChatToolCancelProjectionService:
             )
         except Exception:
             return {
-                "process_state": "orphaned_until_terminal",
+                "process_state": "cancel_requested",
                 "runtime_kill_attempted": bool(command_ids),
-                "runtime_kill_supported": False,
+                "runtime_kill_supported": bool(command_ids),
             }
 
         metadata = dict(result.metadata or {})
-        metadata.setdefault("process_state", "orphaned_until_terminal")
+        metadata.setdefault("process_state", "cancel_requested")
         metadata.setdefault("runtime_kill_attempted", bool(command_ids))
         metadata.setdefault("runtime_kill_supported", False)
         return metadata
@@ -239,6 +244,81 @@ class ChatToolCancelProjectionService:
             row.execution_metadata = self._merge_json_dicts(
                 metadata,
                 {"cancellation": row_patch},
+            )
+        self._db.flush()
+
+    def _persist_canonical_terminal_events(
+        self,
+        *,
+        rows: Iterable[ToolExecution],
+        runtime_metadata: dict[str, object],
+    ) -> None:
+        row_list = list(rows)
+        if not row_list:
+            return
+        event_service = ChatTurnEventService(self._db)
+        persisted_by_execution_id: set[str] = set()
+        for row in row_list:
+            turn_id = str(row.turn_id or "").strip()
+            if not turn_id:
+                continue
+            cancellation = (
+                row.execution_metadata.get("cancellation")
+                if isinstance(row.execution_metadata, dict)
+                and isinstance(row.execution_metadata.get("cancellation"), dict)
+                else {}
+            )
+            process_state = str(
+                cancellation.get("process_state")
+                or runtime_metadata.get("process_state")
+                or "cancel_requested"
+            )
+            tool_batch_id = (
+                str(row.execution_metadata.get("tool_batch_id") or "").strip()
+                if isinstance(row.execution_metadata, dict)
+                else ""
+            )
+            try:
+                created = event_service.append_terminal_tool_lifecycle_event(
+                    task_id=int(row.task_id),
+                    turn_id=turn_id,
+                    tool_call_id=str(row.tool_call_id or "").strip() or None,
+                    tool_name=str(row.tool_name or "unknown").strip() or "unknown",
+                    content="Tool stopped",
+                    status="cancelled",
+                    process_status="terminated",
+                    session_status="closed",
+                    interaction_boundary="terminal",
+                    session_id=str(row.command_id or "").strip() or None,
+                    close_reason="chat_stop",
+                    metadata={
+                        "failure_category": "user_cancelled",
+                        "cancellation_source": "chat_stop",
+                        "process_state": process_state,
+                        "runtime_kill_attempted": bool(
+                            cancellation.get("runtime_kill_attempted")
+                        ),
+                        "runtime_kill_supported": bool(
+                            cancellation.get("runtime_kill_supported")
+                        ),
+                        "tool_batch_id": tool_batch_id or None,
+                        "command_id": str(row.command_id or "").strip() or None,
+                        "execution_id": str(row.id or "").strip() or None,
+                    },
+                )
+            except Exception:
+                continue
+            if created is not None:
+                persisted_by_execution_id.add(str(row.id))
+        if not persisted_by_execution_id:
+            return
+        for row in row_list:
+            if str(row.id) not in persisted_by_execution_id:
+                continue
+            metadata = row.execution_metadata if isinstance(row.execution_metadata, dict) else {}
+            row.execution_metadata = self._merge_json_dicts(
+                metadata,
+                {"cancellation": {"canonical_turn_event_persisted": True}},
             )
         self._db.flush()
 

@@ -23,10 +23,12 @@ from backend.services.langgraph_chat.execution.completion_callback import (
     run_turn_with_completion_callback,
 )
 from backend.services.langgraph_chat.runtime.state_container import ChatStateContainer
+from backend.services.langgraph_chat.streaming.adapter import LangGraphStreamingAdapter
 from backend.database import Base
 from backend.models.chat import ChatMessage, ChatTurnEvent
 from backend.models.core import Task, User
 from backend.models.hitl import TurnWorkflow
+from backend.models.tenant import Tenant
 
 
 class TestCompletionCallbackNormalCompletion:
@@ -151,6 +153,89 @@ class TestCompletionCallbackCancellation:
 
         assert len(events) == 2
         assert result_holder.get("cancelled") is True
+
+    @pytest.mark.asyncio
+    async def test_explicit_cancel_closes_active_reasoning_section(self, monkeypatch):
+        """Late explicit cancel publishes the missing reasoning_section_end boundary."""
+        cancel_requested = False
+        state_container = ChatStateContainer()
+        adapter = LangGraphStreamingAdapter()
+        published_events = []
+
+        class _CaptureHub:
+            async def publish(self, task_id, event):
+                published_events.append((task_id, event))
+
+        monkeypatch.setattr(
+            "backend.services.streaming.in_memory_hub.get_in_memory_stream_hub",
+            lambda: _CaptureHub(),
+        )
+
+        async def mock_llm(emitter: StreamEmitter):
+            for event in (
+                {
+                    "type": "reasoning_start",
+                    "conversation_id": "conv-cancel-reasoning",
+                    "turn_id": "turn-cancel-reasoning",
+                    "step": "tool_intent",
+                },
+                {
+                    "type": "reasoning_delta",
+                    "content": "Thinking before cancellation.",
+                    "conversation_id": "conv-cancel-reasoning",
+                    "turn_id": "turn-cancel-reasoning",
+                },
+            ):
+                processed = adapter.process_streaming_event(
+                    event,
+                    state_container=state_container,
+                )
+                assert processed is not None
+                await emitter.emit(processed)
+            await asyncio.sleep(10)
+            return "Should not reach here"
+
+        events = []
+        async for event in run_turn_with_completion_callback(
+            turn_id="turn-cancel-reasoning",
+            turn_number=7,
+            task_id=7,
+            conversation_id="conv-cancel-reasoning",
+            llm_func=mock_llm,
+            should_cancel=lambda: cancel_requested,
+            state_container=state_container,
+        ):
+            events.append(event)
+            if event["type"] == "reasoning_delta":
+                cancel_requested = True
+
+        assert [event["type"] for event in events] == [
+            "reasoning_start",
+            "reasoning_delta",
+        ]
+        reasoning_end_publications = [
+            (task_id, event)
+            for task_id, event in published_events
+            if event.get("type") == "reasoning_section_end"
+        ]
+        assert len(reasoning_end_publications) == 1
+        published_task_id, reasoning_end = reasoning_end_publications[0]
+        assert published_task_id == 7
+        metadata = reasoning_end["metadata"]
+        start_metadata = events[0]["metadata"]
+        assert metadata["source"] == "completion_callback"
+        assert metadata["cancellation_source"] == "completion_callback"
+        assert metadata["conversation_id"] == "conv-cancel-reasoning"
+        assert metadata["id"] == "turn-cancel-reasoning"
+        assert metadata["phase_sequence"] == start_metadata["phase_sequence"]
+        assert metadata["reasoning_section_id"] == start_metadata["reasoning_section_id"]
+        assert state_container.get_current_reasoning_identity() is None
+
+        sections = state_container.get_reasoning_sections()
+        assert len(sections) == 1
+        assert sections[0]["content"] == "Thinking before cancellation."
+        assert sections[0]["phase_sequence"] == start_metadata["phase_sequence"]
+        assert sections[0]["reasoning_section_id"] == start_metadata["reasoning_section_id"]
 
     @pytest.mark.asyncio
     async def test_explicit_cancel_persists_stopped_assistant_message(self):
@@ -658,16 +743,26 @@ class TestChatMessageUpdate:
 
         seed_db = session_factory()
         try:
+            tenant = Tenant(slug="completion-callback", name="Completion Callback")
+            seed_db.add(tenant)
+            seed_db.flush()
+
             user = User(username="completion-callback-user", password="secret")
             seed_db.add(user)
             seed_db.flush()
 
-            task = Task(user_id=user.id, name="completion-callback-task")
+            tenant_id = int(tenant.id)
+            task = Task(
+                user_id=user.id,
+                tenant_id=tenant_id,
+                name="completion-callback-task",
+            )
             seed_db.add(task)
             seed_db.flush()
 
             message = ChatMessage(
                 task_id=task.id,
+                tenant_id=tenant_id,
                 conversation_id="conv-1",
                 parent_message_id=None,
                 latest_child_message_id=None,
@@ -768,16 +863,26 @@ class TestChatMessageUpdate:
 
         seed_db = session_factory()
         try:
+            tenant = Tenant(slug="completion-retry", name="Completion Retry")
+            seed_db.add(tenant)
+            seed_db.flush()
+
             user = User(username="completion-retry-user", password="secret")
             seed_db.add(user)
             seed_db.flush()
 
-            task = Task(user_id=user.id, name="completion-retry-task")
+            tenant_id = int(tenant.id)
+            task = Task(
+                user_id=user.id,
+                tenant_id=tenant_id,
+                name="completion-retry-task",
+            )
             seed_db.add(task)
             seed_db.flush()
 
             message = ChatMessage(
                 task_id=task.id,
+                tenant_id=tenant_id,
                 conversation_id="conv-retry",
                 parent_message_id=None,
                 latest_child_message_id=None,
@@ -795,6 +900,7 @@ class TestChatMessageUpdate:
             seed_db.add(
                 ChatTurnEvent(
                     task_id=task_id,
+                    tenant_id=tenant_id,
                     conversation_id="conv-retry",
                     chat_message_id=message_id,
                     turn_number=1,
@@ -809,6 +915,7 @@ class TestChatMessageUpdate:
             seed_db.add(
                 ChatTurnEvent(
                     task_id=task_id,
+                    tenant_id=tenant_id,
                     conversation_id="conv-retry",
                     chat_message_id=message_id,
                     turn_number=1,
@@ -822,6 +929,7 @@ class TestChatMessageUpdate:
             # The retry just succeeded — workflow row reflects retry_attempt_count >= 1.
             workflow = TurnWorkflow(
                 task_id=task_id,
+                tenant_id=tenant_id,
                 conversation_id="conv-retry",
                 turn_id=f"task-{task_id}-turn-1",
                 turn_sequence=1,
@@ -905,16 +1013,26 @@ class TestChatMessageUpdate:
 
         seed_db = session_factory()
         try:
+            tenant = Tenant(slug="completion-non-retry", name="Completion Non Retry")
+            seed_db.add(tenant)
+            seed_db.flush()
+
             user = User(username="completion-non-retry-user", password="secret")
             seed_db.add(user)
             seed_db.flush()
 
-            task = Task(user_id=user.id, name="completion-non-retry-task")
+            tenant_id = int(tenant.id)
+            task = Task(
+                user_id=user.id,
+                tenant_id=tenant_id,
+                name="completion-non-retry-task",
+            )
             seed_db.add(task)
             seed_db.flush()
 
             message = ChatMessage(
                 task_id=task.id,
+                tenant_id=tenant_id,
                 conversation_id="conv-non-retry",
                 parent_message_id=None,
                 latest_child_message_id=None,
@@ -932,6 +1050,7 @@ class TestChatMessageUpdate:
             seed_db.add(
                 ChatTurnEvent(
                     task_id=task_id,
+                    tenant_id=tenant_id,
                     conversation_id="conv-non-retry",
                     chat_message_id=message_id,
                     turn_number=1,
@@ -946,6 +1065,7 @@ class TestChatMessageUpdate:
             # Workflow has no retry attempt yet (count == 0).
             workflow = TurnWorkflow(
                 task_id=task_id,
+                tenant_id=tenant_id,
                 conversation_id="conv-non-retry",
                 turn_id=f"task-{task_id}-turn-1",
                 turn_sequence=1,

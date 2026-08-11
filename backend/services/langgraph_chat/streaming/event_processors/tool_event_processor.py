@@ -23,6 +23,7 @@ from typing import Any, Callable, Optional, TYPE_CHECKING
 
 from agent.graph.compression.schema import CompactToolOutput
 from agent.graph.contracts.streaming_constants import (
+    STEP_TOOL_DELTA,
     STEP_TOOL_END,
     STEP_TOOL_START,
     TOOL_PHASE_INDEX,
@@ -30,7 +31,11 @@ from agent.graph.contracts.streaming_constants import (
 from agent.tools.utils import resolve_command_text_for_execution
 from backend.services.metrics.utils import safe_inc
 from runtime_shared.durable_secret_masking import mask_durable_secrets
-from runtime_shared.shell_capabilities import SHELL_SESSION_START_TOOL_IDS
+from runtime_shared.shell_capabilities import (
+    SHELL_SESSION_START_TOOL_IDS,
+    SHELL_SESSION_TOOL_IDS,
+    SHELL_WRITE_STDIN_TOOL_ID,
+)
 
 from backend.services.langgraph_chat.streaming.event_processors.snapshot_service import (
     ToolCallSnapshotService,
@@ -85,6 +90,10 @@ class ToolEventProcessor:
         ind = event.get("ind")
         tool_batch_id = event.get("tool_batch_id")
         normalized_tool = str(tool or "unknown").strip()
+        stream_parameters = self._redact_persisted_shell_stdin_arguments(
+            tool=normalized_tool,
+            parameters=dict(parameters) if isinstance(parameters, dict) else {},
+        )
         command_display = (
             resolve_command_text_for_execution(normalized_tool, parameters)
             if normalized_tool in SHELL_SESSION_START_TOOL_IDS
@@ -136,7 +145,7 @@ class ToolEventProcessor:
             "metadata": {
                 "subtype": "tool_start",
                 "tool": tool,
-                "parameters": parameters,
+                "parameters": stream_parameters,
                 "tool_call_id": tool_call_id,
                 "tool_batch_id": tool_batch_id,
                 "conversation_id": conversation_id,
@@ -171,10 +180,99 @@ class ToolEventProcessor:
             "metadata": metadata,
         }
 
-    def process_tool_delta(self, event: dict[str, Any]) -> Optional[dict[str, Any]]:
-        """Process tool delta event (raw output chunk)."""
-        _ = event
-        return None
+    def process_tool_delta(
+        self,
+        event: dict[str, Any],
+        state_container: Optional["ChatStateContainer"] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Process shell lifecycle progress while suppressing ordinary raw chunks."""
+        tool = str(event.get("tool") or "unknown").strip()
+        if not self._is_shell_lifecycle_delta(event, tool=tool):
+            return None
+
+        tool_call_id = event.get("tool_call_id")
+        conversation_id = event.get("conversation_id", "")
+        turn_id = event.get("turn_id", "")
+        compact_tool_result = event.get("compact_tool_result")
+        output_persistence = event.get("output_persistence") or "transient"
+        process_status = event.get("process_status")
+        if process_status is None and isinstance(compact_tool_result, Mapping):
+            process_status = compact_tool_result.get("process_status")
+        session_status = event.get("session_status")
+        if session_status is None and isinstance(compact_tool_result, Mapping):
+            session_status = compact_tool_result.get("session_status")
+        interaction_boundary = event.get("interaction_boundary")
+        if interaction_boundary is None and isinstance(compact_tool_result, Mapping):
+            interaction_boundary = compact_tool_result.get("interaction_boundary")
+        session_id = event.get("session_id")
+        if session_id is None and isinstance(compact_tool_result, Mapping):
+            session_id = compact_tool_result.get("session_id")
+        status = event.get("status", "success")
+        content = str(event.get("content") or "")
+        summary = event.get("summary", {})
+        normalized_compact_tool_result = self._normalize_compact_tool_result(
+            tool=tool,
+            status=str(status),
+            exit_code=event.get("exit_code"),
+            summary=summary if isinstance(summary, Mapping) else {"summary": content},
+            error=event.get("error"),
+            compact_tool_result=compact_tool_result,
+        )
+
+        if state_container is not None and tool_call_id:
+            tool_call_info: dict[str, Any] = {
+                "tool_call_id": tool_call_id,
+                "tool_batch_id": event.get("tool_batch_id"),
+                "tool_id": None,
+                "tool_name": tool,
+                "tool_arguments": {},
+                "tool_result": self._transient_lifecycle_result(
+                    normalized_compact_tool_result
+                ),
+                "status": status,
+                "process_status": process_status,
+                "session_status": session_status,
+                "interaction_boundary": interaction_boundary,
+                "session_id": session_id,
+                "output_persistence": output_persistence,
+                "compact_tool_result": self._transient_lifecycle_result(
+                    normalized_compact_tool_result
+                ),
+                "replace_existing_lifecycle": True,
+            }
+            sub_turn_index = self._coerce_non_negative_int(event.get("sub_turn_index"))
+            if sub_turn_index is not None:
+                tool_call_info["turn_index"] = sub_turn_index
+            state_container.add_tool_call(tool_call_info)
+
+        processed = {
+            "type": "tool_delta",
+            "content": content,
+            "metadata": {
+                "subtype": "tool_delta",
+                "tool": tool,
+                "tool_call_id": tool_call_id,
+                "tool_batch_id": event.get("tool_batch_id"),
+                "status": status,
+                "process_status": process_status,
+                "session_status": session_status,
+                "interaction_boundary": interaction_boundary,
+                "session_id": session_id,
+                "compact_tool_result": normalized_compact_tool_result,
+                "output_persistence": output_persistence,
+                "shell_lifecycle_event": True,
+                "conversation_id": conversation_id,
+                "conversationId": conversation_id,
+                "id": turn_id,
+                "streaming": True,
+                "source": "langgraph_stream",
+                "timestamp": time.time(),
+            },
+        }
+        processed["metadata"]["step_type"] = STEP_TOOL_DELTA
+        processed["metadata"]["ind"] = event.get("ind", TOOL_PHASE_INDEX)
+        self._metric_inc("langgraph_shell_lifecycle_deltas_processed")
+        return processed
 
     def process_tool_end(
         self,
@@ -195,6 +293,15 @@ class ToolEventProcessor:
         process_status = event.get("process_status")
         if process_status is None and isinstance(compact_tool_result, Mapping):
             process_status = compact_tool_result.get("process_status")
+        session_status = event.get("session_status")
+        if session_status is None and isinstance(compact_tool_result, Mapping):
+            session_status = compact_tool_result.get("session_status")
+        interaction_boundary = event.get("interaction_boundary")
+        if interaction_boundary is None and isinstance(compact_tool_result, Mapping):
+            interaction_boundary = compact_tool_result.get("interaction_boundary")
+        session_id = event.get("session_id")
+        if session_id is None and isinstance(compact_tool_result, Mapping):
+            session_id = compact_tool_result.get("session_id")
         error = event.get("error")
         ind = event.get("ind")
         tool_batch_id = event.get("tool_batch_id")
@@ -253,13 +360,17 @@ class ToolEventProcessor:
                 status,
             )
 
-        if state_container is not None and output_persistence != "transient":
+        if state_container is not None:
             if not parameters and tool_call_id:
                 cached_params = state_container.get_tool_call_parameters(tool_call_id)
                 if cached_params:
                     parameters = cached_params
+            durable_parameters = self._redact_persisted_shell_stdin_arguments(
+                tool=str(tool),
+                parameters=dict(parameters) if isinstance(parameters, dict) else {},
+            )
             durable_parameters = mask_durable_secrets(
-                parameters if isinstance(parameters, dict) else {},
+                durable_parameters,
                 source="tool_call_arguments",
             )
             tool_call_info: dict[str, Any] = {
@@ -268,8 +379,27 @@ class ToolEventProcessor:
                 "tool_id": None,
                 "tool_name": str(tool),
                 "tool_arguments": durable_parameters,
-                "tool_result": normalized_compact_tool_result,
+                "tool_result": (
+                    self._transient_lifecycle_result(normalized_compact_tool_result)
+                    if output_persistence == "transient"
+                    else normalized_compact_tool_result
+                ),
+                "status": status,
+                "process_status": process_status,
+                "session_status": session_status,
+                "interaction_boundary": interaction_boundary,
+                "session_id": session_id,
+                "output_persistence": output_persistence,
             }
+            if self._is_shell_lifecycle_tool_end(
+                tool=str(tool),
+                process_status=process_status,
+                session_status=session_status,
+                interaction_boundary=interaction_boundary,
+            ):
+                tool_call_info["replace_existing_lifecycle"] = True
+            if output_persistence == "transient":
+                tool_call_info["compact_tool_result"] = tool_call_info["tool_result"]
             normalized_sub_turn_index = self._coerce_non_negative_int(sub_turn_index)
             if normalized_sub_turn_index is not None:
                 tool_call_info["turn_index"] = normalized_sub_turn_index
@@ -291,6 +421,9 @@ class ToolEventProcessor:
                 "tool_batch_id": tool_batch_id,
                 "status": status,
                 "process_status": process_status,
+                "session_status": session_status,
+                "interaction_boundary": interaction_boundary,
+                "session_id": session_id,
                 "duration": duration,
                 "exit_code": exit_code,
                 "summary": summary,
@@ -310,6 +443,45 @@ class ToolEventProcessor:
 
         self._metric_inc("langgraph_tool_ends_processed")
         return processed
+
+    @staticmethod
+    def _is_shell_lifecycle_delta(event: Mapping[str, Any], *, tool: str) -> bool:
+        """Return whether a delta is an interactive shell lifecycle projection."""
+        if tool not in SHELL_SESSION_TOOL_IDS:
+            return False
+        if bool(event.get("shell_lifecycle_event")):
+            return True
+        for key in ("process_status", "session_status", "interaction_boundary", "session_id"):
+            if event.get(key) is not None:
+                return True
+        compact = event.get("compact_tool_result")
+        if isinstance(compact, Mapping):
+            return any(
+                compact.get(key) is not None
+                for key in (
+                    "process_status",
+                    "session_status",
+                    "interaction_boundary",
+                    "session_id",
+                )
+            )
+        return False
+
+    @staticmethod
+    def _is_shell_lifecycle_tool_end(
+        *,
+        tool: str,
+        process_status: Any,
+        session_status: Any,
+        interaction_boundary: Any,
+    ) -> bool:
+        """Return whether a tool_end should replace earlier shell lifecycle state."""
+        if str(tool or "").strip() not in SHELL_SESSION_TOOL_IDS:
+            return False
+        return any(
+            value is not None
+            for value in (process_status, session_status, interaction_boundary)
+        )
 
     def process_tool_batch_end(self, event: dict[str, Any]) -> dict[str, Any]:
         """Process a tool batch lifecycle end event."""
@@ -417,7 +589,61 @@ class ToolEventProcessor:
         if error and not merged_payload.get("errors"):
             merged_payload["errors"] = [str(error)]
 
-        return CompactToolOutput.from_dict(merged_payload).to_dict()
+        normalized = CompactToolOutput.from_dict(merged_payload).to_dict()
+        for lifecycle_key in (
+            "process_status",
+            "session_status",
+            "interaction_boundary",
+            "session_id",
+        ):
+            value = source_payload.get(lifecycle_key)
+            if value is not None:
+                normalized[lifecycle_key] = value
+        return normalized
+
+    @staticmethod
+    def _transient_lifecycle_result(
+        compact_tool_result: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Keep terminal status for transcript replay without retaining output."""
+        return {
+            "schema_version": compact_tool_result.get("schema_version", "2.0"),
+            "tool": compact_tool_result.get("tool", "unknown"),
+            "status": compact_tool_result.get("status", "unknown"),
+            "success": bool(compact_tool_result.get("success")),
+            "exit_code": compact_tool_result.get("exit_code"),
+            "process_status": compact_tool_result.get("process_status"),
+            "session_status": compact_tool_result.get("session_status"),
+            "interaction_boundary": compact_tool_result.get("interaction_boundary"),
+            "session_id": compact_tool_result.get("session_id"),
+            "summary": "",
+            "key_findings": [],
+            "errors": [],
+            "report_recommendations": [],
+            "structured_signals": [],
+            "decision_evidence": [],
+            "lossiness_risk": "high",
+            "artifact_refs": [],
+            "compression": None,
+        }
+
+    @staticmethod
+    def _redact_persisted_shell_stdin_arguments(
+        *,
+        tool: str,
+        parameters: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Remove raw interactive input before canonical history persistence."""
+        normalized_tool = str(tool or "").strip()
+        if normalized_tool != SHELL_WRITE_STDIN_TOOL_ID:
+            return parameters
+        redacted = dict(parameters)
+        chars = redacted.pop("chars", None)
+        redacted.pop("input", None)
+        redacted["chars_redacted"] = True
+        if isinstance(chars, str):
+            redacted["chars_length"] = len(chars)
+        return redacted
 
     @staticmethod
     def _coerce_non_negative_int(value: Any) -> Optional[int]:

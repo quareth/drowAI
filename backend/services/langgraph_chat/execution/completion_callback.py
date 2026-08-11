@@ -383,6 +383,68 @@ def _attach_event_attribution(
     ]
 
 
+async def _publish_and_close_active_reasoning_on_cancel(
+    *,
+    task_id: int,
+    turn_id: str,
+    turn_number: int,
+    conversation_id: str,
+    state_container: Optional["ChatStateContainer"],
+) -> None:
+    """Close the active reasoning section after the cancelled producer stops."""
+
+    if state_container is None:
+        return
+    identity = state_container.get_current_reasoning_identity()
+    if not isinstance(identity, Mapping):
+        return
+    sub_turn_index = (
+        identity.get("sub_turn_index")
+        if isinstance(identity.get("sub_turn_index"), int)
+        else None
+    )
+    metadata: dict[str, Any] = {
+        "subtype": "reasoning_section_end",
+        "step_type": "reasoning_section_end",
+        "conversation_id": conversation_id,
+        "conversationId": conversation_id,
+        "id": turn_id,
+        "turn_id": turn_id,
+        "turn_sequence": turn_number,
+        "phase_sequence": identity.get("phase_sequence"),
+        "reasoning_section_id": identity.get("reasoning_section_id"),
+        "section_name": identity.get("section_name"),
+        "sub_turn_index": sub_turn_index,
+        "streaming": False,
+        "is_streaming": False,
+        "source": "completion_callback",
+        "cancellation_source": "completion_callback",
+    }
+    try:
+        from backend.services.streaming.in_memory_hub import get_in_memory_stream_hub
+
+        await get_in_memory_stream_hub().publish(
+            task_id,
+            {
+                "type": "reasoning_section_end",
+                "content": "",
+                "metadata": {
+                    key: value
+                    for key, value in metadata.items()
+                    if value is not None
+                },
+            },
+        )
+    except Exception:
+        logger.exception(
+            "Failed to publish cancelled reasoning_section_end task_id=%s turn_id=%s",
+            task_id,
+            turn_id,
+        )
+    finally:
+        state_container.end_reasoning(sub_turn_index=sub_turn_index)
+
+
 async def run_turn_with_completion_callback(
     turn_id: str,
     turn_number: int,
@@ -560,6 +622,15 @@ async def run_turn_with_completion_callback(
                     task_id,
                     turn_id,
                 )
+
+        if completion_reason == "explicit_cancel":
+            await _publish_and_close_active_reasoning_on_cancel(
+                task_id=task_id,
+                turn_id=turn_id,
+                turn_number=turn_number,
+                conversation_id=conversation_id,
+                state_container=state_container,
+            )
 
     finally:
         logger.info(

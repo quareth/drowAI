@@ -7,11 +7,12 @@ from types import SimpleNamespace
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from backend.database import Base
+from backend.models.chat import ChatMessage, ChatTurnEvent
 from backend.models.core import Task, User
 from backend.models.hitl import InterruptTicket, InterruptTicketState
 from backend.models.provenance import ToolExecution
@@ -128,18 +129,42 @@ def _install_recording_hub(monkeypatch) -> tuple[list[tuple[int, dict]], list[tu
     return published, streaming_states
 
 
+def _derive_batch_status(statuses: list[str]) -> str:
+    completed = any(status in {"success", "ok", "completed"} for status in statuses)
+    failed = any(status not in {"success", "ok", "completed", "cancelled", "canceled"} for status in statuses)
+    cancelled = any(status in {"cancelled", "canceled"} for status in statuses)
+    if cancelled and not completed and not failed:
+        return "cancelled"
+    if failed or cancelled:
+        return "completed_with_errors"
+    return "completed"
+
+
 def test_cancel_endpoint_requests_lifecycle_cancel() -> None:
     client, seeded, engine, session_factory = _build_client()
     lifecycle = get_run_lifecycle_service()
     task_id = seeded["task_id"]
     turn_id = f"task-{task_id}-turn-1"
     with session_factory() as lifecycle_db:
+        assistant_message = ChatMessage(
+            task_id=task_id,
+            tenant_id=seeded["tenant_id"],
+            conversation_id=f"conv-{task_id}",
+            message_type="assistant",
+            message="",
+            token_count=0,
+            turn_number=1,
+        )
+        lifecycle_db.add(assistant_message)
+        lifecycle_db.flush()
+        assistant_message_id = assistant_message.id
         TurnWorkflowService(lifecycle_db).start_turn(
             task_id=task_id,
             conversation_id=f"conv-{task_id}",
             turn_id=turn_id,
             turn_sequence=1,
             graph_name="simple_tool",
+            reserved_message_id=assistant_message_id,
         )
         lifecycle.start_run(
             task_id=task_id,
@@ -204,6 +229,21 @@ def test_cancel_endpoint_requests_lifecycle_cancel() -> None:
             assert tool_row.execution_metadata["cancellation"]["cancel_requested"] is True
             assert tool_row.execution_metadata["cancellation"]["process_state"] == "cancel_requested"
             assert tool_row.execution_metadata["cancellation"]["runtime_kill_attempted"] is True
+            assert tool_row.execution_metadata["cancellation"]["canonical_turn_event_persisted"] is True
+            event_row = verify_db.execute(
+                select(ChatTurnEvent).where(
+                    ChatTurnEvent.chat_message_id == assistant_message_id,
+                    ChatTurnEvent.tool_call_id == "tool-call-stop-1",
+                )
+            ).scalar_one()
+            assert event_row.content == "Tool stopped"
+            assert event_row.event_metadata["lifecycle_event"] == "shell_session_terminal"
+            assert event_row.event_metadata["status"] == "cancelled"
+            assert event_row.event_metadata["session_status"] == "closed"
+            assert event_row.event_metadata["process_status"] == "terminated"
+            assert event_row.event_metadata["interaction_boundary"] == "terminal"
+            assert event_row.event_metadata["process_state"] == "cancel_requested"
+            assert event_row.event_metadata["command_id"] == "cmd-stop-1"
 
         second = client.post(
             f"/tasks/{task_id}/chat/cancel",
@@ -368,6 +408,21 @@ def test_cancel_endpoint_publishes_live_tool_stop_projection(monkeypatch) -> Non
         assert tool_end_metadata["streaming"] is False
         assert tool_end_metadata["cancellation_source"] == "chat_stop"
         assert tool_end_metadata["process_state"] == "cancel_requested"
+        assert tool_end_metadata["process_status"] == "terminated"
+        assert tool_end_metadata["session_status"] == "closed"
+        assert tool_end_metadata["interaction_boundary"] == "terminal"
+        assert tool_end_metadata["session_id"] == "cmd-stop-stream-1"
+        assert tool_end_metadata["command_id"] == "cmd-stop-stream-1"
+        assert tool_end_metadata["close_reason"] == "chat_stop"
+        assert tool_end_metadata["lifecycle_event"] == "shell_session_terminal"
+        assert tool_end_metadata["output_persistence"] == "transient"
+        assert tool_end_metadata["compact_tool_result"]["process_status"] == "terminated"
+        assert tool_end_metadata["compact_tool_result"]["session_status"] == "closed"
+        assert tool_end_metadata["compact_tool_result"]["interaction_boundary"] == "terminal"
+        assert tool_end_metadata["compact_tool_result"]["session_id"] == "cmd-stop-stream-1"
+        assert tool_end_metadata["compact_tool_result"]["close_reason"] == "chat_stop"
+        assert tool_end_metadata["compact_tool_result"]["lifecycle_event"] == "shell_session_terminal"
+        assert tool_end_metadata["compact_tool_result"]["output_persistence"] == "transient"
 
         batch_end_events = [event for _, event in published if event.get("type") == "tool_batch_end"]
         assert len(batch_end_events) == 1
@@ -375,8 +430,231 @@ def test_cancel_endpoint_publishes_live_tool_stop_projection(monkeypatch) -> Non
         assert batch_end_metadata["tool_batch_id"] == "batch-stop-stream-1"
         assert batch_end_metadata["status"] == "cancelled"
         assert batch_end_metadata["streaming"] is False
+        assert batch_end_metadata["process_status"] == "terminated"
+        assert batch_end_metadata["session_status"] == "closed"
+        assert batch_end_metadata["interaction_boundary"] == "terminal"
+        assert batch_end_metadata["session_id"] == "cmd-stop-stream-1"
+        assert batch_end_metadata["close_reason"] == "chat_stop"
+        assert batch_end_metadata["lifecycle_event"] == "shell_session_terminal"
+        assert batch_end_metadata["output_persistence"] == "transient"
         assert batch_end_metadata["results"][0]["tool_call_id"] == "tool-call-stop-stream-1"
         assert batch_end_metadata["results"][0]["status"] == "cancelled"
+        assert batch_end_metadata["results"][0]["process_status"] == "terminated"
+        assert batch_end_metadata["results"][0]["session_status"] == "closed"
+        assert batch_end_metadata["results"][0]["interaction_boundary"] == "terminal"
+        assert batch_end_metadata["results"][0]["session_id"] == "cmd-stop-stream-1"
+        assert batch_end_metadata["results"][0]["close_reason"] == "chat_stop"
+        assert batch_end_metadata["results"][0]["lifecycle_event"] == "shell_session_terminal"
+        assert batch_end_metadata["results"][0]["output_persistence"] == "transient"
+        assert batch_end_metadata["results"][0]["compact_tool_result"]["process_status"] == "terminated"
+        assert batch_end_metadata["results"][0]["compact_tool_result"]["session_status"] == "closed"
+        assert batch_end_metadata["results"][0]["compact_tool_result"]["interaction_boundary"] == "terminal"
+        assert batch_end_metadata["results"][0]["compact_tool_result"]["session_id"] == "cmd-stop-stream-1"
+        assert batch_end_metadata["calls"][0]["process_status"] == "terminated"
+        assert batch_end_metadata["calls"][0]["session_status"] == "closed"
+        assert batch_end_metadata["calls"][0]["interaction_boundary"] == "terminal"
+        assert batch_end_metadata["calls"][0]["session_id"] == "cmd-stop-stream-1"
+    finally:
+        with session_factory() as lifecycle_db:
+            lifecycle.end_run(
+                task_id=task_id,
+                turn_id=turn_id,
+                status="cancelled",
+                db_session=lifecycle_db,
+            )
+        client.close()
+        engine.dispose()
+
+
+def test_cancel_endpoint_mixed_batch_live_status_matches_canonical_rows(monkeypatch) -> None:
+    client, seeded, engine, session_factory = _build_client()
+    lifecycle = get_run_lifecycle_service()
+    task_id = seeded["task_id"]
+    turn_id = f"task-{task_id}-turn-mixed-batch"
+    published, _streaming_states = _install_recording_hub(monkeypatch)
+    with session_factory() as lifecycle_db:
+        assistant_message = ChatMessage(
+            task_id=task_id,
+            tenant_id=seeded["tenant_id"],
+            conversation_id=f"conv-{task_id}",
+            message_type="assistant",
+            message="",
+            token_count=0,
+            turn_number=1,
+        )
+        lifecycle_db.add(assistant_message)
+        lifecycle_db.flush()
+        TurnWorkflowService(lifecycle_db).start_turn(
+            task_id=task_id,
+            conversation_id=f"conv-{task_id}",
+            turn_id=turn_id,
+            turn_sequence=1,
+            graph_name="simple_tool",
+            reserved_message_id=assistant_message.id,
+        )
+        lifecycle.start_run(
+            task_id=task_id,
+            turn_id=turn_id,
+            conversation_id=f"conv-{task_id}",
+            db_session=lifecycle_db,
+        )
+        lifecycle_db.add_all(
+            [
+                ToolExecution(
+                    tenant_id=seeded["tenant_id"],
+                    task_id=task_id,
+                    command_id="cmd-mixed-complete",
+                    workspace_id=f"task-{task_id}",
+                    tool_call_id="tool-call-mixed-complete",
+                    conversation_id=f"conv-{task_id}",
+                    turn_id=turn_id,
+                    tool_name="shell.exec",
+                    tool_arguments={"command": "true"},
+                    execution_metadata={"tool_batch_id": "batch-mixed-stop"},
+                    agent_path="langgraph",
+                    execution_transport="file_comm",
+                    status="completed",
+                    started_at=datetime.now(timezone.utc),
+                ),
+                ToolExecution(
+                    tenant_id=seeded["tenant_id"],
+                    task_id=task_id,
+                    command_id="cmd-mixed-cancel",
+                    workspace_id=f"task-{task_id}",
+                    tool_call_id="tool-call-mixed-cancel",
+                    conversation_id=f"conv-{task_id}",
+                    turn_id=turn_id,
+                    tool_name="shell.exec",
+                    tool_arguments={"command": "sleep 60"},
+                    execution_metadata={"tool_batch_id": "batch-mixed-stop"},
+                    agent_path="langgraph",
+                    execution_transport="file_comm",
+                    status="started",
+                    started_at=datetime.now(timezone.utc),
+                ),
+                ChatTurnEvent(
+                    task_id=task_id,
+                    tenant_id=seeded["tenant_id"],
+                    conversation_id=f"conv-{task_id}",
+                    chat_message_id=assistant_message.id,
+                    turn_number=1,
+                    phase_sequence=0,
+                    kind="tool",
+                    tool_call_id="tool-call-mixed-complete",
+                    content="{}",
+                    event_metadata={
+                        "tool_name": "shell.exec",
+                        "status": "completed",
+                        "tool_batch_id": "batch-mixed-stop",
+                    },
+                ),
+            ]
+        )
+        lifecycle_db.add_all(
+            [
+                _stream_event(
+                    seeded=seeded,
+                    task_id=task_id,
+                    turn_id=turn_id,
+                    sequence=10,
+                    event_type="tool_batch_start",
+                    metadata={
+                        "step_type": "tool_batch_start",
+                        "tool_batch_id": "batch-mixed-stop",
+                        "tool_calls": [
+                            {
+                                "tool_call_id": "tool-call-mixed-complete",
+                                "tool": "shell.exec",
+                            },
+                            {
+                                "tool_call_id": "tool-call-mixed-cancel",
+                                "tool": "shell.exec",
+                            },
+                        ],
+                    },
+                ),
+                _stream_event(
+                    seeded=seeded,
+                    task_id=task_id,
+                    turn_id=turn_id,
+                    sequence=11,
+                    event_type="tool_start",
+                    metadata={
+                        "step_type": "tool_start",
+                        "tool_batch_id": "batch-mixed-stop",
+                        "tool_call_id": "tool-call-mixed-complete",
+                        "tool": "shell.exec",
+                    },
+                ),
+                _stream_event(
+                    seeded=seeded,
+                    task_id=task_id,
+                    turn_id=turn_id,
+                    sequence=12,
+                    event_type="tool_end",
+                    metadata={
+                        "step_type": "tool_end",
+                        "tool_batch_id": "batch-mixed-stop",
+                        "tool_call_id": "tool-call-mixed-complete",
+                        "tool": "shell.exec",
+                        "status": "completed",
+                    },
+                ),
+                _stream_event(
+                    seeded=seeded,
+                    task_id=task_id,
+                    turn_id=turn_id,
+                    sequence=13,
+                    event_type="tool_start",
+                    metadata={
+                        "step_type": "tool_start",
+                        "tool_batch_id": "batch-mixed-stop",
+                        "tool_call_id": "tool-call-mixed-cancel",
+                        "tool": "shell.exec",
+                    },
+                ),
+            ]
+        )
+        lifecycle_db.commit()
+    try:
+        response = client.post(
+            f"/tasks/{task_id}/chat/cancel",
+            json={"turn_id": turn_id, "reason": "user_stop"},
+        )
+        assert response.status_code == 200, response.text
+
+        batch_end_events = [event for _, event in published if event.get("type") == "tool_batch_end"]
+        assert len(batch_end_events) == 1
+        batch_end_metadata = batch_end_events[0]["metadata"]
+        assert batch_end_metadata["status"] == "completed_with_errors"
+        assert [result["status"] for result in batch_end_metadata["results"]] == [
+            "completed",
+            "cancelled",
+        ]
+
+        with session_factory() as verify_db:
+            rows = (
+                verify_db.execute(
+                    select(ChatTurnEvent)
+                    .where(ChatTurnEvent.task_id == task_id)
+                    .where(ChatTurnEvent.kind == "tool")
+                    .order_by(ChatTurnEvent.phase_sequence.asc())
+                )
+                .scalars()
+                .all()
+            )
+            batch_rows = [
+                row
+                for row in rows
+                if isinstance(row.event_metadata, dict)
+                and row.event_metadata.get("tool_batch_id") == "batch-mixed-stop"
+            ]
+            assert [row.tool_call_id for row in batch_rows] == [
+                "tool-call-mixed-complete",
+                "tool-call-mixed-cancel",
+            ]
+            replay_statuses = [row.event_metadata["status"] for row in batch_rows]
+            assert _derive_batch_status(replay_statuses) == batch_end_metadata["status"]
     finally:
         with session_factory() as lifecycle_db:
             lifecycle.end_run(

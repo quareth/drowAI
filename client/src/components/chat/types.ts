@@ -50,7 +50,7 @@ export interface ProviderRefusalMetadata {
  * Task 1.1 contract: raw-output lookup relies on metadata.tool_call_id emitted
  * on both tool_start and tool_end events.
  */
-export type ToolLifecycleStepType = "tool_start" | "tool_end";
+export type ToolLifecycleStepType = "tool_start" | "tool_delta" | "tool_end";
 
 /**
  * Backend tool status values are additive over time; preserve unknown strings.
@@ -128,6 +128,12 @@ export interface ChatMessageMetadata {
         observation?: string;
       }
     | CompactToolResult;
+  /** Independent shell-session lifecycle facts for interactive commands. */
+  session_status?: string;
+  process_status?: string;
+  interaction_boundary?: string;
+  session_id?: string;
+  shell_lifecycle_event?: boolean;
   compact_tool_result?: CompactToolResult | null;
   [key: string]: unknown;
 }

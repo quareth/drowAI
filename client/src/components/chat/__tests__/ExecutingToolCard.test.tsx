@@ -13,9 +13,20 @@ vi.mock("@/components/chat/tool-card-terminal/useToolRawOutput", () => ({
 }));
 
 vi.mock("@/components/chat/tool-card-terminal/ToolCardTerminalOutput", () => ({
-  ToolCardTerminalOutput: ({ outputText, testId }: { outputText: string; testId?: string }) => (
-    <div data-testid={testId ?? "tool-card-terminal-output"}>{outputText}</div>
-  ),
+  ToolCardTerminalOutput: ({
+    outputText,
+    isExpanded,
+    isReady,
+    testId,
+  }: {
+    outputText: string;
+    isExpanded: boolean;
+    isReady: boolean;
+    testId?: string;
+  }) =>
+    isExpanded && isReady ? (
+      <div data-testid={testId ?? "tool-card-terminal-output"}>{outputText}</div>
+    ) : null,
 }));
 
 afterEach(() => {
@@ -87,7 +98,7 @@ describe("ExecutingToolCard", () => {
     expect(toggle.getAttribute("disabled")).toBeNull();
   });
 
-  it("renders a yielded shell call as a durable expandable session state", () => {
+  it("renders a completed shell invocation separately from an active session", () => {
     mocked.useToolRawOutputMock.mockReturnValue({
       state: { status: "loading" },
       status: "loading",
@@ -100,15 +111,90 @@ describe("ExecutingToolCard", () => {
     render(
       <ExecutingToolCard
         toolName="shell.exec"
-        status="yielded"
+        status="completed"
+        sessionStatus="active"
+        processStatus="running"
+        interactionBoundary="output_available"
         taskId={1}
         toolCallId="call-yielded"
         testId="tool-card"
       />,
     );
 
-    expect(screen.getByText("Session running")).not.toBeNull();
+    expect(screen.getByText("Completed")).not.toBeNull();
+    expect(screen.getByText("Session active")).not.toBeNull();
+    expect(screen.getByText("Agent reviewing output")).not.toBeNull();
     expect(getToggleButton().getAttribute("disabled")).toBeNull();
+  });
+
+  it("shows running shell progress output in the existing card", () => {
+    mocked.useToolRawOutputMock.mockReturnValue({
+      state: { status: "idle" },
+      status: "idle",
+      isLoading: false,
+      isReady: false,
+      isNotAvailable: false,
+      isError: false,
+    });
+
+    render(
+      <ExecutingToolCard
+        toolName="shell.utility"
+        status="executing"
+        sessionStatus="active"
+        processStatus="running"
+        interactionBoundary="output_available"
+        taskId={1}
+        toolCallId="call-running-progress"
+        testId="tool-card"
+        compactToolResult={{
+          schema_version: "2.0",
+          tool: "shell.utility",
+          status: "success",
+          success: true,
+          summary: "progress line",
+          key_findings: [],
+          errors: [],
+          report_recommendations: [],
+          structured_signals: [],
+          decision_evidence: [],
+          lossiness_risk: "high",
+        }}
+      />,
+    );
+
+    expect(screen.getByText("Running")).not.toBeNull();
+    expect(screen.getByText("Session active")).not.toBeNull();
+    expect(screen.getByText("Agent reviewing output")).not.toBeNull();
+    expect(getToggleButton().getAttribute("disabled")).toBeNull();
+    expect(screen.getByTestId("tool-card-terminal").textContent).toBe("progress line");
+  });
+
+  it("renders terminal shell process state without changing invocation completion", () => {
+    mocked.useToolRawOutputMock.mockReturnValue({
+      state: { status: "loading" },
+      status: "loading",
+      isLoading: true,
+      isReady: false,
+      isNotAvailable: false,
+      isError: false,
+    });
+
+    render(
+      <ExecutingToolCard
+        toolName="shell.write_stdin"
+        status="completed"
+        sessionStatus="closed"
+        processStatus="completed"
+        interactionBoundary="terminal"
+        taskId={1}
+        toolCallId="call-terminal"
+        testId="tool-card"
+      />,
+    );
+
+    expect(screen.getByText("Completed")).not.toBeNull();
+    expect(screen.getByText("Process completed")).not.toBeNull();
   });
 
   it("keeps expanded state during first-load and transitions to ready output", () => {
@@ -155,6 +241,31 @@ describe("ExecutingToolCard", () => {
 
     expect(screen.queryByText("Loading raw output...")).toBeNull();
     expect(screen.getByText("scan output ready")).not.toBeNull();
+  });
+
+  it("does not show a loading spinner when raw-output lookup is idle", () => {
+    mocked.useToolRawOutputMock.mockReturnValue({
+      state: { status: "idle" },
+      status: "idle",
+      isLoading: false,
+      isReady: false,
+      isNotAvailable: false,
+      isError: false,
+    });
+
+    render(
+      <ExecutingToolCard
+        toolName="nmap"
+        status="completed"
+        taskId={1}
+        toolCallId="call-idle-raw-output"
+        testId="tool-card"
+      />,
+    );
+
+    fireEvent.click(getToggleButton());
+
+    expect(screen.queryByText("Loading raw output...")).toBeNull();
   });
 
   it("uses the full available width while expanded", () => {
