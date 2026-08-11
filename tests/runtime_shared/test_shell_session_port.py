@@ -11,7 +11,9 @@ from runtime_shared.shell_session_contracts import (
     ShellExecRequest,
     ShellSessionErrorCode,
     ShellSessionIdentity,
+    ShellSessionLifecycleStatus,
     ShellSessionUpdate,
+    ShellWaitRequest,
     ShellWriteRequest,
 )
 from runtime_shared.shell_capabilities import ShellCapability
@@ -82,6 +84,27 @@ class _BoundShellSessionService:
             duration_ms=1,
         )
 
+    async def wait_for_output(
+        self,
+        *,
+        identity: ShellSessionIdentity,
+        request: ShellWaitRequest,
+    ) -> ShellSessionUpdate:
+        assert identity.task_id == 11
+        assert request.session_id == "shs_abc123"
+        return ShellSessionUpdate(
+            success=True,
+            status="success",
+            process_status=None,
+            session_id="shs_abc123",
+            stdout="waited\n",
+            stderr="",
+            exit_code=None,
+            stdin_available=True,
+            truncated=False,
+            duration_ms=1,
+        )
+
     async def close_owner_sessions(
         self,
         *,
@@ -129,6 +152,7 @@ async def test_unbound_service_fails_closed_with_structured_update(
         success=False,
         status="error",
         process_status=None,
+        session_status=ShellSessionLifecycleStatus.UNAVAILABLE,
         session_id=None,
         stdout="",
         stderr="",
@@ -139,9 +163,9 @@ async def test_unbound_service_fails_closed_with_structured_update(
         error_code=ShellSessionErrorCode.SHELL_RUNTIME_UNAVAILABLE,
     )
 
-    poll = await service.write_stdin(
+    poll = await service.wait_for_output(
         identity=_identity(),
-        request=ShellWriteRequest(session_id="shs_abc123"),
+        request=ShellWaitRequest(session_id="shs_abc123"),
     )
     assert poll.error_code is ShellSessionErrorCode.SHELL_RUNTIME_UNAVAILABLE
     assert (
@@ -183,9 +207,15 @@ async def test_resolver_exposes_bound_service_methods(
 
     poll = await resolved.write_stdin(
         identity=_identity(),
-        request=ShellWriteRequest(session_id="shs_abc123"),
+        request=ShellWriteRequest(session_id="shs_abc123", chars="input\n"),
     )
     assert poll.session_id == "shs_abc123"
+
+    waited = await resolved.wait_for_output(
+        identity=_identity(),
+        request=ShellWaitRequest(session_id="shs_abc123"),
+    )
+    assert waited.stdout == "waited\n"
 
     await resolved.close_owner_sessions(
         tenant_id=7,

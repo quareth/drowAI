@@ -58,6 +58,7 @@ from runtime_shared.shell_session_contracts import (
     ShellExecRequest,
     ShellProcessStatus,
     ShellSessionIdentity,
+    ShellWaitRequest,
     ShellWriteRequest,
 )
 from runtime_shared.shell_session_framing import PTY_EXIT_CODE_MARKER
@@ -886,11 +887,10 @@ def test_remote_runtime_terminal_operations_route_through_provider_dispatcher_an
         transport.flush_inbound_events()
         channel_db.commit()
         completed = await _drive_provider_wait(
-            shell_service.write_stdin(
+            shell_service.wait_for_output(
                 identity=identity,
-                request=ShellWriteRequest(
+                request=ShellWaitRequest(
                     session_id=delayed.session_id,
-                    yield_time_ms=1_000,
                 ),
             )
         )
@@ -906,11 +906,10 @@ def test_remote_runtime_terminal_operations_route_through_provider_dispatcher_an
             if "managed waiting" in "".join(interactive_stdout_parts):
                 break
             interactive = await _drive_provider_wait(
-                shell_service.write_stdin(
+                shell_service.wait_for_output(
                     identity=identity,
-                    request=ShellWriteRequest(
+                    request=ShellWaitRequest(
                         session_id=interactive.session_id,
-                        yield_time_ms=100,
                     ),
                 )
             )
@@ -956,11 +955,10 @@ def test_remote_runtime_terminal_operations_route_through_provider_dispatcher_an
                 break
             assert split.session_id is not None
             split = await _drive_provider_wait(
-                shell_service.write_stdin(
+                shell_service.wait_for_output(
                     identity=identity,
-                    request=ShellWriteRequest(
+                    request=ShellWaitRequest(
                         session_id=split.session_id,
-                        yield_time_ms=100,
                     ),
                 )
             )

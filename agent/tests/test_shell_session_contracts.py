@@ -14,10 +14,14 @@ from runtime_shared.shell_session_contracts import (
     SHELL_SESSION_MAX_ENV_TOTAL_BYTES,
     SHELL_SESSION_PROTECTED_ENV_NAMES,
     ShellExecRequest,
+    ShellInteractionAction,
+    ShellInteractionBoundary,
     ShellProcessStatus,
     ShellSessionErrorCode,
     ShellSessionIdentity,
+    ShellSessionLifecycleStatus,
     ShellSessionUpdate,
+    ShellWaitRequest,
     ShellWriteRequest,
 )
 
@@ -113,6 +117,8 @@ def test_shell_session_update_supports_nullable_fields_and_deterministic_summary
         success=True,
         status="success",
         process_status=ShellProcessStatus.RUNNING,
+        session_status=ShellSessionLifecycleStatus.ACTIVE,
+        interaction_boundary=ShellInteractionBoundary.OUTPUT_AVAILABLE,
         session_id="shs_abc123",
         stdout="progress\n",
         stderr="",
@@ -123,15 +129,37 @@ def test_shell_session_update_supports_nullable_fields_and_deterministic_summary
     )
 
     assert update.process_status is ShellProcessStatus.RUNNING
+    assert update.session_status is ShellSessionLifecycleStatus.ACTIVE
+    assert update.interaction_boundary is ShellInteractionBoundary.OUTPUT_AVAILABLE
     assert update.session_id == "shs_abc123"
     assert update.exit_code is None
     assert update.stdin_available is True
     assert update.truncated is False
-    assert (
-        update.summary
-        == "Command is still running; poll session shs_abc123 for more output."
-    )
+    assert update.summary == "Command is still running; new output was received."
     assert update.error_code is None
+
+
+def test_running_shell_summary_does_not_prescribe_polling_without_output() -> None:
+    update = ShellSessionUpdate(
+        success=True,
+        status="success",
+        process_status=ShellProcessStatus.RUNNING,
+        session_status=ShellSessionLifecycleStatus.ACTIVE,
+        interaction_boundary=ShellInteractionBoundary.QUIET_BOUNDARY,
+        session_id="shs_abc123",
+        stdout="",
+        stderr="",
+        exit_code=None,
+        stdin_available=True,
+        truncated=False,
+        duration_ms=1_000,
+    )
+
+    assert update.summary == (
+        "Command is still running and accepts additional input; "
+        "no new output was produced."
+    )
+    assert "poll" not in update.summary.lower()
 
 
 def test_shell_session_update_json_round_trip_preserves_enums() -> None:
@@ -139,6 +167,8 @@ def test_shell_session_update_json_round_trip_preserves_enums() -> None:
         success=False,
         status="error",
         process_status=ShellProcessStatus.TIMED_OUT,
+        session_status=ShellSessionLifecycleStatus.CLOSED,
+        interaction_boundary=ShellInteractionBoundary.TERMINAL,
         session_id=None,
         stdout="partial",
         stderr="",
@@ -153,12 +183,23 @@ def test_shell_session_update_json_round_trip_preserves_enums() -> None:
 
     assert restored.model_dump(mode="json") == update.model_dump(mode="json")
     assert restored.process_status is ShellProcessStatus.TIMED_OUT
+    assert restored.session_status is ShellSessionLifecycleStatus.CLOSED
+    assert restored.interaction_boundary is ShellInteractionBoundary.TERMINAL
     assert restored.error_code is ShellSessionErrorCode.COMMAND_TIMED_OUT
 
 
-def test_shell_status_and_error_code_values_round_trip() -> None:
+def test_shell_lifecycle_status_and_error_code_values_round_trip() -> None:
     for process_status in ShellProcessStatus:
         assert ShellProcessStatus(process_status.value) is process_status
+
+    for session_status in ShellSessionLifecycleStatus:
+        assert ShellSessionLifecycleStatus(session_status.value) is session_status
+
+    for boundary in ShellInteractionBoundary:
+        assert ShellInteractionBoundary(boundary.value) is boundary
+
+    for action in ShellInteractionAction:
+        assert ShellInteractionAction(action.value) is action
 
     for error_code in ShellSessionErrorCode:
         assert ShellSessionErrorCode(error_code.value) is error_code
@@ -235,14 +276,16 @@ def test_shell_exec_request_accepts_ordinary_env_additions() -> None:
     assert request.env == env
 
 
-def test_shell_write_request_models_exact_input_and_polling() -> None:
-    poll = ShellWriteRequest(session_id="shs_abc123")
+def test_shell_write_request_models_exact_non_empty_input_and_internal_wait() -> None:
+    wait = ShellWaitRequest(session_id="shs_abc123")
     interrupt = ShellWriteRequest(session_id="shs_abc123", chars="\u0003")
 
-    assert poll.chars == ""
+    with pytest.raises(ValidationError):
+        ShellWriteRequest(session_id="shs_abc123", chars="")
+
     assert interrupt.chars == "\u0003"
-    assert poll.yield_time_ms == 10_000
-    assert poll.max_output_chars == 32_000
+    assert wait.session_id == "shs_abc123"
+    assert wait.max_output_chars == 32_000
 
 
 def test_shell_session_error_codes_include_required_stable_values() -> None:

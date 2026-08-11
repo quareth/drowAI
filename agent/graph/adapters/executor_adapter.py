@@ -50,6 +50,7 @@ from runtime_shared.shell_session_contracts import (
     ShellProcessStatus,
     ShellSessionErrorCode,
     ShellSessionIdentity,
+    ShellSessionOrigin,
     ShellSessionUpdate,
     ShellWriteRequest,
 )
@@ -445,6 +446,13 @@ class GraphToolExecutor:
                 identity=identity,
                 request=session_request,
                 capability=originating_capability,
+                origin=ShellSessionOrigin(
+                    tool_call_id=str(dispatch_input.tool_call_id or "").strip()
+                    or None,
+                    tool_batch_id=str(dispatch_input.tool_batch_id or "").strip()
+                    or None,
+                    tool_name=str(request["tool"] or "").strip() or None,
+                ),
             )
         else:
             originating_capability = await service.get_session_capability(

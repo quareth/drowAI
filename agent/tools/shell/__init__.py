@@ -124,8 +124,9 @@ _shell_write_stdin_metadata = EnhancedToolMetadata(
         ToolCapability(
             name="shell_stdin",
             description=(
-                "Poll, send exact input to, or interrupt an owned provider-backed "
-                "PTY shell session; returns bounded output and process status."
+                "Send exact non-empty input to, or interrupt, an owned "
+                "provider-backed PTY shell session; returns bounded output "
+                "and process status."
             ),
             output_indicators=[
                 "stdout",
@@ -146,7 +147,6 @@ _shell_write_stdin_metadata = EnhancedToolMetadata(
 _shell_write_stdin_metadata.__dict__["pty_support"] = True
 _shell_write_stdin_metadata.__dict__["pty_session_only"] = True
 _shell_write_stdin_metadata.__dict__["pty_benefits"] = [
-    "polling",
     "exact_stdin",
     "interrupts",
 ]

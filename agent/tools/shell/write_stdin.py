@@ -1,6 +1,6 @@
 """Model-facing shell.write_stdin adapter for runtime-session input.
 
-This module validates the public write/poll schema and documents input
+This module validates the public write schema and documents input
 semantics. It does not route providers, execute subprocesses, or manage shell
 session state; those responsibilities belong to runtime-session dispatch and
 the provider-backed shell-session service.
@@ -22,9 +22,10 @@ class ShellWriteStdinTool(BaseTool):
     """
     Validate shell.write_stdin requests before runtime-session dispatch.
 
-    ``chars=""`` polls for more output. ``chars="\\u0003"`` requests an
-    interrupt. Other non-empty input is passed through exactly as provided by
-    the runtime-session service path; this adapter never appends a newline.
+    ``chars="\\u0003"`` requests an interrupt. Other non-empty input is passed
+    through exactly as provided by the runtime-session service path; this
+    adapter never appends a newline. Waiting for output is an internal
+    coordinator operation, not a model-visible empty write.
     """
 
     args_model = ShellWriteStdinArgs

@@ -12,9 +12,17 @@ import time
 from types import SimpleNamespace
 
 import pytest
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from backend import config as backend_config
+from backend.database import Base
+from backend.models.chat import ChatMessage, ChatTurnEvent
+from backend.models.core import Task, User
 from backend.services.metrics import metrics
+from backend.services.chat.transcript_query_service import ChatTranscriptQueryService
+from backend.services.langgraph_chat.checkpoint.turn_workflow_service import TurnWorkflowService
 from backend.services.runtime_provider import RuntimeCallScope
 from backend.services.terminal import manager as terminal_manager_module
 from backend.services.terminal.manager import TerminalSessionManager
@@ -27,9 +35,12 @@ from agent.graph.subgraphs.tool_execution_runtime.result_state_projection import
 )
 from runtime_shared.shell_session_contracts import (
     ShellExecRequest,
+    ShellInteractionBoundary,
     ShellProcessStatus,
     ShellSessionErrorCode,
     ShellSessionIdentity,
+    ShellSessionOrigin,
+    ShellWaitRequest,
     ShellWriteRequest,
 )
 from runtime_shared.shell_session_framing import PTY_EXIT_CODE_MARKER
@@ -139,6 +150,18 @@ class FakeTerminalManager:
             elif "quiet-interrupt" in text:
                 self.quiet_interrupt_sessions.add(session_id)
                 self.queues[session_id].append(f"{start}\nwaiting\n".encode())
+            elif "quiet-then-done" in text:
+                self.deferred_queues[session_id] = [
+                    f"{start}\ndone\n{end}={PTY_EXIT_CODE_MARKER}0\n".encode()
+                ]
+            elif "bursty-output" in text:
+                self.queues[session_id].append(f"{start}\nchunk\n".encode())
+            elif "no-output" in text:
+                pass
+            elif "exit-two" in text:
+                self.queues[session_id].append(
+                    f"{start}\nfailed\n{end}={PTY_EXIT_CODE_MARKER}2\n".encode()
+                )
             elif "delayed" in text:
                 self.queues[session_id].append(f"{start}\nstarted\n".encode())
                 self.deferred_queues[session_id] = [
@@ -223,6 +246,8 @@ class ProviderBoundaryTerminal:
         self.operations: list[str] = []
         self.ctrl_c_writes = 0
         self.cursor = 0
+        self.clock: MutableClock | None = None
+        self.advance_empty_reads = False
 
     async def run(self, *, session, operation: str, payload=None, **_kwargs):
         self.operations.append(operation)
@@ -257,6 +282,8 @@ class ProviderBoundaryTerminal:
                 deferred = self.deferred_queues.pop(provider_session_id, [])
                 if deferred:
                     queue.extend(deferred)
+                elif self.advance_empty_reads and self.clock is not None:
+                    self.clock.advance(1.25)
             self.cursor += 1
             return SimpleNamespace(
                 ok=True,
@@ -300,6 +327,12 @@ class ProviderBoundaryTerminal:
             self.queues[provider_session_id].append(
                 f"{start}\nquick\n{end}={PTY_EXIT_CODE_MARKER}0\n".encode()
             )
+        elif "exit-two-provider" in text:
+            self.queues[provider_session_id].append(
+                f"{start}\nfailed\n{end}={PTY_EXIT_CODE_MARKER}2\n".encode()
+            )
+        elif "no-output-provider" in text:
+            pass
         elif "delayed-provider" in text:
             self.queues[provider_session_id].append(f"{start}\nstarted\n".encode())
             self.deferred_queues[provider_session_id] = [
@@ -317,9 +350,11 @@ def _provider_bound_service(
     monkeypatch: pytest.MonkeyPatch,
     *,
     runtime_placement_mode: str = "runner",
+    clock: MutableClock | None = None,
 ):
     manager = TerminalSessionManager()
     provider = ProviderBoundaryTerminal()
+    provider.clock = clock
     runner_id = "runner-1" if runtime_placement_mode == "runner" else None
     execution_site_id = "site-1" if runtime_placement_mode == "runner" else None
     monkeypatch.setattr(
@@ -389,6 +424,7 @@ def _provider_bound_service(
             runner_id=runner_id,
             execution_site_id=execution_site_id,
         ),
+        clock=clock,
     )
     return service, provider
 
@@ -459,6 +495,63 @@ class MutableClock:
 
     def advance(self, seconds: float) -> None:
         self.value += seconds
+
+
+class RecordingStreamHub:
+    """Test stream hub that records lifecycle packets without subscribers."""
+
+    def __init__(self) -> None:
+        self.published: list[tuple[int, dict[str, object]]] = []
+
+    async def publish(self, task_id: int, event: dict[str, object]) -> None:
+        self.published.append((task_id, event))
+
+
+def _build_shell_turn_session():
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    Base.metadata.create_all(engine)
+    return engine, sessionmaker(bind=engine, autoflush=False, autocommit=False)
+
+
+def _seed_shell_turn(
+    session_factory,
+    *,
+    tenant_id: int,
+    turn_id: str,
+    conversation_id: str,
+) -> tuple[int, int]:
+    with session_factory() as db:
+        user = User(username=f"shell-cleanup-owner-{turn_id}", password="secret")
+        db.add(user)
+        db.flush()
+        task = Task(user_id=user.id, tenant_id=tenant_id, name=f"shell-cleanup-{turn_id}")
+        db.add(task)
+        db.flush()
+        message = ChatMessage(
+            task_id=task.id,
+            tenant_id=tenant_id,
+            conversation_id=conversation_id,
+            message_type="assistant",
+            message="",
+            token_count=0,
+            turn_number=1,
+        )
+        db.add(message)
+        db.flush()
+        TurnWorkflowService(db).start_turn(
+            task_id=task.id,
+            conversation_id=conversation_id,
+            turn_id=turn_id,
+            turn_sequence=1,
+            graph_name="simple_tool",
+            reserved_message_id=message.id,
+        )
+        db.commit()
+        return int(task.id), int(message.id)
 
 
 @pytest.mark.asyncio
@@ -606,9 +699,9 @@ async def test_echoed_wrapper_marker_literals_do_not_start_or_complete() -> None
     assert first.stdout == ""
     assert first.error_code is None
 
-    second = await service.write_stdin(
+    second = await service.wait_for_output(
         identity=_identity(),
-        request=ShellWriteRequest(session_id=first.session_id, yield_time_ms=0),
+        request=ShellWaitRequest(session_id=first.session_id),
     )
 
     assert second.process_status is ShellProcessStatus.COMPLETED
@@ -632,9 +725,9 @@ async def test_incomplete_exit_record_yields_until_structurally_complete() -> No
     assert first.stdout == "partial"
     assert first.error_code is None
 
-    second = await service.write_stdin(
+    second = await service.wait_for_output(
         identity=_identity(),
-        request=ShellWriteRequest(session_id=first.session_id, yield_time_ms=0),
+        request=ShellWaitRequest(session_id=first.session_id),
     )
 
     assert second.process_status is ShellProcessStatus.COMPLETED
@@ -679,9 +772,9 @@ async def test_delayed_command_yields_public_session_id_and_later_completes() ->
     assert not hasattr(record, "provider_session_id")
     assert not hasattr(record, "command")
 
-    second = await service.write_stdin(
+    second = await service.wait_for_output(
         identity=_identity(),
-        request=ShellWriteRequest(session_id=first.session_id, yield_time_ms=0),
+        request=ShellWaitRequest(session_id=first.session_id),
     )
 
     assert second.process_status is ShellProcessStatus.COMPLETED
@@ -722,6 +815,183 @@ async def test_default_attached_command_waits_past_internal_yield_boundary() -> 
     assert update.stdout == "started\ndone"
     assert service._records == {}
     assert manager.closed_sessions == ["terminal-1"]
+
+
+@pytest.mark.asyncio
+async def test_quiet_attached_command_does_not_yield_running_on_read_interval() -> None:
+    manager = FakeTerminalManager()
+    clock = MutableClock()
+    original_read = manager.read_output_result
+
+    async def read_and_advance_after_empty(*args, **kwargs):
+        result = await original_read(*args, **kwargs)
+        if not result.data:
+            clock.advance(11.0)
+        return result
+
+    manager.read_output_result = read_and_advance_after_empty
+    service = ShellSessionService(
+        terminal_manager=manager,
+        config=_config(),
+        runtime_context_resolver=lambda _identity: _context(),
+        clock=clock,
+    )
+
+    update = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(command="quiet-then-done"),
+    )
+
+    assert update.process_status is ShellProcessStatus.COMPLETED
+    assert update.interaction_boundary is ShellInteractionBoundary.TERMINAL
+    assert update.stdout == "done"
+
+
+@pytest.mark.asyncio
+async def test_output_arrival_returns_one_output_available_delta_after_quiescence() -> None:
+    manager = FakeTerminalManager()
+    clock = MutableClock()
+    original_read = manager.read_output_result
+
+    async def read_and_advance_after_empty(*args, **kwargs):
+        result = await original_read(*args, **kwargs)
+        if not result.data:
+            clock.advance(0.2)
+        return result
+
+    manager.read_output_result = read_and_advance_after_empty
+    service = ShellSessionService(
+        terminal_manager=manager,
+        config=_config(output_quiescence_sec=0.1),
+        runtime_context_resolver=lambda _identity: _context(),
+        clock=clock,
+    )
+
+    update = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(command="bursty-output", yield_time_ms=1_000),
+    )
+
+    assert update.process_status is ShellProcessStatus.RUNNING
+    assert update.interaction_boundary is ShellInteractionBoundary.OUTPUT_AVAILABLE
+    assert update.stdout == "chunk"
+    assert update.session_id is not None
+
+
+@pytest.mark.asyncio
+async def test_explicit_interactive_start_with_no_output_emits_one_quiet_boundary() -> None:
+    manager = FakeTerminalManager()
+    service = _service(manager, config=_config(initial_quiet_window_sec=0.0))
+
+    update = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(command="no-output", yield_time_ms=0),
+    )
+
+    assert update.process_status is ShellProcessStatus.RUNNING
+    assert update.interaction_boundary is ShellInteractionBoundary.QUIET_BOUNDARY
+    assert update.stdout == ""
+    assert update.session_id is not None
+
+
+@pytest.mark.asyncio
+async def test_wait_for_output_does_not_emit_recurring_quiet_boundary() -> None:
+    manager = FakeTerminalManager()
+    service = _service(manager, config=_config(initial_quiet_window_sec=0.0))
+    first = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(command="quiet-then-done", yield_time_ms=0),
+    )
+
+    assert first.session_id is not None
+    assert first.interaction_boundary is ShellInteractionBoundary.QUIET_BOUNDARY
+
+    update = await service.wait_for_output(
+        identity=_identity(),
+        request=ShellWaitRequest(session_id=first.session_id),
+    )
+
+    assert update.process_status is ShellProcessStatus.COMPLETED
+    assert update.interaction_boundary is ShellInteractionBoundary.TERMINAL
+    assert update.stdout == "done"
+
+
+@pytest.mark.asyncio
+async def test_write_stdin_waits_past_empty_yield_until_meaningful_boundary() -> None:
+    manager = FakeTerminalManager()
+    clock = MutableClock()
+    original_send = manager.send_input
+    original_read = manager.read_output_result
+    advance_empty_reads = False
+
+    async def send_without_output_after_start(
+        session_id: str,
+        data: bytes | str,
+    ) -> bool:
+        payload = data.encode() if isinstance(data, str) else data
+        if b"__DROWAI_CMD_START_" in payload:
+            return await original_send(session_id, payload)
+        manager.sent_inputs.append((session_id, payload))
+        return True
+
+    async def read_and_advance_after_post_input_empty(*args, **kwargs):
+        result = await original_read(*args, **kwargs)
+        if advance_empty_reads and not result.data:
+            clock.advance(1.25)
+        return result
+
+    manager.send_input = send_without_output_after_start
+    manager.read_output_result = read_and_advance_after_post_input_empty
+    service = ShellSessionService(
+        terminal_manager=manager,
+        config=_config(),
+        runtime_context_resolver=lambda _identity: _context(),
+        clock=clock,
+    )
+    first = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(
+            command="no-output",
+            yield_time_ms=0,
+            max_runtime_sec=1,
+        ),
+    )
+    assert first.session_id is not None
+    assert first.interaction_boundary is ShellInteractionBoundary.QUIET_BOUNDARY
+
+    advance_empty_reads = True
+    update = await service.write_stdin(
+        identity=_identity(),
+        request=ShellWriteRequest(
+            session_id=first.session_id,
+            chars="accepted-but-quiet\n",
+            yield_time_ms=0,
+        ),
+    )
+
+    assert update.error_code is ShellSessionErrorCode.COMMAND_TIMED_OUT
+    assert update.process_status is ShellProcessStatus.TIMED_OUT
+    assert update.interaction_boundary is ShellInteractionBoundary.TERMINAL
+    assert update.session_id is None
+    assert ("terminal-1", b"accepted-but-quiet\n") in manager.sent_inputs
+    assert manager.closed_sessions == ["terminal-1"]
+
+
+@pytest.mark.asyncio
+async def test_non_zero_exit_is_failed_terminal_with_exit_code() -> None:
+    manager = FakeTerminalManager()
+    service = _service(manager)
+
+    update = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(command="exit-two", yield_time_ms=0),
+    )
+
+    assert update.success is False
+    assert update.process_status is ShellProcessStatus.FAILED
+    assert update.interaction_boundary is ShellInteractionBoundary.TERMINAL
+    assert update.exit_code == 2
+    assert update.stderr == "Command exited with code 2."
 
 
 @pytest.mark.asyncio
@@ -777,11 +1047,10 @@ async def test_local_provider_bound_delayed_command_yields_then_polls_bounded_de
     assert first.stdout == "started"
     assert len(first.stdout) <= 1024
 
-    second = await service.write_stdin(
+    second = await service.wait_for_output(
         identity=identity,
-        request=ShellWriteRequest(
+        request=ShellWaitRequest(
             session_id=first.session_id,
-            yield_time_ms=0,
             max_output_chars=1024,
         ),
     )
@@ -876,7 +1145,8 @@ async def test_provider_buffer_loss_before_start_returns_framing_error(
     )
 
     assert update.error_code is ShellSessionErrorCode.COMMAND_OUTPUT_INVALID
-    assert update.process_status is None
+    assert update.process_status is ShellProcessStatus.FAILED
+    assert update.interaction_boundary is ShellInteractionBoundary.TERMINAL
     assert update.session_id is None
     assert service._records == {}
     assert manager.closed_sessions == ["terminal-1"]
@@ -986,11 +1256,10 @@ async def test_managed_provider_contract_matches_local_public_fields(
         ),
     )
     assert delayed.session_id is not None
-    completed = await service.write_stdin(
+    completed = await service.wait_for_output(
         identity=identity,
-        request=ShellWriteRequest(
+        request=ShellWaitRequest(
             session_id=delayed.session_id,
-            yield_time_ms=0,
             max_output_chars=1024,
         ),
     )
@@ -1066,6 +1335,194 @@ async def test_managed_provider_contract_matches_local_public_fields(
     assert "close_terminal_session" in provider.operations
 
 
+def _provider_bound_identity(runtime_placement_mode: str, **overrides: object):
+    values: dict[str, object] = {"runtime_placement_mode": runtime_placement_mode}
+    if runtime_placement_mode == "local":
+        values.update({"runner_id": None, "execution_site_id": None})
+    values.update(overrides)
+    return _identity(**values)
+
+
+def _provider_bound_context(runtime_placement_mode: str, **overrides: object):
+    values: dict[str, object] = {"runtime_placement_mode": runtime_placement_mode}
+    if runtime_placement_mode == "local":
+        values.update({"runner_id": None, "execution_site_id": None})
+    values.update(overrides)
+    return _context(**values)
+
+
+def _stable_update_contract(update):
+    return {
+        "success": update.success,
+        "status": update.status,
+        "process_status": update.process_status,
+        "session_status": update.session_status,
+        "interaction_boundary": update.interaction_boundary,
+        "session_id_present": update.session_id is not None,
+        "exit_code": update.exit_code,
+        "stdout": update.stdout,
+        "stderr": update.stderr,
+        "stdin_available": update.stdin_available,
+        "truncated": update.truncated,
+        "summary": update.summary,
+        "error_code": update.error_code,
+    }
+
+
+@pytest.mark.asyncio
+async def test_provider_bound_local_and_managed_outcome_matrix_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def collect(runtime_placement_mode: str):
+        clock = MutableClock()
+        service, provider = _provider_bound_service(
+            monkeypatch,
+            runtime_placement_mode=runtime_placement_mode,
+            clock=clock,
+        )
+        identity = _provider_bound_identity(runtime_placement_mode)
+
+        failed = await service.execute(
+            identity=identity,
+            request=ShellExecRequest(
+                command="exit-two-provider",
+                yield_time_ms=0,
+                max_output_chars=1024,
+            ),
+        )
+
+        quiet = await service.execute(
+            identity=identity,
+            request=ShellExecRequest(
+                command="no-output-provider",
+                yield_time_ms=0,
+                max_runtime_sec=1,
+                max_output_chars=1024,
+            ),
+        )
+        assert quiet.session_id is not None
+        provider.advance_empty_reads = True
+        timed_out = await service.wait_for_output(
+            identity=identity,
+            request=ShellWaitRequest(
+                session_id=quiet.session_id,
+                max_output_chars=1024,
+            ),
+        )
+        provider.advance_empty_reads = False
+
+        stale_source = await service.execute(
+            identity=identity,
+            request=ShellExecRequest(
+                command="delayed-provider",
+                yield_time_ms=0,
+                max_output_chars=1024,
+            ),
+        )
+        assert stale_source.session_id is not None
+        stale_identity = _provider_bound_identity(
+            runtime_placement_mode,
+            workspace_id="workspace-11-reassigned",
+        )
+        service._runtime_context_resolver = lambda _identity: _provider_bound_context(
+            runtime_placement_mode,
+            workspace_id="workspace-11-reassigned",
+        )
+        stale_operations_before = len(provider.operations)
+        stale = await service.wait_for_output(
+            identity=stale_identity,
+            request=ShellWaitRequest(session_id=stale_source.session_id),
+        )
+        stale_operation_delta = len(provider.operations) - stale_operations_before
+        service._runtime_context_resolver = lambda _identity: _provider_bound_context(
+            runtime_placement_mode
+        )
+        await service.close_task_sessions(tenant_id=identity.tenant_id, task_id=identity.task_id)
+
+        lost_source = await service.execute(
+            identity=identity,
+            request=ShellExecRequest(
+                command="delayed-provider",
+                yield_time_ms=0,
+                max_output_chars=1024,
+            ),
+        )
+        assert lost_source.session_id is not None
+
+        def _runtime_lost(_identity):
+            raise RuntimeError("runtime unavailable")
+
+        service._runtime_context_resolver = _runtime_lost
+        runtime_lost_operations_before = len(provider.operations)
+        runtime_lost = await service.wait_for_output(
+            identity=identity,
+            request=ShellWaitRequest(session_id=lost_source.session_id),
+        )
+        runtime_lost_operation_delta = (
+            len(provider.operations) - runtime_lost_operations_before
+        )
+        service._runtime_context_resolver = lambda _identity: _provider_bound_context(
+            runtime_placement_mode
+        )
+        await service.close_task_sessions(tenant_id=identity.tenant_id, task_id=identity.task_id)
+
+        unavailable_operations_before = len(provider.operations)
+        unavailable = await service.wait_for_output(
+            identity=identity,
+            request=ShellWaitRequest(session_id="shs_missing_session"),
+        )
+        unavailable_operation_delta = len(provider.operations) - unavailable_operations_before
+
+        return {
+            "updates": {
+                "failed": _stable_update_contract(failed),
+                "quiet": _stable_update_contract(quiet),
+                "timed_out": _stable_update_contract(timed_out),
+                "stale": _stable_update_contract(stale),
+                "runtime_lost": _stable_update_contract(runtime_lost),
+                "unavailable": _stable_update_contract(unavailable),
+            },
+            "operations": provider.operations,
+            "stale_operation_delta": stale_operation_delta,
+            "runtime_lost_operation_delta": runtime_lost_operation_delta,
+            "unavailable_operation_delta": unavailable_operation_delta,
+        }
+
+    managed = await collect("runner")
+    local = await collect("local")
+
+    assert managed["updates"] == local["updates"]
+    assert managed["updates"]["failed"]["process_status"] is ShellProcessStatus.FAILED
+    assert managed["updates"]["failed"]["exit_code"] == 2
+    assert managed["updates"]["quiet"]["interaction_boundary"] is (
+        ShellInteractionBoundary.QUIET_BOUNDARY
+    )
+    assert managed["updates"]["timed_out"]["error_code"] is (
+        ShellSessionErrorCode.COMMAND_TIMED_OUT
+    )
+    assert managed["updates"]["stale"]["error_code"] is (
+        ShellSessionErrorCode.SESSION_UNAVAILABLE
+    )
+    assert managed["updates"]["runtime_lost"]["error_code"] is (
+        ShellSessionErrorCode.SESSION_UNAVAILABLE
+    )
+    assert managed["updates"]["unavailable"]["error_code"] is (
+        ShellSessionErrorCode.SESSION_UNAVAILABLE
+    )
+    assert managed["stale_operation_delta"] == local["stale_operation_delta"] == 0
+    assert managed["runtime_lost_operation_delta"] == (
+        local["runtime_lost_operation_delta"]
+    ) == 0
+    assert managed["unavailable_operation_delta"] == (
+        local["unavailable_operation_delta"]
+    ) == 0
+    for operations in (managed["operations"], local["operations"]):
+        assert "open_terminal_session" in operations
+        assert "send_terminal_input" in operations
+        assert "read_terminal_output" in operations
+        assert "close_terminal_session" in operations
+
+
 @pytest.mark.asyncio
 async def test_local_provider_bound_oversized_delayed_output_has_no_hidden_transcript(
     monkeypatch: pytest.MonkeyPatch,
@@ -1123,9 +1580,9 @@ async def test_split_utf8_boundary_is_preserved_across_yield_and_poll() -> None:
     assert first.stdout == "caf"
     assert "\ufffd" not in first.stdout
 
-    second = await service.write_stdin(
+    second = await service.wait_for_output(
         identity=_identity(),
-        request=ShellWriteRequest(session_id=first.session_id, yield_time_ms=0),
+        request=ShellWaitRequest(session_id=first.session_id),
     )
 
     assert second.process_status is ShellProcessStatus.COMPLETED
@@ -1174,13 +1631,13 @@ async def test_foreign_owner_and_task_get_session_unavailable_without_output() -
     )
 
     assert first.session_id is not None
-    foreign = await service.write_stdin(
+    foreign = await service.wait_for_output(
         identity=_identity(execution_owner_id="subagent:other"),
-        request=ShellWriteRequest(session_id=first.session_id, yield_time_ms=0),
+        request=ShellWaitRequest(session_id=first.session_id),
     )
-    other_task = await service.write_stdin(
+    other_task = await service.wait_for_output(
         identity=_identity(task_id=12),
-        request=ShellWriteRequest(session_id=first.session_id, yield_time_ms=0),
+        request=ShellWaitRequest(session_id=first.session_id),
     )
 
     assert foreign.error_code is ShellSessionErrorCode.SESSION_UNAVAILABLE
@@ -1217,14 +1674,20 @@ async def test_runtime_reassignment_rejects_stale_session_without_terminal_io(
 
     runtime_context.runner_id = "runner-2"
     runtime_context.execution_site_id = "site-2"
-    update = await service.write_stdin(
-        identity=continuation_identity,
-        request=ShellWriteRequest(
-            session_id=first.session_id,
-            chars=chars,
-            yield_time_ms=0,
-        ),
-    )
+    if chars:
+        update = await service.write_stdin(
+            identity=continuation_identity,
+            request=ShellWriteRequest(
+                session_id=first.session_id,
+                chars=chars,
+                yield_time_ms=0,
+            ),
+        )
+    else:
+        update = await service.wait_for_output(
+            identity=continuation_identity,
+            request=ShellWaitRequest(session_id=first.session_id),
+        )
 
     assert update.error_code is ShellSessionErrorCode.SESSION_UNAVAILABLE
     assert update.session_id is None
@@ -1277,9 +1740,9 @@ async def test_owner_limit_rejects_new_session_without_corrupting_existing() -> 
 
     assert first.session_id is not None
     assert second.error_code is ShellSessionErrorCode.SESSION_LIMIT_REACHED
-    poll = await service.write_stdin(
+    poll = await service.wait_for_output(
         identity=_identity(),
-        request=ShellWriteRequest(session_id=first.session_id, yield_time_ms=0),
+        request=ShellWaitRequest(session_id=first.session_id),
     )
     assert poll.process_status is ShellProcessStatus.COMPLETED
     assert manager.closed_sessions == ["terminal-1"]
@@ -1318,9 +1781,9 @@ async def test_concurrent_execute_reserves_capacity_before_terminal_prepare() ->
     assert manager.session_counter == 1
     assert list(service._records) == [first.session_id]
 
-    poll = await service.write_stdin(
+    poll = await service.wait_for_output(
         identity=_identity(),
-        request=ShellWriteRequest(session_id=first.session_id, yield_time_ms=0),
+        request=ShellWaitRequest(session_id=first.session_id),
     )
     assert poll.process_status is ShellProcessStatus.COMPLETED
     assert manager.closed_sessions == ["terminal-1"]
@@ -1342,9 +1805,9 @@ async def test_task_limit_rejects_new_owner_without_corrupting_existing() -> Non
 
     assert first.session_id is not None
     assert second.error_code is ShellSessionErrorCode.SESSION_LIMIT_REACHED
-    poll = await service.write_stdin(
+    poll = await service.wait_for_output(
         identity=_identity(execution_owner_id="main:first"),
-        request=ShellWriteRequest(session_id=first.session_id, yield_time_ms=0),
+        request=ShellWaitRequest(session_id=first.session_id),
     )
     assert poll.process_status is ShellProcessStatus.COMPLETED
     assert manager.closed_sessions == ["terminal-1"]
@@ -1361,9 +1824,9 @@ async def test_busy_session_rejects_simultaneous_operation() -> None:
     assert first.session_id is not None
     service._records[first.session_id].operation_in_progress = True
 
-    update = await service.write_stdin(
+    update = await service.wait_for_output(
         identity=_identity(),
-        request=ShellWriteRequest(session_id=first.session_id, yield_time_ms=0),
+        request=ShellWaitRequest(session_id=first.session_id),
     )
 
     assert update.error_code is ShellSessionErrorCode.SESSION_BUSY
@@ -1397,7 +1860,8 @@ async def test_provider_eof_returns_transport_error_and_closes() -> None:
     )
 
     assert update.error_code is ShellSessionErrorCode.RUNTIME_TRANSPORT_FAILED
-    assert update.process_status is None
+    assert update.process_status is ShellProcessStatus.FAILED
+    assert update.interaction_boundary is ShellInteractionBoundary.TERMINAL
     assert update.session_id is None
     assert update.stdin_available is False
     assert manager.closed_sessions == ["terminal-1"]
@@ -1460,7 +1924,7 @@ async def test_ctrl_c_uses_termination_grace_as_drain_deadline() -> None:
 
 
 @pytest.mark.asyncio
-async def test_successful_quiet_poll_refreshes_idle_activity() -> None:
+async def test_initial_quiet_boundary_keeps_session_active_before_idle_expiry() -> None:
     manager = FakeTerminalManager()
     clock = MutableClock()
     service = ShellSessionService(
@@ -1472,21 +1936,14 @@ async def test_successful_quiet_poll_refreshes_idle_activity() -> None:
     first = await service.execute(
         identity=_identity(),
         request=ShellExecRequest(
-            command="interactive",
+            command="no-output",
             yield_time_ms=0,
             max_runtime_sec=10,
         ),
     )
 
     assert first.session_id is not None
-    clock.advance(0.75)
-    poll = await service.write_stdin(
-        identity=_identity(),
-        request=ShellWriteRequest(session_id=first.session_id, yield_time_ms=0),
-    )
-
-    assert poll.process_status is ShellProcessStatus.RUNNING
-    assert poll.stdout == ""
+    assert first.interaction_boundary is ShellInteractionBoundary.QUIET_BOUNDARY
     clock.advance(0.75)
     await service.cleanup_stale_sessions()
     assert first.session_id in service._records
@@ -1494,7 +1951,7 @@ async def test_successful_quiet_poll_refreshes_idle_activity() -> None:
 
 
 @pytest.mark.asyncio
-async def test_quiet_poll_does_not_extend_hard_runtime_deadline() -> None:
+async def test_quiet_boundary_does_not_extend_hard_runtime_deadline() -> None:
     manager = FakeTerminalManager()
     clock = MutableClock()
     service = ShellSessionService(
@@ -1506,24 +1963,19 @@ async def test_quiet_poll_does_not_extend_hard_runtime_deadline() -> None:
     first = await service.execute(
         identity=_identity(),
         request=ShellExecRequest(
-            command="interactive",
+            command="no-output",
             yield_time_ms=0,
             max_runtime_sec=1,
         ),
     )
 
     assert first.session_id is not None
-    clock.advance(0.75)
-    poll = await service.write_stdin(
-        identity=_identity(),
-        request=ShellWriteRequest(session_id=first.session_id, yield_time_ms=0),
-    )
-    assert poll.process_status is ShellProcessStatus.RUNNING
+    assert first.interaction_boundary is ShellInteractionBoundary.QUIET_BOUNDARY
 
-    clock.advance(0.5)
-    timed_out = await service.write_stdin(
+    clock.advance(1.25)
+    timed_out = await service.wait_for_output(
         identity=_identity(),
-        request=ShellWriteRequest(session_id=first.session_id, yield_time_ms=0),
+        request=ShellWaitRequest(session_id=first.session_id),
     )
     assert timed_out.error_code is ShellSessionErrorCode.COMMAND_TIMED_OUT
     assert timed_out.process_status is ShellProcessStatus.TIMED_OUT
@@ -1546,9 +1998,9 @@ async def test_idle_expiry_closes_through_common_cleanup_path() -> None:
 
     assert first.session_id is not None
     clock.advance(2)
-    update = await service.write_stdin(
+    update = await service.wait_for_output(
         identity=_identity(),
-        request=ShellWriteRequest(session_id=first.session_id, yield_time_ms=0),
+        request=ShellWaitRequest(session_id=first.session_id),
     )
 
     assert update.error_code is ShellSessionErrorCode.SESSION_UNAVAILABLE
@@ -1585,9 +2037,9 @@ async def test_deadline_expiry_poll_returns_timed_out_and_closes() -> None:
         )
         is ShellCapability.ASSESSMENT
     )
-    update = await service.write_stdin(
+    update = await service.wait_for_output(
         identity=_identity(),
-        request=ShellWriteRequest(session_id=first.session_id, yield_time_ms=0),
+        request=ShellWaitRequest(session_id=first.session_id),
     )
 
     assert update.success is False
@@ -1661,6 +2113,358 @@ async def test_stale_cleanup_uses_monotonic_hard_runtime_expiry() -> None:
     assert first.session_id not in service._records
     assert b"\x03" in [payload for _session, payload in manager.sent_inputs]
     assert manager.closed_sessions == ["terminal-1"]
+
+
+@pytest.mark.asyncio
+async def test_task_cleanup_persists_canonical_terminal_turn_event(monkeypatch) -> None:
+    engine, session_factory = _build_shell_turn_session()
+    tenant_id = 1
+    turn_id = "task-cleanup-turn-1"
+    task_id, message_id = _seed_shell_turn(
+        session_factory,
+        tenant_id=tenant_id,
+        turn_id=turn_id,
+        conversation_id="conv-shell-cleanup",
+    )
+    hub = RecordingStreamHub()
+
+    monkeypatch.setattr("backend.database.SessionLocal", session_factory)
+    monkeypatch.setattr(
+        "backend.services.streaming.in_memory_hub.get_in_memory_stream_hub",
+        lambda: hub,
+    )
+    try:
+        manager = FakeTerminalManager()
+        service = ShellSessionService(
+            terminal_manager=manager,
+            config=_config(termination_grace_sec=0),
+            runtime_context_resolver=lambda _identity: _context(
+                tenant_id=tenant_id,
+                task_id=task_id,
+            ),
+        )
+        first = await service.execute(
+            identity=_identity(
+                tenant_id=tenant_id,
+                task_id=task_id,
+                execution_owner_id=f"main:{turn_id}",
+            ),
+            request=ShellExecRequest(command="delayed", yield_time_ms=0),
+        )
+
+        assert first.session_id is not None
+        await service.close_task_sessions(tenant_id=tenant_id, task_id=task_id)
+
+        with session_factory() as db:
+            rows = db.execute(
+                select(ChatTurnEvent)
+                .where(ChatTurnEvent.chat_message_id == message_id)
+                .order_by(ChatTurnEvent.phase_sequence.asc())
+            ).scalars().all()
+
+        assert len(rows) == 1
+        tool_call_id = f"shell-session-{first.session_id}"
+        assert rows[0].tool_call_id == tool_call_id
+        assert rows[0].content == "Shell session closed"
+        assert rows[0].event_metadata["lifecycle_event"] == "shell_session_terminal"
+        assert rows[0].event_metadata["close_reason"] == "task_cleanup"
+        assert rows[0].event_metadata["session_id"] == first.session_id
+        assert rows[0].event_metadata["session_status"] == "closed"
+        assert rows[0].event_metadata["process_status"] == "terminated"
+        assert rows[0].event_metadata["interaction_boundary"] == "terminal"
+        assert rows[0].event_metadata["compact_tool_result"]["summary"] == (
+            "Shell session closed"
+        )
+
+        assert len(hub.published) == 1
+        published_task_id, event = hub.published[0]
+        assert published_task_id == task_id
+        metadata = event["metadata"]
+        assert isinstance(metadata, dict)
+        assert event["type"] == "tool_end"
+        assert event["content"] == "Shell session closed"
+        assert metadata["tool_call_id"] == tool_call_id
+        assert metadata["lifecycle_event"] == "shell_session_terminal"
+        assert metadata["close_reason"] == "task_cleanup"
+        assert metadata["session_id"] == first.session_id
+        assert metadata["status"] == "cancelled"
+        assert metadata["session_status"] == "closed"
+        assert metadata["process_status"] == "terminated"
+        assert metadata["interaction_boundary"] == "terminal"
+        assert metadata["output_persistence"] == "transient"
+        assert "chars" not in repr(event)
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_terminal_event_replaces_originating_shell_card(monkeypatch) -> None:
+    engine, session_factory = _build_shell_turn_session()
+    tenant_id = 1
+    turn_id = "task-cleanup-originating-turn-1"
+    task_id, message_id = _seed_shell_turn(
+        session_factory,
+        tenant_id=tenant_id,
+        turn_id=turn_id,
+        conversation_id="conv-shell-cleanup-originating",
+    )
+    hub = RecordingStreamHub()
+
+    monkeypatch.setattr("backend.database.SessionLocal", session_factory)
+    monkeypatch.setattr(
+        "backend.services.streaming.in_memory_hub.get_in_memory_stream_hub",
+        lambda: hub,
+    )
+    try:
+        manager = FakeTerminalManager()
+        service = ShellSessionService(
+            terminal_manager=manager,
+            config=_config(termination_grace_sec=0),
+            runtime_context_resolver=lambda _identity: _context(
+                tenant_id=tenant_id,
+                task_id=task_id,
+            ),
+        )
+        first = await service.execute(
+            identity=_identity(
+                tenant_id=tenant_id,
+                task_id=task_id,
+                execution_owner_id=f"main:{turn_id}",
+            ),
+            request=ShellExecRequest(command="delayed", yield_time_ms=0),
+            capability=ShellCapability.UTILITY,
+        )
+
+        assert first.session_id is not None
+        with session_factory() as db:
+            db.add(
+                ChatTurnEvent(
+                    task_id=task_id,
+                    tenant_id=tenant_id,
+                    conversation_id="conv-shell-cleanup-originating",
+                    chat_message_id=message_id,
+                    turn_number=1,
+                    phase_sequence=0,
+                    kind="tool",
+                    tool_call_id="call-shell-origin",
+                    content="Session active",
+                    event_metadata={
+                        "tool_name": "shell.utility",
+                        "tool_call_id": "call-shell-origin",
+                        "status": "success",
+                        "process_status": "running",
+                        "session_status": "active",
+                        "interaction_boundary": "output_available",
+                        "session_id": first.session_id,
+                        "output_persistence": "transient",
+                    },
+                )
+            )
+            db.commit()
+
+        await service.close_task_sessions(tenant_id=tenant_id, task_id=task_id)
+
+        with session_factory() as db:
+            rows = db.execute(
+                select(ChatTurnEvent)
+                .where(ChatTurnEvent.chat_message_id == message_id)
+                .order_by(ChatTurnEvent.phase_sequence.asc())
+            ).scalars().all()
+
+            page = ChatTranscriptQueryService(db).list_latest_transcript_page(
+                task_id=task_id,
+                requested_conversation_id="conv-shell-cleanup-originating",
+                limit=10,
+            )
+
+        assert len(rows) == 1
+        assert rows[0].tool_call_id == "call-shell-origin"
+        assert rows[0].content == "Shell session closed"
+        metadata = rows[0].event_metadata
+        assert metadata["tool_call_id"] == "call-shell-origin"
+        assert metadata["tool_name"] == "shell.utility"
+        assert metadata["lifecycle_event"] == "shell_session_terminal"
+        assert metadata["close_reason"] == "task_cleanup"
+        assert metadata["session_id"] == first.session_id
+        assert metadata["status"] == "cancelled"
+        assert metadata["process_status"] == "terminated"
+        assert metadata["session_status"] == "closed"
+        assert metadata["interaction_boundary"] == "terminal"
+        assert metadata["output_persistence"] == "transient"
+        assert metadata["compact_tool_result"]["session_status"] == "closed"
+        assert metadata["compact_tool_result"]["process_status"] == "terminated"
+        assert not any(
+            str(row.tool_call_id or "").startswith("shell-session-") for row in rows
+        )
+
+        tool_items = [item for item in page.items if item.kind == "tool"]
+        assert len(tool_items) == 1
+        assert tool_items[0].metadata["tool_call_id"] == "call-shell-origin"
+        assert tool_items[0].metadata["process_status"] == "terminated"
+        assert tool_items[0].metadata["session_status"] == "closed"
+        assert tool_items[0].metadata["interaction_boundary"] == "terminal"
+        assert tool_items[0].metadata["output_persistence"] == "transient"
+
+        assert len(hub.published) == 1
+        published_task_id, event = hub.published[0]
+        assert published_task_id == task_id
+        live_metadata = event["metadata"]
+        assert live_metadata["tool_call_id"] == "call-shell-origin"
+        assert live_metadata["tool_name"] == "shell.utility"
+        assert live_metadata["process_status"] == "terminated"
+        assert live_metadata["session_status"] == "closed"
+        assert live_metadata["interaction_boundary"] == "terminal"
+        assert live_metadata["output_persistence"] == "transient"
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_cleanup_terminal_event_uses_session_origin_without_existing_row(
+    monkeypatch,
+) -> None:
+    engine, session_factory = _build_shell_turn_session()
+    tenant_id = 1
+    turn_id = "task-cleanup-origin-before-row-turn-1"
+    task_id, message_id = _seed_shell_turn(
+        session_factory,
+        tenant_id=tenant_id,
+        turn_id=turn_id,
+        conversation_id="conv-shell-cleanup-origin-before-row",
+    )
+    hub = RecordingStreamHub()
+
+    monkeypatch.setattr("backend.database.SessionLocal", session_factory)
+    monkeypatch.setattr(
+        "backend.services.streaming.in_memory_hub.get_in_memory_stream_hub",
+        lambda: hub,
+    )
+    try:
+        manager = FakeTerminalManager()
+        service = ShellSessionService(
+            terminal_manager=manager,
+            config=_config(termination_grace_sec=0),
+            runtime_context_resolver=lambda _identity: _context(
+                tenant_id=tenant_id,
+                task_id=task_id,
+            ),
+        )
+        first = await service.execute(
+            identity=_identity(
+                tenant_id=tenant_id,
+                task_id=task_id,
+                execution_owner_id=f"main:{turn_id}",
+            ),
+            request=ShellExecRequest(command="delayed", yield_time_ms=0),
+            capability=ShellCapability.UTILITY,
+            origin=ShellSessionOrigin(
+                tool_call_id="call-shell-origin-before-row",
+                tool_batch_id="batch-shell-origin-before-row",
+                tool_name="shell.utility",
+            ),
+        )
+
+        assert first.session_id is not None
+        await service.close_task_sessions(tenant_id=tenant_id, task_id=task_id)
+
+        with session_factory() as db:
+            rows = db.execute(
+                select(ChatTurnEvent)
+                .where(ChatTurnEvent.chat_message_id == message_id)
+                .order_by(ChatTurnEvent.phase_sequence.asc())
+            ).scalars().all()
+
+        assert len(rows) == 1
+        metadata = rows[0].event_metadata
+        assert rows[0].tool_call_id == "call-shell-origin-before-row"
+        assert metadata["tool_call_id"] == "call-shell-origin-before-row"
+        assert metadata["tool_batch_id"] == "batch-shell-origin-before-row"
+        assert metadata["tool_name"] == "shell.utility"
+        assert metadata["session_id"] == first.session_id
+        assert metadata["lifecycle_event"] == "shell_session_terminal"
+        assert not str(rows[0].tool_call_id or "").startswith("shell-session-")
+
+        assert len(hub.published) == 1
+        live_metadata = hub.published[0][1]["metadata"]
+        assert live_metadata["tool_call_id"] == "call-shell-origin-before-row"
+        assert live_metadata["tool_batch_id"] == "batch-shell-origin-before-row"
+        assert live_metadata["tool_name"] == "shell.utility"
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_idle_cleanup_persists_and_publishes_terminal_turn_event(monkeypatch) -> None:
+    engine, session_factory = _build_shell_turn_session()
+    tenant_id = 1
+    turn_id = "idle-cleanup-turn-1"
+    task_id, message_id = _seed_shell_turn(
+        session_factory,
+        tenant_id=tenant_id,
+        turn_id=turn_id,
+        conversation_id="conv-shell-idle-cleanup",
+    )
+    hub = RecordingStreamHub()
+
+    monkeypatch.setattr("backend.database.SessionLocal", session_factory)
+    monkeypatch.setattr(
+        "backend.services.streaming.in_memory_hub.get_in_memory_stream_hub",
+        lambda: hub,
+    )
+    try:
+        manager = FakeTerminalManager()
+        clock = MutableClock()
+        service = ShellSessionService(
+            terminal_manager=manager,
+            config=_config(idle_timeout_sec=1, termination_grace_sec=0),
+            runtime_context_resolver=lambda _identity: _context(
+                tenant_id=tenant_id,
+                task_id=task_id,
+            ),
+            clock=clock,
+        )
+        first = await service.execute(
+            identity=_identity(
+                tenant_id=tenant_id,
+                task_id=task_id,
+                execution_owner_id=f"main:{turn_id}",
+            ),
+            request=ShellExecRequest(
+                command="no-output",
+                yield_time_ms=0,
+                max_runtime_sec=10,
+            ),
+        )
+
+        assert first.session_id is not None
+        clock.advance(2)
+        await service.cleanup_stale_sessions()
+
+        with session_factory() as db:
+            rows = db.execute(
+                select(ChatTurnEvent)
+                .where(ChatTurnEvent.chat_message_id == message_id)
+                .order_by(ChatTurnEvent.phase_sequence.asc())
+            ).scalars().all()
+
+        assert len(rows) == 1
+        assert rows[0].event_metadata["close_reason"] == "idle_expired"
+        assert rows[0].event_metadata["session_id"] == first.session_id
+        assert rows[0].event_metadata["process_status"] == "terminated"
+        assert len(hub.published) == 1
+        published_task_id, event = hub.published[0]
+        assert published_task_id == task_id
+        metadata = event["metadata"]
+        assert isinstance(metadata, dict)
+        assert metadata["close_reason"] == "idle_expired"
+        assert metadata["session_id"] == first.session_id
+        assert metadata["process_status"] == "terminated"
+        assert metadata["session_status"] == "closed"
+        assert metadata["interaction_boundary"] == "terminal"
+        assert metadata["tool_call_id"] == f"shell-session-{first.session_id}"
+        assert "no-output" not in repr(event)
+    finally:
+        engine.dispose()
 
 
 def test_backend_config_defaults_feed_service_config() -> None:

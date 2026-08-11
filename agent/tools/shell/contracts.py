@@ -91,7 +91,7 @@ class ShellExecArgs(BaseModel):
 
 
 class ShellWriteStdinArgs(BaseModel):
-    """Write input to, or poll, an existing provider-backed shell session."""
+    """Write non-empty input to an existing provider-backed shell session."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -102,9 +102,10 @@ class ShellWriteStdinArgs(BaseModel):
         description="Opaque public shell-session handle returned by a shell start alias.",
     )
     chars: str = Field(
-        default="",
+        ...,
+        min_length=1,
         max_length=SHELL_SESSION_MAX_INPUT_CHARS,
-        description="Characters to send to stdin. Empty string polls for more output.",
+        description="Non-empty characters to send to stdin exactly as provided.",
     )
     yield_time_ms: int = Field(
         default=SHELL_SESSION_DEFAULT_YIELD_TIME_MS,

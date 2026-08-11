@@ -73,6 +73,31 @@ class ShellProcessStatus(str, Enum):
     COMPLETED = "completed"
     TERMINATED = "terminated"
     TIMED_OUT = "timed_out"
+    FAILED = "failed"
+
+
+class ShellSessionLifecycleStatus(str, Enum):
+    """Provider-neutral lifecycle state for the live shell session container."""
+
+    ACTIVE = "active"
+    CLOSED = "closed"
+    UNAVAILABLE = "unavailable"
+
+
+class ShellInteractionBoundary(str, Enum):
+    """Meaningful runtime boundary that resumes graph coordination."""
+
+    OUTPUT_AVAILABLE = "output_available"
+    QUIET_BOUNDARY = "quiet_boundary"
+    TERMINAL = "terminal"
+
+
+class ShellInteractionAction(str, Enum):
+    """Semantic continuation actions available to shell-session coordination."""
+
+    SEND_INPUT = "send_input"
+    WAIT_FOR_OUTPUT = "wait_for_output"
+    INTERRUPT = "interrupt"
 
 
 class ShellSessionErrorCode(str, Enum):
@@ -105,6 +130,15 @@ class ShellSessionIdentity:
     workspace_path: str | None
     runner_id: str | None
     execution_site_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ShellSessionOrigin:
+    """Immutable UI correlation identity for one originating shell tool call."""
+
+    tool_call_id: str | None = None
+    tool_batch_id: str | None = None
+    tool_name: str | None = None
 
 
 def _validate_env_limits(env: dict[str, str]) -> dict[str, str]:
@@ -190,8 +224,8 @@ class ShellExecRequest(BaseModel):
         return _validate_env_limits(value)
 
 
-class ShellWriteRequest(BaseModel):
-    """Validated service-bound request for polling or writing to a session."""
+class ShellWaitRequest(BaseModel):
+    """Validated internal request for waiting on an existing shell session."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -199,7 +233,27 @@ class ShellWriteRequest(BaseModel):
         min_length=1,
         max_length=SHELL_SESSION_MAX_PUBLIC_ID_CHARS,
     )
-    chars: str = Field(default="", max_length=SHELL_SESSION_MAX_INPUT_CHARS)
+    max_output_chars: int = Field(
+        default=SHELL_SESSION_DEFAULT_MAX_OUTPUT_CHARS,
+        ge=SHELL_SESSION_MIN_OUTPUT_CHARS,
+        le=SHELL_SESSION_MAX_OUTPUT_CHARS,
+    )
+
+
+class ShellWriteRequest(BaseModel):
+    """Validated service-bound request for writing non-empty input to a session."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str = Field(
+        min_length=1,
+        max_length=SHELL_SESSION_MAX_PUBLIC_ID_CHARS,
+    )
+    chars: str = Field(
+        ...,
+        min_length=1,
+        max_length=SHELL_SESSION_MAX_INPUT_CHARS,
+    )
     yield_time_ms: int = Field(
         default=SHELL_SESSION_DEFAULT_YIELD_TIME_MS,
         ge=0,
@@ -220,6 +274,8 @@ class ShellSessionUpdate(BaseModel):
     success: bool
     status: ShellSessionStatus
     process_status: ShellProcessStatus | None = None
+    session_status: ShellSessionLifecycleStatus | None = None
+    interaction_boundary: ShellInteractionBoundary | None = None
     session_id: str | None = Field(
         default=None,
         max_length=SHELL_SESSION_MAX_PUBLIC_ID_CHARS,
@@ -239,10 +295,17 @@ class ShellSessionUpdate(BaseModel):
             return self
 
         if self.process_status is ShellProcessStatus.RUNNING:
-            session_ref = self.session_id or "the session"
-            self.summary = (
-                f"Command is still running; poll session {session_ref} for more output."
-            )
+            if self.stdout or self.stderr:
+                self.summary = "Command is still running; new output was received."
+            elif self.stdin_available:
+                self.summary = (
+                    "Command is still running and accepts additional input; "
+                    "no new output was produced."
+                )
+            else:
+                self.summary = (
+                    "Command is still running; no new output was produced."
+                )
         elif self.process_status is ShellProcessStatus.COMPLETED:
             if self.exit_code == 0:
                 self.summary = "Command completed successfully."
@@ -252,6 +315,11 @@ class ShellSessionUpdate(BaseModel):
             self.summary = "Command was terminated."
         elif self.process_status is ShellProcessStatus.TIMED_OUT:
             self.summary = "Command timed out."
+        elif self.process_status is ShellProcessStatus.FAILED:
+            if self.exit_code is not None:
+                self.summary = f"Command failed with exit code {self.exit_code}."
+            else:
+                self.summary = "Shell session process failed."
         elif self.error_code is not None:
             self.summary = f"Shell session failed: {self.error_code.value}."
         else:

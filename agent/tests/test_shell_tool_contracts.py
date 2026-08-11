@@ -101,7 +101,10 @@ def test_shell_write_stdin_schema_and_input_forms() -> None:
     assert schema["properties"]["max_output_chars"]["minimum"] == 1_024
     assert schema["properties"]["max_output_chars"]["maximum"] == 128_000
 
-    assert ShellWriteStdinArgs(session_id="shs_123").chars == ""
+    with pytest.raises(ValidationError):
+        ShellWriteStdinArgs(session_id="shs_123")
+    with pytest.raises(ValidationError):
+        ShellWriteStdinArgs(session_id="shs_123", chars="")
     assert (
         ShellWriteStdinArgs(session_id="shs_123", chars="\u0003").chars
         == "\u0003"

@@ -28,11 +28,15 @@ from runtime_shared.shell_session_contracts import (
     SHELL_SESSION_CLEANUP_TIMEOUT_SEC,
     SHELL_SESSION_CONTROL_TIMEOUT_SEC,
     SHELL_SESSION_PREPARATION_TIMEOUT_SEC,
+    ShellInteractionBoundary,
     ShellExecRequest,
     ShellProcessStatus,
     ShellSessionErrorCode,
     ShellSessionIdentity,
+    ShellSessionLifecycleStatus,
+    ShellSessionOrigin,
     ShellSessionUpdate,
+    ShellWaitRequest,
     ShellWriteRequest,
 )
 from runtime_shared.shell_capabilities import ShellCapability
@@ -70,6 +74,17 @@ _SHELL_SESSION_ERROR_MESSAGES = {
         "Shell runtime transport failed while processing the session."
     ),
 }
+_TERMINAL_LIFECYCLE_CLOSE_REASONS = frozenset(
+    {
+        "cancelled",
+        "deadline_expired",
+        "idle_expired",
+        "interrupted",
+        "operation_failed",
+        "owner_cleanup",
+        "task_cleanup",
+    }
+)
 
 ContextResolver = Callable[[ShellSessionIdentity], Awaitable[Any] | Any]
 
@@ -84,6 +99,8 @@ class ShellSessionServiceConfig:
     cleanup_interval_sec: float
     termination_grace_sec: float
     terminal_io_grace_sec: float
+    output_quiescence_sec: float = 0.05
+    initial_quiet_window_sec: float = 0.25
 
     @classmethod
     def from_backend_config(cls) -> "ShellSessionServiceConfig":
@@ -112,11 +129,13 @@ class ShellSessionRecord:
     terminal_session_id: str
     identity: ShellSessionIdentity
     originating_capability: ShellCapability
+    origin: ShellSessionOrigin | None
     framing_parser: StreamingPtyFramingParser
     last_activity_at: float
     deadline_at: float
     operation_in_progress: bool = False
     pending_utf8_bytes: bytes = b""
+    initial_quiet_boundary_emitted: bool = False
 
 
 @dataclass(slots=True)
@@ -157,6 +176,7 @@ class ShellSessionService:
         identity: ShellSessionIdentity,
         request: ShellExecRequest,
         capability: ShellCapability = ShellCapability.ASSESSMENT,
+        origin: ShellSessionOrigin | None = None,
     ) -> ShellSessionUpdate:
         """Start one PTY shell command and return its first bounded update."""
         started_at = self._clock()
@@ -198,6 +218,7 @@ class ShellSessionService:
                     public_session_id=public_session_id,
                     frame=frame,
                     capability=capability,
+                    origin=origin,
                     reservation=reservation,
                 )
                 terminal_session_id, record = terminal_session
@@ -221,6 +242,9 @@ class ShellSessionService:
                 yield_time_ms=yield_time_ms,
                 max_output_chars=request.max_output_chars,
                 started_at=started_at,
+                allow_initial_quiet_boundary=request.yield_time_ms is not None,
+                return_on_empty_window=request.yield_time_ms is not None,
+                return_on_output_boundary=request.yield_time_ms is not None,
             )
         except asyncio.CancelledError:
             if registered and public_session_id:
@@ -259,7 +283,7 @@ class ShellSessionService:
         identity: ShellSessionIdentity,
         request: ShellWriteRequest,
     ) -> ShellSessionUpdate:
-        """Poll, write exact input to, or interrupt an existing shell session."""
+        """Write exact input to, or interrupt, an existing shell session."""
         started_at = self._clock()
         context_error, _ = await self._validate_runtime_context(identity)
         if context_error is not None:
@@ -321,12 +345,87 @@ class ShellSessionService:
                         started_at,
                     )
                 record.last_activity_at = self._clock()
+                remaining_runtime_ms = math.ceil(
+                    max(0.0, record.deadline_at - self._clock()) * 1000.0
+                )
+                return await self._read_update(
+                    record=record,
+                    yield_time_ms=max(1, remaining_runtime_ms),
+                    max_output_chars=request.max_output_chars,
+                    started_at=started_at,
+                    return_on_empty_window=False,
+                )
 
             return await self._read_update(
                 record=record,
                 yield_time_ms=request.yield_time_ms,
                 max_output_chars=request.max_output_chars,
                 started_at=started_at,
+            )
+        except asyncio.CancelledError:
+            await self._release_record(record)
+            raise
+        except Exception:
+            return await self._fail_claimed_record(
+                record,
+                ShellSessionErrorCode.RUNTIME_TRANSPORT_FAILED,
+                started_at,
+            )
+
+    async def wait_for_output(
+        self,
+        *,
+        identity: ShellSessionIdentity,
+        request: ShellWaitRequest,
+    ) -> ShellSessionUpdate:
+        """Wait internally for the next meaningful output or terminal boundary."""
+        started_at = self._clock()
+        context_error, _ = await self._validate_runtime_context(identity)
+        if context_error is not None:
+            error_code = ShellSessionErrorCode.SESSION_UNAVAILABLE
+            self._emit_operation_failed(
+                identity,
+                error_code,
+                public_session_id=request.session_id,
+            )
+            return self._error_update(
+                error_code=error_code,
+                duration_ms=self._duration_ms(started_at),
+                session_status=ShellSessionLifecycleStatus.UNAVAILABLE,
+            )
+
+        record, error_code = await self._claim_existing_record(
+            identity=identity,
+            public_session_id=request.session_id,
+        )
+        if record is None:
+            self._emit_operation_failed(
+                identity,
+                error_code,
+                public_session_id=request.session_id,
+            )
+            if error_code is ShellSessionErrorCode.COMMAND_TIMED_OUT:
+                return self._timeout_update(
+                    stdout="",
+                    truncated=False,
+                    duration_ms=self._duration_ms(started_at),
+                )
+            return self._error_update(
+                error_code=error_code,
+                duration_ms=0,
+                session_status=ShellSessionLifecycleStatus.UNAVAILABLE,
+            )
+
+        try:
+            remaining_runtime_ms = math.ceil(
+                max(0.0, record.deadline_at - self._clock()) * 1000.0
+            )
+            return await self._read_update(
+                record=record,
+                yield_time_ms=max(1, remaining_runtime_ms),
+                max_output_chars=request.max_output_chars,
+                started_at=started_at,
+                return_on_empty_window=False,
             )
         except asyncio.CancelledError:
             await self._release_record(record)
@@ -445,12 +544,16 @@ class ShellSessionService:
         max_output_chars: int,
         started_at: float,
         terminate_after_window: bool = False,
+        allow_initial_quiet_boundary: bool = False,
+        return_on_empty_window: bool = True,
+        return_on_output_boundary: bool = True,
     ) -> ShellSessionUpdate:
         deadline = self._clock() + (float(yield_time_ms) / 1000.0)
         output = ShellSessionOutputAccumulator(
             parser=record.framing_parser,
             max_output_chars=max_output_chars,
         )
+        output_quiescent_at: float | None = None
         while True:
             now = self._clock()
             if self._is_deadline_expired(record, now):
@@ -473,12 +576,33 @@ class ShellSessionService:
                     duration_ms=self._duration_ms(started_at),
                 )
 
-            remaining = max(0.0, deadline - now)
-            if remaining <= 0.0 and yield_time_ms > 0:
+            stdout, _truncated = output.stdout()
+            if (
+                return_on_output_boundary
+                and output_quiescent_at is not None
+                and now >= output_quiescent_at
+                and stdout
+            ):
                 break
 
-            read_timeout = min(self._config.terminal_io_grace_sec, remaining)
-            if yield_time_ms == 0:
+            remaining = max(0.0, deadline - now)
+            if return_on_empty_window and remaining <= 0.0 and yield_time_ms > 0:
+                break
+
+            read_timeout_budget = remaining if return_on_empty_window else max(
+                0.0,
+                record.deadline_at - now,
+            )
+            if output_quiescent_at is not None:
+                read_timeout_budget = min(
+                    read_timeout_budget,
+                    max(0.0, output_quiescent_at - now),
+                )
+            read_timeout = min(
+                self._config.terminal_io_grace_sec,
+                read_timeout_budget,
+            )
+            if yield_time_ms == 0 and return_on_empty_window:
                 read_timeout = 0.0
             result = await self._terminal_manager.read_output_result(
                 record.terminal_session_id,
@@ -517,7 +641,17 @@ class ShellSessionService:
                     started_at,
                 )
             if not result.data:
-                if yield_time_ms == 0 or self._clock() >= deadline:
+                stdout, _truncated = output.stdout()
+                if (
+                    return_on_output_boundary
+                    and output_quiescent_at is not None
+                    and self._clock() >= output_quiescent_at
+                    and stdout
+                ):
+                    break
+                if return_on_empty_window and (
+                    yield_time_ms == 0 or self._clock() >= deadline
+                ):
                     break
                 continue
             record.last_activity_at = self._clock()
@@ -526,7 +660,12 @@ class ShellSessionService:
                     break
                 stdout, truncated = output.stdout()
                 exit_code = completion.exit_code
-                self._emit_process_completed(record, ShellProcessStatus.COMPLETED)
+                process_status = (
+                    ShellProcessStatus.COMPLETED
+                    if exit_code == 0
+                    else ShellProcessStatus.FAILED
+                )
+                self._emit_process_completed(record, process_status)
                 await self._remove_and_close_record(
                     record.public_session_id,
                     interrupt=False,
@@ -536,12 +675,14 @@ class ShellSessionService:
                 return ShellSessionUpdate(
                     success=exit_code == 0,
                     status="success" if exit_code == 0 else "error",
-                    process_status=ShellProcessStatus.COMPLETED,
+                    process_status=process_status,
+                    session_status=ShellSessionLifecycleStatus.CLOSED,
+                    interaction_boundary=ShellInteractionBoundary.TERMINAL,
                     session_id=None,
                     stdout=stdout,
                     stderr=(
                         ""
-                        if exit_code == 0 or stdout
+                        if exit_code == 0
                         else f"Command exited with code {exit_code}."
                     ),
                     exit_code=exit_code,
@@ -551,9 +692,15 @@ class ShellSessionService:
                     summary=(
                         "Command completed successfully."
                         if exit_code == 0
-                        else f"Command completed with exit code {exit_code}."
+                        else f"Command failed with exit code {exit_code}."
                     ),
                 )
+            stdout, _truncated = output.stdout()
+            if return_on_output_boundary and stdout:
+                quiescence = max(0.0, float(self._config.output_quiescence_sec))
+                if quiescence <= 0.0:
+                    break
+                output_quiescent_at = self._clock() + quiescence
 
         stdout, truncated = output.stdout()
         if terminate_after_window:
@@ -568,6 +715,8 @@ class ShellSessionService:
                 success=True,
                 status="success",
                 process_status=ShellProcessStatus.TERMINATED,
+                session_status=ShellSessionLifecycleStatus.CLOSED,
+                interaction_boundary=ShellInteractionBoundary.TERMINAL,
                 session_id=None,
                 stdout=stdout,
                 stderr="",
@@ -577,11 +726,53 @@ class ShellSessionService:
                 duration_ms=self._duration_ms(started_at),
                 summary="Command was interrupted.",
             )
+        if return_on_output_boundary and stdout:
+            await self._release_record(record)
+            return ShellSessionUpdate(
+                success=True,
+                status="success",
+                process_status=ShellProcessStatus.RUNNING,
+                session_status=ShellSessionLifecycleStatus.ACTIVE,
+                interaction_boundary=ShellInteractionBoundary.OUTPUT_AVAILABLE,
+                session_id=record.public_session_id,
+                stdout=stdout,
+                stderr="",
+                exit_code=None,
+                stdin_available=True,
+                truncated=truncated,
+                duration_ms=self._duration_ms(started_at),
+            )
+        if allow_initial_quiet_boundary and not record.initial_quiet_boundary_emitted:
+            if yield_time_ms > 0:
+                initial_window = max(
+                    0.0,
+                    float(self._config.initial_quiet_window_sec),
+                )
+                if initial_window > 0.0 and self._clock() < deadline:
+                    await asyncio.sleep(min(initial_window, max(0.0, deadline - self._clock())))
+            record.initial_quiet_boundary_emitted = True
+            await self._release_record(record)
+            return ShellSessionUpdate(
+                success=True,
+                status="success",
+                process_status=ShellProcessStatus.RUNNING,
+                session_status=ShellSessionLifecycleStatus.ACTIVE,
+                interaction_boundary=ShellInteractionBoundary.QUIET_BOUNDARY,
+                session_id=record.public_session_id,
+                stdout="",
+                stderr="",
+                exit_code=None,
+                stdin_available=True,
+                truncated=False,
+                duration_ms=self._duration_ms(started_at),
+            )
         await self._release_record(record)
         return ShellSessionUpdate(
             success=True,
             status="success",
             process_status=ShellProcessStatus.RUNNING,
+            session_status=ShellSessionLifecycleStatus.ACTIVE,
+            interaction_boundary=None,
             session_id=record.public_session_id,
             stdout=stdout,
             stderr="",
@@ -641,6 +832,7 @@ class ShellSessionService:
         public_session_id: str,
         frame: PtyCommandFrame,
         capability: ShellCapability,
+        origin: ShellSessionOrigin | None,
         reservation: _StartCapacityReservation,
     ) -> tuple[str, ShellSessionRecord]:
         terminal_session_id: str | None = None
@@ -658,6 +850,7 @@ class ShellSessionService:
                 terminal_session_id=terminal_session_id,
                 identity=identity,
                 originating_capability=capability,
+                origin=origin,
                 framing_parser=StreamingPtyFramingParser(frame),
                 last_activity_at=now,
                 deadline_at=now + float(request.max_runtime_sec),
@@ -720,9 +913,13 @@ class ShellSessionService:
             error_code,
             public_session_id=record.public_session_id,
         )
+        self._emit_process_completed(record, ShellProcessStatus.FAILED)
         return self._error_update(
             error_code=error_code,
             duration_ms=self._duration_ms(started_at),
+            process_status=ShellProcessStatus.FAILED,
+            session_status=ShellSessionLifecycleStatus.CLOSED,
+            interaction_boundary=ShellInteractionBoundary.TERMINAL,
         )
 
     async def _remove_and_close_record(
@@ -797,7 +994,7 @@ class ShellSessionService:
     ) -> None:
         for record in records:
             await self._close_terminal(record.terminal_session_id, interrupt=interrupt)
-            self._emit_session_closed(record, close_reason)
+            await self._emit_session_closed(record, close_reason)
 
     async def _close_terminal(self, terminal_session_id: str, *, interrupt: bool) -> None:
         try:
@@ -1030,7 +1227,7 @@ class ShellSessionService:
         )
         safe_inc(f"shell_session_terminal_outcomes.{process_status_value}")
 
-    def _emit_session_closed(
+    async def _emit_session_closed(
         self,
         record: ShellSessionRecord,
         close_reason: str,
@@ -1048,6 +1245,245 @@ class ShellSessionService:
             placement,
             self._stable_segment(close_reason),
         )
+        event_metadata = self._persist_terminal_lifecycle_event(record, close_reason)
+        if event_metadata is not None:
+            await self._publish_terminal_lifecycle_event(
+                record=record,
+                close_reason=close_reason,
+                event_metadata=event_metadata,
+            )
+
+    def _persist_terminal_lifecycle_event(
+        self,
+        record: ShellSessionRecord,
+        close_reason: str,
+    ) -> dict[str, Any] | None:
+        if close_reason not in _TERMINAL_LIFECYCLE_CLOSE_REASONS:
+            return None
+        turn_id = self._turn_id_from_execution_owner_id(record.identity.execution_owner_id)
+        if turn_id is None:
+            return None
+        status, process_status = self._terminal_lifecycle_status(close_reason)
+        try:
+            from backend.database import SessionLocal
+            from backend.services.chat.turn_event_service import ChatTurnEventService
+
+            db = SessionLocal()
+            try:
+                tool_call_id = self._terminal_lifecycle_tool_call_id(record)
+                tool_name = self._terminal_lifecycle_tool_name(record)
+                tool_batch_id = self._terminal_lifecycle_tool_batch_id(record)
+                created = ChatTurnEventService(db).append_terminal_tool_lifecycle_event(
+                    task_id=record.identity.task_id,
+                    turn_id=turn_id,
+                    tool_call_id=tool_call_id,
+                    tool_name=tool_name,
+                    content="Shell session closed",
+                    status=status,
+                    process_status=process_status,
+                    session_status=ShellSessionLifecycleStatus.CLOSED.value,
+                    interaction_boundary=ShellInteractionBoundary.TERMINAL.value,
+                    session_id=record.public_session_id,
+                    close_reason=close_reason,
+                    metadata={
+                        "tool_call_id": tool_call_id,
+                        "tool_batch_id": tool_batch_id,
+                        "tool_name": tool_name,
+                        "execution_owner_id": record.identity.execution_owner_id,
+                        "runtime_placement_mode": record.identity.runtime_placement_mode,
+                        "runner_id": record.identity.runner_id,
+                        "execution_site_id": record.identity.execution_site_id,
+                        "originating_capability": record.originating_capability.value,
+                        "compact_tool_result": self._terminal_lifecycle_compact_result(
+                            status=status,
+                            process_status=process_status,
+                            session_id=record.public_session_id,
+                        ),
+                    },
+                )
+                event_metadata = (
+                    dict(created.event_metadata)
+                    if created is not None and isinstance(created.event_metadata, dict)
+                    else None
+                )
+                db.commit()
+                return event_metadata
+            except Exception:
+                db.rollback()
+                raise
+            finally:
+                db.close()
+        except Exception:
+            logger.debug(
+                "shell_session canonical terminal lifecycle persistence failed task_id=%s owner_fp=%s close_reason=%s",
+                record.identity.task_id,
+                self._fingerprint(record.identity.execution_owner_id),
+                self._stable_segment(close_reason),
+                exc_info=True,
+            )
+            return None
+
+    async def _publish_terminal_lifecycle_event(
+        self,
+        *,
+        record: ShellSessionRecord,
+        close_reason: str,
+        event_metadata: dict[str, Any],
+    ) -> None:
+        if close_reason == "cancelled":
+            return
+        try:
+            from agent.graph.contracts.streaming_constants import (
+                STEP_TOOL_END,
+                TOOL_PHASE_INDEX,
+            )
+            from backend.services.streaming.in_memory_hub import get_in_memory_stream_hub
+
+            status, process_status = self._terminal_lifecycle_status(close_reason)
+            tool_call_id = (
+                str(
+                    event_metadata.get("tool_call_id")
+                    or self._terminal_lifecycle_tool_call_id(record)
+                ).strip()
+                or self._terminal_lifecycle_tool_call_id(record)
+            )
+            tool_name = str(
+                event_metadata.get("tool_name")
+                or self._terminal_lifecycle_tool_name(record)
+            ).strip()
+            tool_name = tool_name or self._terminal_lifecycle_tool_name(record)
+            tool_batch_id = str(
+                event_metadata.get("tool_batch_id")
+                or self._terminal_lifecycle_tool_batch_id(record)
+                or ""
+            ).strip() or None
+            turn_id = self._turn_id_from_execution_owner_id(
+                record.identity.execution_owner_id
+            )
+            metadata: dict[str, Any] = {
+                "subtype": "tool_end",
+                "step_type": STEP_TOOL_END,
+                "ind": TOOL_PHASE_INDEX,
+                "tool": tool_name,
+                "tool_name": tool_name,
+                "tool_call_id": tool_call_id,
+                "tool_batch_id": tool_batch_id,
+                "status": status,
+                "process_status": process_status,
+                "session_status": ShellSessionLifecycleStatus.CLOSED.value,
+                "interaction_boundary": ShellInteractionBoundary.TERMINAL.value,
+                "session_id": record.public_session_id,
+                "close_reason": close_reason,
+                "lifecycle_event": "shell_session_terminal",
+                "output_persistence": "transient",
+                "compact_tool_result": self._terminal_lifecycle_compact_result(
+                    status=status,
+                    process_status=process_status,
+                    session_id=record.public_session_id,
+                ),
+                "conversation_id": event_metadata.get("conversation_id"),
+                "conversationId": event_metadata.get("conversation_id"),
+                "id": turn_id,
+                "turn_id": turn_id,
+                "turn_sequence": event_metadata.get("turn_sequence"),
+                "streaming": False,
+                "is_streaming": False,
+                "in_progress": False,
+                "source": "shell_session_cleanup",
+                "timestamp": time.time(),
+                "execution_owner_id": record.identity.execution_owner_id,
+                "runtime_placement_mode": record.identity.runtime_placement_mode,
+                "runner_id": record.identity.runner_id,
+                "execution_site_id": record.identity.execution_site_id,
+                "originating_capability": record.originating_capability.value,
+            }
+            await get_in_memory_stream_hub().publish(
+                int(record.identity.task_id),
+                {
+                    "type": "tool_end",
+                    "content": "Shell session closed",
+                    "metadata": {
+                        key: value
+                        for key, value in metadata.items()
+                        if value is not None
+                    },
+                },
+            )
+        except Exception:
+            logger.debug(
+                "shell_session terminal lifecycle live projection failed task_id=%s owner_fp=%s close_reason=%s",
+                record.identity.task_id,
+                self._fingerprint(record.identity.execution_owner_id),
+                self._stable_segment(close_reason),
+                exc_info=True,
+            )
+
+    @staticmethod
+    def _terminal_lifecycle_status(close_reason: str) -> tuple[str, str]:
+        if close_reason == "deadline_expired":
+            return "timeout", ShellProcessStatus.TIMED_OUT.value
+        if close_reason == "operation_failed":
+            return "failed", ShellProcessStatus.FAILED.value
+        return "cancelled", ShellProcessStatus.TERMINATED.value
+
+    @staticmethod
+    def _terminal_lifecycle_tool_call_id(record: ShellSessionRecord) -> str:
+        if record.origin is not None:
+            normalized = str(record.origin.tool_call_id or "").strip()
+            if normalized:
+                return normalized
+        return f"shell-session-{record.public_session_id}"
+
+    @staticmethod
+    def _terminal_lifecycle_tool_batch_id(record: ShellSessionRecord) -> str | None:
+        if record.origin is None:
+            return None
+        normalized = str(record.origin.tool_batch_id or "").strip()
+        return normalized or None
+
+    @staticmethod
+    def _terminal_lifecycle_tool_name(record: ShellSessionRecord) -> str:
+        if record.origin is not None:
+            normalized = str(record.origin.tool_name or "").strip()
+            if normalized:
+                return normalized
+        return "shell.session"
+
+    @staticmethod
+    def _terminal_lifecycle_compact_result(
+        *,
+        status: str,
+        process_status: str,
+        session_id: str,
+    ) -> dict[str, Any]:
+        return {
+            "schema_version": "2.0",
+            "tool": "shell.session",
+            "status": status,
+            "success": False,
+            "exit_code": None,
+            "summary": "Shell session closed",
+            "key_findings": [],
+            "errors": [],
+            "report_recommendations": [],
+            "structured_signals": [],
+            "decision_evidence": [],
+            "lossiness_risk": "low",
+            "artifact_refs": [],
+            "compression": None,
+            "process_status": process_status,
+            "session_status": ShellSessionLifecycleStatus.CLOSED.value,
+            "interaction_boundary": ShellInteractionBoundary.TERMINAL.value,
+            "session_id": session_id,
+        }
+
+    @staticmethod
+    def _turn_id_from_execution_owner_id(execution_owner_id: str) -> str | None:
+        normalized = str(execution_owner_id or "").strip()
+        if not normalized.startswith("main:"):
+            return None
+        turn_id = normalized.removeprefix("main:").strip()
+        return turn_id or None
 
     def _emit_operation_failed(
         self,
@@ -1113,12 +1549,19 @@ class ShellSessionService:
         *,
         error_code: ShellSessionErrorCode,
         duration_ms: int,
+        process_status: ShellProcessStatus | None = None,
+        session_status: ShellSessionLifecycleStatus | None = (
+            ShellSessionLifecycleStatus.UNAVAILABLE
+        ),
+        interaction_boundary: ShellInteractionBoundary | None = None,
     ) -> ShellSessionUpdate:
         message = _SHELL_SESSION_ERROR_MESSAGES[error_code]
         return ShellSessionUpdate(
             success=False,
             status="error",
-            process_status=None,
+            process_status=process_status,
+            session_status=session_status,
+            interaction_boundary=interaction_boundary,
             session_id=None,
             stdout="",
             stderr=message,
@@ -1144,6 +1587,8 @@ class ShellSessionService:
             success=False,
             status="error",
             process_status=ShellProcessStatus.TIMED_OUT,
+            session_status=ShellSessionLifecycleStatus.CLOSED,
+            interaction_boundary=ShellInteractionBoundary.TERMINAL,
             session_id=None,
             stdout=stdout,
             stderr=message,

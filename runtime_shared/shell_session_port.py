@@ -15,7 +15,10 @@ from runtime_shared.shell_session_contracts import (
     ShellExecRequest,
     ShellSessionErrorCode,
     ShellSessionIdentity,
+    ShellSessionLifecycleStatus,
+    ShellSessionOrigin,
     ShellSessionUpdate,
+    ShellWaitRequest,
     ShellWriteRequest,
 )
 
@@ -29,6 +32,7 @@ class ShellSessionServicePort(Protocol):
         identity: ShellSessionIdentity,
         request: ShellExecRequest,
         capability: ShellCapability = ShellCapability.ASSESSMENT,
+        origin: ShellSessionOrigin | None = None,
     ) -> ShellSessionUpdate: ...
 
     async def get_session_capability(
@@ -43,6 +47,13 @@ class ShellSessionServicePort(Protocol):
         *,
         identity: ShellSessionIdentity,
         request: ShellWriteRequest,
+    ) -> ShellSessionUpdate: ...
+
+    async def wait_for_output(
+        self,
+        *,
+        identity: ShellSessionIdentity,
+        request: ShellWaitRequest,
     ) -> ShellSessionUpdate: ...
 
     async def close_owner_sessions(
@@ -70,7 +81,9 @@ class _UnavailableShellSessionService:
         identity: ShellSessionIdentity,
         request: ShellExecRequest,
         capability: ShellCapability = ShellCapability.ASSESSMENT,
+        origin: ShellSessionOrigin | None = None,
     ) -> ShellSessionUpdate:
+        _ = origin
         return _runtime_unavailable_update()
 
     async def get_session_capability(
@@ -86,6 +99,14 @@ class _UnavailableShellSessionService:
         *,
         identity: ShellSessionIdentity,
         request: ShellWriteRequest,
+    ) -> ShellSessionUpdate:
+        return _runtime_unavailable_update()
+
+    async def wait_for_output(
+        self,
+        *,
+        identity: ShellSessionIdentity,
+        request: ShellWaitRequest,
     ) -> ShellSessionUpdate:
         return _runtime_unavailable_update()
 
@@ -116,6 +137,8 @@ def _runtime_unavailable_update() -> ShellSessionUpdate:
         success=False,
         status="error",
         process_status=None,
+        session_status=ShellSessionLifecycleStatus.UNAVAILABLE,
+        interaction_boundary=None,
         session_id=None,
         stdout="",
         stderr="",

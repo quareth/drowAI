@@ -73,6 +73,8 @@ def _has_chat_stop_cancellation_projection(execution: ToolExecution) -> bool:
     cancellation = metadata.get("cancellation")
     if not isinstance(cancellation, dict):
         return False
+    if bool(cancellation.get("canonical_turn_event_persisted")):
+        return False
     if bool(cancellation.get("cancel_requested")):
         return True
     return str(cancellation.get("source") or "").strip() == "chat_stop"
@@ -839,9 +841,12 @@ class ChatTranscriptQueryService:
                 "tool_call_id": tool_call_id,
                 "tool_name": tool_name,
                 "status": "cancelled",
+                "process_status": "terminated",
+                "session_status": "closed",
+                "interaction_boundary": "terminal",
                 "failure_category": "user_cancelled",
                 "cancellation_source": "chat_stop",
-                "process_state": cancellation.get("process_state") or "orphaned_until_terminal",
+                "process_state": cancellation.get("process_state") or "cancel_requested",
                 "runtime_kill_attempted": bool(cancellation.get("runtime_kill_attempted")),
                 "runtime_kill_supported": bool(cancellation.get("runtime_kill_supported")),
             }
@@ -883,8 +888,16 @@ class ChatTranscriptQueryService:
             phase_sequence = int(getattr(event, "phase_sequence", 0) or 0)
             metadata = dict(getattr(event, "event_metadata", None) or {})
             metadata["message_id"] = getattr(message, "id", None)
-            metadata["sequence"] = phase_sequence
-            metadata["sequence_authority"] = "canonical_detail"
+            stream_sequence = metadata.get("sequence")
+            if (
+                isinstance(stream_sequence, int)
+                and not isinstance(stream_sequence, bool)
+                and stream_sequence >= 0
+            ):
+                metadata["sequence_authority"] = "task_stream"
+            else:
+                metadata["sequence"] = phase_sequence
+                metadata["sequence_authority"] = "canonical_detail"
             metadata["phase_sequence"] = phase_sequence
             # Reasoning events use ind=0 (reasoning phase), matching the live
             # streaming contract; tool/observation events use ind=1 (execution).
@@ -898,12 +911,22 @@ class ChatTranscriptQueryService:
                 metadata.setdefault("sub_turn_index", getattr(event, "sub_turn_index"))
             if kind == "tool" and getattr(event, "tool_call_id", None):
                 metadata.setdefault("tool_call_id", getattr(event, "tool_call_id"))
-            if timestamp:
-                metadata.setdefault("timestamp", timestamp)
-            item_id = str(
-                getattr(event, "tool_call_id", None)
-                or f"msg-{getattr(message, 'id', 0)}-{kind}-{phase_sequence}"
-            )
+            event_timestamp = self._serialize_timestamp(
+                getattr(event, "created_at", None)
+            ) or timestamp
+            if event_timestamp:
+                metadata.setdefault("timestamp", event_timestamp)
+            lifecycle_event = str(metadata.get("lifecycle_event") or "").strip()
+            if kind == "tool" and lifecycle_event == "shell_session_terminal":
+                item_id = (
+                    f"{getattr(event, 'tool_call_id', None) or 'shell-session'}"
+                    f"-terminal-{phase_sequence}"
+                )
+            else:
+                item_id = str(
+                    getattr(event, "tool_call_id", None)
+                    or f"msg-{getattr(message, 'id', 0)}-{kind}-{phase_sequence}"
+                )
             items.append(
                 ChatTranscriptItem(
                     id=item_id,
