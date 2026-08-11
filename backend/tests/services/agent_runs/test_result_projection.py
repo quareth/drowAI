@@ -25,6 +25,7 @@ from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
 from backend.services.agent_runs.result_projection import (
     ACTIVE_AGENT_RUNS_KEY,
     COMPLETED_AGENT_RESULTS_KEY,
+    DEFAULT_MAX_RESULT_TEXT_CHARS,
     AgentRunResultProjector,
     attach_active_agent_runs_to_context,
     attach_completed_agent_results_to_context,
@@ -83,6 +84,43 @@ def _result(
     )
 
 
+def test_default_projection_preserves_complete_agent_summary() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    projector = AgentRunResultProjector(
+        registry=registry,
+        subagent_registry=get_subagent_registry(),
+    )
+    summary = (
+        "Interactive session evidence:\n"
+        + ("progress output\n" * 60)
+        + "displayed 50\nquit — process exited normally\nfinal value: 50"
+    )
+
+    projected = projector.project_result(_result(summary=summary))
+
+    assert len(summary) > 800
+    assert projected["summary"] == summary
+    assert projected["summary"].endswith(
+        "displayed 50\nquit — process exited normally\nfinal value: 50"
+    )
+
+
+def test_default_projection_truncates_result_text_at_owned_budget() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    projector = AgentRunResultProjector(
+        registry=registry,
+        subagent_registry=get_subagent_registry(),
+    )
+
+    projected = projector.project_result(
+        _result(summary="x" * (DEFAULT_MAX_RESULT_TEXT_CHARS + 100))
+    )
+
+    assert len(projected["summary"]) == DEFAULT_MAX_RESULT_TEXT_CHARS
+    assert projected["summary"].endswith("...")
+    assert projected["key_findings"] == []
+
+
 @pytest.mark.asyncio
 async def test_collect_projects_completed_unconsumed_results_for_conversation() -> None:
     registry = ProcessLocalAgentRunRegistry()
@@ -112,7 +150,7 @@ async def test_collect_projects_completed_unconsumed_results_for_conversation() 
         subagent_registry=get_subagent_registry(),
         max_results=1,
         max_list_items=2,
-        max_text_chars=48,
+        max_result_text_chars=512,
     )
 
     handoff = await projector.collect_for_context(
@@ -176,7 +214,7 @@ async def test_collect_projects_task_local_active_runs_with_bounded_fields() -> 
         registry=registry,
         subagent_registry=get_subagent_registry(),
         max_active_runs=3,
-        max_text_chars=64,
+        max_active_objective_chars=64,
     )
 
     active_runs = await projector.collect_active_for_context(
@@ -201,6 +239,38 @@ async def test_collect_projects_task_local_active_runs_with_bounded_fields() -> 
     assert "assignment" not in active
     assert "relevant_context" not in active
     assert "result" not in active
+
+
+def test_completed_result_text_uses_one_shared_budget_in_priority_order() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    projector = AgentRunResultProjector(
+        registry=registry,
+        subagent_registry=get_subagent_registry(),
+        max_result_text_chars=60,
+    )
+    result = _result(summary="s" * 40).model_copy(
+        update={
+            "key_findings": ("f" * 40,),
+            "limitations": ("l" * 40,),
+            "recommended_next_steps": ("n" * 40,),
+        }
+    )
+
+    projected = projector.project_result(result)
+
+    assert projected["summary"] == "s" * 40
+    assert projected["key_findings"] == [("f" * 17) + "..."]
+    assert projected["limitations"] == []
+    assert projected["recommended_next_steps"] == []
+    assert sum(
+        len(text)
+        for text in (
+            projected["summary"],
+            *projected["key_findings"],
+            *projected["limitations"],
+            *projected["recommended_next_steps"],
+        )
+    ) == 60
 
 
 @pytest.mark.asyncio
