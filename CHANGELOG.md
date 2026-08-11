@@ -11,8 +11,8 @@ The format is based on
 ### Added
 
 - Main agents and subagents can run provider-backed interactive shell commands,
-  continue yielded sessions with exact input or polling, and receive bounded,
-  task-isolated output with lifecycle cleanup.
+  continue yielded sessions with exact input or runtime-owned waits, and receive
+  bounded, task-isolated output with lifecycle cleanup.
 
 ### Changed
 
@@ -27,6 +27,23 @@ The format is based on
 
 ### Fixed
 
+- Refreshed conversations now preserve the original task-stream interleaving of
+  parent reasoning, subagent runs, and observations.
+- Sequential subagent handoffs now preserve the parent turn's accumulated goal,
+  todo progress, and reasoning state while returning larger bounded child
+  summaries to the parent.
+- Local development runners now exit when their launcher disappears, and local
+  shutdown recovers only verified local-dev processes without terminating
+  standalone runners or unrelated services that share configured ports.
+- Interactive shell sessions now keep one originating tool card through live
+  progress, cancellation, completion, and transcript refresh across local and
+  managed runtimes, avoiding duplicate cards and stale running indicators.
+- Interactive shell continuations now preserve the live process, reject stale
+  runtime bindings, and distinguish output waits from requests for the next
+  input without model-visible empty polling.
+- Short tool outputs that bypass LLM compression now retain bounded stdout and
+  stderr for immediate post-tool reasoning instead of reducing failures to a
+  generic exit code.
 - Shell commands now remain attached to their tool execution until completion by
   default, while explicitly yielded interactive sessions continue on the same PTY.
 - Managed runners now enforce one active connection per identity, reject duplicate
