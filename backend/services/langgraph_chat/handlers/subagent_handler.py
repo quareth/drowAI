@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from agent.graph import InteractiveState
 from agent.subagents.registry import SubagentRegistry
 from agent.graph.context.contracts import ActiveAgentRun
 from backend.services.agent_runs.dispatch_contracts import (
@@ -89,22 +90,28 @@ class SubagentHandler(BaseLangGraphHandler):
         )
         tenant_id = int(runtime_config.metadata["tenant_id"])
         child_completion_by_run_id: dict[str, AgentRunCompletion] = {}
+        parent_continuation_state: InteractiveState | None = None
 
         async def run_parent_continuation(
             handoff: Any,
             _active_runs: tuple[ActiveAgentRun, ...],
         ) -> LangGraphChatResult:
+            nonlocal parent_continuation_state
             child_completions = await self._dispatch_service.completions_for_handoff(
                 handoff,
                 tenant_id=tenant_id,
                 task_id=chat_inputs.task_id,
                 completion_by_run_id=child_completion_by_run_id,
             )
-            return await self._parent_finalizer.finalize(
+            result = await self._parent_finalizer.finalize(
                 runtime_config,
                 turn=turn,
                 child_completions=child_completions,
+                continuation_state=parent_continuation_state,
             )
+            if result.interactive_state is not None:
+                parent_continuation_state = result.interactive_state
+            return result
 
         async def process_ready_handoffs(
             child_completions: tuple[AgentRunCompletion, ...],

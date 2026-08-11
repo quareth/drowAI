@@ -346,6 +346,104 @@ class _CompletingExecutor:
         )
 
 
+class _SequentialParentHandoffExecutor:
+    """Drive repeated parent handoffs while recording each starting state."""
+
+    def __init__(self, *, total_child_runs: int) -> None:
+        self.total_child_runs = total_child_runs
+        self.parent_inputs: list[dict[str, Any]] = []
+        self.parent_thread_ids: list[str] = []
+
+    async def stream_graph(
+        self,
+        compiled: Any,
+        graph_input: Any,
+        config: dict[str, Any],
+        task_id: int,
+        **kwargs: Any,
+    ) -> GraphExecutionResult:
+        _ = (compiled, task_id, kwargs)
+        if config["configurable"]["graph_name"] == GRAPH_NAME_SUBAGENT:
+            agent_run_id = graph_input["facts"]["metadata"]["agent_run_id"]
+            return GraphExecutionResult(
+                final_state=_subagent_final_state(agent_run_id=agent_run_id)
+            )
+
+        parent_input = copy.deepcopy(graph_input)
+        self.parent_inputs.append(parent_input)
+        self.parent_thread_ids.append(config["configurable"]["thread_id"])
+        parent_index = len(self.parent_inputs) - 1
+        final_state = copy.deepcopy(graph_input)
+        facts = final_state["facts"]
+        metadata = facts["metadata"]
+        completed_results = metadata[METADATA_CONTEXT_BUNDLE_KEY][
+            COMPLETED_AGENT_RESULTS_KEY
+        ]
+        if COMPLETED_AGENT_RESULTS_KEY in metadata:
+            assert metadata[COMPLETED_AGENT_RESULTS_KEY] == completed_results
+        current_run_id = completed_results[0]["agent_run_id"]
+
+        working_memory = metadata.setdefault("working_memory", {})
+        phases = working_memory.setdefault("current_turn_phases", [])
+        phases.append(
+            {
+                "turn_sequence": 5,
+                "phase_sequence": parent_index,
+                "source": "ptr",
+                "sections": [
+                    {
+                        "heading": "Observation",
+                        "body": f"Accepted child result {current_run_id}.",
+                    }
+                ],
+            }
+        )
+        working_memory["current_turn_phase_counter"] = parent_index + 1
+        working_memory["current_turn_phase_turn"] = 5
+        facts["todo_list"] = ["Complete every bounded child assignment."]
+        facts["current_goal"] = f"Process child result {parent_index + 1}."
+
+        usage_records = final_state["trace"].setdefault("usage_records", [])
+        usage_records.append(
+            {
+                "source": "post_action_reasoning",
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+                "provider": "openai",
+                "model": "gpt-5.2-mini",
+                "api_surface": "responses",
+                "request_mode": "non_streaming",
+                "cache_reporting": "reported",
+            }
+        )
+
+        if parent_index + 1 < self.total_child_runs:
+            router_outcome = {
+                "action": "delegate_subagent",
+                "candidate_id": f"parent-followup-{parent_index + 1}",
+                "agent_handoff": {
+                    "agent_handoff": "required",
+                    "subagent": "pathfinder",
+                    "objective": f"Complete bounded child step {parent_index + 2}.",
+                },
+            }
+            final_text = f"Delegating child step {parent_index + 2}."
+        else:
+            router_outcome = {
+                "action": "finalize",
+                "candidate_id": "parent-finalize-after-all-children",
+            }
+            final_text = "Parent retained every accepted child result."
+
+        metadata["router_outcome"] = router_outcome
+        final_state["trace"]["final_text"] = final_text
+        return GraphExecutionResult(
+            final_state=final_state,
+            metadata={"router_outcome": router_outcome},
+        )
+
+
 class _InterruptingParentExecutor:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
@@ -1256,6 +1354,69 @@ async def test_subagent_handler_child_failure_returns_partial_child_usage() -> N
     assert len(entries) == 1
     assert entries[0].status == "failed"
     assert entries[0].result_consumed is True
+
+
+@pytest.mark.asyncio
+async def test_parent_handoff_reuses_state_across_seven_sequential_children() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    launcher = _RecordingLauncher(registry)
+    executor = _SequentialParentHandoffExecutor(total_child_runs=7)
+
+    async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
+        return None
+
+    handler = build_subagent_handler(
+        _FakeCheckpointerService(),
+        executor,
+        object(),
+        registry=registry,
+        launcher=launcher,
+        lifecycle_publisher=_publish,
+        parent_handoff_continuation_broker=ParentHandoffContinuationBroker(),
+    )
+
+    result = await asyncio.wait_for(handler.handle(_runtime_config()), timeout=2)
+
+    assert result.final_text == "Parent retained every accepted child result."
+    assert result.persistence_handled is True
+    assert len(launcher.calls) == 7
+    assert len(executor.parent_inputs) == 7
+    assert len(set(executor.parent_thread_ids)) == 1
+
+    observed_run_ids: list[str] = []
+    for parent_index, parent_input in enumerate(executor.parent_inputs):
+        facts = parent_input["facts"]
+        metadata = facts["metadata"]
+        completed_results = metadata[METADATA_CONTEXT_BUNDLE_KEY][
+            COMPLETED_AGENT_RESULTS_KEY
+        ]
+        assert len(completed_results) == 1
+        observed_run_ids.append(completed_results[0]["agent_run_id"])
+
+        phases = metadata.get("working_memory", {}).get(
+            "current_turn_phases", []
+        )
+        assert len(phases) == parent_index
+        assert [phase["phase_sequence"] for phase in phases] == list(
+            range(parent_index)
+        )
+        if parent_index:
+            assert observed_run_ids[parent_index - 1] in phases[-1]["sections"][0][
+                "body"
+            ]
+            assert facts["todo_list"] == [
+                "Complete every bounded child assignment."
+            ]
+
+    assert len(set(observed_run_ids)) == 7
+    assert result.interactive_state is not None
+    final_memory = result.interactive_state.facts.metadata["working_memory"]
+    assert len(final_memory["current_turn_phases"]) == 7
+    assert len(result.interactive_state.trace.usage_records) == 7
+
+    entries = await registry.list_task_runs(tenant_id=7, task_id=42)
+    assert len(entries) == 7
+    assert all(entry.result_consumed for entry in entries)
 
 
 @pytest.mark.asyncio
