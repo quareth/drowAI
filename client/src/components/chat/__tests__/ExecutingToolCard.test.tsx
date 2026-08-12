@@ -197,6 +197,38 @@ describe("ExecutingToolCard", () => {
     expect(screen.getByText("Process completed")).not.toBeNull();
   });
 
+  it.each([
+    ["timed_out", "timed_out", "Process timed out"],
+    ["terminated", "terminated", "Process terminated"],
+    ["failed", "failed", "Process failed"],
+  ] as const)(
+    "keeps %s process semantics when the session is closed",
+    (status, processStatus, expectedLabel) => {
+      mocked.useToolRawOutputMock.mockReturnValue({
+        state: { status: "loading" },
+        status: "loading",
+        isLoading: true,
+        isReady: false,
+        isNotAvailable: false,
+        isError: false,
+      });
+      render(
+        <ExecutingToolCard
+          toolName="shell.write_stdin"
+          status={status}
+          sessionStatus="closed"
+          processStatus={processStatus}
+          interactionBoundary="terminal"
+          taskId={1}
+          toolCallId={`call-${status}`}
+        />,
+      );
+
+      expect(screen.getByText(expectedLabel)).not.toBeNull();
+      expect(screen.queryByText("Session closed")).toBeNull();
+    },
+  );
+
   it("keeps expanded state during first-load and transitions to ready output", () => {
     mocked.useToolRawOutputMock.mockReturnValue({
       state: { status: "loading" },

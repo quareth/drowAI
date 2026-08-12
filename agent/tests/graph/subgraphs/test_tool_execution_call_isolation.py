@@ -32,6 +32,7 @@ from runtime_shared.shell_session_contracts import (
     ShellExecRequest,
     ShellProcessStatus,
     ShellSessionIdentity,
+    ShellSessionOrigin,
     ShellSessionUpdate,
     ShellWriteRequest,
 )
@@ -92,7 +93,9 @@ class _FakeShellSessionService:
         identity: ShellSessionIdentity,
         request: ShellExecRequest,
         capability: ShellCapability = ShellCapability.ASSESSMENT,
+        origin: ShellSessionOrigin | None = None,
     ) -> ShellSessionUpdate:
+        _ = capability, origin
         self.exec_calls.append((identity, request))
         return self.update
 
@@ -957,9 +960,9 @@ async def test_mixed_lane_batch_uses_batch_executor_and_per_call_authorities(
             summary="shell completed",
         )
     )
-    previous_shell_service_resolver = shell_session_port._shell_session_service_resolver
-    shell_session_port.set_shell_session_service_resolver(lambda: shell_service)
-    try:
+    with shell_session_port.override_shell_session_service_resolver(
+        lambda: shell_service
+    ):
         result = await run_tool_execution(
             _mixed_lane_runner_state().as_graph_state(),
             context=GraphRuntimeContext(
@@ -974,10 +977,6 @@ async def test_mixed_lane_batch_uses_batch_executor_and_per_call_authorities(
                 workspace_path=str(tmp_path),
                 model="model",
             ),
-        )
-    finally:
-        shell_session_port._shell_session_service_resolver = (
-            previous_shell_service_resolver
         )
 
     assert runner_requests == []
@@ -1315,9 +1314,9 @@ async def test_resume_uses_approved_subset_without_reprompt_or_extra_dispatch(
             summary="shell completed",
         )
     )
-    previous_shell_service_resolver = shell_session_port._shell_session_service_resolver
-    shell_session_port.set_shell_session_service_resolver(lambda: shell_service)
-    try:
+    with shell_session_port.override_shell_session_service_resolver(
+        lambda: shell_service
+    ):
         result = await run_tool_execution(
             state.as_graph_state(),
             context=GraphRuntimeContext(
@@ -1332,10 +1331,6 @@ async def test_resume_uses_approved_subset_without_reprompt_or_extra_dispatch(
                 workspace_path=str(tmp_path),
                 model="model",
             ),
-        )
-    finally:
-        shell_session_port._shell_session_service_resolver = (
-            previous_shell_service_resolver
         )
 
     assert provider_calls == []

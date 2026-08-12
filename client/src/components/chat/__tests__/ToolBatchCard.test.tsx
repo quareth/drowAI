@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ToolBatchCard } from "@/components/chat/ToolBatchCard";
 import type { ChatMessage } from "@/components/chat/types";
+import type { CompactToolResult } from "@/types/compact-tool-result";
 import {
   normalizeTranscriptItemsToSteps,
   type ChatTranscriptItem,
@@ -423,8 +424,22 @@ describe("ToolBatchCard", () => {
           results: [
             { tool_call_id: "tc_running", tool: "shell.exec", status: "success" },
             { tool_call_id: "tc_completed", tool: "shell.write_stdin", status: "success" },
-            { tool_call_id: "tc_timeout", tool: "shell.exec", status: "failed" },
-            { tool_call_id: "tc_terminated", tool: "shell.write_stdin", status: "success" },
+            {
+              tool_call_id: "tc_timeout",
+              tool: "shell.exec",
+              status: "failed",
+              process_status: "timed_out",
+              session_status: "closed",
+              interaction_boundary: "terminal",
+            },
+            {
+              tool_call_id: "tc_terminated",
+              tool: "shell.write_stdin",
+              status: "success",
+              process_status: "terminated",
+              session_status: "closed",
+              interaction_boundary: "terminal",
+            },
           ],
         },
       }),
@@ -460,7 +475,7 @@ describe("ToolBatchCard", () => {
 
     render(<ToolBatchCard messages={messages} groupKey="shell-batch-only" />);
 
-    expect(screen.getByText("Completed")).toBeTruthy();
+    expect(screen.getByText("Running")).toBeTruthy();
     expect(screen.getByText("Session active")).toBeTruthy();
   });
 
@@ -599,5 +614,38 @@ describe("ToolBatchCard", () => {
       "$ touch /workspace/boris.txt\nCreated /workspace/boris.txt.",
     );
     expect(screen.queryByText(/Raw output unavailable/)).toBeNull();
+  });
+
+  it("does not crash on incomplete historical transient compact output", () => {
+    const messages = [
+      makeMsg({
+        id: "cancelled-shell",
+        metadata: {
+          step_type: "tool_end",
+          tool_batch_id: "tb-cancelled-shell",
+          tool_call_id: "tc-cancelled-shell",
+          tool_name: "shell.utility",
+          status: "cancelled",
+          process_status: "terminated",
+          session_status: "closed",
+          interaction_boundary: "terminal",
+          output_persistence: "transient",
+          shell_lifecycle_event: true,
+          compact_tool_result: {
+            schema_version: "2.0",
+            tool: "shell.utility",
+            status: "cancelled",
+            success: false,
+            summary: {},
+          } as unknown as CompactToolResult,
+        },
+      }),
+    ];
+
+    expect(() =>
+      render(<ToolBatchCard messages={messages} groupKey="cancelled-shell" taskId={42} />),
+    ).not.toThrow();
+    expect(screen.getByText("Stopped")).toBeTruthy();
+    expect(screen.queryByText("[object Object]")).toBeNull();
   });
 });

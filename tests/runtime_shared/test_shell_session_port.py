@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 
 import pytest
@@ -12,6 +13,7 @@ from runtime_shared.shell_session_contracts import (
     ShellSessionErrorCode,
     ShellSessionIdentity,
     ShellSessionLifecycleStatus,
+    ShellSessionOrigin,
     ShellSessionUpdate,
     ShellWaitRequest,
     ShellWriteRequest,
@@ -39,7 +41,9 @@ class _BoundShellSessionService:
         identity: ShellSessionIdentity,
         request: ShellExecRequest,
         capability: ShellCapability = ShellCapability.ASSESSMENT,
+        origin: ShellSessionOrigin | None = None,
     ) -> ShellSessionUpdate:
+        _ = capability, origin
         assert identity.execution_owner_id == "main:turn-123"
         assert request.command == "whoami"
         return ShellSessionUpdate(
@@ -223,3 +227,40 @@ async def test_resolver_exposes_bound_service_methods(
         execution_owner_id="main:turn-123",
     )
     await resolved.close_task_sessions(tenant_id=7, task_id=11)
+
+
+@pytest.mark.asyncio
+async def test_scoped_overrides_restore_global_binding_and_are_task_local(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    global_service = _BoundShellSessionService()
+    first_service = _BoundShellSessionService()
+    second_service = _BoundShellSessionService()
+    monkeypatch.setattr(
+        shell_session_port,
+        "_shell_session_service_resolver",
+        lambda: global_service,
+    )
+    release = asyncio.Event()
+    ready = 0
+
+    async def _resolve_in_task(service: _BoundShellSessionService) -> object:
+        nonlocal ready
+        with shell_session_port.override_shell_session_service_resolver(
+            lambda: service
+        ):
+            ready += 1
+            while ready < 2:
+                await asyncio.sleep(0)
+            release.set()
+            await release.wait()
+            return shell_session_port.get_shell_session_service()
+
+    first, second = await asyncio.gather(
+        _resolve_in_task(first_service),
+        _resolve_in_task(second_service),
+    )
+
+    assert first is first_service
+    assert second is second_service
+    assert shell_session_port.get_shell_session_service() is global_service

@@ -15,10 +15,14 @@ import { ToolCardTerminalOutput } from "@/components/chat/tool-card-terminal/Too
 import type { ToolRawOutputNotAvailableReason } from "@/components/chat/tool-card-terminal/toolRawOutput.types";
 import type { CompactToolResult } from "@/types/compact-tool-result";
 import { cn } from "@/lib/utils";
+import {
+  deriveShellLifecycleLabels,
+  type ToolLifecycleStatus,
+} from "./toolLifecycleStatus";
 
 interface ExecutingToolCardProps {
   toolName: string;
-  status?: "executing" | "completed" | "failed" | "cancelled" | "terminated" | "timed_out";
+  status?: ToolLifecycleStatus;
   sessionStatus?: "active" | "closed" | "unavailable" | string;
   processStatus?: "running" | "completed" | "terminated" | "timed_out" | "failed" | string;
   interactionBoundary?: "output_available" | "quiet_boundary" | "terminal" | string;
@@ -46,7 +50,10 @@ function formatCompactOutput(
 ): string {
   if (!result) return "";
   const command = String(commandDisplay || "").trim();
-  const lines = [command ? `$ ${command}` : "", result.summary, ...result.key_findings, ...result.errors]
+  const summary = typeof result.summary === "string" ? result.summary : "";
+  const keyFindings = Array.isArray(result.key_findings) ? result.key_findings : [];
+  const errors = Array.isArray(result.errors) ? result.errors : [];
+  const lines = [command ? `$ ${command}` : "", summary, ...keyFindings, ...errors]
     .map((value) => String(value || "").trim())
     .filter(Boolean);
   return Array.from(new Set(lines)).join("\n");
@@ -121,45 +128,14 @@ export function ExecutingToolCard({
     enabled: !isExecuting && isOpen && hasLookupIdentity && !hasCompactOutput,
   });
   const canExpand = hasCompactOutput || (!isExecuting && hasLookupIdentity);
-  const normalizedSessionStatus =
-    typeof sessionStatus === "string" ? sessionStatus.trim().toLowerCase() : "";
-  const normalizedProcessStatus =
-    typeof processStatus === "string" ? processStatus.trim().toLowerCase() : "";
-  const normalizedBoundary =
-    typeof interactionBoundary === "string" ? interactionBoundary.trim().toLowerCase() : "";
-  const sessionProcessLabel = (() => {
-    if (normalizedSessionStatus === "closed" || normalizedBoundary === "terminal") {
-      return normalizedProcessStatus === "completed" ? "Process completed" : "Session closed";
-    }
-    if (normalizedProcessStatus === "timed_out") {
-      return "Process timed out";
-    }
-    if (normalizedProcessStatus === "terminated") {
-      return "Process terminated";
-    }
-    if (normalizedProcessStatus === "failed") {
-      return "Process failed";
-    }
-    if (normalizedSessionStatus === "unavailable") {
-      return "Session unavailable";
-    }
-    if (normalizedSessionStatus === "active" || normalizedProcessStatus === "running") {
-      return "Session active";
-    }
-    return "";
-  })();
-  const sessionActivityLabel = (() => {
-    if (normalizedSessionStatus !== "active" && normalizedProcessStatus !== "running") {
-      return "";
-    }
-    if (normalizedBoundary === "output_available") {
-      return "Agent reviewing output";
-    }
-    if (normalizedBoundary === "quiet_boundary") {
-      return "Agent deciding next input";
-    }
-    return "Process running";
-  })();
+  const {
+    processLabel: sessionProcessLabel,
+    activityLabel: sessionActivityLabel,
+  } = deriveShellLifecycleLabels({
+    sessionStatus,
+    processStatus,
+    interactionBoundary,
+  });
 
   const readyOutputText = hasCompactOutput
     ? compactOutputText

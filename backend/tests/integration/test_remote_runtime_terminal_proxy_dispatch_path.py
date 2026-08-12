@@ -975,7 +975,10 @@ def test_remote_runtime_terminal_operations_route_through_provider_dispatcher_an
         await _drive_provider_wait(
             shell_service.close_task_sessions(tenant_id=tenant_id, task_id=task_id)
         )
-        assert cleanup_candidate.session_id not in shell_service._records
+        assert await shell_service.get_session_capability(
+            identity=identity,
+            public_session_id=cleanup_candidate.session_id,
+        ) is None
         return (
             [
                 quick,

@@ -21,6 +21,7 @@ from runtime_shared.shell_session_contracts import (
     ShellProcessStatus,
     ShellSessionErrorCode,
     ShellSessionIdentity,
+    ShellSessionOrigin,
     ShellSessionUpdate,
     ShellWriteRequest,
 )
@@ -79,6 +80,7 @@ class _FakeShellSessionService:
         self.update = update
         self.exec_calls: list[tuple[ShellSessionIdentity, ShellExecRequest]] = []
         self.write_calls: list[tuple[ShellSessionIdentity, ShellWriteRequest]] = []
+        self.origins: list[ShellSessionOrigin | None] = []
         self.capability = ShellCapability.ASSESSMENT
 
     async def execute(
@@ -87,8 +89,10 @@ class _FakeShellSessionService:
         identity: ShellSessionIdentity,
         request: ShellExecRequest,
         capability: ShellCapability = ShellCapability.ASSESSMENT,
+        origin: ShellSessionOrigin | None = None,
     ) -> ShellSessionUpdate:
         self.capability = capability
+        self.origins.append(origin)
         self.exec_calls.append((identity, request))
         return self.update
 
@@ -439,6 +443,13 @@ async def test_shell_start_alias_retains_originating_capability(
     )
 
     assert service.capability is expected_capability
+    assert service.origins == [
+        ShellSessionOrigin(
+            tool_call_id="call-capability",
+            tool_batch_id=None,
+            tool_name=tool_id,
+        )
+    ]
     assert result["metadata"]["runtime_session"]["originating_capability"] == (
         expected_capability.value
     )

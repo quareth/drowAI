@@ -1,7 +1,7 @@
 """Provider-backed interactive shell session service.
 
 Responsibilities:
-- Own public shell-session handles and process-local lifecycle state.
+- Coordinate public shell-session operations over registry-owned logical state.
 - Validate runtime identity before delegating PTY I/O to TerminalSessionManager.
 - Return bounded serializable shell-session updates without storing transcripts.
 """
@@ -22,7 +22,6 @@ from typing import Any
 
 from backend import config as backend_config
 from backend.core.logging import safe_identifier_fingerprint
-from backend.services.metrics.utils import safe_gauge, safe_inc
 from runtime_shared.docker_contracts import CONTAINER_WORKSPACE_PATH
 from runtime_shared.shell_session_contracts import (
     SHELL_SESSION_CLEANUP_TIMEOUT_SEC,
@@ -51,6 +50,12 @@ from .contracts import (
     ShellSessionLifecycleProjectorPort,
     ShellSessionTerminalEvent,
 )
+from .registry import (
+    ShellSessionRecord,
+    ShellSessionStateRegistry,
+    _StartCapacityReservation,
+)
+from .shell_session_observability import ShellSessionOperationalObserver
 from .shell_session_output import ShellSessionOutputAccumulator
 
 logger = logging.getLogger(__name__)
@@ -114,32 +119,6 @@ class ShellSessionServiceConfig:
         )
 
 
-@dataclass(slots=True)
-class ShellSessionRecord:
-    """Small process-local control record for one live shell session."""
-
-    public_session_id: str
-    terminal_session_id: str
-    identity: ShellSessionIdentity
-    originating_capability: ShellCapability
-    origin: ShellSessionOrigin | None
-    framing_parser: StreamingPtyFramingParser
-    last_activity_at: float
-    deadline_at: float
-    operation_in_progress: bool = False
-    pending_utf8_bytes: bytes = b""
-    initial_quiet_boundary_emitted: bool = False
-
-
-@dataclass(slots=True)
-class _StartCapacityReservation:
-    """Idempotent pending-capacity lease for one shell-session start."""
-
-    owner_key: tuple[int, int, str]
-    task_key: tuple[int, int]
-    released: bool = False
-
-
 class ShellSessionService:
     """Run interactive shell commands through provider-backed terminal sessions."""
 
@@ -157,10 +136,13 @@ class ShellSessionService:
         self._config = config or ShellSessionServiceConfig.from_backend_config()
         self._runtime_context_resolver = runtime_context_resolver
         self._clock = clock or time.monotonic
-        self._records: dict[str, ShellSessionRecord] = {}
-        self._pending_owner_starts: dict[tuple[int, int, str], int] = {}
-        self._pending_task_starts: dict[tuple[int, int], int] = {}
-        self._lock = asyncio.Lock()
+        self._observer = ShellSessionOperationalObserver()
+        self._registry = ShellSessionStateRegistry(
+            max_active_per_owner=self._config.max_active_per_owner,
+            max_active_per_task=self._config.max_active_per_task,
+            idle_timeout_sec=self._config.idle_timeout_sec,
+            observer=self._observer,
+        )
         self._cleanup_task: asyncio.Task[None] | None = None
 
     async def execute(
@@ -177,7 +159,10 @@ class ShellSessionService:
             identity
         )
         if context_error is not None:
-            self._emit_operation_failed(identity, context_error)
+            self._observer.operation_failed(
+                identity=identity,
+                error_code=context_error,
+            )
             return self._error_update(
                 error_code=context_error,
                 duration_ms=self._duration_ms(started_at),
@@ -190,17 +175,16 @@ class ShellSessionService:
         registered = False
         start_error_code = ShellSessionErrorCode.COMMAND_START_FAILED
 
-        async with self._lock:
-            reservation = self._reserve_start_capacity_locked(identity)
-            if reservation is None:
-                self._emit_operation_failed(
-                    identity,
-                    ShellSessionErrorCode.SESSION_LIMIT_REACHED,
-                )
-                return self._error_update(
-                    error_code=ShellSessionErrorCode.SESSION_LIMIT_REACHED,
-                    duration_ms=self._duration_ms(started_at),
-                )
+        reservation = await self._registry.reserve_start(identity)
+        if reservation is None:
+            self._observer.operation_failed(
+                identity=identity,
+                error_code=ShellSessionErrorCode.SESSION_LIMIT_REACHED,
+            )
+            return self._error_update(
+                error_code=ShellSessionErrorCode.SESSION_LIMIT_REACHED,
+                duration_ms=self._duration_ms(started_at),
+            )
 
         try:
             async with asyncio.timeout(SHELL_SESSION_PREPARATION_TIMEOUT_SEC):
@@ -250,9 +234,9 @@ class ShellSessionService:
                 await self._close_terminal(terminal_session_id, interrupt=True)
             raise
         except Exception:
-            self._emit_operation_failed(
-                identity,
-                start_error_code,
+            self._observer.operation_failed(
+                identity=identity,
+                error_code=start_error_code,
                 public_session_id=public_session_id,
             )
             if registered:
@@ -268,7 +252,7 @@ class ShellSessionService:
                 duration_ms=self._duration_ms(started_at),
             )
         finally:
-            await self._release_start_capacity(reservation)
+            await self._registry.release_start(reservation)
 
     async def write_stdin(
         self,
@@ -281,9 +265,9 @@ class ShellSessionService:
         context_error, _ = await self._validate_runtime_context(identity)
         if context_error is not None:
             error_code = ShellSessionErrorCode.SESSION_UNAVAILABLE
-            self._emit_operation_failed(
-                identity,
-                error_code,
+            self._observer.operation_failed(
+                identity=identity,
+                error_code=error_code,
                 public_session_id=request.session_id,
             )
             return self._error_update(
@@ -295,9 +279,9 @@ class ShellSessionService:
             public_session_id=request.session_id,
         )
         if record is None:
-            self._emit_operation_failed(
-                identity,
-                error_code,
+            self._observer.operation_failed(
+                identity=identity,
+                error_code=error_code,
                 public_session_id=request.session_id,
             )
             if error_code is ShellSessionErrorCode.COMMAND_TIMED_OUT:
@@ -327,28 +311,16 @@ class ShellSessionService:
                     terminate_after_window=True,
                 )
 
-            if request.chars:
-                if not await self._send_input_with_deadline(
-                    record.terminal_session_id,
-                    request.chars.encode(),
-                ):
-                    return await self._fail_claimed_record(
-                        record,
-                        ShellSessionErrorCode.RUNTIME_TRANSPORT_FAILED,
-                        started_at,
-                    )
-                record.last_activity_at = self._clock()
-                remaining_runtime_ms = math.ceil(
-                    max(0.0, record.deadline_at - self._clock()) * 1000.0
+            if not await self._send_input_with_deadline(
+                record.terminal_session_id,
+                request.chars.encode(),
+            ):
+                return await self._fail_claimed_record(
+                    record,
+                    ShellSessionErrorCode.RUNTIME_TRANSPORT_FAILED,
+                    started_at,
                 )
-                return await self._read_update(
-                    record=record,
-                    yield_time_ms=max(1, remaining_runtime_ms),
-                    max_output_chars=request.max_output_chars,
-                    started_at=started_at,
-                    return_on_empty_window=False,
-                )
-
+            record.last_activity_at = self._clock()
             return await self._read_update(
                 record=record,
                 yield_time_ms=request.yield_time_ms,
@@ -356,7 +328,7 @@ class ShellSessionService:
                 started_at=started_at,
             )
         except asyncio.CancelledError:
-            await self._release_record(record)
+            await self._registry.release(record)
             raise
         except Exception:
             return await self._fail_claimed_record(
@@ -376,9 +348,9 @@ class ShellSessionService:
         context_error, _ = await self._validate_runtime_context(identity)
         if context_error is not None:
             error_code = ShellSessionErrorCode.SESSION_UNAVAILABLE
-            self._emit_operation_failed(
-                identity,
-                error_code,
+            self._observer.operation_failed(
+                identity=identity,
+                error_code=error_code,
                 public_session_id=request.session_id,
             )
             return self._error_update(
@@ -392,9 +364,9 @@ class ShellSessionService:
             public_session_id=request.session_id,
         )
         if record is None:
-            self._emit_operation_failed(
-                identity,
-                error_code,
+            self._observer.operation_failed(
+                identity=identity,
+                error_code=error_code,
                 public_session_id=request.session_id,
             )
             if error_code is ShellSessionErrorCode.COMMAND_TIMED_OUT:
@@ -421,7 +393,7 @@ class ShellSessionService:
                 return_on_empty_window=False,
             )
         except asyncio.CancelledError:
-            await self._release_record(record)
+            await self._registry.release(record)
             raise
         except Exception:
             return await self._fail_claimed_record(
@@ -438,15 +410,10 @@ class ShellSessionService:
     ) -> ShellCapability | None:
         """Return immutable capability provenance for an owned session record."""
 
-        normalized_id = str(public_session_id or "").strip()
-        async with self._lock:
-            record = self._records.get(normalized_id)
-            if record is None or not self._same_session_identity(
-                record.identity,
-                identity,
-            ):
-                return None
-            return record.originating_capability
+        return await self._registry.get_capability(
+            identity=identity,
+            public_session_id=public_session_id,
+        )
 
     async def close_owner_sessions(
         self,
@@ -456,12 +423,10 @@ class ShellSessionService:
         execution_owner_id: str,
     ) -> None:
         """Idempotently close every session for one execution owner."""
-        records = await self._pop_matching_records(
-            lambda record: (
-                record.identity.tenant_id == int(tenant_id)
-                and record.identity.task_id == int(task_id)
-                and record.identity.execution_owner_id == execution_owner_id
-            )
+        records = await self._registry.pop_owner(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            execution_owner_id=execution_owner_id,
         )
         await self._close_records(
             records,
@@ -476,11 +441,9 @@ class ShellSessionService:
         task_id: int,
     ) -> None:
         """Idempotently close every shell session for one task."""
-        records = await self._pop_matching_records(
-            lambda record: (
-                record.identity.tenant_id == int(tenant_id)
-                and record.identity.task_id == int(task_id)
-            )
+        records = await self._registry.pop_task(
+            tenant_id=tenant_id,
+            task_id=task_id,
         )
         await self._close_records(
             records,
@@ -509,10 +472,10 @@ class ShellSessionService:
     async def cleanup_stale_sessions(self) -> None:
         """Close idle or deadline-expired sessions through the common close path."""
         now = self._clock()
-        records = await self._pop_stale_records(now)
+        records = await self._registry.pop_stale(now)
         for record, close_reason in records:
             if close_reason == "deadline_expired":
-                self._emit_process_completed(record, ShellProcessStatus.TIMED_OUT)
+                self._observe_process_completed(record, ShellProcessStatus.TIMED_OUT)
             await self._close_records(
                 [record],
                 interrupt=True,
@@ -549,11 +512,14 @@ class ShellSessionService:
         output_quiescent_at: float | None = None
         while True:
             now = self._clock()
-            if self._is_deadline_expired(record, now):
-                self._emit_process_completed(record, ShellProcessStatus.TIMED_OUT)
-                self._emit_operation_failed(
-                    record.identity,
-                    ShellSessionErrorCode.COMMAND_TIMED_OUT,
+            if self._registry.is_deadline_expired(record, now):
+                self._observe_process_completed(
+                    record,
+                    ShellProcessStatus.TIMED_OUT,
+                )
+                self._observer.operation_failed(
+                    identity=record.identity,
+                    error_code=ShellSessionErrorCode.COMMAND_TIMED_OUT,
                     public_session_id=record.public_session_id,
                 )
                 await self._remove_and_close_record(
@@ -658,7 +624,7 @@ class ShellSessionService:
                     if exit_code == 0
                     else ShellProcessStatus.FAILED
                 )
-                self._emit_process_completed(record, process_status)
+                self._observe_process_completed(record, process_status)
                 await self._remove_and_close_record(
                     record.public_session_id,
                     interrupt=False,
@@ -697,7 +663,7 @@ class ShellSessionService:
 
         stdout, truncated = output.stdout()
         if terminate_after_window:
-            self._emit_process_completed(record, ShellProcessStatus.TERMINATED)
+            self._observe_process_completed(record, ShellProcessStatus.TERMINATED)
             await self._remove_and_close_record(
                 record.public_session_id,
                 interrupt=False,
@@ -720,7 +686,7 @@ class ShellSessionService:
                 summary="Command was interrupted.",
             )
         if return_on_output_boundary and stdout:
-            await self._release_record(record)
+            await self._registry.release(record)
             return ShellSessionUpdate(
                 success=True,
                 status="success",
@@ -744,7 +710,7 @@ class ShellSessionService:
                 if initial_window > 0.0 and self._clock() < deadline:
                     await asyncio.sleep(min(initial_window, max(0.0, deadline - self._clock())))
             record.initial_quiet_boundary_emitted = True
-            await self._release_record(record)
+            await self._registry.release(record)
             return ShellSessionUpdate(
                 success=True,
                 status="success",
@@ -759,7 +725,7 @@ class ShellSessionService:
                 truncated=False,
                 duration_ms=self._duration_ms(started_at),
             )
-        await self._release_record(record)
+        await self._registry.release(record)
         return ShellSessionUpdate(
             success=True,
             status="success",
@@ -781,40 +747,18 @@ class ShellSessionService:
         identity: ShellSessionIdentity,
         public_session_id: str,
     ) -> tuple[ShellSessionRecord | None, ShellSessionErrorCode]:
-        normalized_id = str(public_session_id or "").strip()
-        async with self._lock:
-            record = self._records.get(normalized_id)
-            if record is None or not self._same_session_identity(
-                record.identity,
-                identity,
-            ):
-                return None, ShellSessionErrorCode.SESSION_UNAVAILABLE
-            now = self._clock()
-            if self._is_deadline_expired(record, now):
-                self._records.pop(normalized_id, None)
-                self._emit_active_session_gauges(record.identity.runtime_placement_mode)
-                self._emit_process_completed(record, ShellProcessStatus.TIMED_OUT)
-                close_record = record
-                error_code = ShellSessionErrorCode.COMMAND_TIMED_OUT
-                close_reason = "deadline_expired"
-            elif self._is_idle_expired(record, now):
-                self._records.pop(normalized_id, None)
-                self._emit_active_session_gauges(record.identity.runtime_placement_mode)
-                close_record = record
-                error_code = ShellSessionErrorCode.SESSION_UNAVAILABLE
-                close_reason = "idle_expired"
-            elif record.operation_in_progress:
-                return None, ShellSessionErrorCode.SESSION_BUSY
-            else:
-                record.last_activity_at = now
-                record.operation_in_progress = True
-                return record, ShellSessionErrorCode.SESSION_UNAVAILABLE
-        await self._close_records(
-            [close_record],
-            interrupt=True,
-            close_reason=close_reason,
+        record, retired_record, error_code, close_reason = await self._registry.claim(
+            identity=identity,
+            public_session_id=public_session_id,
+            now=self._clock(),
         )
-        return None, error_code
+        if retired_record is not None and close_reason is not None:
+            await self._close_records(
+                [retired_record],
+                interrupt=True,
+                close_reason=close_reason,
+            )
+        return record, error_code
 
     async def _prepare_reserved_terminal(
         self,
@@ -849,10 +793,7 @@ class ShellSessionService:
                 deadline_at=now + float(request.max_runtime_sec),
                 operation_in_progress=True,
             )
-            async with self._lock:
-                self._records[public_session_id] = record
-                self._release_start_capacity_locked(reservation)
-                self._emit_session_opened(record)
+            await self._registry.register(record, reservation=reservation)
             return terminal_session_id, record
         except asyncio.CancelledError:
             if terminal_session_id is not None:
@@ -862,12 +803,6 @@ class ShellSessionService:
             if terminal_session_id is not None:
                 await self._close_terminal(terminal_session_id, interrupt=False)
             raise
-
-    async def _release_record(self, record: ShellSessionRecord) -> None:
-        async with self._lock:
-            current = self._records.get(record.public_session_id)
-            if current is record:
-                record.operation_in_progress = False
 
     async def _send_input_with_deadline(
         self,
@@ -879,15 +814,6 @@ class ShellSessionService:
             return bool(
                 await self._terminal_manager.send_input(terminal_session_id, data)
             )
-
-    async def _release_start_capacity(
-        self,
-        reservation: _StartCapacityReservation | None,
-    ) -> None:
-        if reservation is None or reservation.released:
-            return
-        async with self._lock:
-            self._release_start_capacity_locked(reservation)
 
     async def _fail_claimed_record(
         self,
@@ -901,12 +827,12 @@ class ShellSessionService:
             expected_record=record,
             close_reason="operation_failed",
         )
-        self._emit_operation_failed(
-            record.identity,
-            error_code,
+        self._observer.operation_failed(
+            identity=record.identity,
+            error_code=error_code,
             public_session_id=record.public_session_id,
         )
-        self._emit_process_completed(record, ShellProcessStatus.FAILED)
+        self._observe_process_completed(record, ShellProcessStatus.FAILED)
         return self._error_update(
             error_code=error_code,
             duration_ms=self._duration_ms(started_at),
@@ -923,60 +849,17 @@ class ShellSessionService:
         close_reason: str,
         expected_record: ShellSessionRecord | None = None,
     ) -> None:
-        async with self._lock:
-            record = self._records.get(public_session_id)
-            if record is None:
-                return
-            if expected_record is not None and record is not expected_record:
-                return
-            self._records.pop(public_session_id, None)
-            record.operation_in_progress = False
-            self._emit_active_session_gauges(record.identity.runtime_placement_mode)
+        record = await self._registry.remove(
+            public_session_id,
+            expected_record=expected_record,
+        )
+        if record is None:
+            return
         await self._close_records(
             [record],
             interrupt=interrupt,
             close_reason=close_reason,
         )
-
-    async def _pop_matching_records(
-        self,
-        predicate: Callable[[ShellSessionRecord], bool],
-    ) -> list[ShellSessionRecord]:
-        async with self._lock:
-            records = [
-                record
-                for record in self._records.values()
-                if predicate(record)
-            ]
-            for record in records:
-                self._records.pop(record.public_session_id, None)
-                record.operation_in_progress = False
-            self._emit_active_session_gauges(
-                *(record.identity.runtime_placement_mode for record in records)
-            )
-            return records
-
-    async def _pop_stale_records(
-        self,
-        now: float,
-    ) -> list[tuple[ShellSessionRecord, str]]:
-        async with self._lock:
-            records: list[tuple[ShellSessionRecord, str]] = []
-            for record in self._records.values():
-                if self._is_deadline_expired(record, now):
-                    records.append((record, "deadline_expired"))
-                elif self._is_idle_expired(record, now):
-                    records.append((record, "idle_expired"))
-            for record, _close_reason in records:
-                self._records.pop(record.public_session_id, None)
-                record.operation_in_progress = False
-            self._emit_active_session_gauges(
-                *(
-                    record.identity.runtime_placement_mode
-                    for record, _close_reason in records
-                )
-            )
-            return records
 
     async def _close_records(
         self,
@@ -1063,102 +946,6 @@ class ShellSessionService:
         record.pending_utf8_bytes = decoder.getstate()[0]
         return decoded
 
-    def _active_owner_count(self, identity: ShellSessionIdentity) -> int:
-        return sum(
-            1
-            for record in self._records.values()
-            if self._same_owner(record.identity, identity)
-        )
-
-    def _active_task_count(self, identity: ShellSessionIdentity) -> int:
-        return sum(
-            1
-            for record in self._records.values()
-            if record.identity.tenant_id == identity.tenant_id
-            and record.identity.task_id == identity.task_id
-        )
-
-    def _reserve_start_capacity_locked(
-        self,
-        identity: ShellSessionIdentity,
-    ) -> _StartCapacityReservation | None:
-        owner_key = self._owner_start_key(identity)
-        task_key = self._task_start_key(identity)
-        owner_pending = self._pending_owner_starts.get(owner_key, 0)
-        task_pending = self._pending_task_starts.get(task_key, 0)
-        if (
-            self._active_owner_count(identity) + owner_pending
-            >= self._config.max_active_per_owner
-        ):
-            return None
-        if (
-            self._active_task_count(identity) + task_pending
-            >= self._config.max_active_per_task
-        ):
-            return None
-
-        self._pending_owner_starts[owner_key] = owner_pending + 1
-        self._pending_task_starts[task_key] = task_pending + 1
-        return _StartCapacityReservation(owner_key=owner_key, task_key=task_key)
-
-    def _release_start_capacity_locked(
-        self,
-        reservation: _StartCapacityReservation,
-    ) -> None:
-        if reservation.released:
-            return
-        reservation.released = True
-        owner_key = reservation.owner_key
-        task_key = reservation.task_key
-        owner_pending = self._pending_owner_starts.get(owner_key, 0)
-        if owner_pending <= 1:
-            self._pending_owner_starts.pop(owner_key, None)
-        else:
-            self._pending_owner_starts[owner_key] = owner_pending - 1
-
-        task_pending = self._pending_task_starts.get(task_key, 0)
-        if task_pending <= 1:
-            self._pending_task_starts.pop(task_key, None)
-        else:
-            self._pending_task_starts[task_key] = task_pending - 1
-
-    @staticmethod
-    def _owner_start_key(identity: ShellSessionIdentity) -> tuple[int, int, str]:
-        return (
-            int(identity.tenant_id),
-            int(identity.task_id),
-            identity.execution_owner_id,
-        )
-
-    @staticmethod
-    def _task_start_key(identity: ShellSessionIdentity) -> tuple[int, int]:
-        return (int(identity.tenant_id), int(identity.task_id))
-
-    @staticmethod
-    def _same_owner(
-        left: ShellSessionIdentity,
-        right: ShellSessionIdentity,
-    ) -> bool:
-        return (
-            left.tenant_id == right.tenant_id
-            and left.task_id == right.task_id
-            and left.execution_owner_id == right.execution_owner_id
-        )
-
-    @staticmethod
-    def _same_session_identity(
-        left: ShellSessionIdentity,
-        right: ShellSessionIdentity,
-    ) -> bool:
-        """Return whether a continuation targets the stored runtime binding."""
-        return left == right
-
-    def _is_deadline_expired(self, record: ShellSessionRecord, now: float) -> bool:
-        return now >= record.deadline_at
-
-    def _is_idle_expired(self, record: ShellSessionRecord, now: float) -> bool:
-        return now - record.last_activity_at >= self._config.idle_timeout_sec
-
     def _duration_ms(self, started_at: float) -> int:
         return max(0, int((self._clock() - started_at) * 1000))
 
@@ -1166,60 +953,26 @@ class ShellSessionService:
     def _generate_public_session_id() -> str:
         return f"shs_{secrets.token_urlsafe(12)}"
 
-    def _emit_session_opened(self, record: ShellSessionRecord) -> None:
-        placement = self._placement(record.identity.runtime_placement_mode)
-        logger.info(
-            (
-                "shell_session event=session_opened tenant_id=%s task_id=%s "
-                "owner_fp=%s session_fp=%s placement=%s"
-            ),
-            record.identity.tenant_id,
-            record.identity.task_id,
-            safe_identifier_fingerprint(record.identity.execution_owner_id),
-            safe_identifier_fingerprint(record.public_session_id),
-            placement,
-        )
-        safe_inc("shell_session_starts")
-        self._emit_active_session_gauges(placement)
-
-    def _emit_process_completed(
+    def _observe_process_completed(
         self,
         record: ShellSessionRecord,
         process_status: ShellProcessStatus,
     ) -> None:
-        placement = self._placement(record.identity.runtime_placement_mode)
-        process_status_value = process_status.value
-        logger.info(
-            (
-                "shell_session event=process_completed tenant_id=%s task_id=%s "
-                "owner_fp=%s session_fp=%s placement=%s process_status=%s"
-            ),
-            record.identity.tenant_id,
-            record.identity.task_id,
-            safe_identifier_fingerprint(record.identity.execution_owner_id),
-            safe_identifier_fingerprint(record.public_session_id),
-            placement,
-            process_status_value,
+        self._observer.process_completed(
+            identity=record.identity,
+            public_session_id=record.public_session_id,
+            process_status=process_status,
         )
-        safe_inc(f"shell_session_terminal_outcomes.{process_status_value}")
 
     async def _emit_session_closed(
         self,
         record: ShellSessionRecord,
         close_reason: str,
     ) -> None:
-        placement = self._placement(record.identity.runtime_placement_mode)
-        logger.info(
-            (
-                "shell_session event=session_closed tenant_id=%s task_id=%s "
-                "owner_fp=%s session_fp=%s placement=%s close_reason=%s"
-            ),
-            record.identity.tenant_id,
-            record.identity.task_id,
-            safe_identifier_fingerprint(record.identity.execution_owner_id),
-            safe_identifier_fingerprint(record.public_session_id),
-            placement,
-            self._stable_segment(close_reason),
+        self._observer.session_closed(
+            identity=record.identity,
+            public_session_id=record.public_session_id,
+            close_reason=close_reason,
         )
         event = ShellSessionTerminalEvent(
             identity=record.identity,
@@ -1237,62 +990,9 @@ class ShellSessionService:
                 "shell_session terminal lifecycle projector failed task_id=%s owner_fp=%s close_reason=%s",
                 record.identity.task_id,
                 safe_identifier_fingerprint(record.identity.execution_owner_id),
-                self._stable_segment(close_reason),
+                self._observer.stable_segment(close_reason),
                 exc_info=True,
             )
-
-    def _emit_operation_failed(
-        self,
-        identity: ShellSessionIdentity,
-        error_code: ShellSessionErrorCode,
-        *,
-        public_session_id: str | None = None,
-    ) -> None:
-        placement = self._placement(identity.runtime_placement_mode)
-        error_code_value = error_code.value
-        logger.info(
-            (
-                "shell_session event=operation_failed tenant_id=%s task_id=%s "
-                "owner_fp=%s session_fp=%s placement=%s error_code=%s"
-            ),
-            identity.tenant_id,
-            identity.task_id,
-            safe_identifier_fingerprint(identity.execution_owner_id),
-            safe_identifier_fingerprint(public_session_id or ""),
-            placement,
-            error_code_value,
-        )
-        safe_inc(f"shell_session_operation_failures.{error_code_value}")
-
-    def _emit_active_session_gauges(self, *placements: str) -> None:
-        normalized = {self._placement(placement) for placement in placements}
-        normalized.update(
-            self._placement(record.identity.runtime_placement_mode)
-            for record in self._records.values()
-        )
-        for placement in normalized:
-            active_count = sum(
-                1
-                for record in self._records.values()
-                if self._placement(record.identity.runtime_placement_mode)
-                == placement
-            )
-            safe_gauge(f"shell_session_active_sessions.{placement}", active_count)
-
-    @classmethod
-    def _placement(cls, value: str | None) -> str:
-        normalized = cls._stable_segment(value or "unknown")
-        if normalized in {"local", "runner", "managed_runner"}:
-            return normalized
-        return "unknown"
-
-    @staticmethod
-    def _stable_segment(value: str) -> str:
-        normalized = "".join(
-            char if char.isalnum() or char == "_" else "_"
-            for char in str(value).strip().lower()
-        ).strip("_")
-        return normalized or "unknown"
 
     @staticmethod
     def _error_update(

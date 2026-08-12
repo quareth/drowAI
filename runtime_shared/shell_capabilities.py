@@ -30,6 +30,14 @@ SHELL_START_CAPABILITY_BY_TOOL_ID: Mapping[str, ShellCapability] = MappingProxyT
         SHELL_ASSESSMENT_TOOL_ID: ShellCapability.ASSESSMENT,
     }
 )
+SHELL_SESSION_START_CAPABILITY_BY_TOOL_ID: Mapping[
+    str, ShellCapability
+] = MappingProxyType(
+    {
+        **SHELL_START_CAPABILITY_BY_TOOL_ID,
+        SHELL_EXEC_TOOL_ID: ShellCapability.ASSESSMENT,
+    }
+)
 MODEL_FACING_SHELL_START_TOOL_IDS: frozenset[str] = frozenset(
     SHELL_START_CAPABILITY_BY_TOOL_ID
 )
@@ -45,6 +53,16 @@ def resolve_shell_start_capability(tool_id: object) -> ShellCapability | None:
     """Return the declared capability for a model-facing start alias."""
 
     return SHELL_START_CAPABILITY_BY_TOOL_ID.get(str(tool_id or "").strip())
+
+
+def resolve_shell_session_start_capability(
+    tool_id: object,
+) -> ShellCapability | None:
+    """Return capability provenance for any supported shell-session start id."""
+
+    return SHELL_SESSION_START_CAPABILITY_BY_TOOL_ID.get(
+        str(tool_id or "").strip()
+    )
 
 
 def canonical_shell_implementation_tool_id(tool_id: object) -> str:
@@ -73,6 +91,7 @@ __all__ = [
     "SHELL_ASSESSMENT_TOOL_ID",
     "SHELL_EXEC_TOOL_ID",
     "SHELL_SESSION_START_TOOL_IDS",
+    "SHELL_SESSION_START_CAPABILITY_BY_TOOL_ID",
     "SHELL_SESSION_TOOL_IDS",
     "SHELL_START_CAPABILITY_BY_TOOL_ID",
     "SHELL_UTILITY_TOOL_ID",
@@ -81,4 +100,5 @@ __all__ = [
     "canonical_shell_implementation_tool_id",
     "normalize_shell_capability",
     "resolve_shell_start_capability",
+    "resolve_shell_session_start_capability",
 ]

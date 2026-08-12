@@ -15,6 +15,9 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from backend.core.logging import safe_identifier_fingerprint
+from backend.services.chat.compact_tool_result import (
+    build_terminal_shell_compact_result,
+)
 from backend.services.chat.turn_event_service import ChatTurnEventService
 from backend.services.streaming.stream_event_schema import STEP_TOOL_END, TOOL_PHASE_INDEX
 from backend.services.terminal.contracts import (
@@ -104,6 +107,7 @@ class ShellSessionLifecycleProjector(ShellSessionLifecycleProjectorPort):
                         "runner_id": event.identity.runner_id,
                         "execution_site_id": event.identity.execution_site_id,
                         "originating_capability": event.originating_capability.value,
+                        "shell_lifecycle_event": True,
                         "compact_tool_result": self._terminal_lifecycle_compact_result(
                             status=status,
                             process_status=process_status,
@@ -177,6 +181,7 @@ class ShellSessionLifecycleProjector(ShellSessionLifecycleProjectorPort):
                 "session_id": event.public_session_id,
                 "close_reason": event.close_reason,
                 "lifecycle_event": "shell_session_terminal",
+                "shell_lifecycle_event": True,
                 "output_persistence": "transient",
                 "compact_tool_result": self._terminal_lifecycle_compact_result(
                     status=status,
@@ -260,26 +265,13 @@ class ShellSessionLifecycleProjector(ShellSessionLifecycleProjectorPort):
         process_status: str,
         session_id: str,
     ) -> dict[str, Any]:
-        return {
-            "schema_version": "2.0",
-            "tool": "shell.session",
-            "status": status,
-            "success": False,
-            "exit_code": None,
-            "summary": "Shell session closed",
-            "key_findings": [],
-            "errors": [],
-            "report_recommendations": [],
-            "structured_signals": [],
-            "decision_evidence": [],
-            "lossiness_risk": "low",
-            "artifact_refs": [],
-            "compression": None,
-            "process_status": process_status,
-            "session_status": ShellSessionLifecycleStatus.CLOSED.value,
-            "interaction_boundary": ShellInteractionBoundary.TERMINAL.value,
-            "session_id": session_id,
-        }
+        return build_terminal_shell_compact_result(
+            tool="shell.session",
+            status=status,
+            process_status=process_status,
+            session_id=session_id,
+            summary="Shell session closed",
+        )
 
     @staticmethod
     def _turn_id_from_execution_owner_id(execution_owner_id: str) -> str | None:

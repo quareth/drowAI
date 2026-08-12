@@ -7,6 +7,9 @@ runtime-unavailable results when no service has been bound.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Callable, Protocol
 
 from runtime_shared.shell_capabilities import ShellCapability
@@ -130,6 +133,9 @@ class _UnavailableShellSessionService:
 
 _UNAVAILABLE_SERVICE = _UnavailableShellSessionService()
 _shell_session_service_resolver: Callable[[], ShellSessionServicePort] | None = None
+_shell_session_service_override: ContextVar[
+    Callable[[], ShellSessionServicePort] | None
+] = ContextVar("shell_session_service_override", default=None)
 
 
 def _runtime_unavailable_update() -> ShellSessionUpdate:
@@ -164,8 +170,24 @@ def clear_shell_session_service_resolver() -> None:
     _shell_session_service_resolver = None
 
 
+@contextmanager
+def override_shell_session_service_resolver(
+    resolver: Callable[[], ShellSessionServicePort],
+) -> Iterator[None]:
+    """Temporarily override resolution in the current async/thread context."""
+
+    token = _shell_session_service_override.set(resolver)
+    try:
+        yield
+    finally:
+        _shell_session_service_override.reset(token)
+
+
 def get_shell_session_service() -> ShellSessionServicePort:
     """Return the configured shell-session service or a fail-closed substitute."""
+    override = _shell_session_service_override.get()
+    if override is not None:
+        return override()
     if _shell_session_service_resolver is None:
         return _UNAVAILABLE_SERVICE
     return _shell_session_service_resolver()

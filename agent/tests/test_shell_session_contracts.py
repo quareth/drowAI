@@ -284,6 +284,7 @@ def test_shell_write_request_models_exact_non_empty_input_and_internal_wait() ->
         ShellWriteRequest(session_id="shs_abc123", chars="")
 
     assert interrupt.chars == "\u0003"
+    assert interrupt.yield_time_ms == 20_000
     assert wait.session_id == "shs_abc123"
     assert wait.max_output_chars == 32_000
 

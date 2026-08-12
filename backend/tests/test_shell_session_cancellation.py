@@ -105,9 +105,6 @@ async def test_execute_cancellation_closes_registered_session_and_releases_capac
     with pytest.raises(asyncio.CancelledError):
         await operation
 
-    assert service._records == {}
-    assert service._pending_owner_starts == {}
-    assert service._pending_task_starts == {}
     assert manager.ctrl_c_writes == 1
     assert manager.closed_sessions == ["terminal-1"]
 
@@ -163,8 +160,12 @@ async def test_failed_concurrent_start_releases_only_its_own_capacity() -> None:
     second.cancel()
     third.cancel()
     await asyncio.gather(second, third, return_exceptions=True)
-    assert service._pending_owner_starts == {}
-    assert service._pending_task_starts == {}
+    manager.release_pending.set()
+    follow_up = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(command="echo quick", yield_time_ms=0),
+    )
+    assert follow_up.success is True
 
 
 @pytest.mark.asyncio
@@ -185,8 +186,12 @@ async def test_terminal_preparation_has_a_hard_deadline_and_releases_capacity(
 
     assert result.success is False
     assert result.error_code == "command_start_failed"
-    assert service._pending_owner_starts == {}
-    assert service._pending_task_starts == {}
+    manager.release_pending.set()
+    follow_up = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(command="echo quick", yield_time_ms=0),
+    )
+    assert follow_up.success is True
 
 
 @pytest.mark.asyncio
@@ -213,5 +218,8 @@ async def test_continuation_input_has_a_hard_deadline_and_closes_session(
 
     assert result.success is False
     assert result.error_code == "runtime_transport_failed"
-    assert started.session_id not in service._records
+    assert await service.get_session_capability(
+        identity=_identity(),
+        public_session_id=started.session_id,
+    ) is None
     assert manager.closed_sessions == ["terminal-1"]

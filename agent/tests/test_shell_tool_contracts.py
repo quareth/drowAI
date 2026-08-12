@@ -97,6 +97,7 @@ def test_shell_write_stdin_schema_and_input_forms() -> None:
     assert schema["additionalProperties"] is False
     assert schema["properties"]["session_id"]["maxLength"] == 128
     assert schema["properties"]["chars"]["maxLength"] == 16_384
+    assert schema["properties"]["yield_time_ms"]["default"] == 20_000
     assert schema["properties"]["yield_time_ms"]["maximum"] == 30_000
     assert schema["properties"]["max_output_chars"]["minimum"] == 1_024
     assert schema["properties"]["max_output_chars"]["maximum"] == 128_000

@@ -315,9 +315,10 @@ parent's wait/delegate/finalize policy.
   workspace.
 - `shell.utility`, `shell.assessment`, and `shell.write_stdin` use
   provider-backed PTY sessions through the runtime provider boundary. The
-  process-local shell-session service owns public handles, idle/deadline
-  cleanup, owner cleanup for terminal main and subagent runs, task retirement
-  cleanup, and managed-runner disconnect handle expiry.
+  process-local shell-session registry owns public handles, capacity, claims,
+  and idle/deadline selection. The shell-session service coordinates PTY I/O,
+  owner cleanup for terminal main and subagent runs, task retirement cleanup,
+  and managed-runner disconnect handle expiry.
 - Legacy PTY use outside the shell-session tools remains policy- and
   capability-gated; parallel compatibility PTY calls use named internal
   sessions when enabled.

@@ -20,6 +20,9 @@ from sqlalchemy.orm import Session
 from agent.graph.contracts.streaming_constants import STEP_TOOL_END, TOOL_PHASE_INDEX
 from backend.models.provenance import ToolExecution
 from backend.models.streaming import StreamEvent
+from backend.services.chat.compact_tool_result import (
+    build_terminal_shell_compact_result,
+)
 from backend.services.langgraph_chat.runtime.tool_cancel_service import ToolCancelProjectionResult
 
 logger = logging.getLogger(__name__)
@@ -618,6 +621,7 @@ class ChatToolCancelStreamProjectionService:
             "session_id": session_id,
             "close_reason": "chat_stop",
             "lifecycle_event": "shell_session_terminal",
+            "shell_lifecycle_event": True,
             "output_persistence": "transient",
             "command_id": session_id,
             "execution_id": str(row.id or "").strip() or None,
@@ -633,24 +637,21 @@ class ChatToolCancelStreamProjectionService:
         row: ToolExecution,
         tool_name: str,
     ) -> dict[str, Any]:
-        session_id = ChatToolCancelStreamProjectionService._read_string(row.command_id)
-        return {
-            "schema_version": "2.0",
-            "tool": tool_name,
-            "status": "cancelled",
-            "success": False,
-            "exit_code": row.exit_code,
-            "summary": {},
-            "error": "user_cancelled",
-            "failure_category": "user_cancelled",
-            "process_status": "terminated",
-            "session_status": "closed",
-            "interaction_boundary": "terminal",
-            "session_id": session_id,
-            "close_reason": "chat_stop",
-            "lifecycle_event": "shell_session_terminal",
-            "output_persistence": "transient",
-        }
+        return build_terminal_shell_compact_result(
+            tool=tool_name,
+            status="cancelled",
+            process_status="terminated",
+            session_id=ChatToolCancelStreamProjectionService._read_string(
+                row.command_id
+            ),
+            summary="Tool stopped",
+            exit_code=row.exit_code,
+            error="user_cancelled",
+            close_reason="chat_stop",
+            lifecycle_event="shell_session_terminal",
+            failure_category="user_cancelled",
+            output_persistence="transient",
+        )
 
     @staticmethod
     def _is_cancelled_row(row: ToolExecution) -> bool:

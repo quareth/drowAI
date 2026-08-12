@@ -56,11 +56,10 @@ from runtime_shared.shell_session_contracts import (
 )
 from runtime_shared.shell_session_port import get_shell_session_service
 from runtime_shared.shell_capabilities import (
-    SHELL_EXEC_TOOL_ID,
     SHELL_SESSION_START_TOOL_IDS,
     SHELL_WRITE_STDIN_TOOL_ID,
     ShellCapability,
-    resolve_shell_start_capability,
+    resolve_shell_session_start_capability,
 )
 
 from backend.services.runtime_provider.contracts import (
@@ -430,9 +429,9 @@ class GraphToolExecutor:
         service = get_shell_session_service()
         originating_capability: ShellCapability | None = None
         if isinstance(session_request, ShellExecRequest):
-            originating_capability = resolve_shell_start_capability(request["tool"])
-            if str(request["tool"]) == SHELL_EXEC_TOOL_ID:
-                originating_capability = ShellCapability.ASSESSMENT
+            originating_capability = resolve_shell_session_start_capability(
+                request["tool"]
+            )
             if originating_capability is None:
                 return self._shell_session_error_payload(
                     tool_id=str(request["tool"]),

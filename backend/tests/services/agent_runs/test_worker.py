@@ -56,6 +56,7 @@ from runtime_shared.shell_session_contracts import (
     ShellExecRequest,
     ShellProcessStatus,
     ShellSessionIdentity,
+    ShellSessionOrigin,
     ShellSessionUpdate,
     ShellWriteRequest,
 )
@@ -322,21 +323,15 @@ class _ShellDispatchingExecutor:
         self.request_owner_id = request.metadata["execution_owner_id"]
 
         service = _FakeShellSessionService()
-        previous_shell_service_resolver = (
-            shell_session_port._shell_session_service_resolver
-        )
-        shell_session_port.set_shell_session_service_resolver(lambda: service)
-        try:
+        with shell_session_port.override_shell_session_service_resolver(
+            lambda: service
+        ):
             coordinator = ToolExecutionCoordinator(
                 config=coordinator_config,
                 planner=_ShellExecPlanner(),
                 executor=GraphToolExecutor(executor=_ApprovingExecutor()),
             )
             outcome = await coordinator.run(request)
-        finally:
-            shell_session_port._shell_session_service_resolver = (
-                previous_shell_service_resolver
-            )
 
         assert outcome.result["metadata"]["route_policy"]["selected_authority"] == (
             "runtime_session_control"
@@ -390,7 +385,9 @@ class _FakeShellSessionService:
         identity: ShellSessionIdentity,
         request: ShellExecRequest,
         capability: ShellCapability = ShellCapability.ASSESSMENT,
+        origin: ShellSessionOrigin | None = None,
     ) -> ShellSessionUpdate:
+        _ = capability, origin
         self.exec_calls.append((identity, request))
         return ShellSessionUpdate(
             success=True,

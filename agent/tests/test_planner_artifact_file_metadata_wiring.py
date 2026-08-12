@@ -13,7 +13,7 @@ from core.prompts.builders.tool_planning import ToolPlanningPromptBuilder
 
 
 class _Config:
-    """Minimal planner config for filesystem metadata wiring tests."""
+    """Minimal planner config for artifact metadata wiring tests."""
 
     openai_api_key = "test"
     model_name = "gpt-4"
@@ -27,7 +27,7 @@ class _Config:
 class _Selector:
     async def select_tools(self, **_kwargs: Any) -> ToolSelectionResult:
         return ToolSelectionResult(
-            selected_tools=["filesystem.read_file"],
+            selected_tools=["shell.utility"],
             execution_strategy=ExecutionStrategy.SEQUENTIAL,
             usage_record=None,
         )
@@ -36,10 +36,8 @@ class _Selector:
 class _Resolver:
     async def resolve_parameters(self, **_kwargs: Any) -> ParameterResolutionResult:
         parameters = {
-            "filesystem.read_file": {
-                "path": "artifacts/scan.xml",
-                "read_mode": "head",
-                "num_lines": 20,
+            "shell.utility": {
+                "command": "sed -n '1,20p' artifacts/scan.xml",
             }
         }
         return ParameterResolutionResult(
@@ -49,7 +47,7 @@ class _Resolver:
         )
 
 
-def test_try_llm_action_plan_passes_artifact_file_metadata_after_filesystem_selection(
+def test_try_llm_action_plan_passes_artifact_file_metadata_to_utility_shell(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -85,7 +83,7 @@ def test_try_llm_action_plan_passes_artifact_file_metadata_after_filesystem_sele
     )
     context = {
         "current_phase": "enumeration",
-        "resolved_tools": ["filesystem.read_file"],
+        "resolved_tools": ["shell.utility"],
         "user_message": "inspect saved scan xml",
         "workspace_path": str(tmp_path),
         "artifact_file_refs": [{"path": "artifacts/scan.xml"}],

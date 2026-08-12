@@ -415,6 +415,7 @@ def test_cancel_endpoint_publishes_live_tool_stop_projection(monkeypatch) -> Non
         assert tool_end_metadata["command_id"] == "cmd-stop-stream-1"
         assert tool_end_metadata["close_reason"] == "chat_stop"
         assert tool_end_metadata["lifecycle_event"] == "shell_session_terminal"
+        assert tool_end_metadata["shell_lifecycle_event"] is True
         assert tool_end_metadata["output_persistence"] == "transient"
         assert tool_end_metadata["compact_tool_result"]["process_status"] == "terminated"
         assert tool_end_metadata["compact_tool_result"]["session_status"] == "closed"
@@ -423,6 +424,12 @@ def test_cancel_endpoint_publishes_live_tool_stop_projection(monkeypatch) -> Non
         assert tool_end_metadata["compact_tool_result"]["close_reason"] == "chat_stop"
         assert tool_end_metadata["compact_tool_result"]["lifecycle_event"] == "shell_session_terminal"
         assert tool_end_metadata["compact_tool_result"]["output_persistence"] == "transient"
+        assert tool_end_metadata["compact_tool_result"]["summary"] == "Tool stopped"
+        assert tool_end_metadata["compact_tool_result"]["key_findings"] == []
+        assert tool_end_metadata["compact_tool_result"]["errors"] == ["user_cancelled"]
+        assert tool_end_metadata["compact_tool_result"]["report_recommendations"] == []
+        assert tool_end_metadata["compact_tool_result"]["structured_signals"] == []
+        assert tool_end_metadata["compact_tool_result"]["decision_evidence"] == []
 
         batch_end_events = [event for _, event in published if event.get("type") == "tool_batch_end"]
         assert len(batch_end_events) == 1
@@ -450,6 +457,7 @@ def test_cancel_endpoint_publishes_live_tool_stop_projection(monkeypatch) -> Non
         assert batch_end_metadata["results"][0]["compact_tool_result"]["session_status"] == "closed"
         assert batch_end_metadata["results"][0]["compact_tool_result"]["interaction_boundary"] == "terminal"
         assert batch_end_metadata["results"][0]["compact_tool_result"]["session_id"] == "cmd-stop-stream-1"
+        assert batch_end_metadata["results"][0]["compact_tool_result"]["summary"] == "Tool stopped"
         assert batch_end_metadata["calls"][0]["process_status"] == "terminated"
         assert batch_end_metadata["calls"][0]["session_status"] == "closed"
         assert batch_end_metadata["calls"][0]["interaction_boundary"] == "terminal"

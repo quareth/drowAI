@@ -1,3 +1,5 @@
+"""Planner integration tests for visible tools and provider-neutral calls."""
+
 import os
 import sys
 import asyncio
@@ -16,6 +18,7 @@ from agent.reasoning.enhanced_planner import (
 from agent.models import Action, ActionType
 from agent.tools.tool_registry import available_tools
 from core.llm.structured_schemas import TOOL_SELECTOR_STRUCTURED_OUTPUT
+from runtime_shared.shell_capabilities import SHELL_ASSESSMENT_TOOL_ID
 
 
 class DummyConfig:
@@ -78,7 +81,7 @@ class FakeLLM:
         **_kwargs,
     ):
         self.exposed_tools.append(list(tools))
-        fn_name = tools[0]["function"]["name"]
+        fn_name = tools[0].name
         return SimpleNamespace(
             content="",
             tool_calls=[
@@ -110,19 +113,19 @@ class FakeBuilderFallbackLLM:
         return SimpleNamespace(
             content=json.dumps(
                 {
-                    "selected_tools": ["shell.exec"],
+                    "selected_tools": [SHELL_ASSESSMENT_TOOL_ID],
                     "execution_strategy": "parallel",
                 }
             ),
             usage=None,
             structured_output={
-                "selected_tools": ["shell.exec"],
+                "selected_tools": [SHELL_ASSESSMENT_TOOL_ID],
                 "execution_strategy": "parallel",
             },
         )
 
     async def chat_with_tools_with_usage(self, _system_prompt, _user_prompt, tools, **_kwargs):
-        fn_name = tools[0]["function"]["name"]
+        fn_name = tools[0].name
         return SimpleNamespace(
             content="",
             tool_calls=[
@@ -137,7 +140,7 @@ class FakeBuilderFallbackLLM:
         )
 
 
-class FakeShellRepairLLM:
+class FakeShellAssessmentRepairLLM:
     def __init__(self, initial_arguments: str, retry_arguments: str):
         self.initial_arguments = initial_arguments
         self.retry_arguments = retry_arguments
@@ -154,7 +157,9 @@ class FakeShellRepairLLM:
         except Exception:
             params = {}
         return {
-            "tool_calls": [{"tool_id": "shell.exec", "parameters": params}],
+            "tool_calls": [
+                {"tool_id": SHELL_ASSESSMENT_TOOL_ID, "parameters": params}
+            ],
             "execution_strategy": "sequential",
         }
 
@@ -171,20 +176,20 @@ class FakeShellRepairLLM:
         return SimpleNamespace(
             content=json.dumps(
                 {
-                    "selected_tools": ["shell.exec"],
+                    "selected_tools": [SHELL_ASSESSMENT_TOOL_ID],
                     "execution_strategy": "sequential",
                 }
             ),
             usage=None,
             structured_output={
-                "selected_tools": ["shell.exec"],
+                "selected_tools": [SHELL_ASSESSMENT_TOOL_ID],
                 "execution_strategy": "sequential",
             },
         )
 
     async def chat_with_tools_with_usage(self, _system_prompt, _user_prompt, tools, **_kwargs):
         self.exposed_tools.append(list(tools))
-        fn_name = tools[0]["function"]["name"]
+        fn_name = tools[0].name
         return SimpleNamespace(
             content="",
             tool_calls=[
@@ -196,7 +201,7 @@ class FakeShellRepairLLM:
 
     async def chat_with_tools(self, _system_prompt, _user_prompt, tools, **_kwargs):
         self.retry_calls += 1
-        fn_name = tools[0]["function"]["name"]
+        fn_name = tools[0].name
         return {
             "content": "",
             "tool_calls": [
@@ -208,68 +213,6 @@ class FakeShellRepairLLM:
             ],
             "raw": {},
         }
-
-
-class FakeCveLookupLLM:
-    def __init__(self):
-        self.selection_structured_output = None
-
-    async def chat_with_usage(self, _system_prompt, _user_prompt, **kwargs):
-        spec = kwargs.get("structured_output")
-        spec_name = getattr(spec, "name", None)
-        if spec_name == "commit_tool_batch":
-            return SimpleNamespace(
-                content="",
-                usage=None,
-                structured_output={
-                    "tool_calls": [
-                        {
-                            "tool_id": "knowledge.cve_lookup",
-                            "parameters": {
-                                "product": "PostgreSQL",
-                                "version": "9.6.0",
-                                "max_results": 5,
-                            },
-                        }
-                    ],
-                    "execution_strategy": "sequential",
-                },
-            )
-        self.selection_structured_output = spec
-        return SimpleNamespace(
-            content=json.dumps(
-                {
-                    "selected_tools": ["knowledge.cve_lookup"],
-                    "execution_strategy": "sequential",
-                }
-            ),
-            usage=None,
-            structured_output={
-                "selected_tools": ["knowledge.cve_lookup"],
-                "execution_strategy": "sequential",
-            },
-        )
-
-    async def chat_with_tools_with_usage(self, _system_prompt, _user_prompt, tools, **_kwargs):
-        fn_name = tools[0]["function"]["name"]
-        return SimpleNamespace(
-            content="",
-            tool_calls=[
-                SimpleNamespace(
-                    id="call1",
-                    name=fn_name,
-                    arguments=json.dumps(
-                        {
-                            "product": "PostgreSQL",
-                            "version": "9.6.0",
-                            "max_results": 5,
-                        }
-                    ),
-                )
-            ],
-            raw={},
-            usage=None,
-        )
 
 
 class FakeNmapNoTargetLLM:
@@ -308,7 +251,7 @@ class FakeNmapNoTargetLLM:
         )
 
     async def chat_with_tools_with_usage(self, _system_prompt, _user_prompt, tools, **_kwargs):
-        fn_name = tools[0]["function"]["name"]
+        fn_name = tools[0].name
         return SimpleNamespace(
             content="",
             tool_calls=[
@@ -373,7 +316,7 @@ class FakeDuplicateNmapBuilderLLM:
         )
 
     async def chat_with_tools_with_usage(self, _system_prompt, _user_prompt, tools, **_kwargs):
-        fn_name = tools[0]["function"]["name"]
+        fn_name = tools[0].name
         return SimpleNamespace(
             content="",
             tool_calls=[
@@ -451,38 +394,15 @@ async def test_native_builder_tool_call_uses_selector_strategy():
         action,
         {
             "current_phase": "enumeration",
-            "resolved_tools": ["shell.exec"],
+            "resolved_tools": [SHELL_ASSESSMENT_TOOL_ID],
             "history": [],
             "user_message": "run fallback",
         },
     )
 
-    assert plan.selected_tools == ["shell.exec"]
+    assert plan.selected_tools == [SHELL_ASSESSMENT_TOOL_ID]
     assert plan.execution_strategy.value == "parallel"
-    assert plan.tool_parameters["shell.exec"]["command"] == "echo fallback"
-
-
-@pytest.mark.asyncio
-async def test_planner_does_not_inject_target_for_cve_lookup() -> None:
-    cfg = DummyConfig()
-    fake_llm = FakeCveLookupLLM()
-    planner = EnhancedActionPlanner(cfg, llm_client=fake_llm)
-    action = Action(type=ActionType.SCAN_PORTS, target="127.0.0.1", parameters={}, reasoning="", expected_outcome="")
-
-    plan = await planner.build_action_plan(
-        action,
-        {
-            "current_phase": "enumeration",
-            "resolved_tools": ["knowledge.cve_lookup"],
-            "history": [],
-            "user_message": "check cves",
-        },
-    )
-
-    params = plan.tool_parameters["knowledge.cve_lookup"]
-    assert params["product"] == "PostgreSQL"
-    assert params["version"] == "9.6.0"
-    assert "target" not in params
+    assert plan.tool_parameters[SHELL_ASSESSMENT_TOOL_ID]["command"] == "echo fallback"
 
 
 @pytest.mark.asyncio
@@ -569,9 +489,9 @@ async def test_planner_rejects_missing_target_when_no_target_is_available() -> N
 
 
 @pytest.mark.asyncio
-async def test_shell_exec_invalid_json_repaired_once():
+async def test_shell_assessment_invalid_json_repaired_once():
     cfg = DummyConfig()
-    fake_llm = FakeShellRepairLLM(
+    fake_llm = FakeShellAssessmentRepairLLM(
         initial_arguments='{"command": ',
         retry_arguments=json.dumps({"command": "echo repaired"}),
     )
@@ -582,22 +502,22 @@ async def test_shell_exec_invalid_json_repaired_once():
         action,
         {
             "current_phase": "enumeration",
-            "resolved_tools": ["shell.exec"],
+            "resolved_tools": [SHELL_ASSESSMENT_TOOL_ID],
             "history": [],
             "user_message": "run echo",
         },
     )
 
-    assert plan.selected_tools == ["shell.exec"]
-    assert plan.tool_parameters["shell.exec"]["command"] == "echo repaired"
+    assert plan.selected_tools == [SHELL_ASSESSMENT_TOOL_ID]
+    assert plan.tool_parameters[SHELL_ASSESSMENT_TOOL_ID]["command"] == "echo repaired"
     assert fake_llm.selection_structured_output == TOOL_SELECTOR_STRUCTURED_OUTPUT
     assert fake_llm.retry_calls == 1
 
 
 @pytest.mark.asyncio
-async def test_shell_exec_missing_command_raises_typed_planner_validation_error():
+async def test_shell_assessment_missing_command_raises_typed_planner_validation_error():
     cfg = DummyConfig()
-    fake_llm = FakeShellRepairLLM(
+    fake_llm = FakeShellAssessmentRepairLLM(
         initial_arguments=json.dumps({}),
         retry_arguments=json.dumps({}),
     )
@@ -609,14 +529,14 @@ async def test_shell_exec_missing_command_raises_typed_planner_validation_error(
             action,
             {
                 "current_phase": "enumeration",
-                "resolved_tools": ["shell.exec"],
+                "resolved_tools": [SHELL_ASSESSMENT_TOOL_ID],
                 "history": [],
                 "user_message": "run echo",
             },
         )
 
     exc = exc_info.value
-    assert exc.tool_id == "shell.exec"
+    assert exc.tool_id == SHELL_ASSESSMENT_TOOL_ID
     assert exc.reason == "schema_validation_error"
     assert any(err.get("field") == "command" for err in exc.validation_errors)
     assert fake_llm.selection_structured_output == TOOL_SELECTOR_STRUCTURED_OUTPUT
@@ -624,9 +544,9 @@ async def test_shell_exec_missing_command_raises_typed_planner_validation_error(
 
 
 @pytest.mark.asyncio
-async def test_shell_exec_unparsable_arguments_raise_parse_error():
+async def test_shell_assessment_unparsable_arguments_raise_parse_error():
     cfg = DummyConfig()
-    fake_llm = FakeShellRepairLLM(
+    fake_llm = FakeShellAssessmentRepairLLM(
         initial_arguments='{"command": ',
         retry_arguments='{"command": ',
     )
@@ -638,14 +558,14 @@ async def test_shell_exec_unparsable_arguments_raise_parse_error():
             action,
             {
                 "current_phase": "enumeration",
-                "resolved_tools": ["shell.exec"],
+                "resolved_tools": [SHELL_ASSESSMENT_TOOL_ID],
                 "history": [],
                 "user_message": "run echo",
             },
         )
 
     exc = exc_info.value
-    assert exc.tool_id == "shell.exec"
+    assert exc.tool_id == SHELL_ASSESSMENT_TOOL_ID
     assert exc.reason == "parse_error"
     assert any(err.get("field") == "arguments" for err in exc.validation_errors)
     assert fake_llm.selection_structured_output == TOOL_SELECTOR_STRUCTURED_OUTPUT

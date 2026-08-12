@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 
 import agent.graph.nodes.terminal_session_compressor as terminal_compressor_module
+import agent.graph.subgraphs.shell_interaction_decision as interaction_decision_module
 import agent.graph.subgraphs.tool_execution_session as session_module
 from agent.graph.nodes.terminal_session_compressor import (
     compress_terminal_execution_session_output,
@@ -56,8 +57,7 @@ from runtime_shared.shell_session_contracts import (
     ShellWriteRequest,
 )
 from runtime_shared.shell_session_port import (
-    clear_shell_session_service_resolver,
-    set_shell_session_service_resolver,
+    override_shell_session_service_resolver,
 )
 
 
@@ -564,39 +564,77 @@ def test_abort_discards_transcript_and_evidence_together() -> None:
         append_execution_session_evidence(sequence_id, _view(sequence_id, [row]))
 
 
-def test_eviction_removes_the_whole_execution_session(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(session_module, "_EXECUTION_SESSION_CACHE_LIMIT", 1)
-    row = _row(
-        call_id="call-first",
-        tool_id="shell.utility",
-        summary="First session started.",
-    )
-    begin_execution_session_state(
-        sequence_id="session-first",
-        originating_tool_id="shell.utility",
-        originating_parameters={"command": "sleep 10"},
-    )
-    append_execution_session_evidence(
-        "session-first",
-        _view("session-first", [row]),
+def test_active_execution_sessions_are_not_silently_evicted() -> None:
+    sequence_ids = [f"session-{index}" for index in range(129)]
+    try:
+        for sequence_id in sequence_ids:
+            begin_execution_session_state(
+                sequence_id=sequence_id,
+                originating_tool_id="shell.utility",
+                originating_parameters={"command": "sleep 20"},
+            )
+
+        assert read_shell_interaction_transcript(sequence_ids[0]) is not None
+        assert read_shell_interaction_transcript(sequence_ids[-1]) is not None
+    finally:
+        for sequence_id in sequence_ids:
+            abort_execution_session_state(sequence_id)
+
+
+def test_legacy_shell_exec_continuation_keeps_assessment_provenance() -> None:
+    compact = session_module._compact_from_shell_update(
+        tool_id="shell.write_stdin",
+        update=_shell_update(
+            stdout="done\n",
+            process_status=ShellProcessStatus.COMPLETED,
+            session_status=ShellSessionLifecycleStatus.CLOSED,
+            session_id=None,
+            interaction_boundary=ShellInteractionBoundary.TERMINAL,
+            exit_code=0,
+        ),
+        originating_tool_id="shell.exec",
     )
 
-    begin_execution_session_state(
-        sequence_id="session-second",
-        originating_tool_id="shell.utility",
-        originating_parameters={"command": "sleep 20"},
+    assert compact["metadata"]["runtime_session"]["originating_capability"] == (
+        "assessment"
     )
 
-    assert read_shell_interaction_transcript("session-first") is None
-    with pytest.raises(KeyError, match="Unknown runtime execution session"):
-        append_execution_session_evidence(
-            "session-first",
-            _view("session-first", [row]),
-        )
-    assert read_shell_interaction_transcript("session-second") is not None
-    abort_execution_session_state("session-second")
+
+@pytest.mark.asyncio
+async def test_interaction_failure_preserves_original_error_and_aborts_session() -> None:
+    sequence_id = "batch-interaction-failure"
+    state = _initial_shell_state(
+        batch_id=sequence_id,
+        call_id="call-interaction-failure",
+        command="sleep 30",
+    )
+    metadata = state.facts.ensure_metadata()
+    set_active_execution_control(
+        metadata,
+        turn_sequence=7,
+        active_execution={
+            "originating_tool_id": "shell.utility",
+            "continuation_tool_id": "shell.write_stdin",
+            "process_status": "running",
+            "session_id": "shs_interaction_failure",
+            "stdin_available": True,
+        },
+    )
+    initialized = initialize_tool_execution_session(state)
+
+    async def _raise_interaction(*_args: Any, **_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("sentinel interaction failure")
+
+    graph = build_tool_execution_session_subgraph(
+        initialize_fn=lambda current, context=None: current,
+        collect_fn=lambda current, context=None: current,
+        interaction_fn=_raise_interaction,
+    )
+
+    with pytest.raises(RuntimeError, match="sentinel interaction failure"):
+        await graph.ainvoke(initialized)
+
+    assert read_shell_interaction_transcript(sequence_id) is None
 
 
 @pytest.mark.asyncio
@@ -681,7 +719,7 @@ async def test_default_interaction_boundary_uses_model_structured_decision(
             )
 
     monkeypatch.setattr(
-        session_module,
+        interaction_decision_module,
         "resolve_llm_client",
         lambda *_args, **_kwargs: _DecisionLLM(),
     )
@@ -711,14 +749,11 @@ async def test_default_interaction_boundary_uses_model_structured_decision(
         ) -> ShellSessionUpdate:
             raise AssertionError("send_input must not poll via wait_for_output")
 
-    set_shell_session_service_resolver(lambda: _ShellService())
-    try:
+    with override_shell_session_service_resolver(lambda: _ShellService()):
         updated = await coordinate_shell_interaction(
             state,
             config={"configurable": {}},
         )
-    finally:
-        clear_shell_session_service_resolver()
     updated_metadata = updated["facts"]["metadata"]
     row = updated_metadata["last_tool_result_compact_batch"]["results"][0]
 
@@ -804,7 +839,7 @@ async def test_decision_failure_interrupts_instead_of_waiting_forever(
             raise RuntimeError("decision service unavailable")
 
     monkeypatch.setattr(
-        session_module,
+        interaction_decision_module,
         "resolve_llm_client",
         lambda *_args, **_kwargs: _FailingDecisionLLM(),
     )
@@ -836,14 +871,11 @@ async def test_decision_failure_interrupts_instead_of_waiting_forever(
             _ = (identity, request)
             raise AssertionError("decision failure must not become an unbounded wait")
 
-    set_shell_session_service_resolver(lambda: _ShellService())
-    try:
+    with override_shell_session_service_resolver(lambda: _ShellService()):
         updated = await coordinate_shell_interaction(
             state,
             config={"configurable": {}},
         )
-    finally:
-        clear_shell_session_service_resolver()
 
     updated_metadata = updated["facts"]["metadata"]
     compact = updated_metadata["last_tool_result_compact"]
@@ -902,16 +934,17 @@ async def test_coordinator_uses_bounded_runtime_wait() -> None:
                 stdin_available=True,
             )
 
-    set_shell_session_service_resolver(lambda: _ShellService())
-    try:
-        await coordinate_shell_interaction(
+    with override_shell_session_service_resolver(lambda: _ShellService()):
+        updated = await coordinate_shell_interaction(
             interactive,
             decide_fn=lambda **_kwargs: {"action": "wait_for_output"},
         )
-    finally:
-        clear_shell_session_service_resolver()
 
     assert wait_requests == [ShellWaitRequest(session_id="shs_bounded_wait")]
+    updated_metadata = updated["facts"]["metadata"]
+    assert updated_metadata["tool_batch_id"].startswith("tb_")
+    runtime_batch = updated_metadata["last_tool_result_compact_batch"]
+    assert runtime_batch["results"][0]["tool_call_id"].startswith("tc_")
 
 
 @pytest.mark.asyncio
@@ -1093,11 +1126,8 @@ async def test_running_command_continuation_completes_inside_one_subgraph() -> N
         decide_interaction_fn=decide,
     )
 
-    set_shell_session_service_resolver(lambda: _ShellService())
-    try:
+    with override_shell_session_service_resolver(lambda: _ShellService()):
         result = await graph.ainvoke(dispatched)
-    finally:
-        clear_shell_session_service_resolver()
     runtime = read_compact_evidence(result["facts"]["metadata"], prefer_runtime=True)
 
     assert dispatch_calls == ["shell.utility"]

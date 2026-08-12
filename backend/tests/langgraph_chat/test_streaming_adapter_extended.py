@@ -510,7 +510,6 @@ class TestToolEventProcessing:
                     "session_id": "shs-progress",
                 },
                 "output_persistence": "transient",
-                "shell_lifecycle_event": True,
             },
             state_container=state_container,
         )
@@ -529,7 +528,7 @@ class TestToolEventProcessing:
         assert stored_calls[0]["tool_result"]["summary"] == ""
         assert "progress line" not in repr(stored_calls)
 
-        adapter.process_streaming_event(
+        terminal_result = adapter.process_streaming_event(
             {
                 "type": "tool_end",
                 "tool": "shell.utility",
@@ -554,9 +553,12 @@ class TestToolEventProcessing:
                     "interaction_boundary": "terminal",
                     "session_id": "shs-progress",
                 },
+                "shell_lifecycle_event": True,
             },
             state_container=state_container,
         )
+        assert terminal_result is not None
+        assert terminal_result["metadata"]["shell_lifecycle_event"] is True
         terminal_calls = state_container.get_tool_calls()
         assert len(terminal_calls) == 1
         assert terminal_calls[0]["process_status"] == "completed"

@@ -351,12 +351,14 @@ async def test_projector_preserves_originating_tool_correlation() -> None:
         assert metadata["tool_batch_id"] == "batch-shell-origin"
         assert metadata["tool_name"] == "shell.utility"
         assert metadata["originating_capability"] == "utility"
+        assert metadata["shell_lifecycle_event"] is True
         assert metadata["compact_tool_result"]["tool"] == "shell.session"
         packet_metadata = hub.published[0][1]["metadata"]
         assert packet_metadata["tool_call_id"] == "call-shell-origin"
         assert packet_metadata["tool_batch_id"] == "batch-shell-origin"
         assert packet_metadata["tool_name"] == "shell.utility"
         assert packet_metadata["originating_capability"] == "utility"
+        assert packet_metadata["shell_lifecycle_event"] is True
         assert packet_metadata["compact_tool_result"]["tool"] == "shell.session"
     finally:
         engine.dispose()

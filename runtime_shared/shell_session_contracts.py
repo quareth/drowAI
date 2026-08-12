@@ -16,7 +16,7 @@ from runtime_shared.docker_contracts import build_runtime_contract_environment
 
 SHELL_SESSION_MAX_ENV_ENTRIES = 64
 SHELL_SESSION_MAX_ENV_TOTAL_BYTES = 32 * 1024
-SHELL_SESSION_DEFAULT_YIELD_TIME_MS = 10_000
+SHELL_SESSION_DEFAULT_YIELD_TIME_MS = 20_000
 SHELL_SESSION_MAX_YIELD_TIME_MS = 30_000
 # Session creation includes runtime readiness, provider terminal open, and PTY
 # initialization. Keep this bound shared so the backend operation and the agent

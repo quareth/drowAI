@@ -21,7 +21,6 @@ import time
 from collections.abc import Mapping
 from typing import Any, Callable, Optional, TYPE_CHECKING
 
-from agent.graph.compression.schema import CompactToolOutput
 from agent.graph.contracts.streaming_constants import (
     STEP_TOOL_DELTA,
     STEP_TOOL_END,
@@ -29,6 +28,7 @@ from agent.graph.contracts.streaming_constants import (
     TOOL_PHASE_INDEX,
 )
 from agent.tools.utils import resolve_command_text_for_execution
+from backend.services.chat.compact_tool_result import normalize_compact_tool_result
 from backend.services.metrics.utils import safe_inc
 from runtime_shared.durable_secret_masking import mask_durable_secrets
 from runtime_shared.shell_capabilities import (
@@ -139,7 +139,7 @@ class ToolEventProcessor:
         if state_container is not None and tool_call_id:
             state_container.record_tool_call_start(tool_call_id, parameters)
 
-        processed = {
+        processed: dict[str, Any] = {
             "type": "tool_start",
             "content": f"Executing {tool}...",
             "metadata": {
@@ -210,7 +210,7 @@ class ToolEventProcessor:
         status = event.get("status", "success")
         content = str(event.get("content") or "")
         summary = event.get("summary", {})
-        normalized_compact_tool_result = self._normalize_compact_tool_result(
+        normalized_compact_tool_result = normalize_compact_tool_result(
             tool=tool,
             status=str(status),
             exit_code=event.get("exit_code"),
@@ -312,7 +312,7 @@ class ToolEventProcessor:
                 sub_turn_index = raw_metadata.get("sub_turn_index")
         parameters = event.get("parameters", {})
 
-        normalized_compact_tool_result = self._normalize_compact_tool_result(
+        normalized_compact_tool_result = normalize_compact_tool_result(
             tool=str(tool),
             status=str(status),
             exit_code=exit_code,
@@ -360,6 +360,15 @@ class ToolEventProcessor:
                 status,
             )
 
+        is_shell_lifecycle_event = bool(event.get("shell_lifecycle_event")) or (
+            self._is_shell_lifecycle_tool_end(
+                tool=str(tool),
+                process_status=process_status,
+                session_status=session_status,
+                interaction_boundary=interaction_boundary,
+            )
+        )
+
         if state_container is not None:
             if not parameters and tool_call_id:
                 cached_params = state_container.get_tool_call_parameters(tool_call_id)
@@ -391,12 +400,7 @@ class ToolEventProcessor:
                 "session_id": session_id,
                 "output_persistence": output_persistence,
             }
-            if self._is_shell_lifecycle_tool_end(
-                tool=str(tool),
-                process_status=process_status,
-                session_status=session_status,
-                interaction_boundary=interaction_boundary,
-            ):
+            if is_shell_lifecycle_event:
                 tool_call_info["replace_existing_lifecycle"] = True
             if output_persistence == "transient":
                 tool_call_info["compact_tool_result"] = tool_call_info["tool_result"]
@@ -411,7 +415,7 @@ class ToolEventProcessor:
                     tool_call_info=stored_tool_call,
                 )
 
-        processed = {
+        processed: dict[str, Any] = {
             "type": "tool_end",
             "content": f"Tool {tool} completed ({status})",
             "metadata": {
@@ -438,6 +442,8 @@ class ToolEventProcessor:
                 "timestamp": time.time(),
             },
         }
+        if is_shell_lifecycle_event:
+            processed["metadata"]["shell_lifecycle_event"] = True
         processed["metadata"]["step_type"] = STEP_TOOL_END
         processed["metadata"]["ind"] = ind if ind is not None else TOOL_PHASE_INDEX
 
@@ -525,81 +531,6 @@ class ToolEventProcessor:
         if event.get("conversation_id") is not None:
             metadata["conversationId"] = event.get("conversation_id")
         return metadata
-
-    @staticmethod
-    def _normalize_compact_tool_result(
-        *,
-        tool: str,
-        status: str,
-        exit_code: Any,
-        summary: Any,
-        error: Any,
-        compact_tool_result: Any,
-    ) -> dict[str, Any]:
-        """Return a compact-tool-result payload that matches schema shape."""
-        source_payload = compact_tool_result if isinstance(compact_tool_result, Mapping) else {}
-        summary_payload = summary if isinstance(summary, Mapping) else {}
-
-        normalized_exit_code: Optional[int]
-        if exit_code is None:
-            normalized_exit_code = None
-        else:
-            try:
-                normalized_exit_code = int(exit_code)
-            except (TypeError, ValueError):
-                normalized_exit_code = None
-
-        merged_payload: dict[str, Any] = {
-            "schema_version": source_payload.get("schema_version", "2.0"),
-            "tool": source_payload.get("tool", tool),
-            "status": source_payload.get("status", status),
-            "success": source_payload.get(
-                "success",
-                str(status).lower() in {"success", "ok"},
-            ),
-            "exit_code": normalized_exit_code,
-            "summary": source_payload.get("summary")
-            or summary_payload.get("summary")
-            or summary
-            or "",
-            "key_findings": source_payload.get(
-                "key_findings",
-                summary_payload.get("key_findings"),
-            ),
-            "errors": source_payload.get("errors", summary_payload.get("errors")),
-            "report_recommendations": source_payload.get(
-                "report_recommendations",
-                summary_payload.get("report_recommendations"),
-            ),
-            "structured_signals": source_payload.get(
-                "structured_signals",
-                summary_payload.get("structured_signals"),
-            ),
-            "decision_evidence": source_payload.get(
-                "decision_evidence",
-                summary_payload.get("decision_evidence"),
-            ),
-            "lossiness_risk": source_payload.get(
-                "lossiness_risk",
-                summary_payload.get("lossiness_risk"),
-            ),
-            "artifact_refs": source_payload.get("artifact_refs") or [],
-            "compression": source_payload.get("compression"),
-        }
-        if error and not merged_payload.get("errors"):
-            merged_payload["errors"] = [str(error)]
-
-        normalized = CompactToolOutput.from_dict(merged_payload).to_dict()
-        for lifecycle_key in (
-            "process_status",
-            "session_status",
-            "interaction_boundary",
-            "session_id",
-        ):
-            value = source_payload.get(lifecycle_key)
-            if value is not None:
-                normalized[lifecycle_key] = value
-        return normalized
 
     @staticmethod
     def _transient_lifecycle_result(

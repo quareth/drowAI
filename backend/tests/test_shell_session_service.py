@@ -264,6 +264,31 @@ class GatedPrepareTerminalManager(FakeTerminalManager):
         return SimpleNamespace(session_id=session_id)
 
 
+class BlockingReadTerminalManager(FakeTerminalManager):
+    """Block selected reads so public calls can exercise claim contention."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.block_reads = False
+        self.blocked_read_started = asyncio.Event()
+
+    async def read_output_result(
+        self,
+        session_id: str,
+        size: int = 4096,
+        *,
+        timeout: float | None = None,
+    ) -> TerminalReadResult:
+        if self.block_reads:
+            self.blocked_read_started.set()
+            await asyncio.Event().wait()
+        return await super().read_output_result(
+            session_id,
+            size,
+            timeout=timeout,
+        )
+
+
 class ProviderBoundaryTerminal:
     """Provider-operation fake used behind a real TerminalSessionManager."""
 
@@ -798,11 +823,6 @@ async def test_delayed_command_yields_public_session_id_and_later_completes() ->
     assert len(first.session_id.removeprefix("shs_")) >= 16
     assert first.stdin_available is True
     assert first.stdout == "started"
-    record = service._records[first.session_id]
-    assert record.terminal_session_id == "terminal-1"
-    assert not hasattr(record, "socket")
-    assert not hasattr(record, "provider_session_id")
-    assert not hasattr(record, "command")
 
     second = await service.wait_for_output(
         identity=_identity(),
@@ -813,7 +833,7 @@ async def test_delayed_command_yields_public_session_id_and_later_completes() ->
     assert second.session_id is None
     assert second.exit_code == 0
     assert second.stdout == "done"
-    assert first.session_id not in service._records
+    assert manager.closed_sessions == ["terminal-1"]
 
 
 @pytest.mark.asyncio
@@ -846,7 +866,6 @@ async def test_default_attached_command_waits_past_internal_yield_boundary() -> 
     assert update.session_id is None
     assert update.exit_code == 0
     assert update.stdout == "started\ndone"
-    assert service._records == {}
     assert manager.closed_sessions == ["terminal-1"]
 
 
@@ -952,7 +971,7 @@ async def test_wait_for_output_does_not_emit_recurring_quiet_boundary() -> None:
 
 
 @pytest.mark.asyncio
-async def test_write_stdin_waits_past_empty_yield_until_meaningful_boundary() -> None:
+async def test_write_stdin_returns_active_session_after_silent_fallback_window() -> None:
     manager = FakeTerminalManager()
     clock = MutableClock()
     original_send = manager.send_input
@@ -972,7 +991,7 @@ async def test_write_stdin_waits_past_empty_yield_until_meaningful_boundary() ->
     async def read_and_advance_after_post_input_empty(*args, **kwargs):
         result = await original_read(*args, **kwargs)
         if advance_empty_reads and not result.data:
-            clock.advance(1.25)
+            clock.advance(20.25)
         return result
 
     manager.send_input = send_without_output_after_start
@@ -989,7 +1008,7 @@ async def test_write_stdin_waits_past_empty_yield_until_meaningful_boundary() ->
         request=ShellExecRequest(
             command="no-output",
             yield_time_ms=0,
-            max_runtime_sec=1,
+            max_runtime_sec=60,
         ),
     )
     assert first.session_id is not None
@@ -1001,16 +1020,15 @@ async def test_write_stdin_waits_past_empty_yield_until_meaningful_boundary() ->
         request=ShellWriteRequest(
             session_id=first.session_id,
             chars="accepted-but-quiet\n",
-            yield_time_ms=0,
         ),
     )
 
-    assert update.error_code is ShellSessionErrorCode.COMMAND_TIMED_OUT
-    assert update.process_status is ShellProcessStatus.TIMED_OUT
-    assert update.interaction_boundary is ShellInteractionBoundary.TERMINAL
-    assert update.session_id is None
+    assert update.error_code is None
+    assert update.process_status is ShellProcessStatus.RUNNING
+    assert update.interaction_boundary is None
+    assert update.session_id == first.session_id
     assert ("terminal-1", b"accepted-but-quiet\n") in manager.sent_inputs
-    assert manager.closed_sessions == ["terminal-1"]
+    assert manager.closed_sessions == []
 
 
 @pytest.mark.asyncio
@@ -1117,7 +1135,6 @@ async def test_oversized_output_drains_to_completion_without_extra_poll() -> Non
     assert update.truncated is True
     assert "complete" in update.stdout
     assert len(update.stdout) <= 1024
-    assert service._records == {}
     assert manager.closed_sessions == ["terminal-1"]
 
 
@@ -1184,7 +1201,6 @@ async def test_provider_buffer_loss_before_start_returns_framing_error(
     assert update.process_status is ShellProcessStatus.FAILED
     assert update.interaction_boundary is ShellInteractionBoundary.TERMINAL
     assert update.session_id is None
-    assert service._records == {}
     assert manager.closed_sessions == ["terminal-1"]
 
 
@@ -1226,7 +1242,6 @@ async def test_split_untruncated_immediate_output_drains_to_completion() -> None
     assert update.exit_code == 0
     assert update.truncated is False
     assert update.stdout == "hello"
-    assert service._records == {}
     assert manager.closed_sessions == ["terminal-1"]
     assert manager.queues["terminal-1"] == []
 
@@ -1587,10 +1602,6 @@ async def test_local_provider_bound_oversized_delayed_output_has_no_hidden_trans
     assert update.truncated is True
     assert len(update.stdout) <= 1024
     assert "x" * 1100 not in update.stdout
-    record = service._records[update.session_id]
-    assert not hasattr(record, "transcript")
-    assert not hasattr(record, "raw_output")
-    assert "x" * 1100 not in repr(record)
 
     projected = preserve_shell_session_result_fields(
         {"tool": "shell.exec", "status": "success", "success": True},
@@ -1807,7 +1818,6 @@ async def test_concurrent_execute_reserves_capacity_before_terminal_prepare() ->
     assert second.error_code is ShellSessionErrorCode.SESSION_LIMIT_REACHED
     assert len(manager.prepare_calls) == 1
     assert manager.session_counter == 0
-    assert service._records == {}
 
     manager.allow_prepare.set()
     first = await first_task
@@ -1815,7 +1825,10 @@ async def test_concurrent_execute_reserves_capacity_before_terminal_prepare() ->
     assert first.session_id is not None
     assert len(manager.prepare_calls) == 1
     assert manager.session_counter == 1
-    assert list(service._records) == [first.session_id]
+    assert await service.get_session_capability(
+        identity=_identity(),
+        public_session_id=first.session_id,
+    ) is ShellCapability.ASSESSMENT
 
     poll = await service.wait_for_output(
         identity=_identity(),
@@ -1851,14 +1864,21 @@ async def test_task_limit_rejects_new_owner_without_corrupting_existing() -> Non
 
 @pytest.mark.asyncio
 async def test_busy_session_rejects_simultaneous_operation() -> None:
-    manager = FakeTerminalManager()
+    manager = BlockingReadTerminalManager()
     service = _service(manager)
     first = await service.execute(
         identity=_identity(),
-        request=ShellExecRequest(command="delayed", yield_time_ms=0),
+        request=ShellExecRequest(command="no-output", yield_time_ms=0),
     )
     assert first.session_id is not None
-    service._records[first.session_id].operation_in_progress = True
+    manager.block_reads = True
+    active_operation = asyncio.create_task(
+        service.wait_for_output(
+            identity=_identity(),
+            request=ShellWaitRequest(session_id=first.session_id),
+        )
+    )
+    await asyncio.wait_for(manager.blocked_read_started.wait(), timeout=1)
 
     update = await service.wait_for_output(
         identity=_identity(),
@@ -1866,6 +1886,9 @@ async def test_busy_session_rejects_simultaneous_operation() -> None:
     )
 
     assert update.error_code is ShellSessionErrorCode.SESSION_BUSY
+    active_operation.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await active_operation
 
 
 @pytest.mark.asyncio
@@ -1923,7 +1946,6 @@ async def test_ctrl_c_interrupt_returns_terminated_and_closes_record() -> None:
     assert update.process_status is ShellProcessStatus.TERMINATED
     assert update.session_id is None
     assert update.stdout == "interrupted during cleanup"
-    assert first.session_id not in service._records
     assert manager.ctrl_c_writes == 1
     assert manager.closed_sessions == ["terminal-1"]
 
@@ -1983,7 +2005,10 @@ async def test_initial_quiet_boundary_keeps_session_active_before_idle_expiry() 
     assert first.interaction_boundary is ShellInteractionBoundary.QUIET_BOUNDARY
     clock.advance(0.75)
     await service.cleanup_stale_sessions()
-    assert first.session_id in service._records
+    assert await service.get_session_capability(
+        identity=_identity(),
+        public_session_id=first.session_id,
+    ) is ShellCapability.ASSESSMENT
     assert manager.closed_sessions == []
 
 
@@ -2087,7 +2112,6 @@ async def test_deadline_expiry_poll_returns_timed_out_and_closes() -> None:
     assert update.error_code is ShellSessionErrorCode.COMMAND_TIMED_OUT
     assert update.session_id is None
     assert update.summary == "Command exceeded its configured maximum runtime."
-    assert first.session_id not in service._records
     assert b"\x03" in [payload for _session, payload in manager.sent_inputs]
     assert manager.closed_sessions == ["terminal-1"]
     assert (
@@ -2123,7 +2147,10 @@ async def test_stale_cleanup_uses_monotonic_idle_expiry() -> None:
     clock.advance(2)
     await service.cleanup_stale_sessions()
 
-    assert first.session_id not in service._records
+    assert await service.get_session_capability(
+        identity=_identity(),
+        public_session_id=first.session_id,
+    ) is None
     assert b"\x03" in [payload for _session, payload in manager.sent_inputs]
     assert manager.closed_sessions == ["terminal-1"]
 
@@ -2152,7 +2179,10 @@ async def test_stale_cleanup_uses_monotonic_hard_runtime_expiry() -> None:
     clock.advance(2)
     await service.cleanup_stale_sessions()
 
-    assert first.session_id not in service._records
+    assert await service.get_session_capability(
+        identity=_identity(),
+        public_session_id=first.session_id,
+    ) is None
     assert b"\x03" in [payload for _session, payload in manager.sent_inputs]
     assert manager.closed_sessions == ["terminal-1"]
 

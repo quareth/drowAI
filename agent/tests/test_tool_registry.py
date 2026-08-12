@@ -137,7 +137,7 @@ def test_tool_catalog_entries_shell_write_stdin_runbook_shape():
     entries = build_tool_catalog_entries(["shell.write_stdin"])
 
     description = entries[0]["description"]
-    assert "Poll, send exact input to, or interrupt" in description
+    assert "Send exact non-empty input to, or interrupt" in description
     assert "process status" in description
     assert len(description) <= 200
 

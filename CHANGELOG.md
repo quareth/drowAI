@@ -27,74 +27,35 @@ The format is based on
 
 ### Fixed
 
-- Refreshed conversations now preserve the original task-stream interleaving of
-  parent reasoning, subagent runs, and observations.
-- Sequential subagent handoffs now preserve the parent turn's accumulated goal,
-  todo progress, and reasoning state while returning larger bounded child
-  summaries to the parent.
-- Local development runners now exit when their launcher disappears, and local
-  shutdown recovers only verified local-dev processes without terminating
-  standalone runners or unrelated services that share configured ports.
-- Interactive shell sessions now keep one originating tool card through live
-  progress, cancellation, completion, and transcript refresh across local and
-  managed runtimes, avoiding duplicate cards and stale running indicators.
-- Interactive shell continuations now preserve the live process, reject stale
-  runtime bindings, and distinguish output waits from requests for the next
-  input without model-visible empty polling.
-- Short tool outputs that bypass LLM compression now retain bounded stdout and
-  stderr for immediate post-tool reasoning instead of reducing failures to a
-  generic exit code.
-- Shell commands now remain attached to their tool execution until completion by
-  default, while explicitly yielded interactive sessions continue on the same PTY.
-- Managed runners now enforce one active connection per identity, reject duplicate
-  local processes, and invalidate prior PTYs before a replacement channel is used.
-- Managed-runner terminal frames now use one buffered-reader delivery path,
-  preventing duplicate live output and replay history.
-- Recursive root and home removal remains blocked when invoked through transparent
-  `command` or `env` wrappers, including nested options and assignments.
-- Assessment shell sessions now retain durable timeout evidence when their first
-  continuation poll occurs after the configured runtime deadline.
-- Tool batch cards now preserve running, terminated, and timed-out shell process
-  states when the aggregate batch result arrives.
-- Successful quiet shell polls now refresh session activity without extending
-  the command's hard runtime deadline.
-- Managed interactive shell sessions now detect framing loss after provider
-  buffer truncation instead of leaving completed commands running until timeout.
-- Parallel tool batches now serialize operations targeting the same interactive
-  shell session while preserving concurrency across independent sessions.
-- Durable interactive shell history now masks stdin values before database or
-  graph-checkpoint persistence, preventing credentials entered during assessment
-  sessions from reaching either durable store.
-- Fallback tool planning now receives every visible mission tool instead of
-  collapsing to only universal shell tools; the obsolete `MAX_TOOLS_EXPOSED`
-  setting is now ignored.
-- Local interactive shell sessions now report unexpected PTY socket closure as
-  a transport failure instead of leaving a phantom running session to poll.
-- Interactive shell continuations now reject stale runtime bindings after task
-  runner reassignment without forwarding input to the previous runner.
-- Zero-yield local shell polls now consume already-buffered terminal output
-  without blocking, so completed commands can report completion immediately.
-- Interactive shell output now preserves valid text and command completion
-  after invalid UTF-8 bytes instead of falsely timing out completed commands.
-- Interactive UI and agent terminals now start in the task runtime's
-  `/workspace` directory without changing runtime-service startup paths.
-- Mixed shell batches now keep utility output transient while post-tool
-  reasoning selects and persists only durable assessment evidence.
-- Interactive shell sessions now preserve concurrent session limits, honor
-  bounded startup and input timing, report managed-output loss as truncation,
-  normalize split terminal controls, tolerate managed-runner results that arrive
-  before delivery acknowledgements, and present yielded commands as live sessions
-  instead of active tool calls.
+- Interactive shell commands now remain attached until completion by default,
+  while yielded sessions continue on the same PTY with bounded input, waits,
+  output, timeout evidence, and lifecycle cleanup.
+- Shell lifecycle state now remains correlated to one originating tool card
+  through progress, cancellation, completion, refresh, and task-stream replay,
+  with running, terminated, timed-out, and failed states presented consistently.
+- Shell continuation now rejects stale runtime bindings, serializes operations on
+  the same session, preserves concurrency across independent sessions, and keeps
+  quiet polls within the original runtime deadline.
+- Local and managed terminal handling now preserves valid output across buffering,
+  framing loss, invalid UTF-8, zero-yield reads, early runner results, and
+  unexpected PTY closure without duplicating delivery or leaving phantom runs.
+- Durable shell history and graph checkpoints now mask stdin values, recursive
+  environment destruction remains blocked through transparent wrappers, and
+  mixed utility/assessment batches retain only eligible durable evidence.
+- Agent and UI terminals now start in the task runtime's `/workspace` directory,
+  and fallback planning retains the complete visible mission-tool catalog.
+- Sequential subagent handoffs now retain parent goal, todo, and reasoning state
+  while returning bounded child summaries, and refreshed conversations preserve
+  parent, subagent, and observation ordering.
+- Local development runners now follow verified launcher ownership and shutdown
+  recovery without terminating unrelated or standalone processes.
+- ANSI-formatted ffuf results no longer create invalid Knowledge identities or
+  block task deletion after evidence is safely archived.
 
 ### Security
 
 - Updated cryptography, Undici, and PostCSS to patched releases that address
   dependency security advisories.
-
-### Fixed
-
-- ANSI-formatted ffuf results no longer create invalid Knowledge identities or
-  block task deletion after evidence is safely archived.
 
 ## [0.3.0] - 2026-08-04
 

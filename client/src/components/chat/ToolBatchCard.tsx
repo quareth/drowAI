@@ -18,6 +18,10 @@
 import { useMemo } from "react";
 
 import { ExecutingToolCard } from "./ExecutingToolCard";
+import {
+  deriveToolLifecycleStatus,
+  type ToolLifecycleStatus,
+} from "./toolLifecycleStatus";
 import type { ChatMessage } from "./types";
 import type { CompactToolResult } from "@/types/compact-tool-result";
 
@@ -33,7 +37,7 @@ interface BatchRowState {
   toolCallId: string;
   toolName: string;
   commandDisplay?: string;
-  status: "executing" | "completed" | "failed" | "cancelled" | "terminated" | "timed_out";
+  status: ToolLifecycleStatus;
   sessionStatus?: string;
   processStatus?: string;
   interactionBoundary?: string;
@@ -72,40 +76,6 @@ function readNumber(metadata: Record<string, unknown> | undefined, key: string):
     return value;
   }
   return undefined;
-}
-
-function deriveStatus(
-  rawStatus: string | undefined,
-): BatchRowState["status"] {
-  const lowered = (rawStatus ?? "").toLowerCase();
-  if (lowered === "success" || lowered === "ok" || lowered === "completed") {
-    return "completed";
-  }
-  if (lowered === "running" || lowered === "in_progress") return "executing";
-  if (lowered === "timed_out" || lowered === "timeout") return "timed_out";
-  if (lowered === "terminated") return "terminated";
-  if (
-    lowered === "cancelled" ||
-    lowered === "canceled" ||
-    lowered === "cancel_requested" ||
-    lowered === "stopped"
-  ) {
-    return "cancelled";
-  }
-  return "failed";
-}
-
-function deriveLifecycleStatus(
-  rawStatus: string | undefined,
-  processStatus: string | undefined,
-): BatchRowState["status"] {
-  const normalizedProcess = (processStatus ?? "").toLowerCase();
-  if (normalizedProcess === "running") return "executing";
-  if (normalizedProcess === "completed") return "completed";
-  if (normalizedProcess === "timed_out") return "timed_out";
-  if (normalizedProcess === "terminated") return "terminated";
-  if (normalizedProcess === "failed") return "failed";
-  return deriveStatus(rawStatus);
 }
 
 function buildManifestIndex(messages: ChatMessage[]): Map<string, number> {
@@ -187,6 +157,7 @@ function buildRows(messages: ChatMessage[], manifest: Map<string, number>): Batc
           const rawStatus = typeof item.status === "string" ? item.status : undefined;
           const processStatus =
             typeof item.process_status === "string" ? item.process_status : undefined;
+          const effectiveProcessStatus = processStatus ?? row.processStatus;
           if (processStatus) {
             row.processStatus = processStatus;
           }
@@ -200,7 +171,7 @@ function buildRows(messages: ChatMessage[], manifest: Map<string, number>): Batc
           if (interactionBoundary) {
             row.interactionBoundary = interactionBoundary;
           }
-          row.status = deriveStatus(rawStatus);
+          row.status = deriveToolLifecycleStatus(rawStatus, effectiveProcessStatus);
         });
       }
       return;
@@ -241,10 +212,7 @@ function buildRows(messages: ChatMessage[], manifest: Map<string, number>): Batc
 
     if (stepType === "tool_delta" || stepType === "tool_end") {
       const processStatus = readString(metadata, "process_status");
-      row.status =
-        stepType === "tool_delta" || metadata?.shell_lifecycle_event === true
-          ? deriveLifecycleStatus(readString(metadata, "status"), processStatus)
-          : deriveStatus(readString(metadata, "status"));
+      row.status = deriveToolLifecycleStatus(readString(metadata, "status"), processStatus);
       row.processStatus = processStatus ?? row.processStatus;
       row.sessionStatus = readString(metadata, "session_status") ?? row.sessionStatus;
       row.interactionBoundary =

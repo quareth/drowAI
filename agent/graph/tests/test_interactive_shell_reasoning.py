@@ -36,8 +36,7 @@ from runtime_shared.shell_session_contracts import (
     ShellWriteRequest,
 )
 from runtime_shared.shell_session_port import (
-    clear_shell_session_service_resolver,
-    set_shell_session_service_resolver,
+    override_shell_session_service_resolver,
 )
 
 
@@ -176,14 +175,11 @@ async def test_shell_coordinator_sends_non_empty_input_directly() -> None:
                 duration_ms=11,
             )
 
-    set_shell_session_service_resolver(lambda: _ShellService())
-    try:
+    with override_shell_session_service_resolver(lambda: _ShellService()):
         updated = await coordinate_shell_interaction(
             interactive,
             decide_fn=lambda **_kwargs: {"action": "send_input", "chars": "hello\n"},
         )
-    finally:
-        clear_shell_session_service_resolver()
 
     updated_metadata = updated["facts"]["metadata"]
     row = updated_metadata["last_tool_result_compact_batch"]["results"][0]
