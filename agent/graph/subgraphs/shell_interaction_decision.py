@@ -123,8 +123,11 @@ def _system_prompt() -> str:
         "Valid actions are send_input, wait_for_output, and interrupt.\n"
         "Use send_input only when explicit non-empty characters should be sent "
         "to the existing session. Use wait_for_output when the program may "
-        "continue producing autonomous output. Use interrupt only when controlled "
-        "termination is the right next action. Never use empty input for polling."
+        "continue producing autonomous output. After a quiet boundary, send the "
+        "next required input when the program is waiting for stdin; do not wait "
+        "for a prompt the program is not expected to emit. Use interrupt only "
+        "when controlled termination is the right next action. Never use empty "
+        "input for polling."
     )
 
 

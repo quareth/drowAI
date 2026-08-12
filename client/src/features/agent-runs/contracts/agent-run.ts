@@ -42,16 +42,14 @@ export type AgentRunStatus =
   | "running"
   | "waiting_for_approval"
   | "completed"
-  | "failed"
   | "cancelled"
   | "interrupted";
 
-export type AgentRunLifecycleStatus = Exclude<AgentRunStatus, "interrupted">;
+export type AgentRunLifecycleStatus = AgentRunStatus;
 
 export function isAgentRunTerminalStatus(status: AgentRunStatus): boolean {
   return (
     status === "completed" ||
-    status === "failed" ||
     status === "cancelled" ||
     status === "interrupted"
   );
@@ -61,7 +59,6 @@ export type AgentRunOutcome =
   | "completed"
   | "partial"
   | "blocked"
-  | "failed"
   | "cancelled";
 
 export type AgentCapability = string;

@@ -24,7 +24,7 @@ ACTIVE_AGENT_RUN_STATUSES: frozenset[AgentRunStatus] = frozenset(
     {"queued", "running", "waiting_for_approval"}
 )
 TERMINAL_AGENT_RUN_STATUSES: frozenset[AgentRunStatus] = frozenset(
-    {"completed", "failed", "cancelled"}
+    {"completed", "interrupted", "cancelled"}
 )
 DEFAULT_FINISHED_RETENTION = timedelta(minutes=15)
 

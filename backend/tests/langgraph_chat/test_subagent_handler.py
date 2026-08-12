@@ -54,7 +54,7 @@ from backend.services.langgraph_chat.subagent_composition import (
 )
 from backend.services.agent_runs.launcher import (
     SubagentRunCancelled,
-    SubagentRunFailed,
+    SubagentRunInterrupted,
     SubagentRunPaused,
 )
 from backend.services.langgraph_chat.routing.selectors import ChatBranch, resolve_branch
@@ -197,13 +197,13 @@ class _FailingAfterUsageLauncher:
         assignment = kwargs["assignment"]
 
         async def _fail() -> AgentRunCompletion:
-            await self.registry.mark_failed(
+            await self.registry.mark_interrupted(
                 tenant_id=assignment.tenant_id,
                 task_id=assignment.task_id,
                 agent_run_id=assignment.agent_run_id,
-                safe_error="Subagent worker failed",
+                safe_error="Subagent worker interrupted",
             )
-            raise SubagentRunFailed(
+            raise SubagentRunInterrupted(
                 "Subagent graph completed without a valid terminal result",
                 GraphExecutionResult(
                     final_state={
@@ -680,10 +680,10 @@ async def test_subagent_handler_uses_registered_agent_identity_for_launch_failur
     assert len(entries) == 1
     assert entries[0].agent_id == "cartographer"
     assert entries[0].agent_run_id.startswith("agent-run-")
-    assert entries[0].safe_error == "Cartographer launch failed"
-    assert result.final_text == "Main agent finalized Pathfinder result."
-    assert result.metadata["handoff_agent_id"] == "cartographer"
-    assert entries[0].result_consumed is True
+    assert entries[0].safe_error == "Cartographer launch interrupted"
+    assert result.final_text == "Cartographer subagent infrastructure was interrupted."
+    assert result.metadata["status"] == "interrupted"
+    assert entries[0].result_consumed is False
     lifecycle_events = [event for event in events if "agent_run" in event]
     assert [event["agent_run"]["agent_id"] for event in lifecycle_events] == [
         "cartographer",
@@ -691,7 +691,7 @@ async def test_subagent_handler_uses_registered_agent_identity_for_launch_failur
         "cartographer",
     ]
     assert lifecycle_events[-1]["agent_run"]["safe_error"] == (
-        "Cartographer launch failed"
+        "Cartographer launch interrupted"
     )
 
 
@@ -1090,7 +1090,7 @@ async def test_subagent_handler_fails_closed_for_concurrent_same_agent_parent_tu
     results = await asyncio.gather(first, second)
 
     statuses = sorted(result.metadata["status"] for result in results)
-    assert statuses == ["completed", "failed"]
+    assert statuses == ["completed", "interrupted"]
     entries = await registry.list_task_runs(tenant_id=7, task_id=42)
     assert len(entries) == 1
     assert entries[0].status == "completed"
@@ -1125,7 +1125,7 @@ async def test_subagent_handler_attaches_live_runtime_services_only_at_launch() 
 
 
 @pytest.mark.asyncio
-async def test_subagent_handler_emits_failed_lifecycle_when_launch_fails() -> None:
+async def test_subagent_handler_emits_interrupted_lifecycle_when_launch_is_lost() -> None:
     registry = ProcessLocalAgentRunRegistry()
     executor = _CompletingExecutor()
     events: list[dict[str, Any]] = []
@@ -1148,30 +1148,28 @@ async def test_subagent_handler_emits_failed_lifecycle_when_launch_fails() -> No
 
     entries = await registry.list_task_runs(tenant_id=7, task_id=42)
     assert len(entries) == 1
-    assert entries[0].status == "failed"
-    assert entries[0].safe_error == "Pathfinder launch failed"
-    assert entries[0].result_consumed is True
-    assert result.metadata["status"] == "completed"
-    assert result.metadata["handoff_agent_id"] == "pathfinder"
-    assert result.final_text == "Main agent finalized Pathfinder result."
-    assert result.usage is not None
-    assert len(result.usage) == 1
-    assert len(executor.calls) == 1
-    completed_results = runtime_config.metadata[COMPLETED_AGENT_RESULTS_KEY]
-    assert [handoff["outcome"] for handoff in completed_results] == ["failed"]
+    assert entries[0].status == "interrupted"
+    assert entries[0].safe_error == "Pathfinder launch interrupted"
+    assert entries[0].result_consumed is False
+    assert entries[0].result is None
+    assert result.metadata["status"] == "interrupted"
+    assert result.final_text == "Pathfinder subagent infrastructure was interrupted."
+    assert result.usage is None
+    assert executor.calls == []
+    assert COMPLETED_AGENT_RESULTS_KEY not in runtime_config.metadata
     lifecycle_events = [event for event in events if "agent_run" in event]
     assert [event["agent_run"]["status"] for event in lifecycle_events] == [
         "queued",
         "running",
-        "failed",
+        "interrupted",
     ]
     assert lifecycle_events[-1]["agent_run"]["safe_error"] == (
-        "Pathfinder launch failed"
+        "Pathfinder launch interrupted"
     )
 
 
 @pytest.mark.asyncio
-async def test_subagent_handler_settles_prior_batch_child_when_later_launch_fails(
+async def test_subagent_handler_interrupts_batch_when_later_launch_is_lost(
 ) -> None:
     registry = ProcessLocalAgentRunRegistry()
     launcher = _FailingSecondLaunchAfterCompletionLauncher(registry)
@@ -1215,33 +1213,18 @@ async def test_subagent_handler_settles_prior_batch_child_when_later_launch_fail
 
     result = await handler.handle(runtime_config)
 
-    assert result.metadata["status"] == "completed"
-    assert result.metadata["handoff_agent_ids"] == ["pathfinder", "cartographer"]
-    assert result.final_text == "Main agent finalized Pathfinder result."
-    assert result.usage is not None
-    assert len(result.usage) == 2
-    usage = result.usage[0]
-    assert usage.usage.total_tokens == 15
-    assert usage.metadata.execution_branch == "subagent_child"
-    assert usage.metadata.node_name == "subagent_runtime_model"
-    assert len(executor.calls) == 1
-    completed_results = runtime_config.metadata[COMPLETED_AGENT_RESULTS_KEY]
-    assert [handoff["agent_id"] for handoff in completed_results] == [
-        "pathfinder",
-        "cartographer",
-    ]
-    assert [handoff["outcome"] for handoff in completed_results] == [
-        "completed",
-        "failed",
-    ]
+    assert result.metadata["status"] == "interrupted"
+    assert result.final_text == "Cartographer subagent infrastructure was interrupted."
+    assert executor.calls == []
+    assert COMPLETED_AGENT_RESULTS_KEY not in runtime_config.metadata
     entries = sorted(
         await registry.list_task_runs(tenant_id=7, task_id=42),
         key=lambda entry: entry.agent_id,
     )
     assert [entry.agent_id for entry in entries] == ["cartographer", "pathfinder"]
-    assert [entry.status for entry in entries] == ["failed", "completed"]
-    assert entries[0].result_consumed is True
-    assert entries[1].result_consumed is True
+    assert [entry.status for entry in entries] == ["interrupted", "completed"]
+    assert entries[0].result_consumed is False
+    assert entries[1].result_consumed is False
     later_handoff = await AgentRunResultProjector(
         registry=registry,
         subagent_registry=get_definition_subagent_registry(),
@@ -1250,8 +1233,10 @@ async def test_subagent_handler_settles_prior_batch_child_when_later_launch_fail
         task_id=42,
         conversation_id="conv-42",
     )
-    assert later_handoff.results == ()
-    assert later_handoff.agent_run_ids == ()
+    assert [handoff["agent_run_id"] for handoff in later_handoff.results] == [
+        entries[1].agent_run_id
+    ]
+    assert later_handoff.agent_run_ids == (entries[1].agent_run_id,)
 
 
 @pytest.mark.asyncio
@@ -1322,7 +1307,7 @@ async def test_subagent_handler_hitl_pause_keeps_parent_open_until_child_resumes
 
 
 @pytest.mark.asyncio
-async def test_subagent_handler_child_failure_returns_partial_child_usage() -> None:
+async def test_subagent_handler_child_interruption_returns_recorded_child_usage() -> None:
     registry = ProcessLocalAgentRunRegistry()
     executor = _CompletingExecutor()
 
@@ -1341,19 +1326,20 @@ async def test_subagent_handler_child_failure_returns_partial_child_usage() -> N
 
     result = await handler.handle(_runtime_config())
 
-    assert result.metadata["status"] == "completed"
-    assert result.final_text == "Main agent finalized Pathfinder result."
+    assert result.metadata["status"] == "interrupted"
+    assert result.final_text == "Pathfinder subagent infrastructure was interrupted."
     assert result.usage is not None
-    assert len(result.usage) == 2
+    assert len(result.usage) == 1
     usage = result.usage[0]
     assert usage.usage.total_tokens == 15
     assert usage.metadata.execution_branch == "subagent_child"
     assert usage.metadata.node_name == "subagent_runtime_model"
-    assert len(executor.calls) == 1
+    assert executor.calls == []
     entries = await registry.list_task_runs(tenant_id=7, task_id=42)
     assert len(entries) == 1
-    assert entries[0].status == "failed"
-    assert entries[0].result_consumed is True
+    assert entries[0].status == "interrupted"
+    assert entries[0].result_consumed is False
+    assert entries[0].result is None
 
 
 @pytest.mark.asyncio

@@ -30,6 +30,8 @@ The format is based on
 - Interactive shell commands now remain attached until completion by default,
   while yielded sessions continue on the same PTY with bounded input, waits,
   output, timeout evidence, and lifecycle cleanup.
+- Silent interactive shell reads now yield at the shared 20-second boundary so
+  agents can continue stdin-driven sessions without waiting for process expiry.
 - Shell lifecycle state now remains correlated to one originating tool card
   through progress, cancellation, completion, refresh, and task-stream replay,
   with running, terminated, timed-out, and failed states presented consistently.
@@ -53,6 +55,10 @@ The format is based on
 - Sequential subagent handoffs now retain parent goal, todo, and reasoning state
   while returning bounded child summaries, and refreshed conversations preserve
   parent, subagent, and observation ordering.
+- Subagent activity no longer treats tool or model-action errors as a failed
+  agent run: invalid actions receive bounded recovery, infrastructure loss is
+  reported as interrupted, and parallel progress remains visible while parent
+  reasoning waits for every sibling to finish.
 - Local development runners now follow verified launcher ownership and shutdown
   recovery without terminating unrelated or standalone processes.
 - ANSI-formatted ffuf results no longer create invalid Knowledge identities or

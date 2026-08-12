@@ -145,7 +145,7 @@ async def test_registry_rejects_invalid_inputs_before_mutating_state() -> None:
             result=_result("run-2"),
         )
     with pytest.raises(ValueError, match="safe_error must not be empty"):
-        await registry.record_failed(
+        await registry.record_interrupted(
             tenant_id=7,
             task_id=42,
             agent_run_id="run-1",
@@ -240,7 +240,7 @@ async def test_duplicate_terminal_callbacks_do_not_regress_state() -> None:
     )
 
     with patch("backend.services.agent_runs.registry.safe_inc") as mock_inc:
-        duplicate_failed = await registry.mark_failed(
+        duplicate_failed = await registry.mark_interrupted(
             tenant_id=7,
             task_id=42,
             agent_run_id="run-1",
@@ -261,7 +261,7 @@ async def test_duplicate_terminal_callbacks_do_not_regress_state() -> None:
     assert duplicate_failed.result == _result("run-1")
     recorded_counters = [call.args[0] for call in mock_inc.call_args_list]
     assert recorded_counters.count("agent_run_terminal_duplicate_suppressed") == 2
-    assert "agent_run_terminal_duplicate_suppressed_failed" in recorded_counters
+    assert "agent_run_terminal_duplicate_suppressed_interrupted" in recorded_counters
     assert "agent_run_terminal_duplicate_suppressed_cancelled" in recorded_counters
 
 
@@ -332,7 +332,7 @@ async def test_transition_results_usage_counts_timestamps_and_state_deltas() -> 
 
 
 @pytest.mark.asyncio
-async def test_failed_and_cancelled_terminal_results_are_claimable() -> None:
+async def test_interrupted_run_has_no_handoff_while_cancelled_result_is_claimable() -> None:
     registry = ProcessLocalAgentRunRegistry()
     await registry.register(
         _assignment(agent_run_id="run-1"), graph_thread_id="child-thread-1"
@@ -343,11 +343,11 @@ async def test_failed_and_cancelled_terminal_results_are_claimable() -> None:
     await registry.mark_running(tenant_id=7, task_id=42, agent_run_id="run-1")
     await registry.mark_running(tenant_id=7, task_id=42, agent_run_id="run-2")
 
-    failed = await registry.mark_failed(
+    interrupted = await registry.mark_interrupted(
         tenant_id=7,
         task_id=42,
         agent_run_id="run-1",
-        safe_error="Subagent worker failed",
+        safe_error="Subagent worker interrupted",
     )
     cancelled = await registry.mark_cancelled(
         tenant_id=7,
@@ -357,14 +357,12 @@ async def test_failed_and_cancelled_terminal_results_are_claimable() -> None:
 
     claim = await registry.claim_ready_handoffs(tenant_id=7, task_id=42)
 
-    assert failed.result is not None
-    assert failed.result.outcome == "failed"
-    assert failed.result.summary == "Subagent run failed: Subagent worker failed"
+    assert interrupted.result is None
     assert cancelled.result is not None
     assert cancelled.result.outcome == "cancelled"
     assert claim is not None
-    assert claim.agent_run_ids == ("run-1", "run-2")
-    assert [result.outcome for result in claim.results] == ["failed", "cancelled"]
+    assert claim.agent_run_ids == ("run-2",)
+    assert [result.outcome for result in claim.results] == ["cancelled"]
 
 
 @pytest.mark.asyncio

@@ -24,7 +24,7 @@ from backend.services.agent_runs.completion import (
 from backend.services.agent_runs.launcher import (
     AgentRunLauncher,
     SubagentRunCancelled,
-    SubagentRunFailed,
+    SubagentRunInterrupted,
     SubagentRunPaused,
 )
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
@@ -212,7 +212,7 @@ async def test_lifecycle_publication_failure_preserves_settled_worker_result() -
 
 
 @pytest.mark.asyncio
-async def test_worker_failure_is_sanitized_and_contained() -> None:
+async def test_worker_interruption_is_sanitized_without_agent_failure_result() -> None:
     registry = ProcessLocalAgentRunRegistry()
     assignment = _assignment()
     await registry.register(assignment, graph_thread_id="child-thread-1")
@@ -236,14 +236,15 @@ async def test_worker_failure_is_sanitized_and_contained() -> None:
 
     with pytest.raises(RuntimeError) as raised:
         await task
-    failed = await registry.get(tenant_id=7, task_id=42, agent_run_id="run-1")
+    interrupted = await registry.get(tenant_id=7, task_id=42, agent_run_id="run-1")
 
-    assert failed is not None
-    assert failed.status == "failed"
+    assert interrupted is not None
+    assert interrupted.status == "interrupted"
     assert raised.value is worker_error
-    assert failed.safe_error == "Subagent worker failed"
-    assert "abc123" not in failed.safe_error
-    assert failed.task_handle is None
+    assert interrupted.safe_error == "Subagent worker interrupted"
+    assert "abc123" not in interrupted.safe_error
+    assert interrupted.result is None
+    assert interrupted.task_handle is None
 
 
 @pytest.mark.asyncio
@@ -303,9 +304,9 @@ async def test_lifecycle_task_cannot_overwrite_richer_terminal_result() -> None:
     [
         (SubagentRunCancelled(object()), "cancelled", None),
         (
-            SubagentRunFailed("secret token=abc123", object()),
-            "failed",
-            "Subagent worker failed",
+            SubagentRunInterrupted("secret token=abc123", object()),
+            "interrupted",
+            "Subagent worker interrupted",
         ),
     ],
 )

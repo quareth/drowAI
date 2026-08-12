@@ -138,6 +138,19 @@ class SubagentHandler(BaseLangGraphHandler):
                 wait_for_initial_handoff=wait_for_initial_handoff,
             )
 
+        async def project_ready_handoffs(
+            child_completions: tuple[AgentRunCompletion, ...],
+        ) -> None:
+            for completion in child_completions:
+                child_completion_by_run_id[completion.result.agent_run_id] = completion
+            await self._parent_handoff_coordinator.project_ready_handoffs(
+                tenant_id=tenant_id,
+                task_id=chat_inputs.task_id,
+                conversation_id=chat_inputs.conversation_id or "",
+                parent_turn_id=str(turn.turn_id),
+                metadata=runtime_config.metadata,
+            )
+
         dispatch_result = await self._dispatch_service.dispatch(
             plan,
             runtime_config,
@@ -145,6 +158,7 @@ class SubagentHandler(BaseLangGraphHandler):
                 turn.turn_number if isinstance(turn.turn_number, int) else None
             ),
             process_ready_handoffs=process_ready_handoffs,
+            project_ready_handoffs=project_ready_handoffs,
         )
         if dispatch_result.stop is not None:
             return _ack_for_dispatch_stop(
@@ -199,7 +213,7 @@ def _ack_result(
     display_name = agent_display_name
     return LangGraphChatResult(
         final_text={
-            "failed": f"{display_name} could not complete the subagent run.",
+            "interrupted": f"{display_name} subagent infrastructure was interrupted.",
             "cancelled": f"{display_name} subagent run was cancelled.",
             "waiting_for_approval": f"{display_name} is waiting for tool approval.",
             "running": (

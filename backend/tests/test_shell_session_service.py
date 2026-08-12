@@ -43,6 +43,7 @@ from runtime_shared.shell_session_contracts import (
     ShellProcessStatus,
     ShellSessionErrorCode,
     ShellSessionIdentity,
+    ShellSessionLifecycleStatus,
     ShellSessionOrigin,
     ShellWaitRequest,
     ShellWriteRequest,
@@ -968,6 +969,47 @@ async def test_wait_for_output_does_not_emit_recurring_quiet_boundary() -> None:
     assert update.process_status is ShellProcessStatus.COMPLETED
     assert update.interaction_boundary is ShellInteractionBoundary.TERMINAL
     assert update.stdout == "done"
+
+
+@pytest.mark.asyncio
+async def test_wait_for_output_returns_active_after_shared_silent_yield_window() -> None:
+    manager = FakeTerminalManager()
+    clock = MutableClock()
+    original_read = manager.read_output_result
+
+    async def read_and_advance_after_empty(*args, **kwargs):
+        result = await original_read(*args, **kwargs)
+        if not result.data:
+            clock.advance(20.25)
+        return result
+
+    manager.read_output_result = read_and_advance_after_empty
+    service = ShellSessionService(
+        terminal_manager=manager,
+        lifecycle_projector=_noop_lifecycle_projector(),
+        config=_config(initial_quiet_window_sec=0.0),
+        runtime_context_resolver=lambda _identity: _context(),
+        clock=clock,
+    )
+    first = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(command="no-output", yield_time_ms=0),
+    )
+
+    assert first.session_id is not None
+    update = await service.wait_for_output(
+        identity=_identity(),
+        request=ShellWaitRequest(session_id=first.session_id),
+    )
+
+    assert update.process_status is ShellProcessStatus.RUNNING
+    assert update.session_status is ShellSessionLifecycleStatus.ACTIVE
+    assert update.interaction_boundary is None
+    assert update.session_id == first.session_id
+    assert await service.get_session_capability(
+        identity=_identity(),
+        public_session_id=first.session_id,
+    ) is ShellCapability.ASSESSMENT
 
 
 @pytest.mark.asyncio

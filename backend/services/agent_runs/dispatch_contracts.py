@@ -22,7 +22,10 @@ from .parent_handoff_coordinator import ParentHandoffOutcome
 ReadyHandoffProcessor = Callable[
     [tuple[AgentRunCompletion, ...], bool], Awaitable[ParentHandoffOutcome | None]
 ]
-DispatchStopStatus = Literal["failed", "cancelled", "waiting_for_approval"]
+ReadyHandoffProjector = Callable[
+    [tuple[AgentRunCompletion, ...]], Awaitable[None]
+]
+DispatchStopStatus = Literal["interrupted", "cancelled", "waiting_for_approval"]
 
 
 class AgentRunLaunchService(Protocol):
@@ -111,5 +114,6 @@ __all__ = [
     "DispatchBatchLaunchFailure",
     "DispatchChildSettlement",
     "DispatchStopStatus",
+    "ReadyHandoffProjector",
     "ReadyHandoffProcessor",
 ]

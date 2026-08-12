@@ -76,6 +76,37 @@ def test_backend_contracts_reexport_agent_contracts() -> None:
     assert not hasattr(backend_contracts, legacy_capability_name)
 
 
+def test_subagent_contract_has_no_failed_lifecycle_or_outcome() -> None:
+    assignment = _contract_assignment()
+    lifecycle = AgentRunLifecycleProjection(
+        agent_run_id=assignment.agent_run_id,
+        agent_id=assignment.agent_id,
+        agent_kind=assignment.agent_kind,
+        agent_display_name="Pathfinder",
+        agent_icon_key="pathfinder",
+        status="interrupted",
+        lifecycle_version=3,
+        task_id=assignment.task_id,
+        conversation_id=assignment.conversation_id,
+        parent_turn_id=assignment.parent_turn_id,
+        safe_error="Subagent worker interrupted",
+    )
+
+    assert lifecycle.status == "interrupted"
+    with pytest.raises(ValidationError):
+        AgentRunLifecycleProjection.model_validate(
+            {**lifecycle.model_dump(mode="json"), "status": "failed"}
+        )
+    with pytest.raises(ValidationError):
+        AgentResult(
+            agent_run_id=assignment.agent_run_id,
+            agent_id=assignment.agent_id,
+            agent_kind=assignment.agent_kind,
+            outcome="failed",
+            summary="This lifecycle outcome must not exist.",
+        )
+
+
 def test_assignment_validates_deterministically_and_keeps_display_name_separate() -> None:
     assignment = _contract_assignment()
 

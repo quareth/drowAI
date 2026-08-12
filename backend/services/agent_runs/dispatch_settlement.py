@@ -29,13 +29,17 @@ from .dispatch_contracts import (
     DispatchStopStatus,
 )
 from .dispatch_plan import PlannedAgentInvocation
-from .launcher import SubagentRunCancelled, SubagentRunFailed, SubagentRunPaused
+from .launcher import (
+    SubagentRunCancelled,
+    SubagentRunInterrupted,
+    SubagentRunPaused,
+)
 from .registry import ProcessLocalAgentRunRegistry
 from .result_projection import CompletedAgentResultHandoff
 
 logger = logging.getLogger(__name__)
 _SHELL_OWNER_CLEANUP_STATUSES = frozenset(
-    {"completed", "partial", "blocked", "failed", "cancelled"}
+    {"completed", "partial", "blocked", "interrupted", "cancelled"}
 )
 
 
@@ -99,10 +103,10 @@ class DispatchSettlement:
         *,
         item: PlannedAgentInvocation,
     ) -> AgentRunCompletion | None:
-        """Return a launcher-recorded failed/cancelled completion for parent PAR."""
+        """Return a launcher-recorded cancelled completion for parent PAR."""
         if isinstance(exc, SubagentRunPaused):
             return None
-        if not isinstance(exc, (SubagentRunCancelled, SubagentRunFailed)):
+        if not isinstance(exc, (SubagentRunCancelled, SubagentRunInterrupted)):
             return None
 
         terminal = await self._registry.get(
@@ -113,7 +117,7 @@ class DispatchSettlement:
         if (
             terminal is None
             or terminal.result is None
-            or terminal.status not in {"failed", "cancelled"}
+            or terminal.status != "cancelled"
         ):
             return None
 
@@ -212,7 +216,7 @@ class DispatchSettlement:
         usage: tuple[Any, ...] = ()
         if isinstance(
             exc,
-            (SubagentRunPaused, SubagentRunCancelled, SubagentRunFailed),
+            (SubagentRunPaused, SubagentRunCancelled, SubagentRunInterrupted),
         ):
             records = child_usage_records_from_state(
                 getattr(exc.execution_result, "final_state", None),
@@ -231,14 +235,14 @@ class DispatchSettlement:
                 if isinstance(exc, SubagentRunPaused)
                 else "cancelled"
                 if isinstance(exc, SubagentRunCancelled)
-                else "failed"
+                else "interrupted"
             )
         elif isinstance(exc, asyncio.CancelledError):
             status = "cancelled"
         else:
-            status = "failed"
+            status = "interrupted"
             logger.warning(
-                "subagent run %s failed before parent handoff for task %s",
+                "subagent run %s was interrupted before parent handoff for task %s",
                 assignment.agent_run_id,
                 task_id,
                 exc_info=(type(exc), exc, exc.__traceback__),
@@ -284,12 +288,12 @@ class DispatchSettlement:
                 continue
             elif isinstance(
                 result,
-                (SubagentRunCancelled, SubagentRunFailed),
+                (SubagentRunCancelled, SubagentRunInterrupted),
             ):
                 cleanup_status = (
                     "cancelled"
                     if isinstance(result, SubagentRunCancelled)
-                    else "failed"
+                    else "interrupted"
                 )
                 terminal = await self._registry.get(
                     tenant_id=assignment.tenant_id,
@@ -311,7 +315,9 @@ class DispatchSettlement:
                     cleanup_status = completion.result.outcome
             else:
                 cleanup_status = (
-                    "cancelled" if isinstance(result, asyncio.CancelledError) else "failed"
+                    "cancelled"
+                    if isinstance(result, asyncio.CancelledError)
+                    else "interrupted"
                 )
                 terminal = await self._registry.get(
                     tenant_id=assignment.tenant_id,

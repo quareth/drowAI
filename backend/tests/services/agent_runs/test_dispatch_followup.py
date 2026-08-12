@@ -370,7 +370,7 @@ async def test_unregistered_launch_failure_preserves_runtime_error_message() -> 
         _runtime_config: LangGraphRuntimeConfig,
     ) -> DispatchBatchLaunchFailure:
         return DispatchBatchLaunchFailure(
-            stop=AgentRunDispatchStop(invocation=batch[0], status="failed")
+            stop=AgentRunDispatchStop(invocation=batch[0], status="interrupted")
         )
 
     batch_executor = _RecordingBatchExecutor(_stop_failure)
@@ -378,7 +378,7 @@ async def test_unregistered_launch_failure_preserves_runtime_error_message() -> 
 
     with pytest.raises(
         RuntimeError,
-        match="PAR follow-up delegation launch failed: failed",
+        match="PAR follow-up delegation launch failed: interrupted",
     ):
         await dispatcher.dispatch_followup(
             _runtime_config(),
@@ -392,7 +392,7 @@ async def test_unregistered_launch_failure_preserves_runtime_error_message() -> 
 
 
 @pytest.mark.asyncio
-async def test_registered_launch_failure_returns_ordered_ids_with_empty_launched() -> None:
+async def test_registered_launch_interruption_returns_dispatch_error_without_handoff() -> None:
     trace: Trace = []
     reader = _ActiveCountReader(trace)
     objective = "Bounded registered launch failure."
@@ -406,24 +406,22 @@ async def test_registered_launch_failure_returns_ordered_ids_with_empty_launched
         batch: tuple[PlannedAgentInvocation, ...],
         _runtime_config: LangGraphRuntimeConfig,
     ) -> DispatchBatchLaunchFailure:
-        completion: AgentRunCompletion = _completion(
-            batch[0].assignment,
-            graph_thread_id=batch[0].graph_thread_id,
-            outcome="failed",
+        return DispatchBatchLaunchFailure(
+            stop=AgentRunDispatchStop(
+                invocation=batch[0],
+                status="interrupted",
+            )
         )
-        return DispatchBatchLaunchFailure(child_completions=(completion,))
 
     batch_executor = _RecordingBatchExecutor(_registered_failure)
     dispatcher = _fake_dispatcher(batch_executor, reader)
 
-    result = await dispatcher.dispatch_followup(
-        _runtime_config(),
-        parent_turn_id=PARENT_TURN_ID,
-        agent_handoff=_handoff("pathfinder", objective),
-        decision_id="decision-registered-failure",
-    )
-
-    assert result.agent_run_ids == (stable_run_id,)
-    assert result.launched_agent_run_ids == ()
+    with pytest.raises(RuntimeError, match="interrupted"):
+        await dispatcher.dispatch_followup(
+            _runtime_config(),
+            parent_turn_id=PARENT_TURN_ID,
+            agent_handoff=_handoff("pathfinder", objective),
+            decision_id="decision-registered-failure",
+        )
     assert reader.calls == 1
     assert len(batch_executor.calls) == 1

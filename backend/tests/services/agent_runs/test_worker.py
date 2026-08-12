@@ -19,7 +19,13 @@ from agent.graph.subgraphs.tool_execution_runtime.request_context import (
 )
 from agent.subagents.definition import SubagentDefinition, load_subagent_definitions
 from agent.subagents.registry import SubagentRegistry
-from agent.subagents.runtime.model import SUBAGENT_RESULT_METADATA_KEY
+from agent.subagents.runtime.model import (
+    SUBAGENT_ACTION_METADATA_KEY,
+    SUBAGENT_RESULT_METADATA_KEY,
+    SubagentActionSelectionError,
+    _pop_execution_strategy,
+    run_subagent_model_turn,
+)
 from agent.subagents.runtime.state import (
     apply_subagent_state_to_interactive,
     build_subagent_initial_state,
@@ -30,6 +36,7 @@ from agent.graph.subgraphs.tool_execution_runtime.lane_dispatch import (
     dispatch_tool_call_by_lane,
 )
 from agent.models import ExecutionStrategy
+from agent.providers.llm.core.base import ToolCall as NativeToolCall, ToolCallResult
 from agent.tool_runtime import ToolExecutionCoordinator
 from agent.tool_runtime.batch.types import ToolBatch, ToolCall
 from backend.services.agent_runs.contracts import (
@@ -37,7 +44,7 @@ from backend.services.agent_runs.contracts import (
     AgentResult,
     AgentRuntimeIdentity,
 )
-from backend.services.agent_runs.launcher import SubagentRunFailed
+from backend.services.agent_runs.launcher import SubagentRunInterrupted
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
 from backend.services.agent_runs.worker import (
     ProcessLocalAgentRunWorker,
@@ -187,6 +194,64 @@ def test_resumed_subagent_state_reasserts_agent_run_execution_owner() -> None:
     graph_context = refreshed.facts.metadata["graph_runtime_context"]
     assert graph_context["execution_owner_id"] == "subagent:run-1"
     assert graph_context["execution_owner_id"] != "main:stale-parent-turn"
+
+
+def test_single_native_call_may_reuse_sequential_strategy_default() -> None:
+    parameters: dict[str, Any] = {}
+
+    strategy = _pop_execution_strategy(
+        parameters,
+        default=ExecutionStrategy.SEQUENTIAL,
+    )
+
+    assert strategy is ExecutionStrategy.SEQUENTIAL
+    with pytest.raises(SubagentActionSelectionError):
+        _pop_execution_strategy({}, default=None)
+
+
+class _InvalidActionLLM:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def chat_with_tools_with_usage(self, *_args: Any, **_kwargs: Any) -> ToolCallResult:
+        self.calls += 1
+        return ToolCallResult(
+            content=None,
+            tool_calls=[
+                NativeToolCall(
+                    id=f"invalid-{self.calls}",
+                    name="unbound_subagent_tool",
+                    arguments="{}",
+                )
+            ],
+            raw={},
+        )
+
+
+@pytest.mark.asyncio
+async def test_invalid_subagent_actions_retry_then_complete_as_blocked() -> None:
+    definition = _pathfinder_definition()
+    graph_input = build_subagent_initial_state(
+        definition=definition,
+        assignment=_assignment(),
+        graph_thread_id="child-thread-1",
+    )
+    llm = _InvalidActionLLM()
+
+    update = await run_subagent_model_turn(
+        definition,
+        graph_input,
+        llm_resolver=lambda *_args, **_kwargs: llm,
+    )
+
+    interactive = InteractiveState.from_mapping(update)
+    metadata = interactive.facts.safe_metadata
+    assert llm.calls == 2
+    assert metadata[SUBAGENT_ACTION_METADATA_KEY]["route"] == "handoff"
+    assert metadata[SUBAGENT_RESULT_METADATA_KEY]["outcome"] == "blocked"
+    assert interactive.trace.final_text == (
+        "Subagent could not produce a valid bounded tool action."
+    )
 
 
 class _FakeCheckpointerService:
@@ -697,7 +762,7 @@ async def test_generic_worker_failure_preserves_graph_usage_state(
         executor=executor,
     )
 
-    with pytest.raises(SubagentRunFailed) as exc_info:
+    with pytest.raises(SubagentRunInterrupted) as exc_info:
         await worker(
             assignment=assignment,
             runtime_config={"configurable": {}},

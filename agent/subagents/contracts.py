@@ -37,14 +37,13 @@ AgentRunStatus: TypeAlias = Literal[
     "running",
     "waiting_for_approval",
     "completed",
-    "failed",
+    "interrupted",
     "cancelled",
 ]
 AgentRunOutcome: TypeAlias = Literal[
     "completed",
     "partial",
     "blocked",
-    "failed",
     "cancelled",
 ]
 

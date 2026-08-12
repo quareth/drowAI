@@ -26,6 +26,7 @@ from runtime_shared.docker_contracts import CONTAINER_WORKSPACE_PATH
 from runtime_shared.shell_session_contracts import (
     SHELL_SESSION_CLEANUP_TIMEOUT_SEC,
     SHELL_SESSION_CONTROL_TIMEOUT_SEC,
+    SHELL_SESSION_DEFAULT_YIELD_TIME_MS,
     SHELL_SESSION_PREPARATION_TIMEOUT_SEC,
     ShellInteractionBoundary,
     ShellExecRequest,
@@ -387,10 +388,13 @@ class ShellSessionService:
             )
             return await self._read_update(
                 record=record,
-                yield_time_ms=max(1, remaining_runtime_ms),
+                yield_time_ms=min(
+                    SHELL_SESSION_DEFAULT_YIELD_TIME_MS,
+                    max(1, remaining_runtime_ms),
+                ),
                 max_output_chars=request.max_output_chars,
                 started_at=started_at,
-                return_on_empty_window=False,
+                return_on_empty_window=True,
             )
         except asyncio.CancelledError:
             await self._registry.release(record)
@@ -612,6 +616,8 @@ class ShellSessionService:
                 if return_on_empty_window and (
                     yield_time_ms == 0 or self._clock() >= deadline
                 ):
+                    if self._registry.is_deadline_expired(record, self._clock()):
+                        continue
                     break
                 continue
             record.last_activity_at = self._clock()

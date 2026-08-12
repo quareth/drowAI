@@ -35,6 +35,11 @@ from agent.graph.utils.llm_resolver import resolve_llm_client
 from agent.providers.llm.contracts.tool_contracts import FunctionToolSpec
 from agent.providers.llm.core.base import ToolCallResult
 from agent.reasoning.llm_parameter_resolution import NATIVE_BUILDER_MAX_OUTPUT_TOKENS
+from agent.reasoning.structured_contract_recovery import (
+    contains_retryable_llm_timeout,
+    run_structured_contract_retry,
+)
+from agent.subagents.contracts import AgentResult
 from agent.subagents.definition import SubagentDefinition
 from agent.subagents.runtime.state import (
     SubagentRuntimeState,
@@ -128,70 +133,109 @@ async def run_subagent_model_turn(
         config=config,
         context=context,
     ) as emitter:
-        result = await wait_for_with_timeout(
-            llm_client.chat_with_tools_with_usage(
-                prompt_builder.build_system_prompt(
-                    definition_id=definition.id,
-                    display_name=definition.display_name,
-                    role_prompt=role_prompt,
-                    definition_instructions=definition.instructions,
-                    ownership_boundary=definition.ownership_boundary,
-                    boundary_rules=boundary_rules,
-                    max_committed_tools_per_batch=max_committed_calls,
-                    callable_tool_ids=(
-                        tuple(spec.tool_id for spec in tool_specs)
-                        if can_call_tools
-                        else ()
+        async def request_action() -> tuple[str, Any]:
+            result = await wait_for_with_timeout(
+                llm_client.chat_with_tools_with_usage(
+                    prompt_builder.build_system_prompt(
+                        definition_id=definition.id,
+                        display_name=definition.display_name,
+                        role_prompt=role_prompt,
+                        definition_instructions=definition.instructions,
+                        ownership_boundary=definition.ownership_boundary,
+                        boundary_rules=boundary_rules,
+                        max_committed_tools_per_batch=max_committed_calls,
+                        callable_tool_ids=(
+                            tuple(spec.tool_id for spec in tool_specs)
+                            if can_call_tools
+                            else ()
+                        ),
                     ),
+                    prompt_builder.build_user_prompt(
+                        display_name=definition.display_name,
+                        assignment=subagent.assignment.model_dump(mode="json"),
+                        tool_ids=subagent.tool_profile.tool_ids,
+                        working_memory=_working_memory_prompt_context(
+                            interactive.facts.safe_metadata
+                        ),
+                        previous_tool_summary=_build_previous_tool_context(interactive),
+                        remaining_limits=_build_remaining_limits(
+                            definition,
+                            interactive,
+                            max_committed_calls=max_committed_calls,
+                        ),
+                    ),
+                    tools=tool_specs,
+                    **request_kwargs,
                 ),
-                prompt_builder.build_user_prompt(
-                    display_name=definition.display_name,
-                    assignment=subagent.assignment.model_dump(mode="json"),
-                    tool_ids=subagent.tool_profile.tool_ids,
-                    working_memory=_working_memory_prompt_context(
-                        interactive.facts.safe_metadata
-                    ),
-                    previous_tool_summary=_build_previous_tool_context(interactive),
-                    remaining_limits=_build_remaining_limits(
-                        definition,
-                        interactive,
-                        max_committed_calls=max_committed_calls,
-                    ),
-                ),
-                tools=tool_specs,
-                **request_kwargs,
-            ),
-            timeout_sec=LLM_TIMEOUT_PLANNER_PARAMETER_RESOLUTION_SEC,
-            component="SUBAGENT",
-            operation="subagent_runtime_model_llm_call",
-            logger=logger,
-            task_id=interactive.facts.task_id,
-            outcome="subagent_runtime_model_timeout",
-        )
+                timeout_sec=LLM_TIMEOUT_PLANNER_PARAMETER_RESOLUTION_SEC,
+                component="SUBAGENT",
+                operation="subagent_runtime_model_llm_call",
+                logger=logger,
+                task_id=interactive.facts.task_id,
+                outcome="subagent_runtime_model_timeout",
+            )
 
-        _append_usage(interactive, result)
-        if not result.tool_calls:
-            update = _apply_subagent_text_result(
-                interactive,
-                subagent,
-                result,
-                forced_final=not can_call_tools,
+            _append_usage(interactive, result)
+            if not result.tool_calls:
+                return (
+                    "handoff",
+                    _apply_subagent_text_result(
+                        interactive,
+                        subagent,
+                        result,
+                        forced_final=not can_call_tools,
+                    ),
+                )
+
+            if not can_call_tools:
+                raise SubagentActionSelectionError(
+                    "Subagent returned tool calls after tool budget was exhausted"
+                )
+            return (
+                "tool",
+                _build_tool_batch_from_result(
+                    result,
+                    subagent=subagent,
+                    function_to_tool_id=function_to_tool_id,
+                    max_committed_calls=max_committed_calls,
+                    display_name=definition.display_name,
+                ),
+            )
+
+        try:
+            route, selected = await run_structured_contract_retry(
+                operation=request_action,
+                logger=logger,
+                stage="subagent_model",
+                contract="native_action",
+                max_attempts=2,
+                backoff_seconds=0.25,
+                is_retryable_error=lambda exc: isinstance(
+                    exc,
+                    SubagentActionSelectionError,
+                )
+                or contains_retryable_llm_timeout(exc),
+            )
+        except SubagentActionSelectionError as exc:
+            logger.warning(
+                "Subagent model action contract remained invalid after retry: %s",
+                exc,
             )
             if emitter is not None:
-                emitter.emit_reasoning_delta("Subagent prepared parent handoff.")
-            return update
+                emitter.emit_reasoning_delta(
+                    "Subagent could not produce a valid bounded action and is "
+                    "returning a blocked handoff."
+                )
+            return _apply_subagent_blocked_result(interactive, subagent)
 
-        if not can_call_tools:
-            raise SubagentActionSelectionError(
-                "Subagent returned tool calls after tool budget was exhausted"
-            )
-        batch = _build_tool_batch_from_result(
-            result,
-            subagent=subagent,
-            function_to_tool_id=function_to_tool_id,
-            max_committed_calls=max_committed_calls,
-            display_name=definition.display_name,
-        )
+        if route == "handoff":
+            if emitter is not None:
+                emitter.emit_reasoning_delta("Subagent prepared parent handoff.")
+            return selected
+
+        batch = selected
+        if not isinstance(batch, ToolBatch):
+            raise TypeError("Subagent action selection returned an invalid tool batch")
         if emitter is not None:
             emitter.emit_reasoning_delta(batch.selection_rationale)
     return _apply_subagent_tool_batch(
@@ -278,7 +322,12 @@ def _build_tool_batch_from_result(
             )
 
         raw_parameters = _parse_arguments(raw_arguments)
-        strategy = _pop_execution_strategy(raw_parameters)
+        strategy = _pop_execution_strategy(
+            raw_parameters,
+            default=(
+                ExecutionStrategy.SEQUENTIAL if len(native_calls) == 1 else None
+            ),
+        )
         if batch_strategy is None:
             batch_strategy = strategy
         elif strategy is not batch_strategy:
@@ -359,6 +408,43 @@ def _apply_subagent_text_result(
     return interactive.as_graph_update()
 
 
+def _apply_subagent_blocked_result(
+    interactive: InteractiveState,
+    subagent: SubagentRuntimeState,
+) -> dict[str, Any]:
+    """Finish a bounded run when model action repair cannot produce a safe action."""
+
+    result = AgentResult(
+        agent_run_id=subagent.agent_run_id,
+        agent_id=subagent.agent_id,
+        agent_kind=subagent.agent_kind,
+        outcome="blocked",
+        summary="Subagent could not produce a valid bounded tool action.",
+        limitations=("The subagent model action contract remained invalid after retry.",),
+        recommended_next_steps=(
+            "Continue from the parent agent or dispatch a new bounded assignment.",
+        ),
+    )
+    metadata = interactive.facts.ensure_metadata()
+    metadata[SUBAGENT_RESULT_METADATA_KEY] = result.model_dump(mode="json")
+    metadata[SUBAGENT_FORCED_FINAL_METADATA_KEY] = True
+    metadata[SUBAGENT_ACTION_METADATA_KEY] = {
+        "route": "handoff",
+        "agent_run_id": subagent.agent_run_id,
+        "agent_id": subagent.agent_id,
+        "forced_final": True,
+    }
+    interactive.trace.final_text = result.summary
+    interactive.trace.history.append(
+        {
+            "type": "subagent_model_blocked",
+            "agent_run_id": subagent.agent_run_id,
+            "agent_id": subagent.agent_id,
+        }
+    )
+    return interactive.as_graph_update()
+
+
 def _call_name_and_arguments(call: Any) -> tuple[str, Any]:
     """Return normalized provider function name and raw arguments."""
 
@@ -407,10 +493,16 @@ def _parse_arguments(raw_arguments: Any) -> dict[str, Any]:
     return decoded
 
 
-def _pop_execution_strategy(raw_parameters: dict[str, Any]) -> ExecutionStrategy:
+def _pop_execution_strategy(
+    raw_parameters: dict[str, Any],
+    *,
+    default: ExecutionStrategy | None = None,
+) -> ExecutionStrategy:
     """Strip and validate batch scheduling metadata."""
 
     raw_strategy = raw_parameters.pop(SUBAGENT_EXECUTION_STRATEGY_KEY, None)
+    if raw_strategy is None and default is not None:
+        return default
     normalized = str(raw_strategy or "").strip().lower()
     if normalized == ExecutionStrategy.PARALLEL.value:
         return ExecutionStrategy.PARALLEL

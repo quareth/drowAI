@@ -43,7 +43,6 @@ from agent.subagents.runtime.model import (
     SUBAGENT_EXECUTION_STRATEGY_KEY,
     SUBAGENT_FORCED_FINAL_METADATA_KEY,
     SUBAGENT_RESULT_METADATA_KEY,
-    SubagentActionSelectionError,
     record_subagent_observation_and_budget,
     run_subagent_model_turn,
 )
@@ -827,7 +826,7 @@ async def test_runtime_model_exposes_and_commits_universal_shell_utilities() -> 
 
 
 @pytest.mark.asyncio
-async def test_runtime_model_rejects_empty_write_poll_for_running_shell_result() -> None:
+async def test_runtime_model_blocks_empty_write_poll_after_bounded_repair() -> None:
     public_session_id = "shs_subagent_continuation_123"
     state = _generic_state_with_universal_shell_tools()
     metadata = state["facts"]["metadata"]
@@ -868,19 +867,19 @@ async def test_runtime_model_rejects_empty_write_poll_for_running_shell_result()
     ]
     llm = _FakeBuilderLLM(calls)
 
-    with pytest.raises(
-        SubagentActionSelectionError,
-        match="String should have at least 1 character",
-    ):
-        await run_subagent_model_turn(
-            _pathfinder_definition(),
-            state,
-            llm_resolver=lambda *_args, **_kwargs: llm,
-        )
+    update = await run_subagent_model_turn(
+        _pathfinder_definition(),
+        state,
+        llm_resolver=lambda *_args, **_kwargs: llm,
+    )
 
     request = _request_projection(llm.requests[0])
+    metadata = update["facts"]["metadata"]
+    assert len(llm.requests) == 2
     assert SHELL_WRITE_STDIN_TOOL_ID in request["tool_ids"]
     assert public_session_id in request["user_prompt"]
+    assert metadata[SUBAGENT_ACTION_METADATA_KEY]["route"] == "handoff"
+    assert metadata[SUBAGENT_RESULT_METADATA_KEY]["outcome"] == "blocked"
 
 
 @pytest.mark.asyncio

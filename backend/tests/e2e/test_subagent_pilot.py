@@ -589,6 +589,27 @@ async def _wait_for_parent_call_count(
     await asyncio.wait_for(_poll(), timeout=1)
 
 
+async def _wait_for_run_status(
+    registry: ProcessLocalAgentRunRegistry,
+    *,
+    task_id: int,
+    agent_run_id: str,
+    status: str,
+) -> None:
+    async def _poll() -> None:
+        while True:
+            entry = await registry.get(
+                tenant_id=7,
+                task_id=task_id,
+                agent_run_id=agent_run_id,
+            )
+            if entry is not None and entry.status == status:
+                return
+            await asyncio.sleep(0)
+
+    await asyncio.wait_for(_poll(), timeout=1)
+
+
 def _release_call(worker: _ScriptedSubagentWorker, index: int) -> None:
     worker.calls[index]["release"].set()
 
@@ -812,7 +833,7 @@ async def test_subagent_pilot_par_direct_tool_after_handoff_finalizes_once(
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "outcome",
-    ["completed", "partial", "blocked", "failed", "cancelled"],
+    ["completed", "partial", "blocked", "cancelled"],
 )
 async def test_subagent_pilot_projects_every_terminal_child_outcome_to_par(
     outcome: str,
@@ -995,16 +1016,15 @@ async def test_subagent_pilot_waits_for_active_work_and_keeps_tasks_isolated(
     )
     await _wait_for_call_count(worker, 2)
     _release_call(worker, 0)
-    await _wait_for_parent_call_count(parent_executor, 1)
-
-    first_parent_call = parent_executor.calls[0]
-    assert first_parent_call["task_id"] == 42
-    assert first_parent_call["decision"]["router_outcome"]["action"] == (
-        "wait_for_subagents"
+    first_run_id = worker.calls[0]["assignment"].agent_run_id
+    await _wait_for_run_status(
+        registry,
+        task_id=42,
+        agent_run_id=first_run_id,
+        status="completed",
     )
-    assert [run["agent_run_id"] for run in first_parent_call["active_runs"]] == [
-        worker.calls[1]["assignment"].agent_run_id
-    ]
+
+    assert parent_executor.calls == []
     assert task_42_turn.done() is False
 
     task_43_turn = asyncio.create_task(
@@ -1031,7 +1051,6 @@ async def test_subagent_pilot_waits_for_active_work_and_keeps_tasks_isolated(
         call for call in parent_executor.calls if call["task_id"] == 42
     ]
     assert [call["decision"]["router_outcome"]["action"] for call in task_42_calls] == [
-        "wait_for_subagents",
         "finalize",
     ]
     entries_42 = await registry.list_task_runs(tenant_id=7, task_id=42)

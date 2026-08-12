@@ -26,8 +26,6 @@ function formatStatus(status: AgentRunRecord["status"]): string {
       return "waiting for approval";
     case "completed":
       return "completed";
-    case "failed":
-      return "failed";
     case "cancelled":
       return "stopped";
     case "interrupted":
