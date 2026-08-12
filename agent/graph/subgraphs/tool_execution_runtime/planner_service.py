@@ -21,16 +21,22 @@ from agent.tool_runtime.batch.plan_view import (
 from agent.tool_runtime.artifact_file_metadata import (
     collect_artifact_file_ref_candidates,
 )
+from runtime_shared.shell_capabilities import SHELL_WRITE_STDIN_TOOL_ID
 
 
-def _serialize_tool_batch(batch: _ToolBatch) -> Dict[str, Any]:
+def _serialize_tool_batch(
+    batch: _ToolBatch,
+    *,
+    execution_sequence_id: str = "",
+) -> Dict[str, Any]:
     """Serialize a ToolBatch into the planner_plan dict shape.
 
     The orchestrator (Phase 5 Task 5.4) reconstructs the batch via
     ``_deserialize_tool_batch_from_plan_data`` to feed BatchValidator and
-    the lifecycle emitters. Pure data — no execution semantics.
+    the lifecycle emitters. Exact shell stdin is diverted to process-local
+    session state before this serializable representation is returned.
     """
-    return {
+    serialized = {
         "tool_batch_id": batch.tool_batch_id,
         "requested_execution_strategy": batch.requested_execution_strategy.value,
         "deferred_followups": list(batch.deferred_followups),
@@ -45,6 +51,70 @@ def _serialize_tool_batch(batch: _ToolBatch) -> Dict[str, Any]:
             for call in batch.tool_calls
         ],
     }
+    return _redact_shell_stdin_in_batch(
+        serialized,
+        execution_sequence_id=execution_sequence_id,
+    )
+
+
+def _redact_shell_stdin_in_batch(
+    batch: Mapping[str, Any],
+    *,
+    execution_sequence_id: str,
+) -> Dict[str, Any]:
+    """Move exact shell stdin out of a serialized batch before checkpointing."""
+
+    from ..tool_execution_session_state import (
+        SHELL_STDIN_REDACTED_MARKER,
+        remember_shell_input,
+    )
+
+    redacted = dict(batch)
+    raw_calls = batch.get("tool_calls")
+    if not isinstance(raw_calls, list):
+        return redacted
+
+    calls: list[Any] = []
+    for raw_call in raw_calls:
+        if not isinstance(raw_call, Mapping):
+            calls.append(raw_call)
+            continue
+        call = dict(raw_call)
+        raw_parameters = call.get("parameters")
+        parameters = (
+            dict(raw_parameters) if isinstance(raw_parameters, Mapping) else {}
+        )
+        if str(call.get("tool_id") or "") == SHELL_WRITE_STDIN_TOOL_ID:
+            chars = parameters.get("chars")
+            if chars and chars != SHELL_STDIN_REDACTED_MARKER:
+                exact_chars = str(chars)
+                remember_shell_input(
+                    sequence_id=execution_sequence_id,
+                    call_id=str(call.get("tool_call_id") or ""),
+                    chars=exact_chars,
+                )
+                parameters["chars"] = SHELL_STDIN_REDACTED_MARKER
+        call["parameters"] = parameters
+        calls.append(call)
+    redacted["tool_calls"] = calls
+    return redacted
+
+
+def _redact_shell_stdin_in_plan(
+    plan: Mapping[str, Any],
+    *,
+    execution_sequence_id: str,
+) -> Dict[str, Any]:
+    """Return a checkpoint-safe planner plan, including legacy raw plans."""
+
+    redacted = dict(plan)
+    batch = plan.get("tool_batch")
+    if isinstance(batch, Mapping):
+        redacted["tool_batch"] = _redact_shell_stdin_in_batch(
+            batch,
+            execution_sequence_id=execution_sequence_id,
+        )
+    return redacted
 from agent.tool_runtime.artifact_tool_policy import iter_non_artifact_tools  # noqa: E402
 from backend.services.metrics.utils import safe_inc  # noqa: E402
 
@@ -66,6 +136,7 @@ from ...memory.target_resolution import (  # noqa: E402
 from ...runtime_controls import (  # noqa: E402
     read_active_execution_control,
     read_current_turn_runtime_controls,
+    read_execution_session_control,
 )
 from ...state import InteractiveState  # noqa: E402
 from ...utils import iteration_memory as _iteration_memory  # noqa: E402
@@ -627,8 +698,23 @@ async def ensure_action_plan(
         metadata = interactive.facts.metadata_copy()
         safe_inc("langgraph_planner_plan_invalidated")
 
+    execution_session = read_execution_session_control(metadata)
+    execution_sequence_id = (
+        str(execution_session.get("sequence_id") or "").strip()
+        if execution_session is not None
+        else ""
+    )
+
     plan_data = metadata.get("planner_plan")
     if plan_data:
+        if isinstance(plan_data, Mapping):
+            plan_data = _redact_shell_stdin_in_plan(
+                plan_data,
+                execution_sequence_id=execution_sequence_id,
+            )
+            metadata["planner_plan"] = plan_data
+            request.metadata = metadata
+            interactive.facts.metadata = metadata
         apply_plan_to_state(interactive, plan_data)
         safe_inc("langgraph_planner_plan_reused")
         return
@@ -670,7 +756,10 @@ async def ensure_action_plan(
         "expected_outcome": plan.expected_outcome,
     }
     if getattr(plan, "tool_batch", None) is not None:
-        plan_data["tool_batch"] = _serialize_tool_batch(plan.tool_batch)
+        plan_data["tool_batch"] = _serialize_tool_batch(
+            plan.tool_batch,
+            execution_sequence_id=execution_sequence_id,
+        )
 
     metadata["planner_plan"] = plan_data
     metadata["planner_context_snapshot"] = planner_context

@@ -20,6 +20,7 @@ from runtime_shared.shell_session_contracts import ShellProcessStatus
 _TRANSCRIPT_MAX_ENTRIES = 24
 _TRANSCRIPT_MAX_CHARS = 12_000
 _RUNTIME_EXECUTION_SESSIONS: dict[str, dict[str, Any]] = {}
+SHELL_STDIN_REDACTED_MARKER = "<SHELL_STDIN_REDACTED>"
 
 
 def begin_execution_session_state(
@@ -168,6 +169,19 @@ def remember_shell_input(*, sequence_id: str, call_id: str, chars: str) -> None:
         pending_inputs = {}
         transcript["pending_inputs"] = pending_inputs
     pending_inputs[call_id] = chars
+
+
+def read_shell_input(*, sequence_id: str, call_id: str) -> str | None:
+    """Return exact pending stdin without moving it into serializable state."""
+
+    transcript = _RUNTIME_EXECUTION_SESSIONS.get(str(sequence_id or "").strip())
+    if transcript is None or not call_id:
+        return None
+    pending_inputs = transcript.get("pending_inputs")
+    if not isinstance(pending_inputs, Mapping):
+        return None
+    chars = pending_inputs.get(call_id)
+    return chars if isinstance(chars, str) and chars else None
 
 
 def materialize_terminal_session_output(

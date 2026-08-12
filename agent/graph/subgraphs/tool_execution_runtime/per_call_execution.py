@@ -13,9 +13,15 @@ from agent.tool_runtime.output_persistence_policy import resolve_output_persiste
 
 from agent.execution_strategy import ExecutionStrategy
 from agent.tool_runtime.batch.types import ToolBatch, ToolCall, ToolCallResult, ToolCallStatus
+from runtime_shared.shell_capabilities import SHELL_WRITE_STDIN_TOOL_ID
 
 from .approval_and_idempotency import _read_dispatch_cache_entry
 from .lane_dispatch import resolve_tool_lane_dispatch
+from ...runtime_controls import read_execution_session_control
+from ..tool_execution_session_state import (
+    SHELL_STDIN_REDACTED_MARKER,
+    read_shell_input,
+)
 
 
 def _project_tool_call_status(*, success: bool, status: Any) -> ToolCallStatus:
@@ -120,6 +126,36 @@ def _clone_request_for_call(request: Any, metadata: Dict[str, Any]) -> Any:
             else None
         ),
         reasoning_effort=getattr(request, "reasoning_effort", None),
+    )
+
+
+def _materialize_process_local_shell_input(
+    call: ToolCall,
+    *,
+    metadata: Mapping[str, Any],
+) -> ToolCall | None:
+    """Restore checkpoint-redacted stdin only for the immediate dispatch call."""
+
+    if call.tool_id != SHELL_WRITE_STDIN_TOOL_ID:
+        return call
+    parameters = dict(call.parameters)
+    if parameters.get("chars") != SHELL_STDIN_REDACTED_MARKER:
+        return call
+    execution_session = read_execution_session_control(metadata)
+    sequence_id = (
+        str(execution_session.get("sequence_id") or "").strip()
+        if execution_session is not None
+        else ""
+    )
+    chars = read_shell_input(sequence_id=sequence_id, call_id=call.tool_call_id)
+    if chars is None:
+        return None
+    parameters["chars"] = chars
+    return ToolCall(
+        tool_call_id=call.tool_call_id,
+        tool_id=call.tool_id,
+        parameters=parameters,
+        intent=call.intent,
     )
 
 
@@ -298,6 +334,22 @@ def build_run_one_call_callback(
                 ),
             )
 
+        dispatch_call = _materialize_process_local_shell_input(
+            call,
+            metadata=call_metadata,
+        )
+        if dispatch_call is None:
+            return ToolCallResult(
+                tool_call_id=tool_call_id,
+                tool_id=tool_name,
+                status=ToolCallStatus.FAILED,
+                failure_category="shell_input_unavailable",
+                error_message=(
+                    "Shell input is unavailable because its process-local state "
+                    "was lost before dispatch."
+                ),
+            )
+
         if has_writer and emitter is not None:
             emitter.emit_tool_start(
                 tool_name,
@@ -328,7 +380,13 @@ def build_run_one_call_callback(
                 step_sub_turn_index,
             )
 
-        call_request = _clone_request_for_call(request, call_metadata)
+        dispatch_metadata = dict(call_metadata)
+        dispatch_metadata["planner_plan"] = _single_call_planner_plan(
+            original_plan,
+            dispatch_call,
+            effective_strategy=effective_strategy,
+        )
+        call_request = _clone_request_for_call(request, dispatch_metadata)
         persistence_decision = resolve_output_persistence(tool_name)
         execution_id = deps["record_provenance_execution_start_service"](
             get_provenance_service_fn=deps["_get_provenance_service"],

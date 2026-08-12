@@ -51,9 +51,10 @@ The format is based on
 - Unsupported managed-runner cancellation requests now remain visibly pending
   until the runtime reports a terminal outcome instead of claiming the process
   was terminated, and shell output retains line separators across yield windows.
-- Durable shell history and graph checkpoints now mask stdin values, recursive
-  environment destruction remains blocked through transparent wrappers, and
-  mixed utility/assessment batches retain only eligible durable evidence.
+- Durable shell history and graph checkpoints, including planner plans, now mask
+  stdin values; recursive environment destruction remains blocked through
+  transparent wrappers, and mixed utility/assessment batches retain only
+  eligible durable evidence.
 - Agent and UI terminals now start in the task runtime's `/workspace` directory,
   and fallback planning retains the complete visible mission-tool catalog.
 - Sequential subagent handoffs now retain parent goal, todo, and reasoning state
