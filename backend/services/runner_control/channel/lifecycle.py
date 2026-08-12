@@ -199,7 +199,7 @@ class RunnerChannelLifecycle:
         self._db.flush()
 
     async def reset_terminal_state(self, session: RunnerChannelSession) -> None:
-        """Invalidate PTYs from the prior channel before this one is accepted."""
+        """Invalidate PTYs from the prior channel before this one becomes usable."""
         await _reset_runner_terminal_state(
             db=self._db,
             tenant_id=session.tenant_id,

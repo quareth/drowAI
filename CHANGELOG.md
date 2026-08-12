@@ -59,8 +59,11 @@ The format is based on
   agent run: invalid actions receive bounded recovery, infrastructure loss is
   reported as interrupted, and parallel progress remains visible while parent
   reasoning waits for every sibling to finish.
-- Local development runners now follow verified launcher ownership and shutdown
-  recovery without terminating unrelated or standalone processes.
+- Local development runners now follow verified launcher ownership, preserve
+  shutdown recovery across legacy PID files, and avoid terminating unrelated or
+  standalone processes.
+- Managed-runner reconnect handshakes now complete before stale terminal cleanup,
+  preventing multi-session cleanup from exhausting the runner's open timeout.
 - ANSI-formatted ffuf results no longer create invalid Knowledge identities or
   block task deletion after evidence is safely archived.
 

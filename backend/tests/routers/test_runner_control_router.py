@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 import json
@@ -1174,6 +1175,79 @@ def test_runner_channel_auth_failure_logs_are_redacted_and_rate_limited(
     message = warning_records[0].getMessage()
     assert raw_secret not in message
     assert "fields={'install_token': '<NO_INSTALL_TOKEN>', 'runner_secret': 'rsec...7890'}" in message
+
+
+@pytest.mark.asyncio
+async def test_runner_channel_accepts_before_waiting_for_terminal_reset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Slow reconnect cleanup cannot consume the runner's WebSocket open timeout."""
+    runner_id = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
+    reset_started = asyncio.Event()
+    release_reset = asyncio.Event()
+
+    class _FakeWebSocket:
+        client = None
+
+        def __init__(self) -> None:
+            self.accepted = False
+
+        async def accept(self) -> None:
+            self.accepted = True
+
+    websocket = _FakeWebSocket()
+    session = SimpleNamespace(
+        tenant_id=7,
+        runner_id=runner_id,
+        connection_id="replacement-connection",
+    )
+
+    class _FakeManager:
+        def __init__(self, _db) -> None:
+            pass
+
+        def open_session(self, _identity, *, remote_ip_address=None):
+            return session
+
+        async def reset_terminal_state(self, _session) -> None:
+            reset_started.set()
+            await release_reset.wait()
+            raise WebSocketDisconnect(code=status.WS_1001_GOING_AWAY)
+
+        def close_session(self, _session) -> None:
+            pass
+
+    class _FakeDb:
+        def commit(self) -> None:
+            pass
+
+        def rollback(self) -> None:
+            pass
+
+    class _FakeStreamRegistry:
+        def unregister_channel(self, **_kwargs) -> None:
+            pass
+
+    monkeypatch.setattr(runner_routes, "RunnerChannelManager", _FakeManager)
+    monkeypatch.setattr(
+        runner_routes,
+        "get_runner_terminal_stream_registry",
+        lambda: _FakeStreamRegistry(),
+    )
+
+    channel_task = asyncio.create_task(
+        runner_routes.runner_channel(
+            websocket,
+            identity=SimpleNamespace(tenant_id=7, runner_id=runner_id),
+            db=_FakeDb(),
+        )
+    )
+    await asyncio.wait_for(reset_started.wait(), timeout=1)
+    accepted_during_reset = websocket.accepted
+    release_reset.set()
+    await asyncio.wait_for(channel_task, timeout=1)
+
+    assert accepted_during_reset is True
 
 
 def test_runner_channel_requires_hello_first_and_logs_policy_close_event(

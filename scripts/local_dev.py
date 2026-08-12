@@ -611,9 +611,14 @@ def _terminate_process_group(*, pid: int, signal_number: int) -> None:
 
 def _stop_recorded_processes(env: dict[str, str]) -> None:
     records = _read_recorded_pids(env)
-    owned_records = [record for record in records if _is_expected_local_process(record)]
+    owned_records: list[_ProcessRecord] = []
     for record in records:
-        if record not in owned_records and _pid_exists(record.pid):
+        verified_record = _verified_local_process_record(record)
+        if verified_record is not None:
+            owned_records.append(verified_record)
+    owned_record_keys = {(record.name, record.pid) for record in owned_records}
+    for record in records:
+        if (record.name, record.pid) not in owned_record_keys and _pid_exists(record.pid):
             print(
                 f"[local-cloud] refusing to stop unverified recorded "
                 f"{record.name} pid={record.pid}"
@@ -629,18 +634,24 @@ def _stop_recorded_processes(env: dict[str, str]) -> None:
 
 
 def _is_expected_local_process(record: _ProcessRecord) -> bool:
-    if record.create_time is None or not process_identity_matches(
-        record.pid, record.create_time
-    ):
-        return False
+    return _verified_local_process_record(record) is not None
+
+
+def _verified_local_process_record(record: _ProcessRecord) -> _ProcessRecord | None:
+    """Return a start-time-bound record after launcher command and cwd verification."""
+    create_time = record.create_time
+    if create_time is None:
+        create_time = process_create_time(record.pid)
+    if create_time is None or not process_identity_matches(record.pid, create_time):
+        return None
     try:
         process = psutil.Process(record.pid)
         command = process.cmdline()
         working_directory = Path(process.cwd()).resolve()
     except (psutil.Error, OSError):
-        return False
+        return None
     if working_directory != REPO_ROOT.resolve():
-        return False
+        return None
 
     command_text = " ".join(command)
     expected_fragments = {
@@ -648,8 +659,16 @@ def _is_expected_local_process(record: _ProcessRecord) -> bool:
         "runner": ("drowai_runner", "run"),
         "frontend": ("vite",),
     }.get(record.name)
-    return expected_fragments is not None and all(
+    if expected_fragments is None or not all(
         fragment in command_text for fragment in expected_fragments
+    ):
+        return None
+    if not process_identity_matches(record.pid, create_time):
+        return None
+    return _ProcessRecord(
+        name=record.name,
+        pid=record.pid,
+        create_time=create_time,
     )
 
 

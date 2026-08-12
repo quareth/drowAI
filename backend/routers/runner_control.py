@@ -1219,8 +1219,10 @@ async def runner_channel(
             remote_ip_address=websocket.client.host if websocket.client else None,
         )
         db.commit()
-        await manager.reset_terminal_state(session)
+        # Finish the upgrade before bounded multi-session cleanup can consume the
+        # runner client's WebSocket open timeout. Registration remains cleanup-gated.
         await websocket.accept()
+        await manager.reset_terminal_state(session)
         stream_registry.register_channel(
             tenant_id=identity.tenant_id,
             runner_id=identity.runner_id,

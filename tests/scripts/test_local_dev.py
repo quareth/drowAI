@@ -2,6 +2,7 @@
 
 Responsibilities:
 - Lock local single-host managed-runtime bootstrap behavior.
+- Preserve safe shutdown compatibility across PID metadata schemas.
 - Prevent stored runner credentials from skipping required tenant identity setup.
 """
 
@@ -644,6 +645,86 @@ def test_recorded_pid_reuse_does_not_stop_unrelated_process(
     stopped: list[int] = []
 
     monkeypatch.setattr(local_dev, "process_identity_matches", lambda _pid, _started: False)
+    monkeypatch.setattr(local_dev, "_pid_exists", lambda _pid: True)
+    monkeypatch.setattr(local_dev.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(
+        local_dev,
+        "_terminate_process_group",
+        lambda *, pid, signal_number: stopped.append(pid),
+    )
+
+    local_dev._stop_recorded_processes(env)
+
+    assert stopped == []
+
+
+def test_legacy_recorded_runner_is_stopped_after_command_and_cwd_verification(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """The pre-create-time PID format remains safe and usable during upgrades."""
+    env = {"DROWAI_RUNNER_ROOT": str(tmp_path / "runner-root")}
+    pid_file = tmp_path / "runner-root" / "local-cloud-pids.json"
+    pid_file.parent.mkdir(parents=True)
+    pid_file.write_text(
+        '{"processes":[{"name":"runner","pid":123}]}',
+        encoding="utf-8",
+    )
+    process_alive = True
+    stopped: list[tuple[int, int]] = []
+
+    class _LegacyRunnerProcess:
+        def cmdline(self) -> list[str]:
+            return ["/venv/bin/python", "-m", "drowai_runner", "run"]
+
+        def cwd(self) -> str:
+            return str(local_dev.REPO_ROOT)
+
+    monkeypatch.setattr(local_dev, "process_create_time", lambda _pid: 456.0)
+    monkeypatch.setattr(
+        local_dev,
+        "process_identity_matches",
+        lambda _pid, _started: process_alive,
+    )
+    monkeypatch.setattr(local_dev.psutil, "Process", lambda _pid: _LegacyRunnerProcess())
+    monkeypatch.setattr(local_dev.time, "sleep", lambda _seconds: None)
+
+    def _stop(*, pid: int, signal_number: int) -> None:
+        nonlocal process_alive
+        stopped.append((pid, signal_number))
+        process_alive = False
+
+    monkeypatch.setattr(local_dev, "_terminate_process_group", _stop)
+
+    local_dev._stop_recorded_processes(env)
+
+    assert stopped == [(123, signal.SIGTERM)]
+
+
+def test_legacy_recorded_pid_does_not_stop_unrelated_process(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    """Legacy compatibility still requires the recorded launcher command."""
+    env = {"DROWAI_RUNNER_ROOT": str(tmp_path / "runner-root")}
+    pid_file = tmp_path / "runner-root" / "local-cloud-pids.json"
+    pid_file.parent.mkdir(parents=True)
+    pid_file.write_text(
+        '{"processes":[{"name":"runner","pid":123}]}',
+        encoding="utf-8",
+    )
+    stopped: list[int] = []
+
+    class _UnrelatedProcess:
+        def cmdline(self) -> list[str]:
+            return ["python", "unrelated_service.py"]
+
+        def cwd(self) -> str:
+            return str(local_dev.REPO_ROOT)
+
+    monkeypatch.setattr(local_dev, "process_create_time", lambda _pid: 456.0)
+    monkeypatch.setattr(local_dev, "process_identity_matches", lambda _pid, _started: True)
+    monkeypatch.setattr(local_dev.psutil, "Process", lambda _pid: _UnrelatedProcess())
     monkeypatch.setattr(local_dev, "_pid_exists", lambda _pid: True)
     monkeypatch.setattr(local_dev.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(
