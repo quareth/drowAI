@@ -821,6 +821,7 @@ def _compact_from_shell_update(
         "interaction_boundary": boundary,
         "session_id": update.session_id,
         "stdout": update.stdout,
+        "stdout_ends_with_newline": update.stdout_ends_with_newline,
         "stderr": update.stderr,
         "exit_code": update.exit_code,
         "stdin_available": update.stdin_available,

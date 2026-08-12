@@ -44,6 +44,7 @@ SHELL_SESSION_COMPACT_RESULT_KEYS = (
     "exit_code",
     "stdin_available",
     "stdout",
+    "stdout_ends_with_newline",
     "stderr",
     "truncated",
     "summary",

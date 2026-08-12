@@ -6,6 +6,7 @@ and still recognize a completion marker after very large output.
 
 from runtime_shared.shell_session_framing import (
     PTY_EXIT_CODE_MARKER,
+    StreamingPtyFramingParser,
     create_pty_command_frame,
 )
 
@@ -27,6 +28,30 @@ def test_accumulator_preserves_untruncated_spacing_and_blank_lines() -> None:
     assert completion is not None
     assert completion.exit_code == 0
     assert accumulator.stdout() == ("  first  \n\n second ", False)
+
+
+def test_accumulator_preserves_line_separator_across_output_windows() -> None:
+    frame = create_pty_command_frame("printf output")
+    parser = StreamingPtyFramingParser(frame)
+
+    first_window = ShellSessionOutputAccumulator(
+        parser=parser,
+        max_output_chars=200,
+    )
+    first_window.ingest(f"{frame.start_marker}\none\n")
+
+    second_window = ShellSessionOutputAccumulator(
+        parser=parser,
+        max_output_chars=200,
+    )
+    second_window.ingest("two\n")
+
+    first_stdout, _ = first_window.stdout()
+    second_stdout, _ = second_window.stdout()
+    assert first_stdout == "one"
+    assert first_window.stdout_ends_with_newline is True
+    assert second_stdout == "two"
+    assert second_window.stdout_ends_with_newline is True
 
 
 def test_accumulator_bounds_large_output_and_finds_trailing_completion() -> None:

@@ -76,6 +76,7 @@ class PtyFramingIngestResult:
 
     stdout: str
     completion: PtyFramingCompletion | None = None
+    stdout_ends_with_newline: bool = False
 
 
 class StreamingPtyFramingParser:
@@ -159,10 +160,16 @@ class StreamingPtyFramingParser:
                 return PtyFramingIngestResult(
                     stdout="".join(produced),
                     completion=completion,
+                    stdout_ends_with_newline=bool(produced),
                 )
 
         self._flush_pending_output(produced)
-        return PtyFramingIngestResult(stdout="".join(produced))
+        return PtyFramingIngestResult(
+            stdout="".join(produced),
+            stdout_ends_with_newline=(
+                bool(produced) and self._pending_visible_newline
+            ),
+        )
 
     def _consume_complete_line(
         self,

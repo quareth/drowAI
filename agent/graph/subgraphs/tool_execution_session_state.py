@@ -130,6 +130,9 @@ def append_shell_interaction_transcript(
                 "tool_call_id": call_id,
                 "input": chars or None,
                 "stdout": str(compact_map.get("stdout") or ""),
+                "stdout_ends_with_newline": bool(
+                    compact_map.get("stdout_ends_with_newline")
+                ),
                 "stderr": str(compact_map.get("stderr") or ""),
                 "boundary": infer_shell_interaction_boundary(compact_map),
                 "process_status": compact_map.get("process_status"),
@@ -188,7 +191,7 @@ def materialize_terminal_session_output(
     terminal_row = dict(rows[-1])
     terminal_compact = terminal_row.get("compact_tool_result")
     compact = dict(terminal_compact) if isinstance(terminal_compact, Mapping) else {}
-    compact["stdout"] = "".join(str(entry.get("stdout") or "") for entry in entries)
+    compact["stdout"] = _materialize_stdout(entries)
     compact["stderr"] = "".join(str(entry.get("stderr") or "") for entry in entries)
     compact["truncated"] = bool(
         transcript.get("compacted")
@@ -200,6 +203,29 @@ def materialize_terminal_session_output(
     materialized = dict(aggregate)
     materialized["results"] = rows
     return materialized
+
+
+def _materialize_stdout(entries: Sequence[Mapping[str, Any]]) -> str:
+    """Join stdout deltas while restoring deferred inter-window separators."""
+    stdout_parts: list[str] = []
+    for index, entry in enumerate(entries):
+        stdout = str(entry.get("stdout") or "")
+        if not stdout:
+            continue
+        stdout_parts.append(stdout)
+        if not bool(entry.get("stdout_ends_with_newline")):
+            continue
+        later_stdout = next(
+            (
+                str(later.get("stdout") or "")
+                for later in entries[index + 1 :]
+                if str(later.get("stdout") or "")
+            ),
+            "",
+        )
+        if later_stdout and not stdout.endswith("\n") and not later_stdout.startswith("\n"):
+            stdout_parts.append("\n")
+    return "".join(stdout_parts)
 
 
 def infer_shell_interaction_boundary(compact: Mapping[str, Any]) -> str:

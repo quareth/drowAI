@@ -686,12 +686,15 @@ def test_cancelled_transcript_projects_cancelled_tool_execution_rows() -> None:
 
     assert [item.kind for item in page.items] == ["assistant", "tool"]
     tool_item = page.items[1]
-    assert tool_item.content == "Tool stopped"
+    assert tool_item.content == "Tool cancellation requested"
     assert tool_item.metadata["tool_call_id"] == "tool-call-stop-1"
     assert tool_item.metadata["tool_name"] == "shell.exec"
-    assert tool_item.metadata["status"] == "cancelled"
+    assert tool_item.metadata["status"] == "cancel_requested"
     assert tool_item.metadata["cancellation_source"] == "chat_stop"
     assert tool_item.metadata["process_state"] == "orphaned_until_terminal"
+    assert "process_status" not in tool_item.metadata
+    assert "session_status" not in tool_item.metadata
+    assert "interaction_boundary" not in tool_item.metadata
 
 
 def test_cancelled_transcript_rehydrates_canonical_terminal_tool_event() -> None:

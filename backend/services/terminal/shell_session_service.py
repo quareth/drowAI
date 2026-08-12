@@ -531,6 +531,7 @@ class ShellSessionService:
                 stdout, truncated = output.stdout()
                 return self._timeout_update(
                     stdout=stdout,
+                    stdout_ends_with_newline=output.stdout_ends_with_newline,
                     truncated=truncated,
                     duration_ms=self._duration_ms(started_at),
                 )
@@ -639,6 +640,7 @@ class ShellSessionService:
                     interaction_boundary=ShellInteractionBoundary.TERMINAL,
                     session_id=None,
                     stdout=stdout,
+                    stdout_ends_with_newline=output.stdout_ends_with_newline,
                     stderr=(
                         ""
                         if exit_code == 0
@@ -678,6 +680,7 @@ class ShellSessionService:
                 interaction_boundary=ShellInteractionBoundary.TERMINAL,
                 session_id=None,
                 stdout=stdout,
+                stdout_ends_with_newline=output.stdout_ends_with_newline,
                 stderr="",
                 exit_code=None,
                 stdin_available=False,
@@ -695,6 +698,7 @@ class ShellSessionService:
                 interaction_boundary=ShellInteractionBoundary.OUTPUT_AVAILABLE,
                 session_id=record.public_session_id,
                 stdout=stdout,
+                stdout_ends_with_newline=output.stdout_ends_with_newline,
                 stderr="",
                 exit_code=None,
                 stdin_available=True,
@@ -734,6 +738,7 @@ class ShellSessionService:
             interaction_boundary=None,
             session_id=record.public_session_id,
             stdout=stdout,
+            stdout_ends_with_newline=output.stdout_ends_with_newline,
             stderr="",
             exit_code=None,
             stdin_available=True,
@@ -1027,6 +1032,7 @@ class ShellSessionService:
     def _timeout_update(
         *,
         stdout: str,
+        stdout_ends_with_newline: bool = False,
         truncated: bool,
         duration_ms: int,
     ) -> ShellSessionUpdate:
@@ -1041,6 +1047,7 @@ class ShellSessionService:
             interaction_boundary=ShellInteractionBoundary.TERMINAL,
             session_id=None,
             stdout=stdout,
+            stdout_ends_with_newline=stdout_ends_with_newline,
             stderr=message,
             exit_code=None,
             stdin_available=False,

@@ -97,6 +97,7 @@ class ShellSessionOutputAccumulator:
         self._max_output_chars = max_output_chars
         self._bounded = _BoundedText(max_output_chars)
         self._provider_output_truncated = False
+        self._stdout_ends_with_newline = False
 
     @property
     def truncated(self) -> bool:
@@ -111,6 +112,11 @@ class ShellSessionOutputAccumulator:
     def retained_state_limit_chars(self) -> int:
         """Return the configured upper bound for helper-owned retained text."""
         return self._max_output_chars + self._parser.retained_state_limit_chars
+
+    @property
+    def stdout_ends_with_newline(self) -> bool:
+        """Return whether this window's visible stdout ended at a line break."""
+        return self._stdout_ends_with_newline
 
     def ingest(
         self,
@@ -130,6 +136,7 @@ class ShellSessionOutputAccumulator:
             raise ValueError(str(exc)) from exc
         if result.stdout:
             self._bounded.append(result.stdout)
+            self._stdout_ends_with_newline = result.stdout_ends_with_newline
         if result.completion is None:
             return None
         return result.completion

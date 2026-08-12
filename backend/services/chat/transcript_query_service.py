@@ -35,6 +35,9 @@ from sqlalchemy.orm import Session
 from backend.models.chat import ChatMessage, ChatTurnEvent
 from backend.models.hitl import TurnWorkflow
 from backend.models.provenance import ToolExecution
+from backend.services.chat.cancellation_projection import (
+    supports_terminal_cancellation_projection,
+)
 from backend.services.langgraph_chat.checkpoint.turn_workflow_service import (
     DEFAULT_CHECKPOINT_RETRY_MAX_ATTEMPTS,
     TurnWorkflowState,
@@ -827,6 +830,9 @@ class ChatTranscriptQueryService:
             )
             cancellation = metadata_source.get("cancellation")
             cancellation = cancellation if isinstance(cancellation, dict) else {}
+            terminal_projection = supports_terminal_cancellation_projection(
+                cancellation
+            )
             tool_name = str(getattr(execution, "tool_name", "") or "").strip() or "unknown"
             phase_sequence = sequence_seed + index
             metadata: Dict[str, Any] = {
@@ -840,16 +846,21 @@ class ChatTranscriptQueryService:
                 "phase_sequence": phase_sequence,
                 "tool_call_id": tool_call_id,
                 "tool_name": tool_name,
-                "status": "cancelled",
-                "process_status": "terminated",
-                "session_status": "closed",
-                "interaction_boundary": "terminal",
+                "status": "cancelled" if terminal_projection else "cancel_requested",
                 "failure_category": "user_cancelled",
                 "cancellation_source": "chat_stop",
                 "process_state": cancellation.get("process_state") or "cancel_requested",
                 "runtime_kill_attempted": bool(cancellation.get("runtime_kill_attempted")),
                 "runtime_kill_supported": bool(cancellation.get("runtime_kill_supported")),
             }
+            if terminal_projection:
+                metadata.update(
+                    {
+                        "process_status": "terminated",
+                        "session_status": "closed",
+                        "interaction_boundary": "terminal",
+                    }
+                )
             tool_batch_id = metadata_source.get("tool_batch_id")
             if isinstance(tool_batch_id, str) and tool_batch_id.strip():
                 metadata["tool_batch_id"] = tool_batch_id.strip()
@@ -860,7 +871,11 @@ class ChatTranscriptQueryService:
                     id=f"tool-execution-{getattr(execution, 'id', tool_call_id)}",
                     kind="tool",
                     turn_number=turn_number,
-                    content="Tool stopped",
+                    content=(
+                        "Tool stopped"
+                        if terminal_projection
+                        else "Tool cancellation requested"
+                    ),
                     metadata={key: value for key, value in metadata.items() if value is not None},
                 )
             )

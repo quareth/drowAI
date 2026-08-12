@@ -16,6 +16,9 @@ from sqlalchemy.orm import Session
 from backend.core.time_utils import utc_now
 from backend.models.provenance import ToolExecution
 from backend.repositories.tool_execution_repository import ToolExecutionRepository
+from backend.services.chat.cancellation_projection import (
+    supports_terminal_cancellation_projection,
+)
 from backend.services.chat.turn_event_service import ChatTurnEventService
 from backend.services.runtime_provider.contracts import RuntimeActorType
 from backend.services.runtime_provider.operations import RuntimeOperationService
@@ -268,6 +271,8 @@ class ChatToolCancelProjectionService:
                 and isinstance(row.execution_metadata.get("cancellation"), dict)
                 else {}
             )
+            if not supports_terminal_cancellation_projection(cancellation):
+                continue
             process_state = str(
                 cancellation.get("process_state")
                 or runtime_metadata.get("process_state")

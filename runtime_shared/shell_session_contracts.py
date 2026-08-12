@@ -281,6 +281,7 @@ class ShellSessionUpdate(BaseModel):
         max_length=SHELL_SESSION_MAX_PUBLIC_ID_CHARS,
     )
     stdout: str = Field(default="", max_length=SHELL_SESSION_MAX_OUTPUT_CHARS)
+    stdout_ends_with_newline: bool = False
     stderr: str = Field(default="", max_length=SHELL_SESSION_MAX_OUTPUT_CHARS)
     exit_code: int | None = None
     stdin_available: bool = False

@@ -39,6 +39,9 @@ The format is based on
 - Local and managed terminal handling now preserves valid output across buffering,
   framing loss, invalid UTF-8, zero-yield reads, early runner results, and
   unexpected PTY closure without duplicating delivery or leaving phantom runs.
+- Unsupported managed-runner cancellation requests now remain visibly pending
+  until the runtime reports a terminal outcome instead of claiming the process
+  was terminated, and shell output retains line separators across yield windows.
 - Durable shell history and graph checkpoints now mask stdin values, recursive
   environment destruction remains blocked through transparent wrappers, and
   mixed utility/assessment batches retain only eligible durable evidence.

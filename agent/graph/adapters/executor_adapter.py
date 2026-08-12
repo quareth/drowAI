@@ -592,6 +592,7 @@ class GraphToolExecutor:
                 "session_id": update.session_id,
                 "stdin_available": update.stdin_available,
                 "truncated": update.truncated,
+                "stdout_ends_with_newline": update.stdout_ends_with_newline,
                 "error_code": error_code,
             },
         }
@@ -612,6 +613,7 @@ class GraphToolExecutor:
             "tool": tool_id,
             "success": bool(update.success),
             "stdout": stdout,
+            "stdout_ends_with_newline": update.stdout_ends_with_newline,
             "stderr": stderr,
             "stdout_excerpt": stdout_excerpt,
             "stderr_excerpt": stderr_excerpt,
