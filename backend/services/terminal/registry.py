@@ -295,6 +295,8 @@ class ShellSessionStateRegistry:
                     ShellSessionErrorCode.COMMAND_TIMED_OUT,
                     "deadline_expired",
                 )
+            if record.operation_in_progress:
+                return None, None, ShellSessionErrorCode.SESSION_BUSY, None
             if self._is_idle_expired(record, now):
                 self._records.pop(normalized_id, None)
                 self._observer.active_session_gauges(
@@ -307,8 +309,6 @@ class ShellSessionStateRegistry:
                     ShellSessionErrorCode.SESSION_UNAVAILABLE,
                     "idle_expired",
                 )
-            if record.operation_in_progress:
-                return None, None, ShellSessionErrorCode.SESSION_BUSY, None
 
             record.last_activity_at = now
             record.operation_in_progress = True
@@ -387,7 +387,10 @@ class ShellSessionStateRegistry:
             for record in self._records.values():
                 if self.is_deadline_expired(record, now):
                     records.append((record, "deadline_expired"))
-                elif self._is_idle_expired(record, now):
+                elif (
+                    not record.operation_in_progress
+                    and self._is_idle_expired(record, now)
+                ):
                     records.append((record, "idle_expired"))
             for record, _close_reason in records:
                 self._records.pop(record.public_session_id, None)

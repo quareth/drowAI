@@ -188,6 +188,67 @@ async def test_deadline_precedes_idle_expiry_and_expected_record_guards_removal(
 
 
 @pytest.mark.asyncio
+async def test_claimed_record_ignores_idle_expiry_until_operation_releases() -> None:
+    """Active coordination prevents idle retirement without extending the deadline."""
+    registry = _registry(idle_timeout=1.0)
+    identity = _identity()
+    reservation = await registry.reserve_start(identity)
+    assert reservation is not None
+    record = _record(
+        "shs_claimed_idle",
+        identity=identity,
+        last_activity_at=0.0,
+        deadline_at=10.0,
+    )
+    await registry.register(record, reservation=reservation)
+
+    claimed, _, _, _ = await registry.claim(
+        identity=identity,
+        public_session_id=record.public_session_id,
+        now=0.5,
+    )
+    assert claimed is record
+
+    assert await registry.pop_stale(2.0) == []
+    busy, retired, error, close_reason = await registry.claim(
+        identity=identity,
+        public_session_id=record.public_session_id,
+        now=2.0,
+    )
+    assert busy is None
+    assert retired is None
+    assert error is ShellSessionErrorCode.SESSION_BUSY
+    assert close_reason is None
+
+    await registry.release(record)
+    assert await registry.pop_stale(2.0) == [(record, "idle_expired")]
+
+
+@pytest.mark.asyncio
+async def test_claimed_record_remains_subject_to_hard_deadline_cleanup() -> None:
+    """A live claim cannot extend the command's authorized maximum runtime."""
+    registry = _registry(idle_timeout=1.0)
+    identity = _identity()
+    reservation = await registry.reserve_start(identity)
+    assert reservation is not None
+    record = _record(
+        "shs_claimed_deadline",
+        identity=identity,
+        last_activity_at=0.0,
+        deadline_at=2.0,
+    )
+    await registry.register(record, reservation=reservation)
+    claimed, _, _, _ = await registry.claim(
+        identity=identity,
+        public_session_id=record.public_session_id,
+        now=0.5,
+    )
+    assert claimed is record
+
+    assert await registry.pop_stale(2.0) == [(record, "deadline_expired")]
+
+
+@pytest.mark.asyncio
 async def test_owner_task_and_stale_selection_remain_tenant_isolated() -> None:
     registry = _registry(owner_limit=5, task_limit=5, idle_timeout=2.0)
     identities = [

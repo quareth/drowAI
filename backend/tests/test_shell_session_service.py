@@ -2055,6 +2055,81 @@ async def test_initial_quiet_boundary_keeps_session_active_before_idle_expiry() 
 
 
 @pytest.mark.asyncio
+async def test_stale_cleanup_does_not_interrupt_claimed_silent_wait() -> None:
+    """Idle cleanup skips a session while a coordinator actively waits on it."""
+
+    class _GatedReadTerminalManager(FakeTerminalManager):
+        def __init__(self) -> None:
+            super().__init__()
+            self.gate_reads = False
+            self.read_started = asyncio.Event()
+            self.allow_read = asyncio.Event()
+
+        async def read_output_result(
+            self,
+            session_id: str,
+            size: int = 4096,
+            *,
+            timeout: float | None = None,
+        ) -> TerminalReadResult:
+            if not self.gate_reads:
+                return await super().read_output_result(
+                    session_id,
+                    size,
+                    timeout=timeout,
+                )
+            self.read_started.set()
+            await self.allow_read.wait()
+            start, end = self.session_markers[session_id]
+            return TerminalReadResult(
+                ok=True,
+                data=f"{start}\ndone\n{end}={PTY_EXIT_CODE_MARKER}0\n".encode(),
+            )
+
+    manager = _GatedReadTerminalManager()
+    clock = MutableClock()
+    service = ShellSessionService(
+        terminal_manager=manager,
+        lifecycle_projector=_noop_lifecycle_projector(),
+        config=_config(idle_timeout_sec=1),
+        runtime_context_resolver=lambda _identity: _context(),
+        clock=clock,
+    )
+    first = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(
+            command="no-output",
+            yield_time_ms=0,
+            max_runtime_sec=10,
+        ),
+    )
+    assert first.session_id is not None
+
+    manager.gate_reads = True
+    wait_task = asyncio.create_task(
+        service.wait_for_output(
+            identity=_identity(),
+            request=ShellWaitRequest(session_id=first.session_id),
+        )
+    )
+    await asyncio.wait_for(manager.read_started.wait(), timeout=1)
+    clock.advance(2)
+
+    await service.cleanup_stale_sessions()
+
+    assert manager.closed_sessions == []
+    assert await service.get_session_capability(
+        identity=_identity(),
+        public_session_id=first.session_id,
+    ) is ShellCapability.ASSESSMENT
+
+    manager.allow_read.set()
+    completed = await asyncio.wait_for(wait_task, timeout=1)
+    assert completed.process_status is ShellProcessStatus.COMPLETED
+    assert manager.closed_sessions == ["terminal-1"]
+
+
+@pytest.mark.asyncio
 async def test_quiet_boundary_does_not_extend_hard_runtime_deadline() -> None:
     manager = FakeTerminalManager()
     clock = MutableClock()

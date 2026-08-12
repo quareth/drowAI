@@ -38,6 +38,8 @@ The format is based on
 - Shell continuation now rejects stale runtime bindings, serializes operations on
   the same session, preserves concurrency across independent sessions, and keeps
   quiet polls within the original runtime deadline.
+- Active shell operations now remain exempt from idle-session cleanup while hard
+  runtime deadlines and explicit task cleanup continue to take precedence.
 - Mixed tool batches now attribute yielded shell continuation to the actual
   running call, and batches with multiple shell-session starts are rejected
   before dispatch so no live session is silently displaced.
