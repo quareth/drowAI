@@ -555,6 +555,37 @@ class MutableClock:
         self.value += seconds
 
 
+@pytest.mark.asyncio
+async def test_service_clamps_process_lifetime_to_configured_tool_maximum() -> None:
+    manager = FakeTerminalManager()
+    clock = MutableClock()
+    service = ShellSessionService(
+        terminal_manager=manager,
+        lifecycle_projector=_noop_lifecycle_projector(),
+        config=_config(tool_timeout_max_sec=60),
+        runtime_context_resolver=lambda _identity: _context(),
+        clock=clock,
+    )
+
+    started = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(
+            command="no-output",
+            yield_time_ms=0,
+            max_runtime_sec=900,
+        ),
+    )
+
+    assert started.session_id is not None
+    record, _, _, _ = await service._registry.claim(
+        identity=_identity(),
+        public_session_id=started.session_id,
+        now=clock(),
+    )
+    assert record is not None
+    assert record.deadline_at - clock() == 52
+
+
 class RecordingStreamHub:
     """Test stream hub that records lifecycle packets without subscribers."""
 
@@ -2692,6 +2723,9 @@ def test_backend_config_defaults_feed_service_config() -> None:
     )
     assert service_config.terminal_io_grace_sec == (
         backend_config.SHELL_SESSION_TERMINAL_IO_GRACE_SEC
+    )
+    assert service_config.tool_timeout_max_sec == (
+        backend_config.TOOL_TIMEOUT_MAX_SECONDS
     )
 
 

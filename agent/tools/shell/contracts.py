@@ -13,15 +13,17 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from agent.tools.schemas import CONTAINER_TRANSPORT_DESCRIPTION, ContainerTransport
 from runtime_shared.shell_session_contracts import (
     SHELL_SESSION_DEFAULT_MAX_OUTPUT_CHARS,
-    SHELL_SESSION_DEFAULT_MAX_RUNTIME_SEC,
-    SHELL_SESSION_DEFAULT_YIELD_TIME_MS,
     SHELL_SESSION_MAX_INPUT_CHARS,
     SHELL_SESSION_MAX_OUTPUT_CHARS,
     SHELL_SESSION_MAX_PUBLIC_ID_CHARS,
-    SHELL_SESSION_MAX_RUNTIME_SEC,
-    SHELL_SESSION_MAX_YIELD_TIME_MS,
     SHELL_SESSION_MIN_OUTPUT_CHARS,
     ShellExecRequest,
+)
+from runtime_shared.shell_timeouts import (
+    SHELL_SESSION_DEFAULT_MAX_RUNTIME_SEC,
+    SHELL_SESSION_DEFAULT_YIELD_TIME_MS,
+    SHELL_SESSION_MAX_RUNTIME_SEC,
+    SHELL_SESSION_MAX_YIELD_TIME_MS,
 )
 
 ShellTransport = Literal["direct", "file-comm", "pty"]

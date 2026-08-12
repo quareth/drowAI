@@ -27,6 +27,8 @@ The format is based on
 
 ### Fixed
 
+- Shell process and interaction deadlines now share one timeout authority and
+  honor the operator-configured global tool maximum.
 - Interactive shell commands now remain attached until completion by default,
   while yielded sessions continue on the same PTY with bounded input, waits,
   output, timeout evidence, and lifecycle cleanup.

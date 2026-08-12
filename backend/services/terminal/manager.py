@@ -26,7 +26,7 @@ from ..runtime_provider import (
     RuntimeProviderContextResolver,
 )
 from ..runtime_provider.terminal_stream_contract import is_push_terminal_stream
-from runtime_shared.shell_session_contracts import SHELL_SESSION_CLEANUP_TIMEOUT_SEC
+from runtime_shared.shell_timeouts import SHELL_SESSION_CLEANUP_TIMEOUT_SEC
 from runtime_shared.terminal_contracts import TerminalReadResult
 from .contracts import (
     AGENT_PROMPT_ENV,

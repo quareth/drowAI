@@ -24,10 +24,6 @@ from backend import config as backend_config
 from backend.core.logging import safe_identifier_fingerprint
 from runtime_shared.docker_contracts import CONTAINER_WORKSPACE_PATH
 from runtime_shared.shell_session_contracts import (
-    SHELL_SESSION_CLEANUP_TIMEOUT_SEC,
-    SHELL_SESSION_CONTROL_TIMEOUT_SEC,
-    SHELL_SESSION_DEFAULT_YIELD_TIME_MS,
-    SHELL_SESSION_PREPARATION_TIMEOUT_SEC,
     ShellInteractionBoundary,
     ShellExecRequest,
     ShellProcessStatus,
@@ -40,6 +36,18 @@ from runtime_shared.shell_session_contracts import (
     ShellWriteRequest,
 )
 from runtime_shared.shell_capabilities import ShellCapability
+from runtime_shared.shell_timeouts import (
+    DEFAULT_TOOL_TIMEOUT_SECONDS,
+    SHELL_SESSION_CLEANUP_TIMEOUT_SEC,
+    SHELL_SESSION_CONTROL_TIMEOUT_SEC,
+    SHELL_SESSION_DEFAULT_INITIAL_QUIET_WINDOW_SEC,
+    SHELL_SESSION_DEFAULT_OUTPUT_QUIESCENCE_SEC,
+    SHELL_SESSION_DEFAULT_YIELD_TIME_MS,
+    SHELL_SESSION_PREPARATION_TIMEOUT_SEC,
+    clamp_shell_runtime_sec,
+    clamp_shell_yield_time_ms,
+    shell_preparation_timeout_sec,
+)
 from runtime_shared.shell_session_framing import (
     PtyCommandFrame,
     StreamingPtyFramingParser,
@@ -98,8 +106,9 @@ class ShellSessionServiceConfig:
     cleanup_interval_sec: float
     termination_grace_sec: float
     terminal_io_grace_sec: float
-    output_quiescence_sec: float = 0.05
-    initial_quiet_window_sec: float = 0.25
+    tool_timeout_max_sec: float = DEFAULT_TOOL_TIMEOUT_SECONDS
+    output_quiescence_sec: float = SHELL_SESSION_DEFAULT_OUTPUT_QUIESCENCE_SEC
+    initial_quiet_window_sec: float = SHELL_SESSION_DEFAULT_INITIAL_QUIET_WINDOW_SEC
 
     @classmethod
     def from_backend_config(cls) -> "ShellSessionServiceConfig":
@@ -117,6 +126,7 @@ class ShellSessionServiceConfig:
             terminal_io_grace_sec=float(
                 backend_config.SHELL_SESSION_TERMINAL_IO_GRACE_SEC
             ),
+            tool_timeout_max_sec=float(backend_config.TOOL_TIMEOUT_MAX_SECONDS),
         )
 
 
@@ -155,6 +165,30 @@ class ShellSessionService:
         origin: ShellSessionOrigin | None = None,
     ) -> ShellSessionUpdate:
         """Start one PTY shell command and return its first bounded update."""
+        preparation_timeout_sec = shell_preparation_timeout_sec(
+            tool_timeout_max_seconds=self._config.tool_timeout_max_sec,
+            maximum_seconds=SHELL_SESSION_PREPARATION_TIMEOUT_SEC,
+        )
+        effective_runtime_sec = clamp_shell_runtime_sec(
+            request.max_runtime_sec,
+            tool_timeout_max_seconds=self._config.tool_timeout_max_sec,
+            preparation_seconds=preparation_timeout_sec,
+        )
+        effective_yield_time_ms = (
+            None
+            if request.yield_time_ms is None
+            else clamp_shell_yield_time_ms(
+                request.yield_time_ms,
+                reserved_seconds=preparation_timeout_sec,
+                tool_timeout_max_seconds=self._config.tool_timeout_max_sec,
+            )
+        )
+        request = request.model_copy(
+            update={
+                "max_runtime_sec": effective_runtime_sec,
+                "yield_time_ms": effective_yield_time_ms,
+            }
+        )
         started_at = self._clock()
         context_error, terminal_workspace_path = await self._validate_runtime_context(
             identity
@@ -188,7 +222,7 @@ class ShellSessionService:
             )
 
         try:
-            async with asyncio.timeout(SHELL_SESSION_PREPARATION_TIMEOUT_SEC):
+            async with asyncio.timeout(preparation_timeout_sec):
                 terminal_session = await self._prepare_reserved_terminal(
                     identity=identity,
                     request=request,
@@ -262,6 +296,19 @@ class ShellSessionService:
         request: ShellWriteRequest,
     ) -> ShellSessionUpdate:
         """Write exact input to, or interrupt, an existing shell session."""
+        control_timeout_sec = min(
+            SHELL_SESSION_CONTROL_TIMEOUT_SEC,
+            self._config.tool_timeout_max_sec,
+        )
+        request = request.model_copy(
+            update={
+                "yield_time_ms": clamp_shell_yield_time_ms(
+                    request.yield_time_ms,
+                    reserved_seconds=control_timeout_sec,
+                    tool_timeout_max_seconds=self._config.tool_timeout_max_sec,
+                )
+            }
+        )
         started_at = self._clock()
         context_error, _ = await self._validate_runtime_context(identity)
         if context_error is not None:
@@ -306,7 +353,11 @@ class ShellSessionService:
                     )
                 return await self._read_update(
                     record=record,
-                    yield_time_ms=int(self._config.termination_grace_sec * 1000),
+                    yield_time_ms=clamp_shell_yield_time_ms(
+                        self._config.termination_grace_sec * 1000,
+                        reserved_seconds=control_timeout_sec,
+                        tool_timeout_max_seconds=self._config.tool_timeout_max_sec,
+                    ),
                     max_output_chars=request.max_output_chars,
                     started_at=started_at,
                     terminate_after_window=True,
@@ -389,7 +440,11 @@ class ShellSessionService:
             return await self._read_update(
                 record=record,
                 yield_time_ms=min(
-                    SHELL_SESSION_DEFAULT_YIELD_TIME_MS,
+                    clamp_shell_yield_time_ms(
+                        SHELL_SESSION_DEFAULT_YIELD_TIME_MS,
+                        reserved_seconds=0.0,
+                        tool_timeout_max_seconds=self._config.tool_timeout_max_sec,
+                    ),
                     max(1, remaining_runtime_ms),
                 ),
                 max_output_chars=request.max_output_chars,
@@ -821,7 +876,12 @@ class ShellSessionService:
         data: bytes,
     ) -> bool:
         """Send one shell control write within the shared invocation budget."""
-        async with asyncio.timeout(SHELL_SESSION_CONTROL_TIMEOUT_SEC):
+        async with asyncio.timeout(
+            min(
+                SHELL_SESSION_CONTROL_TIMEOUT_SEC,
+                self._config.tool_timeout_max_sec,
+            )
+        ):
             return bool(
                 await self._terminal_manager.send_input(terminal_session_id, data)
             )
