@@ -264,6 +264,70 @@ def test_completed_ordinary_batch_bypasses_interactive_session_unchanged() -> No
     )
 
 
+def test_session_initialization_uses_the_active_non_primary_shell_call() -> None:
+    sequence_id = "batch-active-non-primary"
+    state = InteractiveState(
+        facts=FactsState(
+            task_id=42,
+            message="Run assessment and utility commands.",
+            metadata={
+                "turn_sequence": 7,
+                "tool_batch_id": sequence_id,
+                "planner_plan": {
+                    "tool_batch": {
+                        "tool_batch_id": sequence_id,
+                        "requested_execution_strategy": "sequential",
+                        "tool_calls": [
+                            {
+                                "tool_call_id": "call-assessment",
+                                "tool_id": "information_gathering.network_discovery.nmap",
+                                "parameters": {"target": "localhost"},
+                                "intent": "Collect assessment evidence.",
+                            },
+                            {
+                                "tool_call_id": "call-utility",
+                                "tool_id": "shell.utility",
+                                "parameters": {"command": "sleep 30"},
+                                "intent": "Wait for a utility process.",
+                            },
+                        ],
+                    }
+                },
+            },
+        ),
+        trace=TraceState(),
+    )
+    metadata = state.facts.ensure_metadata()
+    set_active_execution_control(
+        metadata,
+        turn_sequence=7,
+        active_execution={
+            "originating_tool_id": "shell.utility",
+            "originating_tool_call_id": "call-utility",
+            "originating_tool_batch_id": sequence_id,
+            "continuation_tool_id": "shell.write_stdin",
+            "process_status": "running",
+            "session_id": "shs_active_utility",
+            "stdin_available": True,
+        },
+    )
+
+    initialized = initialize_tool_execution_session(state)
+    initialized_metadata = initialized["facts"]["metadata"]
+    session = read_execution_session_control(initialized_metadata)
+    transcript = read_shell_interaction_transcript(sequence_id)
+    try:
+        assert session is not None
+        assert session["originating_tool_id"] == "shell.utility"
+        assert session["originating_tool_call_id"] == "call-utility"
+        assert session["originating_tool_batch_id"] == sequence_id
+        assert transcript is not None
+        assert transcript["originating_tool_id"] == "shell.utility"
+        assert transcript["originating_command"] == "sleep 30"
+    finally:
+        abort_execution_session_state(sequence_id)
+
+
 def test_running_dispatch_routes_to_interactive_session() -> None:
     state = _initial_shell_state(
         batch_id="batch-running-route",

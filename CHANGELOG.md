@@ -36,6 +36,9 @@ The format is based on
 - Shell continuation now rejects stale runtime bindings, serializes operations on
   the same session, preserves concurrency across independent sessions, and keeps
   quiet polls within the original runtime deadline.
+- Mixed tool batches now attribute yielded shell continuation to the actual
+  running call, and batches with multiple shell-session starts are rejected
+  before dispatch so no live session is silently displaced.
 - Local and managed terminal handling now preserves valid output across buffering,
   framing loss, invalid UTF-8, zero-yield reads, early runner results, and
   unexpected PTY closure without duplicating delivery or leaving phantom runs.

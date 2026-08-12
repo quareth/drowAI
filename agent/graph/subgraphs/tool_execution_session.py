@@ -17,7 +17,10 @@ from langgraph.config import get_stream_writer
 from langgraph.graph import END, StateGraph
 
 from agent.tool_runtime.batch.ids import mint_tool_batch_id, mint_tool_call_id
-from agent.tool_runtime.batch.plan_view import primary_tool_call_from_metadata
+from agent.tool_runtime.batch.plan_view import (
+    primary_tool_call_from_metadata,
+    serialized_tool_calls_from_metadata,
+)
 from agent.tool_runtime.output_persistence_policy import resolve_output_persistence
 from core.prompts.builders.post_tool.evidence import (
     aggregate_compact_evidence_rows,
@@ -82,20 +85,38 @@ def initialize_tool_execution_session(
     _ = context
     interactive = InteractiveState.from_mapping(state)
     metadata = interactive.facts.ensure_metadata()
-    if read_active_execution_control(metadata) is None:
+    active = read_active_execution_control(metadata)
+    if active is None:
         return interactive.as_graph_update()
     turn_sequence = metadata.get("turn_sequence")
-    primary_call = primary_tool_call_from_metadata(metadata)
-    if not isinstance(turn_sequence, int) or primary_call is None:
+    if not isinstance(turn_sequence, int):
         return interactive.as_graph_update()
+
+    active_call_id = str(active.get("originating_tool_call_id") or "").strip()
+    active_tool_id = str(active.get("originating_tool_id") or "").strip()
+    calls = serialized_tool_calls_from_metadata(metadata)
+    active_call = next(
+        (call for call in calls if call.tool_call_id == active_call_id),
+        None,
+    )
+    if active_call is None and not active_call_id and active_tool_id:
+        matching_calls = [call for call in calls if call.tool_id == active_tool_id]
+        active_call = matching_calls[0] if len(matching_calls) == 1 else None
+    if active_call is None or (
+        active_tool_id and active_call.tool_id != active_tool_id
+    ):
+        raise ValueError("Active shell execution is missing from the prepared batch")
 
     batch = metadata.get("planner_plan")
     batch_view = batch.get("tool_batch") if isinstance(batch, Mapping) else None
-    sequence_id = (
+    planned_batch_id = (
         str(batch_view.get("tool_batch_id") or "").strip()
         if isinstance(batch_view, Mapping)
         else ""
     )
+    sequence_id = str(active.get("originating_tool_batch_id") or "").strip()
+    if not sequence_id:
+        sequence_id = planned_batch_id
     if not sequence_id:
         sequence_id = str(metadata.get("tool_batch_id") or "").strip()
     if not sequence_id:
@@ -103,15 +124,15 @@ def initialize_tool_execution_session(
 
     begin_execution_session_state(
         sequence_id=sequence_id,
-        originating_tool_id=primary_call.tool_id,
-        originating_parameters=primary_call.parameters,
+        originating_tool_id=active_call.tool_id,
+        originating_parameters=active_call.parameters,
     )
     set_execution_session_control(
         metadata,
         turn_sequence=turn_sequence,
         sequence_id=sequence_id,
-        originating_tool_id=primary_call.tool_id,
-        originating_tool_call_id=primary_call.tool_call_id,
+        originating_tool_id=active_call.tool_id,
+        originating_tool_call_id=active_call.tool_call_id,
         originating_tool_batch_id=sequence_id,
     )
     interactive.facts.metadata = metadata

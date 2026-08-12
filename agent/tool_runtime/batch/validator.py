@@ -38,6 +38,7 @@ from agent.tool_runtime.batch.compatibility import (
 )
 from agent.tool_runtime.batch.types import ToolBatch, ToolCall
 from agent.tool_runtime.batch.validation_helpers import looks_like_placeholder
+from runtime_shared.shell_capabilities import SHELL_SESSION_START_TOOL_IDS
 
 
 class BatchValidationError(Exception):
@@ -168,6 +169,12 @@ class BatchValidator:
         )
         if not survivors:
             return self._reject(batch, requested, "denied_aggregate")
+        if _has_multiple_shell_session_starts(survivors):
+            return self._reject(
+                batch,
+                requested,
+                "multiple_shell_session_starts",
+            )
 
         survivor_batch = ToolBatch(
             tool_batch_id=batch.tool_batch_id,
@@ -235,6 +242,8 @@ class BatchValidator:
             return "duplicate_tool_call_id"
 
         tool_ids = [call.tool_id for call in batch.tool_calls]
+        if _has_multiple_shell_session_starts(batch.tool_calls):
+            return "multiple_shell_session_starts"
         candidate_ids = _coerce_string_set(ctx.get("candidate_tool_ids"))
         if candidate_ids:
             for tool_id in tool_ids:
@@ -325,6 +334,11 @@ def _coerce_string_set(value: Any) -> set[str]:
     if not isinstance(value, Iterable) or isinstance(value, (str, bytes)):
         return set()
     return {str(item) for item in value if str(item or "").strip()}
+
+
+def _has_multiple_shell_session_starts(calls: Sequence[ToolCall]) -> bool:
+    """Return whether a batch exceeds the single-continuation state model."""
+    return sum(call.tool_id in SHELL_SESSION_START_TOOL_IDS for call in calls) > 1
 
 
 def _tool_exists(tool_id: str) -> bool:
