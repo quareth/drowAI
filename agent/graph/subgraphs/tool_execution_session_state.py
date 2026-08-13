@@ -19,6 +19,7 @@ from runtime_shared.shell_session_contracts import ShellProcessStatus
 
 _TRANSCRIPT_MAX_ENTRIES = 24
 _TRANSCRIPT_MAX_CHARS = 12_000
+_TRANSCRIPT_TRUNCATION_MARKER = "...[truncated]...\n"
 _RUNTIME_EXECUTION_SESSIONS: dict[str, dict[str, Any]] = {}
 SHELL_STDIN_REDACTED_MARKER = "<SHELL_STDIN_REDACTED>"
 
@@ -290,7 +291,57 @@ def _compact_shell_interaction_transcript(
         entries.pop(0)
         transcript["omitted_entries"] = int(transcript.get("omitted_entries") or 0) + 1
         transcript["compacted"] = True
+    _truncate_transcript_text_to_limit(transcript, entries)
     transcript["entries"] = entries
+
+
+def _truncate_transcript_text_to_limit(
+    transcript: MutableMapping[str, Any],
+    entries: Sequence[Mapping[str, Any]],
+) -> None:
+    """Enforce the character cap while retaining the newest output tails."""
+
+    overflow = _transcript_char_count(transcript, entries) - _TRANSCRIPT_MAX_CHARS
+    if overflow <= 0:
+        return
+
+    targets: list[tuple[MutableMapping[str, Any], str]] = [
+        (transcript, "originating_command")
+    ]
+    for entry in entries:
+        if not isinstance(entry, MutableMapping):
+            continue
+        targets.extend((entry, field) for field in ("input", "stdout", "stderr"))
+    targets.sort(
+        key=lambda item: len(str(item[0].get(item[1]) or "")),
+        reverse=True,
+    )
+
+    for target, field in targets:
+        text = str(target.get(field) or "")
+        if not text:
+            continue
+        removed = min(overflow, len(text))
+        target[field] = _truncate_text_head(text, len(text) - removed)
+        if target is not transcript:
+            target["truncated"] = True
+        transcript["compacted"] = True
+        overflow -= removed
+        if overflow <= 0:
+            return
+
+
+def _truncate_text_head(text: str, keep_chars: int) -> str:
+    """Keep the most recent characters, adding a marker when it fits."""
+
+    if keep_chars <= 0:
+        return ""
+    if len(text) <= keep_chars:
+        return text
+    if keep_chars <= len(_TRANSCRIPT_TRUNCATION_MARKER):
+        return text[-keep_chars:]
+    tail_chars = keep_chars - len(_TRANSCRIPT_TRUNCATION_MARKER)
+    return _TRANSCRIPT_TRUNCATION_MARKER + text[-tail_chars:]
 
 
 def _transcript_char_count(

@@ -29,6 +29,8 @@ The format is based on
 
 - Shell session environment inputs now require valid variable names and cannot
   be interpreted as command-line options during runtime command construction.
+- Oversized interactive shell output now remains bounded in session-decision
+  prompts while preserving the latest output needed for continued interaction.
 - Shell process and interaction deadlines now share one timeout authority and
   honor the operator-configured global tool maximum.
 - Interactive shell commands now remain attached until completion by default,
