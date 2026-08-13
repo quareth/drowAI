@@ -1501,6 +1501,91 @@ async def test_wait_with_later_output_stays_in_subgraph_without_write_calls(
 
 
 @pytest.mark.asyncio
+async def test_periodic_output_completes_without_exhausting_graph_recursion() -> None:
+    state = _initial_shell_state(
+        batch_id="batch-periodic-output",
+        call_id="call-periodic-output",
+        command="long-scan --progress-every 1s",
+    )
+    metadata = state.facts.ensure_metadata()
+    initial_row = _row(
+        call_id="call-periodic-output",
+        tool_id="shell.utility",
+        summary="Session is running.",
+        stdout="started\n",
+        process_status="running",
+        session_id="shs_periodic_output",
+    )
+    register_runtime_compact_evidence(
+        _view("batch-periodic-output", [initial_row]).raw,
+        single_compact=initial_row["compact_tool_result"],
+    )
+    set_active_execution_control(
+        metadata,
+        turn_sequence=metadata["turn_sequence"],
+        active_execution={
+            "originating_tool_id": "shell.utility",
+            "originating_tool_call_id": "call-periodic-output",
+            "originating_tool_batch_id": "batch-periodic-output",
+            "continuation_tool_id": "shell.write_stdin",
+            "process_status": "running",
+            "session_id": "shs_periodic_output",
+            "stdin_available": True,
+        },
+    )
+    state.facts.metadata = metadata
+    decision_calls = 0
+    wait_calls = 0
+
+    def decide(**_kwargs: Any) -> dict[str, Any]:
+        nonlocal decision_calls
+        decision_calls += 1
+        return {"action": "wait_for_output"}
+
+    def wait_for_output(**_kwargs: Any) -> ShellSessionUpdate:
+        nonlocal wait_calls
+        wait_calls += 1
+        if wait_calls <= 60:
+            return _shell_update(
+                stdout=f"progress {wait_calls}\n",
+                process_status=ShellProcessStatus.RUNNING,
+                session_status=ShellSessionLifecycleStatus.ACTIVE,
+                session_id="shs_periodic_output",
+                interaction_boundary=ShellInteractionBoundary.OUTPUT_AVAILABLE,
+                stdin_available=True,
+            )
+        return _shell_update(
+            stdout="done\n",
+            process_status=ShellProcessStatus.COMPLETED,
+            session_status=ShellSessionLifecycleStatus.CLOSED,
+            session_id=None,
+            interaction_boundary=ShellInteractionBoundary.TERMINAL,
+            exit_code=0,
+        )
+
+    graph = build_tool_execution_session_subgraph(
+        decide_interaction_fn=decide,
+        wait_interaction_fn=wait_for_output,
+    )
+
+    result = await graph.ainvoke(
+        state.as_graph_state(),
+        config={"recursion_limit": 100},
+    )
+    runtime = read_compact_evidence(result["facts"]["metadata"], prefer_runtime=True)
+
+    assert wait_calls == 61
+    assert decision_calls == session_module.SHELL_INTERACTION_DECISION_BUDGET
+    assert runtime is not None
+    assert len(runtime.rows) == session_module.SHELL_INTERACTION_DECISION_BUDGET + 2
+    terminal = runtime.rows[-1]["compact_tool_result"]
+    assert terminal["process_status"] == "completed"
+    assert "progress 60\n" in terminal["stdout"]
+    assert terminal["stdout"].endswith("done\n")
+    assert read_execution_session_control(result["facts"]["metadata"]) is None
+
+
+@pytest.mark.asyncio
 async def test_cancelled_session_terminal_update_clears_graph_control() -> None:
     async def dispatch(state: dict[str, Any], **_kwargs: Any) -> dict[str, Any]:
         interactive = InteractiveState.from_mapping(state)

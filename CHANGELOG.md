@@ -27,6 +27,8 @@ The format is based on
 
 ### Fixed
 
+- Long-running shell sessions now bound reasoning-model interaction cycles and
+  continue runtime-owned waits without exhausting the graph recursion limit.
 - Interactive shell output now preserves legitimate lines containing the static
   exit-code token while still removing frame-specific protocol records.
 - Terminal cleanup now preserves durable shell assessment evidence while updating
