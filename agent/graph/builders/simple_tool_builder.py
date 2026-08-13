@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from langgraph.graph import StateGraph
+from langgraph.graph import END, StateGraph
 
 from backend.services.metrics.utils import safe_inc
 from agent.reasoning.tool_selection_sentinel import metadata_has_unavailable_capability
@@ -68,10 +68,13 @@ GRAPH_NAME = GRAPH_NAME_SIMPLE_TOOL
 logger = logging.getLogger(__name__)
 
 
-_ROUTER_ACTION_MAP = build_router_action_map(
-    call_tool_target="select_tool_categories",
-    finalize_target="format_results",
-)
+_ROUTER_ACTION_MAP = {
+    **build_router_action_map(
+        call_tool_target="select_tool_categories",
+        finalize_target="format_results",
+    ),
+    "delegate_subagent": "delegate_subagent",
+}
 
 
 def _route_after_router(interactive: InteractiveState) -> str:
@@ -139,6 +142,7 @@ def build_simple_tool_graph(*, checkpointer=None, build_only: bool = False) -> A
             reflect     -> reflect -> decision_router (one-hop hint recovery)
             synthesis   -> synthesis    (terminal-bound)
             finalize    -> format_results
+            delegate_subagent -> END (backend dispatch control)
       15. format_results          -> stream structured data for frontend rendering
       16. finalize                -> produce final assistant response
 
@@ -160,6 +164,8 @@ def build_simple_tool_graph(*, checkpointer=None, build_only: bool = False) -> A
     - think_more / reflect / synthesis: enter reasoning node, then re-enter router
       authority for deterministic dispatch
     - finalize: proceeds to format_results and finalize
+    - delegate_subagent: stops at the graph boundary so the backend can reuse
+      the canonical subagent dispatch and parent-handoff pipeline
     """
     
     # Log graph build start
@@ -261,6 +267,7 @@ def build_simple_tool_graph(*, checkpointer=None, build_only: bool = False) -> A
             "reflect": "reflect",
             "synthesis": "synthesis",
             "format_results": "format_results",
+            "delegate_subagent": END,
         },
         conditional=conditional,
     )

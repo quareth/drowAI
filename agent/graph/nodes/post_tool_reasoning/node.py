@@ -905,6 +905,13 @@ async def post_tool_reasoning(
         current_ptr_phase_sequence,
         latest_recorded_phase_sequence,
     ) = _resolve_iteration_memory_prompt_context(metadata)
+    if current_ptr_phase_sequence is None:
+        metadata.pop("current_ptr_phase_sequence", None)
+    else:
+        # Publish the runtime-derived phase used by this PTR invocation so the
+        # adjacent decision router can validate the structured candidate even
+        # when transient tool evidence intentionally skips the phase ledger.
+        metadata["current_ptr_phase_sequence"] = current_ptr_phase_sequence
     try:
         decision_user_prompt = prompt_builder.build_user_prompt(
             interactive=interactive,

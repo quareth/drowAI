@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+
+from agent.graph.state import FactsState, InteractiveState, TraceState
 from agent.subagents.registry import get_subagent_registry
 from backend.services.langgraph_chat.contracts import (
     ChatInputs,
@@ -11,6 +14,7 @@ from backend.services.langgraph_chat.contracts import (
 from backend.services.langgraph_chat.routing.selectors import (
     ChatBranch,
     resolve_branch,
+    resolve_late_subagent_handoff,
     select_branch,
 )
 
@@ -151,3 +155,79 @@ def test_resolve_branch_rejects_active_local_pathfinder_run() -> None:
         is ChatBranch.SIMPLE_TOOL
     )
     assert config.metadata["subagent_routing"]["reason"] == "subagent_unavailable"
+
+
+def _late_handoff_state(*, action: str = "delegate_subagent") -> InteractiveState:
+    return InteractiveState(
+        facts=FactsState(
+            task_id=1,
+            message="delegate this work",
+            capability="simple_tool_execution",
+            metadata={
+                "intent_classifier_label": "direct_executor",
+                "intent_hints": {
+                    "classifier_label": "direct_executor",
+                    "targets": ["10.0.0.10"],
+                },
+                "runtime_budgets": {"remaining_tool_calls": 4},
+                "router_outcome": {
+                    "action": action,
+                    "candidate_id": "ptr-delegate-1",
+                    "agent_handoff": {
+                        "agent_handoff": "required",
+                        "subagent": "pathfinder",
+                        "objective": "Scan ports on 10.0.0.10.",
+                    },
+                },
+            },
+        ),
+        trace=TraceState(reasoning=["PTR selected Pathfinder."]),
+    )
+
+
+def test_resolve_late_handoff_reuses_canonical_subagent_routing() -> None:
+    config = _runtime_config(ExecutionMode.SIMPLE_TOOL)
+    config.metadata["turn_id"] = "task-1-turn-1"
+
+    routed = resolve_late_subagent_handoff(
+        config,
+        _late_handoff_state(),
+        subagent_registry=get_subagent_registry(),
+    )
+
+    assert routed is not None
+    assert routed.metadata["subagent_routing"]["should_delegate"] is True
+    assert routed.metadata["subagent_routing"]["agent_id"] == "pathfinder"
+    assert routed.metadata["subagent_routing"]["objective"] == (
+        "Scan ports on 10.0.0.10."
+    )
+    assert routed.metadata["subagent_routing"]["delegation_source"] == "ptr"
+    assert routed.metadata["runtime_budgets"] == {"remaining_tool_calls": 4}
+    assert "subagent_routing" not in config.metadata
+
+
+def test_resolve_late_handoff_ignores_non_delegation_outcome() -> None:
+    config = _runtime_config(ExecutionMode.SIMPLE_TOOL)
+    config.metadata["turn_id"] = "task-1-turn-1"
+
+    assert (
+        resolve_late_subagent_handoff(
+            config,
+            _late_handoff_state(action="finalize"),
+            subagent_registry=get_subagent_registry(),
+        )
+        is None
+    )
+
+
+def test_resolve_late_handoff_fails_closed_when_subagent_is_unavailable() -> None:
+    config = _runtime_config(ExecutionMode.SIMPLE_TOOL)
+    config.metadata["turn_id"] = "task-1-turn-1"
+
+    with pytest.raises(RuntimeError, match="subagent_unavailable"):
+        resolve_late_subagent_handoff(
+            config,
+            _late_handoff_state(),
+            active_subagent_run_counts={"pathfinder": 1},
+            subagent_registry=get_subagent_registry(),
+        )

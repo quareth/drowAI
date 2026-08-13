@@ -77,9 +77,16 @@ class SubagentHandler(BaseLangGraphHandler):
         self._parent_finalizer = parent_finalizer
 
     async def handle(
-        self, runtime_config: LangGraphRuntimeConfig
+        self,
+        runtime_config: LangGraphRuntimeConfig,
+        *,
+        continuation_state: InteractiveState | None = None,
     ) -> LangGraphChatResult:
-        """Run requested subagents, hand bounded results to the parent, then finalize."""
+        """Run requested subagents, hand bounded results to the parent, then finalize.
+
+        ``continuation_state`` preserves already-accumulated direct-execution
+        progress when PTR delegates through the classifier handoff pipeline.
+        """
         chat_inputs = runtime_config.chat_inputs
         turn = ensure_turn_identity(runtime_config, logger_=logger)
 
@@ -90,7 +97,7 @@ class SubagentHandler(BaseLangGraphHandler):
         )
         tenant_id = int(runtime_config.metadata["tenant_id"])
         child_completion_by_run_id: dict[str, AgentRunCompletion] = {}
-        parent_continuation_state: InteractiveState | None = None
+        parent_continuation_state = continuation_state
 
         async def run_parent_continuation(
             handoff: Any,

@@ -139,6 +139,11 @@ Route policy:
 - A direct-executor turn with supported required Pathfinder handoff entries
   routes to the generic subagent handler. `suggested_capabilities` remains
   advisory assignment context and is not delegation authority.
+- If direct execution is already running when post-tool reasoning emits a valid
+  `delegate_subagent` control, the simple-tool graph stops at the backend
+  boundary. The facade validates that handoff through the same ownership policy
+  and continues through the same generic subagent handler, preserving the
+  accumulated parent state for the existing parent-handoff continuation.
 - `agent/subagents/registry.py` is the source of truth for enabled declarative
   subagent definitions and their classifier-safe projections: names, purpose,
   ownership boundary, supported and excluded task categories, target
@@ -332,11 +337,13 @@ flowchart TD
     decision_router --> reflect
     decision_router --> synthesis
     decision_router --> format_results
+    decision_router --> delegate_subagent
     think_more --> post_tool_reasoning
     reflect --> decision_router
     synthesis --> format_results
     format_results --> finalize
     finalize --> END
+    delegate_subagent --> END
 ```
 
 Important boundaries:
@@ -353,6 +360,10 @@ Important boundaries:
   compresses a completed interactive aggregate once before synthesis and PTR.
 - `post_tool_reasoning` emits candidate decisions; `decision_router` is the
   deterministic route authority.
+- `delegate_subagent` is a backend-owned control outcome. It ends the graph
+  without formatting a response; the facade reuses the normal classifier
+  handoff pipeline and seeds parent continuation with the accumulated
+  simple-tool state.
 
 ## Deep Reasoning Graph
 

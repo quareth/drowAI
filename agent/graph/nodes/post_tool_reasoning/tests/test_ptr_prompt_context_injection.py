@@ -401,6 +401,7 @@ class TestPromptReceivesContext:
         await node.post_tool_reasoning(state, context=None, config=None, writer=None)
 
         prompt = captured["decision_prompt"]
+        assert state.facts.metadata["current_ptr_phase_sequence"] == 1
         assert "## Current Execution Context" in prompt
         assert "turn_sequence: 4" in prompt
         assert "current_phase_sequence: 1" in prompt
