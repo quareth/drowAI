@@ -16,9 +16,8 @@ The format is based on
 
 ### Changed
 
-- Shell commands now use explicit utility or assessment aliases; utility commands
-  and compact results remain visible for the immediate response without becoming
-  reusable assessment evidence.
+- Shell commands retain explicit utility and assessment aliases while both use
+  the assessment execution, graph-state, artifact, and knowledge-retention path.
 - Interactive shell policy now reserves hard blocks for obvious environment
   destruction, shutdown, resource exhaustion, and container escape while
   permitting pentesting workflows in the default permissive mode.
@@ -27,8 +26,22 @@ The format is based on
 
 ### Fixed
 
-- Long-running shell sessions now bound reasoning-model interaction cycles and
-  continue runtime-owned waits without exhausting the graph recursion limit.
+- Direct execution now honors valid Pathfinder delegation selected by
+  post-tool reasoning, reusing the existing subagent lifecycle and parent
+  continuation instead of prematurely finalizing the response.
+- Subagents now enable parallel tool calls only when the selected route's
+  effective model profile supports them, allowing sequential-only models to
+  execute the same model-agnostic agent workflow.
+- Shell commands now return on process completion, output availability, or a
+  bounded silent wait, preventing silent interactive programs from remaining
+  attached until their hard runtime limit.
+- Pathfinder now has nine tool-capable iterations and uses plain chat for its
+  required final handoff, avoiding compatible-provider failures after its tool
+  budget is exhausted.
+- Temporary LLM API failures now use provider-neutral retry handling, honor
+  bounded `Retry-After` delays, otherwise retry three times with 1/2/4-second
+  exponential backoff plus jitter, preserve the selected provider identity,
+  and offer checkpoint retry after adapter attempts are exhausted.
 - Interactive shell output now preserves legitimate lines containing the static
   exit-code token while still removing frame-specific protocol records.
 - Terminal cleanup now preserves durable shell assessment evidence while updating
@@ -39,10 +52,7 @@ The format is based on
   prompts while preserving the latest output needed for continued interaction.
 - Shell process and interaction deadlines now share one timeout authority and
   honor the operator-configured global tool maximum.
-- Interactive shell commands now remain attached until completion by default,
-  while yielded sessions continue on the same PTY with bounded input, waits,
-  output, timeout evidence, and lifecycle cleanup.
-- Silent interactive shell reads now yield at the shared 20-second boundary so
+- Silent interactive shell reads now yield at the shared 10-second boundary so
   agents can continue stdin-driven sessions without waiting for process expiry.
 - Shell lifecycle state now remains correlated to one originating tool card
   through progress, cancellation, completion, refresh, and task-stream replay,
