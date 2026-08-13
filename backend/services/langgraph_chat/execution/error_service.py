@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Awaitable, Callable, Dict, Optional
 
+from agent.providers.llm.core.exceptions import LLMAPIError
 from backend.database import SessionLocal
 from backend.services.chat.message_service import ChatMessageService
 from backend.services.chat.turn_identity_resolver import (
@@ -31,6 +32,8 @@ from backend.services.langgraph_chat.checkpoint.turn_workflow_service import Tur
 from backend.services.langgraph_chat.checkpoint.turn_workflow_service import (
     mark_turn_workflow_failed_best_effort,
 )
+from backend.services.llm_provider.failure_policy import classify_llm_runtime_failure
+from core.llm.api_retry import retry_after_seconds_from_error
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +43,8 @@ _CONTEXT_UNCOMPACTABLE = "context_uncompactable"
 _RETRYABLE_POST_TOOL_ERROR_CODE = "provider_structured_output_parse"
 _RETRYABLE_STRUCTURED_CONTRACT_ERROR_CODE = "structured_contract_semantic_validation"
 _LLM_TIMEOUT_ERROR_CODE = "llm_timeout"
+_LLM_RATE_LIMITED_ERROR_CODE = "llm_rate_limited"
+_LLM_PROVIDER_UNAVAILABLE_ERROR_CODE = "llm_provider_unavailable"
 
 # Retry Continuation Context Contract — these are the only fields the
 # write path may persist on ``workflow_metadata['last_failure']``. Raw
@@ -114,7 +119,7 @@ class TurnExecutionErrorService:
         cls,
         exc: BaseException,
     ) -> Optional[Dict[str, Any]]:
-        """Extract retryable structured-contract failure details from nested exceptions."""
+        """Extract retryable LLM and post-tool details from nested exceptions."""
         try:
             from agent.graph.nodes.post_tool_reasoning.models import (
                 RetryablePostToolReasoningError,
@@ -135,6 +140,31 @@ class TurnExecutionErrorService:
             LLMTimeoutError = None  # type: ignore[assignment]
 
         for candidate in cls.iter_exception_chain(exc):
+            if isinstance(candidate, LLMAPIError):
+                disposition = classify_llm_runtime_failure(candidate)
+                if not disposition.retryable:
+                    continue
+                error_code = (
+                    _LLM_RATE_LIMITED_ERROR_CODE
+                    if candidate.status_code == 429
+                    else _LLM_PROVIDER_UNAVAILABLE_ERROR_CODE
+                )
+                diagnostics: Dict[str, Any] = {}
+                if candidate.provider:
+                    diagnostics["provider"] = candidate.provider
+                if isinstance(candidate.status_code, int):
+                    diagnostics["status_code"] = candidate.status_code
+                retry_after_seconds = retry_after_seconds_from_error(candidate)
+                if retry_after_seconds is not None:
+                    diagnostics["retry_after_seconds"] = retry_after_seconds
+                return {
+                    "error_code": error_code,
+                    "retry_mode": "checkpoint",
+                    "graph_name": None,
+                    "diagnostics": diagnostics,
+                    "internal_error_message": error_code,
+                }
+
             if LLMTimeoutError and isinstance(candidate, LLMTimeoutError):
                 diagnostics = getattr(candidate, "diagnostics", None)
                 return {

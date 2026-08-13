@@ -22,8 +22,18 @@ logger = logging.getLogger(__name__)
 PublishBoundaryCompletionEvents = Callable[..., Awaitable[None]]
 
 _LLM_TIMEOUT_ERROR_CODE = "llm_timeout"
+_LLM_RATE_LIMITED_ERROR_CODE = "llm_rate_limited"
+_LLM_PROVIDER_UNAVAILABLE_ERROR_CODE = "llm_provider_unavailable"
 _LLM_TIMEOUT_ERROR_MESSAGE = (
     "The request is taking too much time to generate a response."
+)
+_LLM_RATE_LIMITED_ERROR_MESSAGE = (
+    "The model provider is temporarily rate limiting requests. Retry to continue "
+    "from the latest checkpoint."
+)
+_LLM_PROVIDER_UNAVAILABLE_ERROR_MESSAGE = (
+    "The model provider is temporarily unavailable. Retry to continue from the "
+    "latest checkpoint."
 )
 
 
@@ -158,6 +168,16 @@ def _retryable_failure_content(
     """Return the user-facing content for a retryable terminal failure."""
     if str(retryable_failure.get("error_code") or "") == _LLM_TIMEOUT_ERROR_CODE:
         return _LLM_TIMEOUT_ERROR_MESSAGE
+    if (
+        str(retryable_failure.get("error_code") or "")
+        == _LLM_RATE_LIMITED_ERROR_CODE
+    ):
+        return _LLM_RATE_LIMITED_ERROR_MESSAGE
+    if (
+        str(retryable_failure.get("error_code") or "")
+        == _LLM_PROVIDER_UNAVAILABLE_ERROR_CODE
+    ):
+        return _LLM_PROVIDER_UNAVAILABLE_ERROR_MESSAGE
     return default_content
 
 

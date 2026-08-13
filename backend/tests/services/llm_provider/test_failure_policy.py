@@ -31,6 +31,7 @@ from core.llm.timeout_runtime import LLMTimeoutError
         ),
         (LLMAPIError("limited", status_code=429), "provider_api", True),
         (LLMAPIError("server", status_code=503), "provider_api", True),
+        (LLMAPIError("not implemented", status_code=501), "provider_api", False),
         (LLMResponseError("invalid response"), "response", True),
         (LLMRefusalError("declined"), "refusal", False),
         (LLMAPIError("unauthorized", status_code=401), "provider_api", False),

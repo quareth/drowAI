@@ -1654,14 +1654,14 @@ class TestOpenAIResponsesClientRetry:
         """Backoff helper should preserve delay and jitter calculation."""
         client, _ = client_with_mock
 
-        with patch("agent.providers.llm.adapters.openai.responses.retry.random.random", return_value=0.4), patch(
-            "agent.providers.llm.adapters.openai.responses.retry.asyncio.sleep",
+        with patch("core.llm.api_retry.random.random", return_value=0.4), patch(
+            "core.llm.api_retry.asyncio.sleep",
             new_callable=AsyncMock,
         ) as mock_sleep:
             await client._backoff_sleep(3)
 
         assert mock_sleep.await_count == 1
-        assert mock_sleep.await_args.args[0] == pytest.approx(2.2)
+        assert mock_sleep.await_args.args[0] == pytest.approx(4.4)
 
     @pytest.mark.asyncio
     async def test_configuration_error_still_fails_fast_without_retry(self, client_with_mock) -> None:

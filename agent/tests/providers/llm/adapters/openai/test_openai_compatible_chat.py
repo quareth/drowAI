@@ -23,7 +23,7 @@ from agent.providers.llm.adapters.openai.compatible_request_policies import (
 )
 from agent.providers.llm.core.base import StructuredOutputSpec
 from agent.providers.llm.contracts.compat import LLMDialectPolicy
-from agent.providers.llm.core.exceptions import LLMConfigurationError
+from agent.providers.llm.core.exceptions import LLMAPIError, LLMConfigurationError
 from agent.providers.llm.factory.client_factory import LLMClientFactory
 from agent.providers.llm.core.identity import ProviderModelRef
 from agent.providers.llm.profiles.registry import require_model_profile
@@ -39,15 +39,19 @@ class _InferenceTransport:
         stream_events: list[Any] | None = None,
         request_gate: asyncio.Event | None = None,
         stream_gate: asyncio.Event | None = None,
+        request_error: Exception | None = None,
     ) -> None:
         self.json_response = json_response
         self.stream_events = stream_events or []
         self.request_gate = request_gate
         self.stream_gate = stream_gate
+        self.request_error = request_error
         self.requests: list[dict[str, Any]] = []
 
     async def request_json(self, json_body: Mapping[str, Any]) -> Any:
         self.requests.append(dict(json_body))
+        if self.request_error is not None:
+            raise self.request_error
         if self.request_gate is not None:
             await self.request_gate.wait()
         return self.json_response
@@ -81,6 +85,7 @@ def _client(
     request_policy_id: str | None = None,
     reasoning_effort: str | None = None,
     model_profile: Any | None = None,
+    provider_id: str = "OpenAI-compatible",
 ) -> tuple[OpenAICompatibleChatClient, MagicMock, MagicMock]:
     """Create the compatible adapter with a mocked SDK constructor."""
 
@@ -97,6 +102,7 @@ def _client(
             "auth": auth or CompatibleChatAuth.bearer("test-key"),
             "wire_model_id": wire_model_id,
             "inference_transport": inference_transport,
+            "provider_id": provider_id,
         }
         if dialect_policy is not None:
             client_kwargs["dialect_policy"] = dialect_policy
@@ -503,6 +509,99 @@ async def test_guarded_request_yields_control_while_provider_is_slow() -> None:
     assert pending.done() is False
     request_gate.set()
     assert await pending == "ok"
+
+
+@pytest.mark.asyncio
+async def test_guarded_failure_preserves_provider_status_and_retry_after() -> None:
+    """Compatible transports must not leak the inherited OpenAI identity."""
+
+    transport_error = RuntimeError("sanitized upstream rejection")
+    transport_error.status_code = 429  # type: ignore[attr-defined]
+    transport_error.retry_after_seconds = 4.0  # type: ignore[attr-defined]
+    inference_transport = _InferenceTransport(request_error=transport_error)
+    client, _sdk, _constructor = _client(
+        inference_transport=inference_transport,
+        dialect_policy=AGENT_OPENAI_COMPATIBLE_DIALECT,
+        provider_id="mistral",
+    )
+
+    with pytest.raises(LLMAPIError) as exc_info:
+        await client.chat_messages(
+            [{"role": "user", "content": "hello"}],
+            _retries=0,
+        )
+
+    assert exc_info.value.provider == "mistral"
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.retry_after_seconds == 4.0
+
+
+@pytest.mark.asyncio
+async def test_guarded_permanent_failure_is_not_retried() -> None:
+    transport_error = RuntimeError("sanitized upstream rejection")
+    transport_error.status_code = 401  # type: ignore[attr-defined]
+    inference_transport = _InferenceTransport(request_error=transport_error)
+    client, _sdk, _constructor = _client(
+        inference_transport=inference_transport,
+        dialect_policy=AGENT_OPENAI_COMPATIBLE_DIALECT,
+        provider_id="qwen",
+    )
+
+    with pytest.raises(LLMAPIError):
+        await client.chat_messages(
+            [{"role": "user", "content": "hello"}],
+            _retries=2,
+        )
+
+    assert len(inference_transport.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_guarded_rate_limit_retries_with_normalized_delay() -> None:
+    transport_error = RuntimeError("sanitized upstream rejection")
+    transport_error.status_code = 429  # type: ignore[attr-defined]
+    transport_error.retry_after_seconds = 6.0  # type: ignore[attr-defined]
+    inference_transport = _InferenceTransport(request_error=transport_error)
+    client, _sdk, _constructor = _client(
+        inference_transport=inference_transport,
+        dialect_policy=AGENT_OPENAI_COMPATIBLE_DIALECT,
+        provider_id="mistral",
+    )
+    client._backoff_sleep = AsyncMock()  # type: ignore[method-assign]
+
+    with pytest.raises(LLMAPIError):
+        await client.chat_messages(
+            [{"role": "user", "content": "hello"}],
+            _retries=1,
+        )
+
+    assert len(inference_transport.requests) == 2
+    retry_error = client._backoff_sleep.await_args.args[1]
+    assert retry_error.status_code == 429
+    assert retry_error.retry_after_seconds == 6.0
+
+
+@pytest.mark.asyncio
+async def test_guarded_rate_limit_uses_three_default_retries() -> None:
+    transport_error = RuntimeError("sanitized upstream rejection")
+    transport_error.status_code = 429  # type: ignore[attr-defined]
+    inference_transport = _InferenceTransport(request_error=transport_error)
+    client, _sdk, _constructor = _client(
+        inference_transport=inference_transport,
+        dialect_policy=AGENT_OPENAI_COMPATIBLE_DIALECT,
+        provider_id="mistral",
+    )
+    client._backoff_sleep = AsyncMock()  # type: ignore[method-assign]
+
+    with pytest.raises(LLMAPIError):
+        await client.chat_messages([{"role": "user", "content": "hello"}])
+
+    assert len(inference_transport.requests) == 4
+    assert [call.args[0] for call in client._backoff_sleep.await_args_list] == [
+        1,
+        2,
+        3,
+    ]
 
 
 @pytest.mark.asyncio

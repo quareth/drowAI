@@ -16,8 +16,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import random
 from typing import Any, AsyncIterator, Dict, List, Optional
+
+from core.llm.api_retry import (
+    DEFAULT_API_RETRY_COUNT,
+    INITIAL_API_RETRY_DELAY_SECONDS,
+    is_retryable_api_error,
+    retry_after_seconds_from_error,
+    sleep_before_retry,
+)
 
 from ...core.base import (
     LLMClient,
@@ -152,8 +159,8 @@ DEFAULT_TEMPERATURE = 0.1
 # High token limit for testing - avoid interruption by token limits
 # This is used across all GPT-4 LLM calls unless explicitly overridden
 DEFAULT_MAX_TOKENS = 10000
-DEFAULT_RETRY_COUNT = 2
-INITIAL_RETRY_DELAY = 0.5
+DEFAULT_RETRY_COUNT = DEFAULT_API_RETRY_COUNT
+INITIAL_RETRY_DELAY = INITIAL_API_RETRY_DELAY_SECONDS
 
 
 # ---------------------------------------------------------------------------
@@ -234,6 +241,7 @@ class OpenAIChatClient(LLMClient):
         self._api_key = api_key
         self._model = model
         self._client = sdk_client
+        self._provider_name = "OpenAI"
         self._close_lock = asyncio.Lock()
         self._closed = False
     
@@ -404,27 +412,32 @@ class OpenAIChatClient(LLMClient):
             except LLMConfigurationError:
                 # Fail fast on invalid structured schema contracts
                 raise
-            except (APIError, APIConnectionError, RateLimitError, APIStatusError) as e:
-                last_error = self._wrap_api_error(e)
-                if attempt >= max_attempts:
+            except (
+                LLMAPIError,
+                APIError,
+                APIConnectionError,
+                RateLimitError,
+                APIStatusError,
+            ) as e:
+                last_error = e if isinstance(e, LLMAPIError) else self._wrap_api_error(e)
+                if attempt >= max_attempts or not is_retryable_api_error(last_error):
                     logger.warning(
                         f"OpenAI chat_messages failed after {attempt} attempts: {e}"
                     )
+                    if last_error is e:
+                        raise
                     raise last_error from e
                 self._log_retry(attempt, e, max_attempts)
-                await self._backoff_sleep(attempt)
+                await self._backoff_sleep(attempt, last_error)
             except Exception as e:
-                last_error = LLMAPIError(
-                    f"Unexpected error during OpenAI chat: {e}",
-                    provider="OpenAI",
-                )
-                if attempt >= max_attempts:
+                last_error = self._wrap_api_error(e)
+                if attempt >= max_attempts or not is_retryable_api_error(last_error):
                     logger.warning(
                         f"OpenAI chat_messages failed after {attempt} attempts: {e}"
                     )
                     raise last_error from e
                 self._log_retry(attempt, e, max_attempts)
-                await self._backoff_sleep(attempt)
+                await self._backoff_sleep(attempt, last_error)
         
         # Should not reach here, but satisfy type checker
         raise last_error if last_error else LLMAPIError(
@@ -515,13 +528,12 @@ class OpenAIChatClient(LLMClient):
                     
         except (APIError, APIConnectionError, RateLimitError, APIStatusError) as e:
             raise self._wrap_api_error(e) from e
+        except LLMAPIError:
+            raise
         except LLMRefusalError:
             raise
         except Exception as e:
-            raise LLMAPIError(
-                f"Streaming failed: {e}",
-                provider="OpenAI",
-            ) from e
+            raise self._wrap_api_error(e) from e
     
     # -------------------------------------------------------------------------
     # Usage-Tracking Methods (Phase 2 + Phase 7)
@@ -654,27 +666,32 @@ class OpenAIChatClient(LLMClient):
                 raise
             except LLMConfigurationError:
                 raise
-            except (APIError, APIConnectionError, RateLimitError, APIStatusError) as e:
-                last_error = self._wrap_api_error(e)
-                if attempt >= max_attempts:
+            except (
+                LLMAPIError,
+                APIError,
+                APIConnectionError,
+                RateLimitError,
+                APIStatusError,
+            ) as e:
+                last_error = e if isinstance(e, LLMAPIError) else self._wrap_api_error(e)
+                if attempt >= max_attempts or not is_retryable_api_error(last_error):
                     logger.warning(
                         f"OpenAI chat_messages_with_usage failed after {attempt} attempts: {e}"
                     )
+                    if last_error is e:
+                        raise
                     raise last_error from e
                 self._log_retry(attempt, e, max_attempts)
-                await self._backoff_sleep(attempt)
+                await self._backoff_sleep(attempt, last_error)
             except Exception as e:
-                last_error = LLMAPIError(
-                    f"Unexpected error during OpenAI chat: {e}",
-                    provider="OpenAI",
-                )
-                if attempt >= max_attempts:
+                last_error = self._wrap_api_error(e)
+                if attempt >= max_attempts or not is_retryable_api_error(last_error):
                     logger.warning(
                         f"OpenAI chat_messages_with_usage failed after {attempt} attempts: {e}"
                     )
                     raise last_error from e
                 self._log_retry(attempt, e, max_attempts)
-                await self._backoff_sleep(attempt)
+                await self._backoff_sleep(attempt, last_error)
         
         raise last_error if last_error else LLMAPIError(
             "OpenAI chat failed", provider="OpenAI"
@@ -773,13 +790,12 @@ class OpenAIChatClient(LLMClient):
                         
             except (APIError, APIConnectionError, RateLimitError, APIStatusError) as e:
                 raise self._wrap_api_error(e) from e
+            except LLMAPIError:
+                raise
             except LLMRefusalError:
                 raise
             except Exception as e:
-                raise LLMAPIError(
-                    f"Streaming failed: {e}",
-                    provider="OpenAI",
-                ) from e
+                raise self._wrap_api_error(e) from e
         
         def get_usage() -> Optional["UsageData"]:
             """Get final usage after streaming completes."""
@@ -868,29 +884,34 @@ class OpenAIChatClient(LLMClient):
                     outcome=_chat_response_outcome(choice.finish_reason),
                 )
                 
-            except (APIError, APIConnectionError, RateLimitError, APIStatusError) as e:
-                last_error = self._wrap_api_error(e)
-                if attempt >= max_attempts:
+            except (
+                LLMAPIError,
+                APIError,
+                APIConnectionError,
+                RateLimitError,
+                APIStatusError,
+            ) as e:
+                last_error = e if isinstance(e, LLMAPIError) else self._wrap_api_error(e)
+                if attempt >= max_attempts or not is_retryable_api_error(last_error):
                     logger.warning(
                         f"OpenAI chat_with_tools failed after {attempt} attempts: {e}"
                     )
+                    if last_error is e:
+                        raise
                     raise last_error from e
                 self._log_retry(attempt, e, max_attempts)
-                await self._backoff_sleep(attempt)
+                await self._backoff_sleep(attempt, last_error)
             except LLMRefusalError:
                 raise
             except Exception as e:
-                last_error = LLMAPIError(
-                    f"Unexpected error during tool call: {e}",
-                    provider="OpenAI",
-                )
-                if attempt >= max_attempts:
+                last_error = self._wrap_api_error(e)
+                if attempt >= max_attempts or not is_retryable_api_error(last_error):
                     logger.warning(
                         f"OpenAI chat_with_tools failed after {attempt} attempts: {e}"
                     )
                     raise last_error from e
                 self._log_retry(attempt, e, max_attempts)
-                await self._backoff_sleep(attempt)
+                await self._backoff_sleep(attempt, last_error)
         
         raise last_error if last_error else LLMAPIError(
             "OpenAI tool call failed", provider="OpenAI"
@@ -1000,13 +1021,12 @@ class OpenAIChatClient(LLMClient):
                 ] or None
             except (APIError, APIConnectionError, RateLimitError, APIStatusError) as exc:
                 raise self._wrap_api_error(exc) from exc
+            except LLMAPIError:
+                raise
             except LLMRefusalError:
                 raise
             except Exception as exc:
-                raise LLMAPIError(
-                    f"Streaming tool call failed: {exc}",
-                    provider="OpenAI",
-                ) from exc
+                raise self._wrap_api_error(exc) from exc
 
         return LLMToolStreamingResponse(
             content_iterator=content_generator(),
@@ -1100,29 +1120,34 @@ class OpenAIChatClient(LLMClient):
                     outcome=_chat_response_outcome(choice.finish_reason),
                 )
                 
-            except (APIError, APIConnectionError, RateLimitError, APIStatusError) as e:
-                last_error = self._wrap_api_error(e)
-                if attempt >= max_attempts:
+            except (
+                LLMAPIError,
+                APIError,
+                APIConnectionError,
+                RateLimitError,
+                APIStatusError,
+            ) as e:
+                last_error = e if isinstance(e, LLMAPIError) else self._wrap_api_error(e)
+                if attempt >= max_attempts or not is_retryable_api_error(last_error):
                     logger.warning(
                         f"OpenAI chat_with_tools_with_usage failed after {attempt} attempts: {e}"
                     )
+                    if last_error is e:
+                        raise
                     raise last_error from e
                 self._log_retry(attempt, e, max_attempts)
-                await self._backoff_sleep(attempt)
+                await self._backoff_sleep(attempt, last_error)
             except LLMRefusalError:
                 raise
             except Exception as e:
-                last_error = LLMAPIError(
-                    f"Unexpected error during tool call: {e}",
-                    provider="OpenAI",
-                )
-                if attempt >= max_attempts:
+                last_error = self._wrap_api_error(e)
+                if attempt >= max_attempts or not is_retryable_api_error(last_error):
                     logger.warning(
                         f"OpenAI chat_with_tools_with_usage failed after {attempt} attempts: {e}"
                     )
                     raise last_error from e
                 self._log_retry(attempt, e, max_attempts)
-                await self._backoff_sleep(attempt)
+                await self._backoff_sleep(attempt, last_error)
         
         raise last_error if last_error else LLMAPIError(
             "OpenAI tool call failed", provider="OpenAI"
@@ -1222,14 +1247,17 @@ class OpenAIChatClient(LLMClient):
     
     def _wrap_api_error(self, error: Exception) -> LLMAPIError:
         """Wrap OpenAI SDK exceptions into LLMAPIError."""
+        if isinstance(error, LLMAPIError):
+            return error
         status_code = None
         if hasattr(error, "status_code"):
             status_code = error.status_code
         
         return LLMAPIError(
             f"OpenAI API error: {error}",
-            provider="OpenAI",
+            provider=self._provider_name,
             status_code=status_code,
+            retry_after_seconds=retry_after_seconds_from_error(error),
         )
     
     def _log_retry(self, attempt: int, error: Exception, max_attempts: int) -> None:
@@ -1239,15 +1267,18 @@ class OpenAIChatClient(LLMClient):
             f"retrying..."
         )
     
-    async def _backoff_sleep(self, attempt: int) -> None:
+    async def _backoff_sleep(
+        self,
+        attempt: int,
+        error: LLMAPIError | None = None,
+    ) -> None:
         """Sleep with exponential backoff and jitter."""
-        # Exponential backoff: 0.5s, 1s, 2s, ... with 25% jitter
-        delay = INITIAL_RETRY_DELAY * (2 ** (attempt - 1))
-        jitter = delay * random.random() * 0.25
-        sleep_duration = delay + jitter
-        
-        logger.debug(f"Backing off for {sleep_duration:.2f}s before retry")
-        await asyncio.sleep(sleep_duration)
+        await sleep_before_retry(
+            attempt,
+            error=error,
+            initial_retry_delay=INITIAL_RETRY_DELAY,
+            logger=logger,
+        )
 
 
 __all__ = ["OpenAIChatClient"]

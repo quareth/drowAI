@@ -73,6 +73,7 @@ class LLMAPIError(LLMProviderError):
     
     Attributes:
         status_code: Optional HTTP status code from the API response
+        retry_after_seconds: Optional bounded server-requested retry delay
     """
     
     def __init__(
@@ -81,9 +82,11 @@ class LLMAPIError(LLMProviderError):
         *, 
         provider: str | None = None,
         status_code: int | None = None,
+        retry_after_seconds: float | None = None,
     ) -> None:
         super().__init__(message, provider=provider)
         self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
 
 
 class LLMResponseError(LLMProviderError):

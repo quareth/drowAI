@@ -103,11 +103,13 @@ class TestLLMAPIError:
             "Server error",
             provider="OpenAI",
             status_code=500,
+            retry_after_seconds=2.5,
         )
         
         assert err.message == "Server error"
         assert err.provider == "OpenAI"
         assert err.status_code == 500
+        assert err.retry_after_seconds == 2.5
         assert str(err) == "[OpenAI] Server error"
     
     def test_preserves_cause(self) -> None:
