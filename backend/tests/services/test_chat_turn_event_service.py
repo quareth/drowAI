@@ -201,6 +201,135 @@ def test_terminal_lifecycle_update_replaces_existing_correlated_tool_row() -> No
         engine.dispose()
 
 
+def test_terminal_lifecycle_update_preserves_durable_assessment_evidence() -> None:
+    engine, db = _build_session()
+    try:
+        message = _seed_assistant_message(db)
+        db.add(
+            TurnWorkflow(
+                task_id=message.task_id,
+                tenant_id=message.tenant_id,
+                conversation_id=message.conversation_id,
+                turn_id="turn-shell-assessment",
+                turn_sequence=message.turn_number,
+                state="COMPLETED",
+                reserved_message_id=message.id,
+            )
+        )
+        service = ChatTurnEventService(db)
+        durable_result = {
+            "status": "success",
+            "summary": "Assessment found exposed credentials.",
+            "key_findings": ["Credentials were accepted by the target."],
+            "stdout": "proof-of-access",
+            "process_status": "running",
+            "session_status": "active",
+            "interaction_boundary": "output_available",
+            "session_id": "shs-durable-assessment",
+        }
+        service.replace_events_for_message(
+            task_id=message.task_id,
+            conversation_id=message.conversation_id,
+            chat_message_id=message.id,
+            turn_number=message.turn_number or 0,
+            tool_calls=[
+                {
+                    "tool_call_id": "call-shell-assessment",
+                    "tool_name": "shell.assessment",
+                    "tool_arguments": {"command": "verify target"},
+                    "tool_result": durable_result,
+                    "status": "success",
+                    "process_status": "running",
+                    "session_status": "active",
+                    "interaction_boundary": "output_available",
+                    "session_id": "shs-durable-assessment",
+                    "output_persistence": "durable",
+                    "compact_tool_result": durable_result,
+                    "phase_sequence": 0,
+                }
+            ],
+        )
+        db.commit()
+
+        original_row = db.execute(select(ChatTurnEvent)).scalar_one()
+        original_content = original_row.content
+        row = service.append_terminal_tool_lifecycle_event(
+            task_id=message.task_id,
+            turn_id="turn-shell-assessment",
+            tool_call_id="call-shell-assessment",
+            tool_name="shell.assessment",
+            content="Shell session closed",
+            status="cancelled",
+            process_status="terminated",
+            session_status="closed",
+            interaction_boundary="terminal",
+            session_id="shs-durable-assessment",
+            close_reason="task_cleanup",
+            metadata={
+                "compact_tool_result": {
+                    "status": "cancelled",
+                    "summary": "Shell session closed",
+                    "process_status": "terminated",
+                    "session_status": "closed",
+                    "interaction_boundary": "terminal",
+                    "session_id": "shs-durable-assessment",
+                }
+            },
+        )
+        db.commit()
+
+        assert row is not None
+        assert row.content == original_content
+        metadata = row.event_metadata
+        assert metadata["tool_arguments"] == {"command": "verify target"}
+        assert metadata["output_persistence"] == "durable"
+        assert metadata["status"] == "cancelled"
+        assert metadata["process_status"] == "terminated"
+        assert metadata["session_status"] == "closed"
+        assert metadata["interaction_boundary"] == "terminal"
+        assert metadata["close_reason"] == "task_cleanup"
+        compact = metadata["compact_tool_result"]
+        assert compact["status"] == "success"
+        assert compact["summary"] == "Assessment found exposed credentials."
+        assert compact["key_findings"] == [
+            "Credentials were accepted by the target."
+        ]
+        assert compact["stdout"] == "proof-of-access"
+        assert compact["process_status"] == "terminated"
+        assert compact["session_status"] == "closed"
+        assert compact["interaction_boundary"] == "terminal"
+
+        created = service.merge_events_for_message(
+            task_id=message.task_id,
+            conversation_id=message.conversation_id,
+            chat_message_id=message.id,
+            turn_number=message.turn_number or 0,
+            tool_calls=[
+                {
+                    "tool_call_id": "call-shell-assessment",
+                    "tool_name": "shell.assessment",
+                    "tool_arguments": {"command": "verify target"},
+                    "tool_result": durable_result,
+                    "output_persistence": "durable",
+                    "compact_tool_result": durable_result,
+                    "phase_sequence": 0,
+                }
+            ],
+        )
+        db.commit()
+
+        assert created == []
+        persisted = db.execute(select(ChatTurnEvent)).scalar_one()
+        assert persisted.content == original_content
+        assert persisted.event_metadata["compact_tool_result"]["stdout"] == (
+            "proof-of-access"
+        )
+        assert persisted.event_metadata["session_status"] == "closed"
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_event_rows_preserve_subagent_ownership_metadata() -> None:
     engine, db = _build_session()
     try:

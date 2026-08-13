@@ -27,6 +27,8 @@ The format is based on
 
 ### Fixed
 
+- Terminal cleanup now preserves durable shell assessment evidence while updating
+  the session's final lifecycle state.
 - Shell session environment inputs now require valid variable names and cannot
   be interpreted as command-line options during runtime command construction.
 - Oversized interactive shell output now remains bounded in session-decision

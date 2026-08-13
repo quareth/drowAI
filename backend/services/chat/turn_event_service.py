@@ -36,6 +36,26 @@ EVENT_ATTRIBUTION_KEYS = (
     "internal_only",
     "lifecycle_version",
 )
+_TERMINAL_LIFECYCLE_METADATA_KEYS = (
+    "status",
+    "process_status",
+    "session_status",
+    "interaction_boundary",
+    "session_id",
+    "close_reason",
+    "lifecycle_event",
+    "shell_lifecycle_event",
+)
+_TERMINAL_LIFECYCLE_COMPACT_KEYS = (
+    "process_status",
+    "session_status",
+    "interaction_boundary",
+    "session_id",
+    "close_reason",
+    "lifecycle_event",
+    "error",
+    "failure_category",
+)
 
 
 class ChatTurnEventService:
@@ -250,8 +270,35 @@ class ChatTurnEventService:
             {key: value for key, value in event_metadata.items() if value is not None}
         )
         if existing_tool_row is not None:
-            existing_tool_row.content = content
-            existing_tool_row.event_metadata = stable_metadata
+            existing_metadata = getattr(existing_tool_row, "event_metadata", None)
+            existing_metadata = (
+                existing_metadata if isinstance(existing_metadata, dict) else {}
+            )
+            if existing_metadata.get("output_persistence") == "durable":
+                terminal_metadata = (
+                    stable_metadata if isinstance(stable_metadata, dict) else {}
+                )
+                merged_metadata = dict(existing_metadata)
+                for key in _TERMINAL_LIFECYCLE_METADATA_KEYS:
+                    if terminal_metadata.get(key) is not None:
+                        merged_metadata[key] = terminal_metadata[key]
+
+                existing_compact = existing_metadata.get("compact_tool_result")
+                terminal_compact = terminal_metadata.get("compact_tool_result")
+                if isinstance(existing_compact, dict):
+                    merged_compact = dict(existing_compact)
+                    lifecycle_compact = (
+                        terminal_compact if isinstance(terminal_compact, dict) else {}
+                    )
+                    for key in _TERMINAL_LIFECYCLE_COMPACT_KEYS:
+                        value = lifecycle_compact.get(key, terminal_metadata.get(key))
+                        if value is not None:
+                            merged_compact[key] = value
+                    merged_metadata["compact_tool_result"] = merged_compact
+                existing_tool_row.event_metadata = _stable_metadata(merged_metadata)
+            else:
+                existing_tool_row.content = content
+                existing_tool_row.event_metadata = stable_metadata
             self.db.flush()
             return existing_tool_row
 
