@@ -25,8 +25,10 @@ from agent.graph.subgraphs.tool_execution_runtime.batch_runner import (
 )
 from agent.graph.state import InteractiveState, ToolExecutionRecord
 from agent.graph.utils import iteration_memory
+from agent.providers.llm.core.base import LLMResponse
 from agent.providers.llm.core.base import ToolCall as ProviderToolCall
 from agent.providers.llm.core.base import ToolCallResult
+from agent.providers.llm.core.capabilities import LLMCapability
 from agent.subagents.contracts import (
     AgentAssignment,
     AgentResultProjection,
@@ -94,10 +96,20 @@ class _FakeBuilderLLM:
         calls: list[ProviderToolCall] | None = None,
         *,
         content: str | None = None,
+        parallel_tools: bool = True,
     ) -> None:
         self.calls = calls
         self.content = content
+        self.parallel_tools = parallel_tools
         self.requests: list[dict[str, Any]] = []
+
+    def supports_capability(self, capability: LLMCapability | str) -> bool:
+        """Return the configured provider-neutral parallel-tool capability."""
+
+        return (
+            capability == LLMCapability.PARALLEL_TOOLS
+            and self.parallel_tools
+        )
 
     async def chat_with_tools_with_usage(
         self,
@@ -118,6 +130,21 @@ class _FakeBuilderLLM:
             raw=None,
             usage=_FakeUsage(),
         )
+
+    async def chat_with_usage(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        self.requests.append(
+            {
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+                "kwargs": kwargs,
+            }
+        )
+        return LLMResponse(content=self.content or "", usage=_FakeUsage())
 
 
 def _pathfinder_definition() -> SubagentDefinition:
@@ -746,12 +773,42 @@ async def test_runtime_model_records_generic_route_metadata_and_call_topology() 
         "max_tokens": 5000,
     }
     assert "Remaining Limits:" in request["user_prompt"]
-    assert '"remaining_iterations": 3' in request["user_prompt"]
+    assert '"remaining_iterations": 9' in request["user_prompt"]
     assert '"remaining_tool_calls_this_iteration": 3' in request["user_prompt"]
     assert all(
         SUBAGENT_EXECUTION_STRATEGY_KEY in required
         for required in request["required"]
     )
+
+
+@pytest.mark.asyncio
+async def test_runtime_model_omits_parallel_option_when_capability_is_unsupported() -> None:
+    """A sequential-only model receives a valid tool request without parallel control."""
+
+    llm = _FakeBuilderLLM(
+        [
+            _native_call(
+                FPING_TOOL_ID,
+                parameters={"target": "10.0.0.10"},
+                strategy="sequential",
+                intent="Check whether the approved host responds.",
+            )
+        ],
+        parallel_tools=False,
+    )
+
+    await run_subagent_model_turn(
+        _pathfinder_definition(),
+        _generic_state(),
+        llm_resolver=lambda *_args, **_kwargs: llm,
+    )
+
+    request = _request_projection(llm.requests[0])
+    assert request["kwargs"] == {
+        "tool_choice": "auto",
+        "temperature": 0.1,
+        "max_tokens": 5000,
+    }
 
 
 @pytest.mark.asyncio
@@ -1069,7 +1126,6 @@ async def test_runtime_model_forces_text_handoff_when_iteration_budget_exhausted
     request = _request_projection(llm.requests[0])
     assert request["tool_ids"] == []
     assert request["kwargs"] == {
-        "tool_choice": "none",
         "temperature": 0.1,
         "max_tokens": 5000,
     }
@@ -1302,7 +1358,7 @@ async def test_runtime_counts_real_multi_call_batch_application_as_one_iteration
     assert len(tool_phase_records) == 1
     assert synced["facts"]["iterations"] == 1
     assert remaining_limits["completed_iterations"] == 1
-    assert remaining_limits["remaining_iterations"] == 2
+    assert remaining_limits["remaining_iterations"] == 8
     assert "subagent_completed_iteration_markers" not in synced["facts"]["metadata"]
     assert "subagent_observation_transcript" not in synced["facts"]["metadata"]
 
@@ -2015,7 +2071,7 @@ def test_runtime_modules_do_not_import_backend_services() -> None:
 
 def _request_projection(request: dict[str, Any]) -> dict[str, Any]:
     kwargs = dict(request["kwargs"])
-    tools = kwargs.pop("tools")
+    tools = kwargs.pop("tools", [])
     return {
         "system_prompt": request["system_prompt"],
         "user_prompt": request["user_prompt"],

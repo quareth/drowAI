@@ -36,7 +36,12 @@ from agent.graph.subgraphs.tool_execution_runtime.lane_dispatch import (
     dispatch_tool_call_by_lane,
 )
 from agent.models import ExecutionStrategy
-from agent.providers.llm.core.base import ToolCall as NativeToolCall, ToolCallResult
+from agent.providers.llm.core.base import (
+    LLMResponse,
+    ToolCall as NativeToolCall,
+    ToolCallResult,
+)
+from agent.reasoning.llm_parameter_resolution import NATIVE_BUILDER_MAX_OUTPUT_TOKENS
 from agent.tool_runtime import ToolExecutionCoordinator
 from agent.tool_runtime.batch.types import ToolBatch, ToolCall
 from backend.services.agent_runs.contracts import (
@@ -77,6 +82,13 @@ def _pathfinder_definition() -> SubagentDefinition:
         if definition.id == "pathfinder"
     ]
     return definition
+
+
+def test_pathfinder_has_nine_bounded_tool_iterations() -> None:
+    definition = _pathfinder_definition()
+
+    assert definition.max_iterations == 9
+    assert definition.max_tool_calls_per_iteration == 3
 
 
 def _runtime_identity() -> AgentRuntimeIdentity:
@@ -226,6 +238,59 @@ class _InvalidActionLLM:
             ],
             raw={},
         )
+
+
+class _ForcedFinalTextLLM:
+    def __init__(self) -> None:
+        self.chat_with_usage_kwargs: list[dict[str, Any]] = []
+
+    async def chat_with_usage(
+        self,
+        _system_prompt: str,
+        _user_prompt: str,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        self.chat_with_usage_kwargs.append(dict(kwargs))
+        return LLMResponse(content="Pathfinder completed the bounded assignment.")
+
+    async def chat_with_tools_with_usage(
+        self,
+        *_args: Any,
+        **_kwargs: Any,
+    ) -> ToolCallResult:
+        raise AssertionError("forced finalization must not use the tool-call API")
+
+
+@pytest.mark.asyncio
+async def test_exhausted_subagent_uses_plain_chat_for_final_handoff() -> None:
+    definition = _pathfinder_definition()
+    graph_input = build_subagent_initial_state(
+        definition=definition,
+        assignment=_assignment(),
+        graph_thread_id="child-thread-1",
+    )
+    graph_input["facts"]["iterations"] = definition.max_iterations
+    llm = _ForcedFinalTextLLM()
+
+    update = await run_subagent_model_turn(
+        definition,
+        graph_input,
+        llm_resolver=lambda *_args, **_kwargs: llm,
+    )
+
+    interactive = InteractiveState.from_mapping(update)
+    metadata = interactive.facts.safe_metadata
+    assert llm.chat_with_usage_kwargs == [
+        {
+            "temperature": 0.1,
+            "max_tokens": NATIVE_BUILDER_MAX_OUTPUT_TOKENS,
+        }
+    ]
+    assert metadata[SUBAGENT_ACTION_METADATA_KEY]["route"] == "handoff"
+    assert metadata[SUBAGENT_ACTION_METADATA_KEY]["forced_final"] is True
+    assert interactive.trace.final_text == (
+        "Pathfinder completed the bounded assignment."
+    )
 
 
 @pytest.mark.asyncio

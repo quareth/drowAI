@@ -33,7 +33,8 @@ from agent.graph.state import InteractiveState
 from agent.graph.utils import iteration_memory
 from agent.graph.utils.llm_resolver import resolve_llm_client
 from agent.providers.llm.contracts.tool_contracts import FunctionToolSpec
-from agent.providers.llm.core.base import ToolCallResult
+from agent.providers.llm.core.base import LLMResponse, ToolCallResult
+from agent.providers.llm.core.capabilities import LLMCapability
 from agent.reasoning.llm_parameter_resolution import NATIVE_BUILDER_MAX_OUTPUT_TOKENS
 from agent.reasoning.structured_contract_recovery import (
     contains_retryable_llm_timeout,
@@ -99,11 +100,9 @@ async def run_subagent_model_turn(
     )
     if can_call_tools:
         tool_specs, function_to_tool_id = _build_subagent_function_specs(subagent)
-        tool_choice = "auto"
     else:
         tool_specs = []
         function_to_tool_id = {}
-        tool_choice = "none"
 
     prompt_builder = SubagentRuntimePromptBuilder()
     role_prompt = definition.runtime_role_prompt or definition.instructions
@@ -118,12 +117,41 @@ async def run_subagent_model_turn(
         role="reasoning_main",
     )
     request_kwargs: dict[str, Any] = {
-        "tool_choice": tool_choice,
         "temperature": 0.1,
         "max_tokens": NATIVE_BUILDER_MAX_OUTPUT_TOKENS,
     }
     if can_call_tools:
-        request_kwargs["parallel_tool_calls"] = True
+        request_kwargs["tool_choice"] = "auto"
+        supports_capability = getattr(llm_client, "supports_capability", None)
+        if callable(supports_capability) and supports_capability(
+            LLMCapability.PARALLEL_TOOLS
+        ):
+            request_kwargs["parallel_tool_calls"] = True
+
+    system_prompt = prompt_builder.build_system_prompt(
+        definition_id=definition.id,
+        display_name=definition.display_name,
+        role_prompt=role_prompt,
+        definition_instructions=definition.instructions,
+        ownership_boundary=definition.ownership_boundary,
+        boundary_rules=boundary_rules,
+        max_committed_tools_per_batch=max_committed_calls,
+        callable_tool_ids=(
+            tuple(spec.tool_id for spec in tool_specs) if can_call_tools else ()
+        ),
+    )
+    user_prompt = prompt_builder.build_user_prompt(
+        display_name=definition.display_name,
+        assignment=subagent.assignment.model_dump(mode="json"),
+        tool_ids=subagent.tool_profile.tool_ids,
+        working_memory=_working_memory_prompt_context(interactive.facts.safe_metadata),
+        previous_tool_summary=_build_previous_tool_context(interactive),
+        remaining_limits=_build_remaining_limits(
+            definition,
+            interactive,
+            max_committed_calls=max_committed_calls,
+        ),
+    )
 
     async with reasoning_section(
         writer,
@@ -134,39 +162,21 @@ async def run_subagent_model_turn(
         context=context,
     ) as emitter:
         async def request_action() -> tuple[str, Any]:
-            result = await wait_for_with_timeout(
-                llm_client.chat_with_tools_with_usage(
-                    prompt_builder.build_system_prompt(
-                        definition_id=definition.id,
-                        display_name=definition.display_name,
-                        role_prompt=role_prompt,
-                        definition_instructions=definition.instructions,
-                        ownership_boundary=definition.ownership_boundary,
-                        boundary_rules=boundary_rules,
-                        max_committed_tools_per_batch=max_committed_calls,
-                        callable_tool_ids=(
-                            tuple(spec.tool_id for spec in tool_specs)
-                            if can_call_tools
-                            else ()
-                        ),
-                    ),
-                    prompt_builder.build_user_prompt(
-                        display_name=definition.display_name,
-                        assignment=subagent.assignment.model_dump(mode="json"),
-                        tool_ids=subagent.tool_profile.tool_ids,
-                        working_memory=_working_memory_prompt_context(
-                            interactive.facts.safe_metadata
-                        ),
-                        previous_tool_summary=_build_previous_tool_context(interactive),
-                        remaining_limits=_build_remaining_limits(
-                            definition,
-                            interactive,
-                            max_committed_calls=max_committed_calls,
-                        ),
-                    ),
+            if can_call_tools:
+                request = llm_client.chat_with_tools_with_usage(
+                    system_prompt,
+                    user_prompt,
                     tools=tool_specs,
                     **request_kwargs,
-                ),
+                )
+            else:
+                request = llm_client.chat_with_usage(
+                    system_prompt,
+                    user_prompt,
+                    **request_kwargs,
+                )
+            result = await wait_for_with_timeout(
+                request,
                 timeout_sec=LLM_TIMEOUT_PLANNER_PARAMETER_RESOLUTION_SEC,
                 component="SUBAGENT",
                 operation="subagent_runtime_model_llm_call",
@@ -176,6 +186,16 @@ async def run_subagent_model_turn(
             )
 
             _append_usage(interactive, result)
+            if not can_call_tools:
+                return (
+                    "handoff",
+                    _apply_subagent_text_result(
+                        interactive,
+                        subagent,
+                        result,
+                        forced_final=True,
+                    ),
+                )
             if not result.tool_calls:
                 return (
                     "handoff",
@@ -375,7 +395,7 @@ def _build_tool_batch_from_result(
 def _apply_subagent_text_result(
     interactive: InteractiveState,
     subagent: SubagentRuntimeState,
-    result: ToolCallResult,
+    result: LLMResponse | ToolCallResult,
     *,
     forced_final: bool,
 ) -> dict[str, Any]:
@@ -619,7 +639,10 @@ def _serialize_tool_batch(batch: ToolBatch) -> dict[str, Any]:
     }
 
 
-def _append_usage(interactive: InteractiveState, result: ToolCallResult) -> None:
+def _append_usage(
+    interactive: InteractiveState,
+    result: LLMResponse | ToolCallResult,
+) -> None:
     """Append the single subagent model call to normal usage accounting."""
 
     usage = _usage_to_dict(

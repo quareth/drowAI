@@ -21,6 +21,7 @@ from agent.providers.llm.core.base import (
     ToolCallResult,
 )
 from agent.providers.llm.core.budget_enforcing_client import BudgetEnforcingLLMClient
+from agent.providers.llm.core.capabilities import LLMCapability
 from agent.providers.llm.core.exceptions import LLMConfigurationError
 from agent.providers.llm.core.identity import ProviderModelRef
 from agent.providers.llm.profiles.registry import require_model_profile
@@ -165,6 +166,17 @@ def test_model_attribute_and_optional_streaming_usage_capability_are_delegated()
     client_with_usage = _wrapper(wrapped_with_usage)
 
     assert hasattr(client_with_usage, "stream_chat_messages_with_usage") is True
+
+
+def test_supports_capability_uses_effective_model_profile() -> None:
+    """Capability queries use the route-effective profile owned by the wrapper."""
+
+    gpt_oss = _wrapper(model="gpt-oss-20b")
+    assert gpt_oss.supports_capability(LLMCapability.TOOLS) is True
+    assert gpt_oss.supports_capability(LLMCapability.PARALLEL_TOOLS) is False
+
+    gpt = _wrapper(model="gpt-5.2")
+    assert gpt.supports_capability(LLMCapability.PARALLEL_TOOLS) is True
 
 
 @pytest.mark.asyncio

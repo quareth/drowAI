@@ -21,6 +21,7 @@ from agent.providers.llm.core.base import (
     ToolSpecInput,
 )
 from agent.providers.llm.core.budget_policy import OutputBudgetDecision, decide_output_budget
+from agent.providers.llm.core.capabilities import CapabilityInput
 from agent.providers.llm.core.exceptions import LLMConfigurationError
 from agent.providers.llm.core.identity import ProviderModelRef
 from agent.providers.llm.profiles.registry import ModelProfile
@@ -52,6 +53,11 @@ class BudgetEnforcingLLMClient(LLMClient):
     def model(self) -> str:
         """Return the provider request model exposed by the wrapped client."""
         return getattr(self._wrapped, "model", self._provider_model.model)
+
+    def supports_capability(self, capability: CapabilityInput) -> bool:
+        """Return whether the route-effective model profile supports a capability."""
+
+        return self._model_profile.supports(capability)
 
     def __getattribute__(self, name: str) -> Any:
         if name in {
