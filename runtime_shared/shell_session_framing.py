@@ -335,9 +335,7 @@ class StreamingPtyFramingParser:
             return None
         if line.startswith(self._frame.end_marker):
             return None
-        if PTY_EXIT_CODE_MARKER in line:
-            return None
-        return strip_pty_artifacts(line, self._frame.wrapped_command)
+        return line
 
 
 def normalize_pty_output(output: str) -> str:

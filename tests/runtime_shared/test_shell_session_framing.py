@@ -233,6 +233,38 @@ def test_streaming_parser_preserves_spaces_split_across_reads() -> None:
     assert final.completion is not None
 
 
+def test_streaming_parser_preserves_output_containing_static_exit_token() -> None:
+    frame = create_pty_command_frame("printf diagnostic", command_id="token-output")
+    parser = StreamingPtyFramingParser(frame)
+
+    result = parser.ingest(
+        f"{frame.start_marker}\n"
+        f"repository contains {PTY_EXIT_CODE_MARKER}literal\n"
+        f"{frame.end_marker}={PTY_EXIT_CODE_MARKER}0\n"
+    )
+
+    assert result.stdout == f"repository contains {PTY_EXIT_CODE_MARKER}literal"
+    assert result.completion is not None
+    assert result.completion.exit_code == 0
+
+
+def test_streaming_parser_preserves_static_exit_token_across_reads() -> None:
+    frame = create_pty_command_frame("printf diagnostic", command_id="token-chunks")
+    parser = StreamingPtyFramingParser(frame)
+
+    first = parser.ingest(f"{frame.start_marker}\nrepository contains ")
+    second = parser.ingest(f"{PTY_EXIT_CODE_MARKER}literal")
+    final = parser.ingest(
+        f"\nnext line\n{frame.end_marker}={PTY_EXIT_CODE_MARKER}0\n"
+    )
+
+    assert "".join((first.stdout, second.stdout, final.stdout)) == (
+        f"repository contains {PTY_EXIT_CODE_MARKER}literal\nnext line"
+    )
+    assert final.completion is not None
+    assert final.completion.exit_code == 0
+
+
 def test_streaming_parser_resynchronizes_when_gap_retains_start_marker() -> None:
     frame = create_pty_command_frame("printf output", command_id="gap-recovers")
     parser = StreamingPtyFramingParser(frame)

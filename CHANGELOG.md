@@ -27,6 +27,8 @@ The format is based on
 
 ### Fixed
 
+- Interactive shell output now preserves legitimate lines containing the static
+  exit-code token while still removing frame-specific protocol records.
 - Terminal cleanup now preserves durable shell assessment evidence while updating
   the session's final lifecycle state.
 - Shell session environment inputs now require valid variable names and cannot
