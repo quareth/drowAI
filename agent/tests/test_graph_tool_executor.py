@@ -399,7 +399,7 @@ async def test_shell_exec_running_update_maps_session_continuation_fields(
 @pytest.mark.parametrize(
     ("tool_id", "expected_capability"),
     [
-        ("shell.utility", ShellCapability.UTILITY),
+        ("shell.utility", ShellCapability.ASSESSMENT),
         ("shell.assessment", ShellCapability.ASSESSMENT),
     ],
 )
@@ -602,7 +602,9 @@ async def test_shell_write_stdin_builds_write_request(
 
     assert result["success"] is True
     assert result["process_status"] == "running"
-    assert result["metadata"]["runtime_session"]["originating_capability"] == "utility"
+    assert result["metadata"]["runtime_session"]["originating_capability"] == (
+        "assessment"
+    )
     assert service.write_calls
     _, write_request = service.write_calls[0]
     assert write_request == ShellWriteRequest(session_id="shs_public123", chars="yes\n")

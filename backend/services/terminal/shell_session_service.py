@@ -174,14 +174,10 @@ class ShellSessionService:
             tool_timeout_max_seconds=self._config.tool_timeout_max_sec,
             preparation_seconds=preparation_timeout_sec,
         )
-        effective_yield_time_ms = (
-            None
-            if request.yield_time_ms is None
-            else clamp_shell_yield_time_ms(
-                request.yield_time_ms,
-                reserved_seconds=preparation_timeout_sec,
-                tool_timeout_max_seconds=self._config.tool_timeout_max_sec,
-            )
+        effective_yield_time_ms = clamp_shell_yield_time_ms(
+            request.yield_time_ms,
+            reserved_seconds=preparation_timeout_sec,
+            tool_timeout_max_seconds=self._config.tool_timeout_max_sec,
         )
         request = request.model_copy(
             update={
@@ -242,21 +238,12 @@ class ShellSessionService:
                 ):
                     raise RuntimeError("send_terminal_input failed")
 
-            yield_time_ms = request.yield_time_ms
-            if yield_time_ms is None:
-                remaining_runtime_ms = math.ceil(
-                    max(0.0, record.deadline_at - self._clock()) * 1000.0
-                )
-                yield_time_ms = max(1, remaining_runtime_ms)
-
             return await self._read_update(
                 record=record,
-                yield_time_ms=yield_time_ms,
+                yield_time_ms=request.yield_time_ms,
                 max_output_chars=request.max_output_chars,
                 started_at=started_at,
-                allow_initial_quiet_boundary=request.yield_time_ms is not None,
-                return_on_empty_window=request.yield_time_ms is not None,
-                return_on_output_boundary=request.yield_time_ms is not None,
+                allow_initial_quiet_boundary=True,
             )
         except asyncio.CancelledError:
             if registered and public_session_id:

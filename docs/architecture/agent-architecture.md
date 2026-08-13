@@ -183,9 +183,9 @@ Tool execution boundaries:
 - Container-scoped tools use file-comm or PTY for local placement.
 - `shell.utility`, `shell.assessment`, and `shell.write_stdin` are universal
   runtime-session-scoped tools. The two start aliases share the hidden
-  `shell.exec` implementation schema and command policy, while preserving their
-  distinct output-persistence semantics. Their adapters fail closed for direct
-  execution; the graph dispatcher routes them through `runtime_session_control`.
+  `shell.exec` implementation schema, command policy, runtime capability, and
+  output-persistence path. Their adapters fail closed for direct execution; the
+  graph dispatcher routes them through `runtime_session_control`.
 - Runtime-session shell tools use `ShellSessionService` through the
   runtime-shared service port, then `TerminalSessionManager`, then the selected
   runtime provider PTY implementation. The model-facing shell aliases and

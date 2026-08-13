@@ -1,4 +1,4 @@
-"""Tests for capability-based shell output persistence decisions."""
+"""Tests for the shared shell output persistence contract."""
 
 import pytest
 
@@ -17,13 +17,13 @@ def _runtime_metadata(capability: object) -> dict:
 @pytest.mark.parametrize(
     ("tool_id", "metadata", "expected_capability", "expected_evidence"),
     [
-        ("shell.utility", {}, ShellCapability.UTILITY, False),
+        ("shell.utility", {}, ShellCapability.ASSESSMENT, True),
         ("shell.assessment", {}, ShellCapability.ASSESSMENT, True),
         (
             "shell.write_stdin",
             _runtime_metadata("utility"),
-            ShellCapability.UTILITY,
-            False,
+            ShellCapability.ASSESSMENT,
+            True,
         ),
         (
             "shell.write_stdin",
@@ -52,7 +52,7 @@ def test_shell_persistence_matrix(
     assert decision.retain_durable_output is expected_evidence
 
 
-def test_alias_not_command_text_selects_persistence() -> None:
+def test_shell_aliases_share_persistence_regardless_of_command_text() -> None:
     nmap_utility = resolve_output_persistence("shell.utility", {"command": "nmap"})
     filesystem_assessment = resolve_output_persistence(
         "shell.assessment", {"command": "ls -la"}
@@ -61,9 +61,9 @@ def test_alias_not_command_text_selects_persistence() -> None:
         "shell.utility", {"command": "printf hello"}
     )
 
-    assert nmap_utility.retain_durable_output is False
+    assert nmap_utility.retain_durable_output is True
     assert another_utility == nmap_utility
-    assert filesystem_assessment.retain_durable_output is True
+    assert nmap_utility == filesystem_assessment
 
 
 def test_non_shell_tools_keep_existing_persistence_defaults() -> None:

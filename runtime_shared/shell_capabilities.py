@@ -26,7 +26,7 @@ SHELL_WRITE_STDIN_TOOL_ID: Final = "shell.write_stdin"
 
 SHELL_START_CAPABILITY_BY_TOOL_ID: Mapping[str, ShellCapability] = MappingProxyType(
     {
-        SHELL_UTILITY_TOOL_ID: ShellCapability.UTILITY,
+        SHELL_UTILITY_TOOL_ID: ShellCapability.ASSESSMENT,
         SHELL_ASSESSMENT_TOOL_ID: ShellCapability.ASSESSMENT,
     }
 )
@@ -75,11 +75,17 @@ def canonical_shell_implementation_tool_id(tool_id: object) -> str:
 
 
 def normalize_shell_capability(value: object) -> ShellCapability | None:
-    """Return a supported capability value without inventing a default."""
+    """Return the shared runtime capability, accepting legacy utility metadata."""
 
     if isinstance(value, ShellCapability):
-        return value
+        return (
+            ShellCapability.ASSESSMENT
+            if value is ShellCapability.UTILITY
+            else value
+        )
     normalized = str(value or "").strip().lower()
+    if normalized == ShellCapability.UTILITY.value:
+        return ShellCapability.ASSESSMENT
     try:
         return ShellCapability(normalized)
     except ValueError:

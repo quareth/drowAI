@@ -21,7 +21,6 @@ from runtime_shared.file_comm_contracts import (
 from runtime_shared.shell_timeouts import (
     DEFAULT_TOOL_TIMEOUT_SECONDS,
     SHELL_SESSION_CLEANUP_TIMEOUT_SEC,
-    SHELL_SESSION_MAX_RUNTIME_SEC,
     SHELL_SESSION_MAX_YIELD_TIME_MS,
     SHELL_SESSION_PREPARATION_TIMEOUT_SEC,
     SHELL_SESSION_DEFAULT_TERMINAL_IO_GRACE_SEC,
@@ -464,66 +463,6 @@ class ToolTimeoutPolicy:
             if tool_id in SHELL_SESSION_START_TOOL_IDS
             else 0.0
         )
-        if tool_id in SHELL_SESSION_START_TOOL_IDS and raw_yield_ms is None:
-            requested_runtime_seconds = _coerce_positive_seconds(
-                raw_parameters.get("max_runtime_sec")
-            )
-            runtime_seconds = clamp_shell_runtime_sec(
-                requested_runtime_seconds,
-                tool_timeout_max_seconds=operation_max_seconds,
-                preparation_seconds=preparation_seconds,
-            )
-            deadline_seconds = preparation_seconds + runtime_seconds
-            normalized = dict(raw_parameters)
-            if (
-                "max_runtime_sec" not in raw_parameters
-                or requested_runtime_seconds is not None
-            ):
-                normalized["max_runtime_sec"] = runtime_seconds
-            return ToolTimeoutPlan(
-                tool_id=str(tool_id),
-                deadline_seconds=deadline_seconds,
-                native_timeout_seconds=max(1, int(math.ceil(deadline_seconds))),
-                normalized_parameters=normalized,
-                source=(
-                    "caller_override"
-                    if caller_override is not None
-                    else "parameter:max_runtime_sec"
-                    if requested_runtime_seconds is not None
-                    else "default:max_runtime_sec"
-                ),
-                requested_timeout_seconds=(
-                    caller_override
-                    if caller_override is not None
-                    else requested_runtime_seconds
-                ),
-                requested_timeout_field=(
-                    None
-                    if caller_override is not None
-                    else "max_runtime_sec"
-                    if requested_runtime_seconds is not None
-                    else None
-                ),
-                native_timeout_field=None,
-                max_timeout_seconds=min(
-                    self._config.max_seconds,
-                    configured_preparation_seconds + SHELL_SESSION_MAX_RUNTIME_SEC,
-                ),
-                default_timeout_seconds=(
-                    configured_preparation_seconds
-                    + clamp_shell_runtime_sec(
-                        None,
-                        tool_timeout_max_seconds=self._config.max_seconds,
-                        preparation_seconds=configured_preparation_seconds,
-                    )
-                ),
-                grace_seconds=max(
-                    self._config.shell_session_terminal_io_grace_seconds,
-                    SHELL_SESSION_CLEANUP_TIMEOUT_SEC,
-                ),
-                stripped_timeout_fields=(),
-            )
-
         requested_yield_ms = _coerce_non_negative_seconds(raw_yield_ms)
         requested_seconds: Optional[float] = None
         requested_field: Optional[str] = None
@@ -561,7 +500,11 @@ class ToolTimeoutPolicy:
         deadline_seconds = preparation_seconds + control_seconds + yield_seconds
         native_timeout_seconds = max(1, int(math.ceil(deadline_seconds)))
         normalized = dict(raw_parameters)
-        if "yield_time_ms" not in raw_parameters or requested_yield_ms is not None:
+        if (
+            tool_id in SHELL_SESSION_START_TOOL_IDS
+            or "yield_time_ms" not in raw_parameters
+            or requested_yield_ms is not None
+        ):
             normalized["yield_time_ms"] = yield_ms
         if tool_id in SHELL_SESSION_START_TOOL_IDS:
             requested_runtime_seconds = _coerce_positive_seconds(

@@ -195,7 +195,11 @@ async def test_shell_coordinator_sends_non_empty_input_directly() -> None:
                 runner_id=None,
                 execution_site_id=None,
             ),
-            ShellWriteRequest(session_id=public_session_id, chars="hello\n"),
+            ShellWriteRequest(
+                session_id=public_session_id,
+                chars="hello\n",
+                yield_time_ms=0,
+            ),
         )
     ]
     assert "planner_plan" not in updated_metadata

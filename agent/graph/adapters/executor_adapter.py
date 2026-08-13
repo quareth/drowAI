@@ -59,6 +59,7 @@ from runtime_shared.shell_capabilities import (
     SHELL_SESSION_START_TOOL_IDS,
     SHELL_WRITE_STDIN_TOOL_ID,
     ShellCapability,
+    normalize_shell_capability,
     resolve_shell_session_start_capability,
 )
 
@@ -454,9 +455,11 @@ class GraphToolExecutor:
                 ),
             )
         else:
-            originating_capability = await service.get_session_capability(
-                identity=identity,
-                public_session_id=session_request.session_id,
+            originating_capability = normalize_shell_capability(
+                await service.get_session_capability(
+                    identity=identity,
+                    public_session_id=session_request.session_id,
+                )
             )
             update = await service.write_stdin(identity=identity, request=session_request)
 

@@ -100,10 +100,11 @@ def test_shell_request_contracts_json_round_trip() -> None:
     ).model_dump(mode="json") == write_request.model_dump(mode="json")
 
 
-def test_shell_start_omits_yield_for_attached_execution_by_default() -> None:
+def test_shell_start_uses_bounded_silent_yield_by_default() -> None:
     request = ShellExecRequest(command="sleep 20")
 
-    assert request.yield_time_ms is None
+    assert request.yield_time_ms == 10_000
+    assert ShellExecRequest(command="sleep 20", yield_time_ms=None).yield_time_ms == 10_000
 
 
 def test_shell_start_accepts_explicit_interactive_yield_window() -> None:
@@ -306,7 +307,7 @@ def test_shell_write_request_models_exact_non_empty_input_and_internal_wait() ->
         ShellWriteRequest(session_id="shs_abc123", chars="")
 
     assert interrupt.chars == "\u0003"
-    assert interrupt.yield_time_ms == 20_000
+    assert interrupt.yield_time_ms == 10_000
     assert wait.session_id == "shs_abc123"
     assert wait.max_output_chars == 32_000
 

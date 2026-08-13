@@ -70,7 +70,7 @@ def test_should_skip_backend_execution_artifact_save_when_runner_materialized() 
     assert should_skip_backend_execution_artifact_save(outcome=outcome) is True
 
 
-def test_save_execution_artifact_skips_utility_without_reporting_failure(
+def test_save_execution_artifact_persists_utility_like_assessment(
     tmp_path,
 ) -> None:
     calls: list[dict[str, Any]] = []
@@ -86,15 +86,17 @@ def test_save_execution_artifact_skips_utility_without_reporting_failure(
         workspace_path=str(tmp_path),
         facts=SimpleNamespace(task_id=34, metadata={}),
         interactive=interactive,
-        save_tool_output_artifact_fn=lambda **kwargs: calls.append(dict(kwargs)),
+        save_tool_output_artifact_fn=lambda **kwargs: (
+            calls.append(dict(kwargs)) or "artifacts/tool_output.txt"
+        ),
         safe_inc_fn=increments.append,
         logger=SimpleNamespace(debug=lambda *_args, **_kwargs: None),
         persistence_decision=resolve_output_persistence("shell.utility"),
     )
 
-    assert artifact_path is None
-    assert calls == []
-    assert increments == []
+    assert artifact_path == "artifacts/tool_output.txt"
+    assert len(calls) == 1
+    assert increments == ["langgraph_artifact_saves_successful"]
     assert interactive.trace.reasoning == []
 
 

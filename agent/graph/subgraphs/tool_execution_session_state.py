@@ -43,7 +43,6 @@ def begin_execution_session_state(
         "evidence_rows": [],
         "entries": [],
         "pending_inputs": {},
-        "interaction_decisions": 0,
         "compacted": False,
         "omitted_entries": 0,
     }
@@ -157,25 +156,7 @@ def read_shell_interaction_transcript(sequence_id: str) -> Mapping[str, Any] | N
     copied["entries"] = [dict(entry) for entry in transcript.get("entries", [])]
     copied.pop("evidence_rows", None)
     copied.pop("pending_inputs", None)
-    copied.pop("interaction_decisions", None)
     return copied
-
-
-def consume_shell_interaction_decision(
-    sequence_id: str,
-    *,
-    limit: int,
-) -> bool:
-    """Reserve one reasoning decision within a live session's fixed budget."""
-
-    session = _RUNTIME_EXECUTION_SESSIONS.get(str(sequence_id or "").strip())
-    if session is None:
-        return False
-    used = int(session.get("interaction_decisions") or 0)
-    if used >= max(0, int(limit)):
-        return False
-    session["interaction_decisions"] = used + 1
-    return True
 
 
 def remember_shell_input(*, sequence_id: str, call_id: str, chars: str) -> None:

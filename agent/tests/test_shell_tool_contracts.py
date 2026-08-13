@@ -52,7 +52,8 @@ def test_shell_exec_schema_matches_session_contract_surface() -> None:
         "idempotent",
         "redact_output",
     } & _schema_fields(ShellExecArgs)
-    assert ShellExecArgs(command="sleep 20").yield_time_ms is None
+    assert ShellExecArgs(command="sleep 20").yield_time_ms == 10_000
+    assert ShellExecArgs(command="sleep 20", yield_time_ms=None).yield_time_ms == 10_000
     assert ShellExecArgs(command="sleep 20", yield_time_ms=500).yield_time_ms == 500
 
 
@@ -97,7 +98,7 @@ def test_shell_write_stdin_schema_and_input_forms() -> None:
     assert schema["additionalProperties"] is False
     assert schema["properties"]["session_id"]["maxLength"] == 128
     assert schema["properties"]["chars"]["maxLength"] == 16_384
-    assert schema["properties"]["yield_time_ms"]["default"] == 20_000
+    assert schema["properties"]["yield_time_ms"]["default"] == 10_000
     assert schema["properties"]["yield_time_ms"]["maximum"] == 30_000
     assert schema["properties"]["max_output_chars"]["minimum"] == 1_024
     assert schema["properties"]["max_output_chars"]["maximum"] == 128_000

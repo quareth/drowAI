@@ -819,7 +819,7 @@ async def test_runtime_model_exposes_and_commits_universal_shell_utilities() -> 
         "command": "printf ready",
         "cwd": None,
         "env": None,
-        "yield_time_ms": None,
+        "yield_time_ms": 10_000,
         "max_output_chars": 32000,
         "max_runtime_sec": 120,
     }

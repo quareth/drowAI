@@ -66,7 +66,6 @@ from .tool_execution_session_state import (
     append_execution_session_evidence,
     append_shell_interaction_transcript,
     begin_execution_session_state,
-    consume_shell_interaction_decision,
     finish_execution_session_state,
     infer_shell_interaction_boundary as _infer_boundary,
     materialize_terminal_session_output as _materialize_terminal_session_output,
@@ -75,8 +74,6 @@ from .tool_execution_session_state import (
 )
 
 _SHELL_INTERACTION_WAIT_BATCH_KEY = "shell_interaction_wait_batch"
-# Leave ample graph steps for setup/finalization, then let the runtime own waiting.
-SHELL_INTERACTION_DECISION_BUDGET = 8
 
 
 def initialize_tool_execution_session(
@@ -263,18 +260,6 @@ async def coordinate_shell_interaction(
         _publish_unavailable_execution_session(metadata, session=session)
         interactive.facts.metadata = metadata
         return interactive.as_graph_update()
-    if not consume_shell_interaction_decision(
-        sequence_id,
-        limit=SHELL_INTERACTION_DECISION_BUDGET,
-    ):
-        return await _wait_for_shell_terminal(
-            interactive=interactive,
-            metadata=metadata,
-            session=session,
-            active=active,
-            context=context,
-            wait_fn=wait_fn,
-        )
     decision = _normalize_interaction_decision(
         await _call_interaction_decision_boundary(
             interactive=interactive,
@@ -349,58 +334,6 @@ async def coordinate_shell_interaction(
         )
     interactive.facts.metadata = metadata
     return interactive.as_graph_update()
-
-
-async def _wait_for_shell_terminal(
-    *,
-    interactive: InteractiveState,
-    metadata: MutableMapping[str, Any],
-    session: Mapping[str, Any],
-    active: Mapping[str, Any],
-    context: Any,
-    wait_fn: Callable[..., Any] | None,
-) -> dict[str, Any]:
-    """Drain runtime-owned waits without spending one graph step per update."""
-
-    sequence_id = str(session["sequence_id"])
-    while True:
-        update = await _wait_for_shell_output(
-            interactive=interactive,
-            metadata=metadata,
-            active=active,
-            context=context,
-            wait_fn=wait_fn,
-        )
-        _publish_direct_shell_update(
-            metadata,
-            sequence_id=sequence_id,
-            session=session,
-            active=active,
-            update=update,
-            row_tool_id=str(
-                session.get("originating_tool_id")
-                or active.get("originating_tool_id")
-                or ""
-            ).strip(),
-            intent="Runtime-owned wait for the existing shell session.",
-        )
-        interactive.facts.metadata = metadata
-        if read_active_execution_control(metadata) is None:
-            return interactive.as_graph_update()
-
-        evidence = read_compact_evidence(metadata, prefer_runtime=True)
-        if evidence is None:
-            _publish_unavailable_execution_session(metadata, session=session)
-            interactive.facts.metadata = metadata
-            return interactive.as_graph_update()
-        append_shell_interaction_transcript(
-            sequence_id=sequence_id,
-            evidence=evidence,
-            metadata=metadata,
-        )
-        metadata.pop(_SHELL_INTERACTION_WAIT_BATCH_KEY, None)
-        active = read_active_execution_control(metadata) or active
-        await asyncio.sleep(0)
 
 
 def _row_is_durable(row: Mapping[str, Any]) -> bool:
@@ -998,5 +931,4 @@ __all__ = [
     "initialize_tool_execution_session",
     "read_shell_interaction_transcript",
     "route_after_tool_dispatch",
-    "SHELL_INTERACTION_DECISION_BUDGET",
 ]

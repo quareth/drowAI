@@ -108,10 +108,10 @@ def test_deep_reasoning_capability_selects_dr_finalizer_path(
     assert captured["capability"] == "deep_reasoning"
 
 
-def test_simple_finalizer_reads_runtime_only_utility_evidence_without_state_write() -> None:
+def test_simple_finalizer_reads_runtime_only_shell_evidence_without_state_write() -> None:
     batch_id = "tb-runtime-only-finalizer"
     compact = {
-        "tool": "shell.utility",
+        "tool": "shell.write_stdin",
         "status": "success",
         "success": True,
         "summary": "Created /workspace/boris.txt.",
@@ -127,7 +127,7 @@ def test_simple_finalizer_reads_runtime_only_utility_evidence_without_state_writ
             "results": [
                 {
                     "tool_call_id": "tc-runtime-only-finalizer",
-                    "tool_id": "shell.utility",
+                    "tool_id": "shell.write_stdin",
                     "status": "success",
                     "success": True,
                     "compact_tool_result": compact,

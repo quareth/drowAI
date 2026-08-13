@@ -15,7 +15,6 @@ from agent.tools import BaseTool, BaseToolArgs, ToolResult, register_tool
 from runtime_shared.shell_timeouts import (
     SHELL_SESSION_CLEANUP_TIMEOUT_SEC,
     SHELL_SESSION_CONTROL_TIMEOUT_SEC,
-    SHELL_SESSION_DEFAULT_MAX_RUNTIME_SEC,
     SHELL_SESSION_PREPARATION_TIMEOUT_SEC,
 )
 
@@ -212,7 +211,7 @@ def test_shell_session_exec_timeout_uses_yield_wait_not_process_lifetime():
     assert plan.stripped_timeout_fields == ()
 
 
-def test_shell_session_exec_without_yield_waits_for_process_lifetime() -> None:
+def test_shell_session_exec_without_yield_uses_default_silent_wait() -> None:
     plan = _policy(default=25, max_seconds=300).resolve(
         tool_id="shell.exec",
         parameters={
@@ -221,15 +220,15 @@ def test_shell_session_exec_without_yield_waits_for_process_lifetime() -> None:
         },
     )
 
-    assert plan.deadline_seconds == SHELL_SESSION_PREPARATION_TIMEOUT_SEC + 180
+    assert plan.deadline_seconds == SHELL_SESSION_PREPARATION_TIMEOUT_SEC + 10
     assert plan.grace_seconds == SHELL_SESSION_CLEANUP_TIMEOUT_SEC
-    assert plan.requested_timeout_field == "max_runtime_sec"
+    assert plan.requested_timeout_field is None
     assert plan.native_timeout_field is None
     assert plan.default_timeout_seconds == (
-        SHELL_SESSION_PREPARATION_TIMEOUT_SEC
-        + SHELL_SESSION_DEFAULT_MAX_RUNTIME_SEC
+        SHELL_SESSION_PREPARATION_TIMEOUT_SEC + 10
     )
-    assert plan.max_timeout_seconds == 300
+    assert plan.max_timeout_seconds == SHELL_SESSION_PREPARATION_TIMEOUT_SEC + 30
+    assert plan.normalized_parameters["yield_time_ms"] == 10_000
 
 
 def test_shell_session_exec_clamps_runtime_to_configured_tool_maximum() -> None:
@@ -241,8 +240,8 @@ def test_shell_session_exec_clamps_runtime_to_configured_tool_maximum() -> None:
         },
     )
 
-    assert plan.deadline_seconds == 60
-    assert plan.max_timeout_seconds == 60
+    assert plan.deadline_seconds == SHELL_SESSION_PREPARATION_TIMEOUT_SEC + 10
+    assert plan.max_timeout_seconds == SHELL_SESSION_PREPARATION_TIMEOUT_SEC + 30
     assert plan.normalized_parameters["max_runtime_sec"] == 52
 
 
@@ -252,7 +251,7 @@ def test_default_shell_runtime_is_clamped_to_configured_tool_maximum() -> None:
         parameters={"command": "sleep 900"},
     )
 
-    assert plan.deadline_seconds == 60
+    assert plan.deadline_seconds == SHELL_SESSION_PREPARATION_TIMEOUT_SEC + 10
     assert plan.normalized_parameters["max_runtime_sec"] == 52
 
 
@@ -266,14 +265,14 @@ def test_shell_runtime_remains_bounded_below_standard_preparation_budget() -> No
     assert plan.normalized_parameters["max_runtime_sec"] == 1
 
 
-def test_shell_caller_override_tightens_attached_deadline() -> None:
+def test_shell_caller_override_caps_default_yield_deadline() -> None:
     plan = _policy(default=25, max_seconds=60).resolve(
         tool_id="shell.exec",
         parameters={"command": "sleep 900", "max_runtime_sec": 900},
         override_deadline_seconds=30,
     )
 
-    assert plan.deadline_seconds == 30
+    assert plan.deadline_seconds == SHELL_SESSION_PREPARATION_TIMEOUT_SEC + 10
     assert plan.source == "caller_override"
     assert plan.normalized_parameters["max_runtime_sec"] == 22
 

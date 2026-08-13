@@ -71,7 +71,7 @@ async def test_synthesizer_allows_runtime_only_compact_evidence_without_persisti
     batch_id = "tb-runtime-only-synthesizer"
     compact = {
         "schema_version": "2.0",
-        "tool": "shell.utility",
+        "tool": "shell.write_stdin",
         "status": "success",
         "success": True,
         "summary": "Created /workspace/boris.txt.",
@@ -90,7 +90,7 @@ async def test_synthesizer_allows_runtime_only_compact_evidence_without_persisti
             "results": [
                 {
                     "tool_call_id": "tc-runtime-only",
-                    "tool_id": "shell.utility",
+                    "tool_id": "shell.write_stdin",
                     "status": "success",
                     "success": True,
                     "compact_tool_result": compact,

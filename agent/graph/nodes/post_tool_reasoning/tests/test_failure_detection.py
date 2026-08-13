@@ -274,13 +274,13 @@ def test_detect_empty_output() -> None:
 
 
 @pytest.mark.asyncio
-async def test_runtime_only_utility_evidence_reaches_ptr_without_checkpoint_output(
+async def test_runtime_only_shell_evidence_reaches_ptr_without_checkpoint_output(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     batch_id = "tb-runtime-only-ptr"
     compact = {
         "schema_version": "2.0",
-        "tool": "shell.utility",
+        "tool": "shell.write_stdin",
         "status": "success",
         "success": True,
         "exit_code": 0,
@@ -300,7 +300,7 @@ async def test_runtime_only_utility_evidence_reaches_ptr_without_checkpoint_outp
             "results": [
                 {
                     "tool_call_id": "tc-runtime-only-ptr",
-                    "tool_id": "shell.utility",
+                    "tool_id": "shell.write_stdin",
                     "status": "success",
                     "success": True,
                     "compact_tool_result": compact,

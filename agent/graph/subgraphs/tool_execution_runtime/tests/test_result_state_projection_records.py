@@ -97,9 +97,9 @@ def test_completed_batch_enqueues_each_persisted_execution_and_isolates_failures
         compact_by_call_id={
             "tc-1": {"summary": "fallback"},
             "tc-2": {"summary": "curl complete"},
-            "tc-4": {"summary": "utility transient"},
+            "tc-4": {"summary": "utility retained"},
             "tc-5": {"summary": "assessment retained"},
-            "tc-6": {"summary": "utility continuation transient"},
+            "tc-6": {"summary": "utility continuation retained"},
             "tc-7": {"summary": "assessment continuation retained"},
         },
         deterministic_compact_by_call_id={
@@ -133,33 +133,39 @@ def test_completed_batch_enqueues_each_persisted_execution_and_isolates_failures
     assert [attempt["execution_id"] for attempt in attempts] == [
         "execution-1",
         "execution-2",
+        "execution-4",
         "execution-5",
+        "execution-6",
         "execution-7",
     ]
     assert attempts[0]["compact_output"]["summary"] == "nmap complete"
     assert attempts[1]["compact_output"]["summary"] == "curl complete"
-    assert attempts[2]["compact_output"]["summary"] == "assessment retained"
-    assert attempts[3]["compact_output"]["summary"] == (
+    assert attempts[2]["compact_output"]["summary"] == "utility retained"
+    assert attempts[3]["compact_output"]["summary"] == "assessment retained"
+    assert attempts[4]["compact_output"]["summary"] == (
+        "utility continuation retained"
+    )
+    assert attempts[5]["compact_output"]["summary"] == (
         "assessment continuation retained"
     )
     assert metrics == ["knowledge_ingestion_enqueue_failures"]
 
 
-def test_utility_only_batch_clears_output_bearing_primary_metadata() -> None:
+def test_utility_only_batch_retains_primary_metadata_like_assessment() -> None:
     facts = _Facts(
         metadata={
             "selected_tool": "shell.utility",
-            "tool_parameters": {"command": "printf transient"},
-            "last_tool_result": {"stdout": "transient"},
-            "last_artifact_path": "artifacts/transient.txt",
+            "tool_parameters": {"command": "printf retained"},
+            "last_tool_result": {"stdout": "retained"},
+            "last_artifact_path": "artifacts/retained.txt",
         }
     )
     facts.selected_tool = "shell.utility"
-    facts.tool_parameters = {"command": "printf transient"}
+    facts.tool_parameters = {"command": "printf retained"}
     batch = ToolBatch(
         tool_batch_id="tb-utility",
         tool_calls=(
-            ToolCall("tc-utility", "shell.utility", {"command": "printf transient"}),
+            ToolCall("tc-utility", "shell.utility", {"command": "printf retained"}),
         ),
         requested_execution_strategy=ExecutionStrategy.SEQUENTIAL,
     )
@@ -176,14 +182,13 @@ def test_utility_only_batch_clears_output_bearing_primary_metadata() -> None:
         },
     )
 
-    assert facts.selected_tool is None
-    assert facts.tool_parameters == {}
-    assert set(facts.metadata).isdisjoint(
-        {"selected_tool", "tool_parameters", "last_tool_result", "last_artifact_path"}
-    )
+    assert facts.selected_tool == "shell.utility"
+    assert facts.tool_parameters == {"command": "printf retained"}
+    assert facts.metadata["last_tool_result"] == {"stdout": "retained"}
+    assert facts.metadata["last_artifact_path"] == "artifacts/retained.txt"
 
 
-def test_mixed_batch_restores_first_durable_call_not_utility_call() -> None:
+def test_mixed_batch_restores_first_call_when_utility_alias_is_first() -> None:
     facts = _Facts(metadata={})
     facts.selected_tool = None
     facts.tool_parameters = {}
@@ -200,6 +205,12 @@ def test_mixed_batch_restores_first_durable_call_not_utility_call() -> None:
         facts=facts,
         batch=batch,
         projection_by_call_id={
+            "tc-utility": {
+                "result_for_metadata": {
+                    "tool": "shell.utility",
+                    "summary": "utility retained",
+                }
+            },
             "tc-assessment": {
                 "result_for_metadata": {
                     "tool": "shell.assessment",
@@ -216,9 +227,9 @@ def test_mixed_batch_restores_first_durable_call_not_utility_call() -> None:
         },
     )
 
-    assert facts.selected_tool == "shell.assessment"
-    assert facts.tool_parameters == {"command": "nmap localhost"}
-    assert facts.metadata["last_tool_result"]["summary"] == "assessment retained"
+    assert facts.selected_tool == "shell.utility"
+    assert facts.tool_parameters == {"command": "pwd"}
+    assert facts.metadata["last_tool_result"]["summary"] == "utility retained"
 
 
 def test_append_tool_execution_record_persists_route_and_runtime_identity_fields() -> None:
@@ -444,8 +455,8 @@ def test_apply_result_state_projection_masks_tool_history_without_mutating_runti
     assert "<DURABLE_SECRET_MASK:" in serialized_execution_records
 
 
-def test_utility_projection_retains_only_operational_execution_record() -> None:
-    sentinel = "TRANSIENT_UTILITY_OUTPUT_SENTINEL"
+def test_utility_projection_retains_output_like_assessment() -> None:
+    sentinel = "UTILITY_OUTPUT_SENTINEL"
     working_memory = {"objective": {"text": "keep existing memory"}}
     facts = _Facts(
         metadata={
@@ -486,7 +497,7 @@ def test_utility_projection_retains_only_operational_execution_record() -> None:
             "result_for_metadata": {"stdout": sentinel, "summary": sentinel},
             "graph_metadata": {"result": {"stdout": sentinel}},
             "action_record": {"params": {"command": "printf transient"}},
-            "artifact_refs_for_memory": [{"path": "artifacts/transient.txt"}],
+            "artifact_refs_for_memory": [{"path": "artifacts/utility.txt"}],
             "compression_usage_record": None,
             "persistence_decision": resolve_output_persistence("shell.utility"),
         },
@@ -497,7 +508,9 @@ def test_utility_projection_retains_only_operational_execution_record() -> None:
             compact.get("summary") or fallback or ""
         ),
         refresh_trace_scratchpad_fn=lambda _interactive: None,
-        memory_reduce_tool_result_fn=lambda **kwargs: memory_calls.append(kwargs),
+        memory_reduce_tool_result_fn=lambda **kwargs: (
+            memory_calls.append(kwargs) or working_memory
+        ),
         logger=SimpleNamespace(
             warning=lambda *_args, **_kwargs: None,
             debug=lambda *_args, **_kwargs: None,
@@ -506,23 +519,23 @@ def test_utility_projection_retains_only_operational_execution_record() -> None:
     )
 
     assert facts.metadata["working_memory"] is working_memory
-    assert memory_calls == []
-    assert set(facts.metadata).isdisjoint(
-        {"last_tool_result", "last_tool_result_compact", "tool_history", "action_history"}
-    )
+    assert len(memory_calls) == 1
+    assert facts.metadata["last_tool_result"]["stdout"] == sentinel
+    assert facts.metadata["tool_history"]
+    assert facts.metadata["action_history"]
     [record] = facts.metadata["tool_execution_records"]
     assert record["tool"] == "shell.utility"
-    assert record["capability"] == "utility"
+    assert record["capability"] == "assessment"
     assert record["status"] == "success"
     assert record["exit_code"] == 0
-    assert record["stdout_excerpt"] == ""
+    assert record["stdout_excerpt"] == sentinel
     assert record["stderr_excerpt"] == ""
-    assert record["artifact_refs"] == []
-    assert sentinel not in str(facts.metadata)
+    assert record["artifact_refs"] == [{"path": "artifacts/utility.txt"}]
+    assert sentinel in str(facts.metadata)
 
 
-def test_running_utility_projection_retains_only_active_execution_control() -> None:
-    sentinel = "TRANSIENT_RUNNING_OUTPUT_SENTINEL"
+def test_running_utility_projection_retains_output_and_active_execution_control() -> None:
+    sentinel = "RUNNING_OUTPUT_SENTINEL"
     public_session_id = "shs_runtime_control_123"
     facts = _Facts(
         metadata={
@@ -599,9 +612,8 @@ def test_running_utility_projection_retains_only_active_execution_control() -> N
         "session_id": public_session_id,
         "stdin_available": True,
     }
-    assert "last_tool_result" not in facts.metadata
-    assert "last_tool_result_compact" not in facts.metadata
-    assert sentinel not in str(facts.metadata)
+    assert facts.metadata["last_tool_result"]["stdout"] == sentinel
+    assert sentinel in str(facts.metadata)
 
 
 def test_apply_result_state_projection_sets_clears_and_counts_validation_errors() -> None:
@@ -747,8 +759,8 @@ def test_project_trace_history_masks_checkpoint_and_cache_without_masking_runtim
     assert "<DURABLE_SECRET_MASK:" in serialized_cache
 
 
-def test_utility_dispatch_cache_excludes_transient_output_but_event_keeps_it() -> None:
-    sentinel = "TRANSIENT_UTILITY_EVENT_SENTINEL"
+def test_utility_dispatch_cache_retains_output_like_assessment() -> None:
+    sentinel = "UTILITY_EVENT_SENTINEL"
     facts = _Facts(metadata={})
     interactive = SimpleNamespace(
         trace=SimpleNamespace(reasoning=[], observations=[], executed_tools=[]),
@@ -800,11 +812,11 @@ def test_utility_dispatch_cache_excludes_transient_output_but_event_keeps_it() -
     )
 
     assert sentinel in str(emitted_events[0])
-    assert emitted_events[0]["output_persistence"] == "transient"
-    assert sentinel not in str(facts.metadata["tool_dispatch_cache"])
-    assert interactive.trace.reasoning == []
-    assert interactive.trace.observations == []
-    assert interactive.trace.executed_tools == []
+    assert emitted_events[0]["output_persistence"] == "durable"
+    assert sentinel in str(facts.metadata["tool_dispatch_cache"])
+    assert interactive.trace.reasoning == [sentinel]
+    assert interactive.trace.observations == [sentinel]
+    assert len(interactive.trace.executed_tools) == 1
 
 
 def test_shell_session_projection_preserves_continuation_fields_and_nullable_exit_code() -> None:
@@ -1320,13 +1332,13 @@ def test_compact_batch_metadata_keeps_ptr_runtime_copy_raw_and_durable_copy_mask
     assert sentinel in runtime_sections["key_findings"]
 
 
-def test_utility_compact_evidence_is_runtime_only() -> None:
-    sentinel = "TRANSIENT_RUNTIME_ONLY_SENTINEL"
+def test_utility_compact_evidence_is_durable_like_assessment() -> None:
+    sentinel = "UTILITY_DURABLE_SENTINEL"
     facts = _Facts(metadata={})
     batch = ToolBatch(
-        tool_batch_id="tb-utility-runtime-only",
+        tool_batch_id="tb-utility-durable",
         tool_calls=(
-            ToolCall("tc-utility-runtime-only", "shell.utility", {"command": "printf x"}),
+            ToolCall("tc-utility-durable", "shell.utility", {"command": "printf x"}),
         ),
         requested_execution_strategy=ExecutionStrategy.SEQUENTIAL,
     )
@@ -1335,7 +1347,7 @@ def test_utility_compact_evidence_is_runtime_only() -> None:
         status=BatchStatus.COMPLETED,
         call_results=(
             ToolCallResult(
-                tool_call_id="tc-utility-runtime-only",
+                tool_call_id="tc-utility-durable",
                 tool_id="shell.utility",
                 status=ToolCallStatus.SUCCESS,
             ),
@@ -1349,19 +1361,20 @@ def test_utility_compact_evidence_is_runtime_only() -> None:
         batch=batch,
         result=result,
         compact_by_call_id={
-            "tc-utility-runtime-only": {
+            "tc-utility-durable": {
                 "tool": "shell.utility",
                 "summary": sentinel,
                 "success": True,
             }
         },
         persistence_decision_by_call_id={
-            "tc-utility-runtime-only": resolve_output_persistence("shell.utility")
+            "tc-utility-durable": resolve_output_persistence("shell.utility")
         },
     )
 
-    assert facts.metadata == {"tool_batch_id": "tb-utility-runtime-only"}
-    assert read_compact_evidence(facts.metadata) is None
+    durable_view = read_compact_evidence(facts.metadata)
+    assert durable_view is not None
+    assert sentinel in str(durable_view.raw)
     runtime_view = read_compact_evidence(facts.metadata, prefer_runtime=True)
     assert runtime_view is not None
     assert sentinel in str(runtime_view.raw)

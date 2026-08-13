@@ -880,7 +880,7 @@ async def test_delayed_command_yields_public_session_id_and_later_completes() ->
 
 
 @pytest.mark.asyncio
-async def test_default_attached_command_waits_past_internal_yield_boundary() -> None:
+async def test_default_shell_start_returns_when_output_becomes_available() -> None:
     manager = FakeTerminalManager()
     clock = MutableClock()
     original_read = manager.read_output_result
@@ -905,15 +905,16 @@ async def test_default_attached_command_waits_past_internal_yield_boundary() -> 
         request=ShellExecRequest(command="delayed"),
     )
 
-    assert update.process_status is ShellProcessStatus.COMPLETED
-    assert update.session_id is None
-    assert update.exit_code == 0
-    assert update.stdout == "started\ndone"
-    assert manager.closed_sessions == ["terminal-1"]
+    assert update.process_status is ShellProcessStatus.RUNNING
+    assert update.interaction_boundary is ShellInteractionBoundary.OUTPUT_AVAILABLE
+    assert update.session_id is not None
+    assert update.exit_code is None
+    assert update.stdout == "started"
+    assert manager.closed_sessions == []
 
 
 @pytest.mark.asyncio
-async def test_quiet_attached_command_does_not_yield_running_on_read_interval() -> None:
+async def test_default_shell_start_yields_silent_running_session() -> None:
     manager = FakeTerminalManager()
     clock = MutableClock()
     original_read = manager.read_output_result
@@ -935,12 +936,13 @@ async def test_quiet_attached_command_does_not_yield_running_on_read_interval() 
 
     update = await service.execute(
         identity=_identity(),
-        request=ShellExecRequest(command="quiet-then-done"),
+        request=ShellExecRequest(command="no-output"),
     )
 
-    assert update.process_status is ShellProcessStatus.COMPLETED
-    assert update.interaction_boundary is ShellInteractionBoundary.TERMINAL
-    assert update.stdout == "done"
+    assert update.process_status is ShellProcessStatus.RUNNING
+    assert update.interaction_boundary is ShellInteractionBoundary.QUIET_BOUNDARY
+    assert update.session_id is not None
+    assert update.stdout == ""
 
 
 @pytest.mark.asyncio
@@ -1022,7 +1024,7 @@ async def test_wait_for_output_returns_active_after_shared_silent_yield_window()
     async def read_and_advance_after_empty(*args, **kwargs):
         result = await original_read(*args, **kwargs)
         if not result.data:
-            clock.advance(20.25)
+            clock.advance(10.25)
         return result
 
     manager.read_output_result = read_and_advance_after_empty
@@ -1075,7 +1077,7 @@ async def test_write_stdin_returns_active_session_after_silent_fallback_window()
     async def read_and_advance_after_post_input_empty(*args, **kwargs):
         result = await original_read(*args, **kwargs)
         if advance_empty_reads and not result.data:
-            clock.advance(20.25)
+            clock.advance(10.25)
         return result
 
     manager.send_input = send_without_output_after_start
