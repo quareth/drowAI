@@ -1006,7 +1006,7 @@ class ShellSessionService:
                 shlex.quote(f"{key}={value}")
                 for key, value in sorted(request.env.items())
             )
-            command = f"env {env_args} {command}"
+            command = f"env -- {env_args} {command}"
         parts.append(command)
         return " && ".join(parts)
 

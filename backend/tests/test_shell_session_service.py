@@ -555,6 +555,17 @@ class MutableClock:
         self.value += seconds
 
 
+def test_prepare_command_terminates_env_option_parsing() -> None:
+    request = ShellExecRequest(
+        command="printf intended",
+        env={"APP_MODE": "test"},
+    )
+
+    prepared = ShellSessionService._prepare_command(None, request)
+
+    assert prepared == "env -- APP_MODE=test bash -lc 'printf intended'"
+
+
 @pytest.mark.asyncio
 async def test_service_clamps_process_lifetime_to_configured_tool_maximum() -> None:
     manager = FakeTerminalManager()

@@ -268,8 +268,30 @@ def test_shell_exec_request_rejects_protected_env_names(
         ShellExecRequest(command="env", env={protected_name: "override"})
 
 
+@pytest.mark.parametrize(
+    "invalid_name",
+    [
+        "--split-string",
+        "-S",
+        "9INVALID",
+        "INVALID NAME",
+        "INVALID=NAME",
+        "INVALID.NAME",
+        "",
+    ],
+)
+def test_shell_exec_request_rejects_invalid_env_names(invalid_name: str) -> None:
+    with pytest.raises(ValidationError):
+        ShellExecRequest(command="env", env={invalid_name: "value"})
+
+
 def test_shell_exec_request_accepts_ordinary_env_additions() -> None:
-    env = {"APP_MODE": "test", "PATH_SUFFIX": "/opt/example"}
+    env = {
+        "APP_MODE": "test",
+        "PATH_SUFFIX": "/opt/example",
+        "_PRIVATE_VALUE_2": "enabled",
+        "lowercase": "accepted",
+    }
 
     request = ShellExecRequest(command="env", env=env)
 

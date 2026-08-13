@@ -7,6 +7,7 @@ PTY resources, or depend on backend-owned services.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Literal
@@ -47,6 +48,7 @@ SHELL_SESSION_PROTECTED_ENV_PREFIXES = (
     "DROWAI_",
     "RUNNER_",
 )
+_SHELL_SESSION_ENV_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 ShellRuntimePlacementMode = Literal["local", "runner"]
 ShellSessionStatus = Literal["success", "error"]
@@ -154,6 +156,10 @@ def _validate_env_limits(env: dict[str, str]) -> dict[str, str]:
 
 def _validate_protected_env(env: dict[str, str]) -> dict[str, str]:
     for key in env:
+        if _SHELL_SESSION_ENV_NAME_PATTERN.fullmatch(key) is None:
+            raise ValueError(
+                f"env key `{key}` must be a valid environment variable name"
+            )
         normalized_key = str(key).strip().upper()
         if normalized_key in SHELL_SESSION_PROTECTED_ENV_NAMES or normalized_key.startswith(
             SHELL_SESSION_PROTECTED_ENV_PREFIXES
