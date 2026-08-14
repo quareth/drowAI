@@ -87,6 +87,17 @@ class _CommandTerminalManager:
             ]
         elif "silent-running" in command:
             results = [TerminalReadResult(ok=True)]
+        elif "quiet-then-terminal" in command:
+            results = [
+                TerminalReadResult(ok=True),
+                TerminalReadResult(ok=True),
+                TerminalReadResult(
+                    ok=True,
+                    eof=True,
+                    process_status="completed",
+                    exit_code=0,
+                ),
+            ]
         else:
             results = [
                 TerminalReadResult(ok=True, data=b"quick\n"),
@@ -440,6 +451,25 @@ async def test_hard_deadline_terminates_a_running_exec() -> None:
     )
     assert terminal.process_status is ShellProcessStatus.TIMED_OUT
     assert manager.sent_inputs == [("terminal-1", b"\x03")]
+
+
+@pytest.mark.asyncio
+async def test_explicit_wait_does_not_return_an_unchanged_quiet_boundary() -> None:
+    manager = _CommandTerminalManager()
+    service = _service(manager)
+    started = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(command="quiet-then-terminal", yield_time_ms=0),
+        capability=ShellCapability.UTILITY,
+    )
+
+    terminal = await service.wait_for_output(
+        identity=_identity(),
+        request=ShellWaitRequest(session_id=str(started.session_id)),
+    )
+
+    assert terminal.process_status is ShellProcessStatus.COMPLETED
+    assert terminal.exit_code == 0
 
 
 @pytest.mark.asyncio

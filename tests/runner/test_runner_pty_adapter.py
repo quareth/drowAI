@@ -89,3 +89,106 @@ def test_runner_adapter_starts_exact_dedicated_exec_and_reports_final_exit(
     assert final.eof is True
     assert final.process_status == "completed"
     assert final.exit_code == 0
+
+
+def test_runner_adapter_reports_stopped_exec_before_socket_eof(monkeypatch) -> None:
+    raw_socket = _RawSocket()
+    api = _Api(raw_socket)
+    client = SimpleNamespace(
+        api=api,
+        containers=SimpleNamespace(get=lambda _container_id: SimpleNamespace(id="cid-1")),
+    )
+    adapter = _RunnerPtyAdapter(docker_runtime=SimpleNamespace(_client=lambda: client))
+    monkeypatch.setattr(
+        adapter_module.select,
+        "select",
+        lambda *_args, **_kwargs: ([], [], []),
+    )
+
+    adapter.open_session(
+        container_id="cid-1",
+        session_id="session-1",
+        cols=120,
+        rows=30,
+        command="printf hello",
+        interactive=False,
+    )
+    result = adapter.read_output_result(session_id="session-1", max_bytes=4096)
+
+    assert result.eof is False
+    assert result.process_status == "running"
+
+
+def test_runner_adapter_reports_terminal_after_bounded_drain_grace(monkeypatch) -> None:
+    raw_socket = _RawSocket()
+    api = _Api(raw_socket)
+    client = SimpleNamespace(
+        api=api,
+        containers=SimpleNamespace(get=lambda _container_id: SimpleNamespace(id="cid-1")),
+    )
+    adapter = _RunnerPtyAdapter(docker_runtime=SimpleNamespace(_client=lambda: client))
+    observed_times = iter((10.0, 10.051))
+    monkeypatch.setattr(
+        adapter_module.select,
+        "select",
+        lambda *_args, **_kwargs: ([], [], []),
+    )
+    monkeypatch.setattr(
+        adapter_module.time,
+        "monotonic",
+        lambda: next(observed_times),
+    )
+
+    adapter.open_session(
+        container_id="cid-1",
+        session_id="session-1",
+        cols=120,
+        rows=30,
+        command="printf hello",
+        interactive=False,
+    )
+    draining = adapter.read_output_result(session_id="session-1", max_bytes=4096)
+    terminal = adapter.read_output_result(session_id="session-1", max_bytes=4096)
+
+    assert draining.eof is False
+    assert terminal.eof is True
+    assert terminal.process_status == "completed"
+    assert terminal.exit_code == 0
+
+
+def test_runner_adapter_drains_tail_after_exec_stops(monkeypatch) -> None:
+    raw_socket = _RawSocket()
+    raw_socket.chunks = [b"tail\n", b""]
+    api = _Api(raw_socket)
+    client = SimpleNamespace(
+        api=api,
+        containers=SimpleNamespace(get=lambda _container_id: SimpleNamespace(id="cid-1")),
+    )
+    adapter = _RunnerPtyAdapter(docker_runtime=SimpleNamespace(_client=lambda: client))
+    readiness = iter((False, True, True))
+    monkeypatch.setattr(
+        adapter_module.select,
+        "select",
+        lambda *_args, **_kwargs: (
+            ([raw_socket], [], []) if next(readiness) else ([], [], [])
+        ),
+    )
+
+    adapter.open_session(
+        container_id="cid-1",
+        session_id="session-1",
+        cols=120,
+        rows=30,
+        command="printf tail",
+        interactive=False,
+    )
+    stopped = adapter.read_output_result(session_id="session-1", max_bytes=4096)
+    tail = adapter.read_output_result(session_id="session-1", max_bytes=4096)
+    terminal = adapter.read_output_result(session_id="session-1", max_bytes=4096)
+
+    assert stopped.eof is False
+    assert tail.data == b"tail\n"
+    assert tail.eof is False
+    assert terminal.eof is True
+    assert terminal.process_status == "completed"
+    assert terminal.exit_code == 0

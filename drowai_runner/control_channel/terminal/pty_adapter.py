@@ -8,11 +8,14 @@ runtime; no protocol or websocket knowledge.
 from __future__ import annotations
 
 import select
+import time
 from typing import Mapping
 
 from drowai_runner.docker_runtime import RunnerDockerRuntime
 from runtime_shared.docker_contracts import CONTAINER_WORKSPACE_PATH
-from runtime_shared.terminal_contracts import TerminalReadResult
+from runtime_shared.terminal_contracts import DedicatedExecDrainState, TerminalReadResult
+
+_EXEC_EXIT_DRAIN_GRACE_SECONDS = 0.05
 
 
 class _RunnerPtyAdapter:
@@ -86,6 +89,7 @@ class _RunnerPtyAdapter:
             "rows": rows,
             "dedicated_command": command is not None,
             "interactive": bool(interactive),
+            "exit_drain_state": DedicatedExecDrainState(),
         }
 
     def send_input(self, *, session_id: str, data: str) -> None:
@@ -196,20 +200,21 @@ class _RunnerPtyAdapter:
                 eof=socket_eof,
                 process_status="failed" if socket_eof else "running",
             )
-        if bool(inspection.get("Running")):
-            return TerminalReadResult(ok=True, process_status="running")
-        if not socket_eof:
-            return TerminalReadResult(ok=True, process_status="running")
         exit_code_raw = inspection.get("ExitCode")
         try:
             exit_code = int(exit_code_raw) if exit_code_raw is not None else None
         except (TypeError, ValueError):
             exit_code = None
-        return TerminalReadResult(
-            ok=True,
-            eof=True,
-            process_status="completed" if exit_code == 0 else "failed",
+        drain_state = session.get("exit_drain_state")
+        if not isinstance(drain_state, DedicatedExecDrainState):
+            drain_state = DedicatedExecDrainState()
+            session["exit_drain_state"] = drain_state
+        return drain_state.observe(
+            running=bool(inspection.get("Running")),
+            socket_eof=socket_eof,
             exit_code=exit_code,
+            now=time.monotonic(),
+            drain_grace_seconds=_EXEC_EXIT_DRAIN_GRACE_SECONDS,
         )
 
     def _require_session(self, session_id: str) -> dict[str, object]:

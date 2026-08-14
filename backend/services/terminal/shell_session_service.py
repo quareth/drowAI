@@ -452,7 +452,7 @@ class ShellSessionService:
                 ),
                 max_output_chars=request.max_output_chars,
                 started_at=started_at,
-                return_on_empty_window=True,
+                return_on_empty_window=False,
             )
         except asyncio.CancelledError:
             await self._registry.release(record)

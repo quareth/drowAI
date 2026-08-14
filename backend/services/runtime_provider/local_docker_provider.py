@@ -12,6 +12,7 @@ import inspect
 import json
 import signal
 import base64
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,6 +25,7 @@ from backend.services.unified_docker_service import unified_docker_service
 from backend.services.runtime_provider.local_file_comm_cancel import append_file_comm_cancellations
 from backend.services.workspace.manager import WorkspaceManager
 from runtime_shared.docker_contracts import CONTAINER_WORKSPACE_PATH
+from runtime_shared.terminal_contracts import DedicatedExecDrainState
 from runtime_shared.workspace_write_mode import (
     WORKSPACE_WRITE_MODE_APPEND,
     WORKSPACE_WRITE_MODE_WRITE,
@@ -44,6 +46,7 @@ from .contracts import (
 from .provider import TaskExecutionRuntimeProvider
 
 _Adapter = Callable[[RuntimeOperationRequest], Any]
+_EXEC_EXIT_DRAIN_GRACE_SECONDS = 0.05
 
 
 class LocalDockerRuntimeProvider(TaskExecutionRuntimeProvider):
@@ -59,6 +62,7 @@ class LocalDockerRuntimeProvider(TaskExecutionRuntimeProvider):
         self._docker_service = docker_service
         self._workspace_manager = workspace_manager or WorkspaceManager()
         self._operation_adapters = dict(operation_adapters or {})
+        self._terminal_exit_drain_states: dict[str, DedicatedExecDrainState] = {}
 
     @property
     def provider_name(self) -> str:
@@ -936,26 +940,30 @@ class LocalDockerRuntimeProvider(TaskExecutionRuntimeProvider):
                 "eof": socket_eof,
                 "process_status": "failed" if socket_eof else "running",
             }
-        if bool(inspection.get("Running")):
-            return {
-                "success": True,
-                "data": data,
-                "eof": False,
-                "process_status": "running",
-            }
-        if not socket_eof:
-            return {"success": True, "data": data, "eof": False, "process_status": "running"}
         exit_code_raw = inspection.get("ExitCode")
         try:
             exit_code = int(exit_code_raw) if exit_code_raw is not None else None
         except (TypeError, ValueError):
             exit_code = None
+        drain_state = self._terminal_exit_drain_states.setdefault(
+            exec_id,
+            DedicatedExecDrainState(),
+        )
+        result = drain_state.observe(
+            running=bool(inspection.get("Running")),
+            socket_eof=socket_eof,
+            exit_code=exit_code,
+            now=time.monotonic(),
+            drain_grace_seconds=_EXEC_EXIT_DRAIN_GRACE_SECONDS,
+        )
+        if result.eof:
+            self._terminal_exit_drain_states.pop(exec_id, None)
         return {
             "success": True,
             "data": data,
-            "eof": True,
-            "process_status": "completed" if exit_code == 0 else "failed",
-            "exit_code": exit_code,
+            "eof": result.eof,
+            "process_status": result.process_status,
+            "exit_code": result.exit_code,
         }
 
     def _resize_terminal_session(self, request: RuntimeOperationRequest) -> dict[str, Any]:
@@ -972,6 +980,9 @@ class LocalDockerRuntimeProvider(TaskExecutionRuntimeProvider):
         return {"success": True}
 
     def _close_terminal_session(self, request: RuntimeOperationRequest) -> dict[str, Any]:
+        session_id = request.payload.get("session_id")
+        if isinstance(session_id, str):
+            self._terminal_exit_drain_states.pop(session_id, None)
         socket_obj = request.payload.get("socket")
         if socket_obj is not None:
             raw_sock = getattr(socket_obj, "_sock", socket_obj)

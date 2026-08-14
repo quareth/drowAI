@@ -66,6 +66,7 @@ class RemoteRuntimeHandler:
         session_state: ConnectionSessionState,
     ) -> None:
         normalized_message_id = str(inbound.message_id).strip()
+        is_stream_request = self._terminal_stream_handler.is_request(inbound)
         cached_decision = session_state.ack_decisions_by_message_id.get(normalized_message_id)
         validated_context: _RemoteRuntimeRequestContext | None = None
         if cached_decision is None:
@@ -83,38 +84,51 @@ class RemoteRuntimeHandler:
             session_state.ack_decisions_by_message_id[normalized_message_id] = cached_decision
 
         status, error_code = cached_decision
-        ack = build_runner_ack_envelope(
-            tenant_id=identity.tenant_id,
-            runner_id=identity.runner_id,
-            acked_message_id=inbound.message_id,
-            status=status,
-            error_code=error_code,
-            correlation_id=inbound.correlation_id,
-            protocol_version=identity.protocol_version,
-        )
-        websocket.send(ack.to_json())
+
+        def _send_ack() -> None:
+            ack = build_runner_ack_envelope(
+                tenant_id=identity.tenant_id,
+                runner_id=identity.runner_id,
+                acked_message_id=inbound.message_id,
+                status=status,
+                error_code=error_code,
+                correlation_id=inbound.correlation_id,
+                protocol_version=identity.protocol_version,
+            )
+            websocket.send(ack.to_json())
 
         if (
             status != "accepted"
             or normalized_message_id in session_state.processed_runtime_messages
         ):
+            _send_ack()
             return
-        session_state.processed_runtime_messages.add(normalized_message_id)
 
         if validated_context is None:
             validation = self._validator.validate(identity=identity, inbound=inbound)
             if validation[0] != "accepted" or validation[2] is None:
+                _send_ack()
                 return
             validated_context = validation[2]
 
-        if self._terminal_stream_handler.is_request(inbound):
-            self._terminal_stream_handler.execute(
+        session_state.processed_runtime_messages.add(normalized_message_id)
+        if is_stream_request:
+            operation_status, operation_error = self._terminal_stream_handler.execute(
                 websocket=websocket,
                 identity=identity,
                 inbound=inbound,
                 context=validated_context,
             )
+            status = "accepted" if operation_status == "succeeded" else "failed"
+            error_code = operation_error
+            session_state.ack_decisions_by_message_id[normalized_message_id] = (
+                status,
+                error_code,
+            )
+            _send_ack()
             return
+
+        _send_ack()
 
         event_type, payload, terminal_frames = self._execute_runtime_operation(
             inbound=inbound,

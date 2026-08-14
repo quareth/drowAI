@@ -386,6 +386,20 @@ async def _runner_channel_inbound_loop(
         stream_envelope = _try_parse_runner_envelope(inbound)
         if stream_envelope is not None:
             if stream_registry.handle_stream_ack(stream_envelope):
+                payload = stream_envelope.payload
+                ack_waiters.resolve(
+                    RunnerAckObservation(
+                        acked_message_id=str(
+                            getattr(payload, "acked_message_id", "") or ""
+                        ).strip(),
+                        status=str(
+                            getattr(payload, "status", "accepted") or "accepted"
+                        ).strip().lower(),
+                        error_code=(
+                            str(getattr(payload, "error_code", "")).strip() or None
+                        ),
+                    )
+                )
                 continue
             if await _handle_terminal_stream_frame(
                 session=session,
@@ -549,6 +563,15 @@ async def _handle_terminal_stream_frame(
         task_id=int(envelope.task_id),
         session_id=session_id,
         data=data,
+        eof=bool(getattr(payload, "eof", False)),
+        process_status=(
+            str(getattr(payload, "process_status", "") or "").strip() or None
+        ),
+        exit_code=(
+            int(getattr(payload, "exit_code"))
+            if isinstance(getattr(payload, "exit_code", None), int)
+            else None
+        ),
     )
 
 
@@ -1210,8 +1233,11 @@ async def runner_channel(
     stream_registry = get_runner_terminal_stream_registry()
 
     async def _send_stream_envelope(envelope: RunnerEnvelope) -> None:
-        async with send_lock:
-            await websocket.send_json(envelope.to_dict())
+        result = await transport.send(envelope, timeout_seconds=5.0)
+        if not result.acked:
+            raise RuntimeError(
+                result.error_message or "Runner did not apply terminal stream input."
+            )
 
     try:
         session = manager.open_session(
