@@ -8,9 +8,11 @@ runtime; no protocol or websocket knowledge.
 from __future__ import annotations
 
 import select
+from typing import Mapping
 
 from drowai_runner.docker_runtime import RunnerDockerRuntime
 from runtime_shared.docker_contracts import CONTAINER_WORKSPACE_PATH
+from runtime_shared.terminal_contracts import TerminalReadResult
 
 
 class _RunnerPtyAdapter:
@@ -27,6 +29,10 @@ class _RunnerPtyAdapter:
         session_id: str,
         cols: int,
         rows: int,
+        command: str | None = None,
+        cwd: str = CONTAINER_WORKSPACE_PATH,
+        env: Mapping[str, str] | None = None,
+        interactive: bool = True,
     ) -> None:
         client = self._docker_runtime._client()
         if not hasattr(client, "api"):
@@ -39,16 +45,20 @@ class _RunnerPtyAdapter:
             }
             return
         container = client.containers.get(container_id)
+        exec_command: str | list[str] = "/bin/bash"
+        if command is not None:
+            exec_command = ["/bin/bash", "-lc", command]
         exec_id = client.api.exec_create(
             container.id,
-            cmd="/bin/bash",
+            cmd=exec_command,
             tty=True,
             stdin=True,
             stdout=True,
             stderr=True,
+            environment=dict(env or {}) or None,
             privileged=True,
             user="root",
-            workdir=CONTAINER_WORKSPACE_PATH,
+            workdir=cwd or CONTAINER_WORKSPACE_PATH,
         )["Id"]
         sock = client.api.exec_start(
             exec_id,
@@ -74,6 +84,8 @@ class _RunnerPtyAdapter:
             "raw_socket": raw_sock,
             "cols": cols,
             "rows": rows,
+            "dedicated_command": command is not None,
+            "interactive": bool(interactive),
         }
 
     def send_input(self, *, session_id: str, data: str) -> None:
@@ -97,24 +109,46 @@ class _RunnerPtyAdapter:
             pass
 
     def read_output(self, *, session_id: str, max_bytes: int) -> bytes:
+        return self.read_output_result(
+            session_id=session_id,
+            max_bytes=max_bytes,
+        ).data
+
+    def read_output_result(
+        self,
+        *,
+        session_id: str,
+        max_bytes: int,
+    ) -> TerminalReadResult:
         session = self._require_session(session_id)
         if "raw_socket" not in session:
             buffer = session["buffer"]
             assert isinstance(buffer, bytearray)
             chunk = bytes(buffer[:max_bytes])
             del buffer[:max_bytes]
-            return chunk
+            return TerminalReadResult(
+                ok=True,
+                data=chunk,
+                process_status="running",
+            )
         raw_sock = session["raw_socket"]
         try:
             readable, _, _ = select.select([raw_sock], [], [], 0.005)
         except Exception:
             readable = [raw_sock]
         if not readable:
-            return b""
+            return self._process_state_result(session)
         try:
-            return raw_sock.recv(max(1, max_bytes))
+            data = raw_sock.recv(max(1, max_bytes))
         except (BlockingIOError, TimeoutError):
-            return b""
+            return self._process_state_result(session)
+        if data:
+            return TerminalReadResult(
+                ok=True,
+                data=data,
+                process_status="running",
+            )
+        return self._process_state_result(session, socket_eof=True)
 
     def resize_session(self, *, session_id: str, cols: int, rows: int) -> None:
         session = self._require_session(session_id)
@@ -133,6 +167,50 @@ class _RunnerPtyAdapter:
         close = getattr(raw_sock, "close", None)
         if callable(close):
             close()
+
+    def _process_state_result(
+        self,
+        session: dict[str, object],
+        *,
+        socket_eof: bool = False,
+    ) -> TerminalReadResult:
+        if not bool(session.get("dedicated_command")):
+            return TerminalReadResult(
+                ok=True,
+                eof=socket_eof,
+                process_status="failed" if socket_eof else "running",
+            )
+        exec_id = session.get("exec_id")
+        client = self._docker_runtime._client()
+        if not isinstance(exec_id, str) or not exec_id or not hasattr(client, "api"):
+            return TerminalReadResult(
+                ok=True,
+                eof=socket_eof,
+                process_status="failed" if socket_eof else "running",
+            )
+        try:
+            inspection = client.api.exec_inspect(exec_id)
+        except Exception:
+            return TerminalReadResult(
+                ok=True,
+                eof=socket_eof,
+                process_status="failed" if socket_eof else "running",
+            )
+        if bool(inspection.get("Running")):
+            return TerminalReadResult(ok=True, process_status="running")
+        if not socket_eof:
+            return TerminalReadResult(ok=True, process_status="running")
+        exit_code_raw = inspection.get("ExitCode")
+        try:
+            exit_code = int(exit_code_raw) if exit_code_raw is not None else None
+        except (TypeError, ValueError):
+            exit_code = None
+        return TerminalReadResult(
+            ok=True,
+            eof=True,
+            process_status="completed" if exit_code == 0 else "failed",
+            exit_code=exit_code,
+        )
 
     def _require_session(self, session_id: str) -> dict[str, object]:
         session = self._sessions.get(session_id)

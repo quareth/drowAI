@@ -46,6 +46,9 @@ class _StreamBuffer:
     event: asyncio.Event = field(default_factory=asyncio.Event)
     closed: bool = False
     output_dropped: bool = False
+    eof: bool = False
+    process_status: str | None = None
+    exit_code: int | None = None
 
 
 class CloudTerminalStreamClient:
@@ -313,6 +316,9 @@ class RunnerTerminalStreamRegistry:
         task_id: int,
         session_id: str,
         data: str,
+        eof: bool = False,
+        process_status: str | None = None,
+        exit_code: int | None = None,
     ) -> bool:
         """Append a known stream-mode frame and wake readers."""
         key = self._stream_key(
@@ -326,10 +332,20 @@ class RunnerTerminalStreamRegistry:
             return False
         with self._lock:
             buffer = self._buffers.get(key)
-            if buffer is None or buffer.closed:
+            if buffer is None:
+                if (int(tenant_id), runner_id) not in self._channels:
+                    return False
+                buffer = _StreamBuffer()
+                self._buffers[key] = buffer
+            if buffer.closed:
                 return False
-            buffer.frames.append(encoded)
-            buffer.byte_count += len(encoded)
+            if encoded:
+                buffer.frames.append(encoded)
+                buffer.byte_count += len(encoded)
+            if eof:
+                buffer.eof = True
+                buffer.process_status = process_status
+                buffer.exit_code = exit_code
             while buffer.byte_count > _MAX_BUFFER_BYTES and buffer.frames:
                 removed = buffer.frames.popleft()
                 buffer.byte_count -= len(removed)
@@ -345,6 +361,9 @@ class RunnerTerminalStreamRegistry:
         task_id: int,
         session_id: str,
         data: str,
+        eof: bool = False,
+        process_status: str | None = None,
+        exit_code: int | None = None,
     ) -> bool:
         """Append a known frame once for delivery through the stream reader."""
         return self.append_stream_frame(
@@ -353,6 +372,9 @@ class RunnerTerminalStreamRegistry:
             task_id=task_id,
             session_id=session_id,
             data=data,
+            eof=eof,
+            process_status=process_status,
+            exit_code=exit_code,
         )
 
     async def read_stream_output(
@@ -431,6 +453,13 @@ class RunnerTerminalStreamRegistry:
                     buffer.output_dropped = False
                     buffer.event.clear()
                     return TerminalReadResult(ok=True, truncated=True)
+                if buffer.eof:
+                    return TerminalReadResult(
+                        ok=True,
+                        eof=True,
+                        process_status=buffer.process_status,
+                        exit_code=buffer.exit_code,
+                    )
                 event = buffer.event
 
             if deadline is not None and asyncio.get_running_loop().time() >= deadline:

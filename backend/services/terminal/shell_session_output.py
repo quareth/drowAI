@@ -1,17 +1,10 @@
 """Bounded shell-session output accumulation.
 
-This module owns per-operation PTY output projection for shell sessions. It
-keeps bounded public head/tail output plus a small framing tail for marker
-detection, and performs no provider I/O or session lifecycle work.
+This module owns bounded per-operation output projection for shell sessions.
+It performs no provider I/O and does not infer process lifecycle from text.
 """
 
 from __future__ import annotations
-
-from runtime_shared.shell_session_framing import (
-    PtyCommandFrame,
-    PtyFramingCompletion,
-    StreamingPtyFramingParser,
-)
 
 _TRUNCATION_MARKER = "\n[... shell output truncated ...]\n"
 
@@ -84,16 +77,8 @@ class ShellSessionOutputAccumulator:
     def __init__(
         self,
         *,
-        frame: PtyCommandFrame | None = None,
-        parser: StreamingPtyFramingParser | None = None,
         max_output_chars: int,
     ) -> None:
-        if parser is None:
-            if frame is None:
-                raise ValueError("frame or parser is required")
-            parser = StreamingPtyFramingParser(frame)
-        self._parser = parser
-        self._parser.begin_output_window()
         self._max_output_chars = max_output_chars
         self._bounded = _BoundedText(max_output_chars)
         self._provider_output_truncated = False
@@ -106,12 +91,12 @@ class ShellSessionOutputAccumulator:
     @property
     def retained_state_chars(self) -> int:
         """Return the helper-owned retained character count for safety tests."""
-        return self._bounded.retained_len + self._parser.retained_state_chars
+        return self._bounded.retained_len
 
     @property
     def retained_state_limit_chars(self) -> int:
         """Return the configured upper bound for helper-owned retained text."""
-        return self._max_output_chars + self._parser.retained_state_limit_chars
+        return self._max_output_chars
 
     @property
     def stdout_ends_with_newline(self) -> bool:
@@ -123,23 +108,14 @@ class ShellSessionOutputAccumulator:
         raw_output: str,
         *,
         provider_output_truncated: bool = False,
-    ) -> PtyFramingCompletion | None:
+    ) -> None:
         """Consume provider output and its transport-loss signal atomically."""
         if provider_output_truncated:
             self._provider_output_truncated = True
-        try:
-            result = self._parser.ingest(
-                raw_output,
-                input_gap=provider_output_truncated,
-            )
-        except Exception as exc:
-            raise ValueError(str(exc)) from exc
-        if result.stdout:
-            self._bounded.append(result.stdout)
-            self._stdout_ends_with_newline = result.stdout_ends_with_newline
-        if result.completion is None:
-            return None
-        return result.completion
+        if raw_output:
+            self._bounded.append(raw_output)
+            self._stdout_ends_with_newline = raw_output.endswith(("\n", "\r"))
+        return None
 
     def stdout(self) -> tuple[str, bool]:
         """Return the current bounded public stdout delta and truncation flag."""

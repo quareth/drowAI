@@ -682,6 +682,9 @@ class RuntimeEventService:
                 sequence=payload.sequence,
                 stream=payload.stream,
                 data=safe_frame_data,
+                eof=payload.eof,
+                process_status=payload.process_status,
+                exit_code=payload.exit_code,
             )
             streamed = get_runner_terminal_stream_registry().append_stream_frame(
                 tenant_id=tenant_id,
@@ -689,6 +692,9 @@ class RuntimeEventService:
                 task_id=task_id,
                 session_id=payload.session_id,
                 data=safe_frame_data,
+                eof=payload.eof,
+                process_status=payload.process_status,
+                exit_code=payload.exit_code,
             )
             event_metadata["terminal"] = {
                 "session_id": payload.session_id,
@@ -697,6 +703,9 @@ class RuntimeEventService:
                 "data": safe_frame_data,
                 "buffered": buffered,
                 "streamed": streamed,
+                "eof": payload.eof,
+                "process_status": payload.process_status,
+                "exit_code": payload.exit_code,
             }
         elif isinstance(payload, _RESULT_PAYLOAD_TYPES):
             event_metadata["operation_id"] = str(payload.operation_id)

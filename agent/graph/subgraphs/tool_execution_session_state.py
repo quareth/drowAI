@@ -40,6 +40,7 @@ def begin_execution_session_state(
         "sequence_id": normalized,
         "originating_tool_id": str(originating_tool_id or "").strip(),
         "originating_command": command,
+        "interactive": bool(originating_parameters.get("interactive", False)),
         "evidence_rows": [],
         "entries": [],
         "pending_inputs": {},

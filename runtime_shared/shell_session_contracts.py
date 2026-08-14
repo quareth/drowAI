@@ -105,7 +105,6 @@ class ShellSessionErrorCode(str, Enum):
     SESSION_UNAVAILABLE = "session_unavailable"
     SESSION_BUSY = "session_busy"
     COMMAND_START_FAILED = "command_start_failed"
-    COMMAND_OUTPUT_INVALID = "command_output_invalid"
     COMMAND_TIMED_OUT = "command_timed_out"
     RUNTIME_TRANSPORT_FAILED = "runtime_transport_failed"
 
@@ -188,6 +187,13 @@ class ShellExecRequest(BaseModel):
     env: dict[str, str] = Field(
         default_factory=dict,
         description="Additional bounded environment variables for the runtime command.",
+    )
+    interactive: bool = Field(
+        default=False,
+        description=(
+            "Enable stdin-driven interaction for this dedicated command process. "
+            "Output content is never used to infer this mode."
+        ),
     )
     yield_time_ms: int = Field(
         default=SHELL_SESSION_DEFAULT_YIELD_TIME_MS,

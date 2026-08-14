@@ -81,6 +81,7 @@ def test_shell_request_contracts_json_round_trip() -> None:
         command="printf 'ok'",
         cwd="/workspace/src",
         env={"UNICODE": "caf\u00e9"},
+        interactive=True,
         yield_time_ms=123,
         max_output_chars=2048,
         max_runtime_sec=5,
@@ -105,6 +106,7 @@ def test_shell_start_uses_bounded_silent_yield_by_default() -> None:
 
     assert request.yield_time_ms == 10_000
     assert ShellExecRequest(command="sleep 20", yield_time_ms=None).yield_time_ms == 10_000
+    assert request.interactive is False
 
 
 def test_shell_start_accepts_explicit_interactive_yield_window() -> None:
@@ -319,7 +321,6 @@ def test_shell_session_error_codes_include_required_stable_values() -> None:
         "session_unavailable",
         "session_busy",
         "command_start_failed",
-        "command_output_invalid",
         "command_timed_out",
         "runtime_transport_failed",
     }

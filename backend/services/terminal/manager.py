@@ -767,6 +767,30 @@ class TerminalSessionManager:
         session.update_activity()
         return session
 
+    async def create_agent_command_session(
+        self,
+        *,
+        task_id: int,
+        command: str,
+        cwd: str = "/workspace",
+        env: dict[str, str] | None = None,
+        interactive: bool = False,
+        cols: int = 120,
+        rows: int = 30,
+        session_name: str | None = None,
+    ) -> TerminalSession:
+        """Start one dedicated command exec owned by the runtime provider."""
+        return await self._create_agent_session(
+            task_id,
+            cols,
+            rows,
+            session_name=session_name,
+            command=command,
+            cwd=cwd,
+            env=env,
+            interactive=interactive,
+        )
+
     async def _retire_failed_agent_session(self, session: TerminalSession) -> None:
         """Bound cleanup for a provider terminal that failed during initialization."""
         try:
@@ -840,6 +864,10 @@ class TerminalSessionManager:
         cols: int,
         rows: int,
         session_name: Optional[str] = None,
+        command: str | None = None,
+        cwd: str = "/workspace",
+        env: dict[str, str] | None = None,
+        interactive: bool = True,
     ) -> TerminalSession:
         """Create a new agent PTY session."""
         try:
@@ -873,6 +901,11 @@ class TerminalSessionManager:
                     shell="/bin/bash",
                     cols=cols,
                     rows=rows,
+                    session_name=session_name,
+                    command=command,
+                    cwd=cwd,
+                    env=env,
+                    interactive=interactive,
                 )
             finally:
                 db.close()
@@ -906,6 +939,8 @@ class TerminalSessionManager:
                 runtime_call_scope=getattr(context_scope, "value", str(context_scope)),
                 socket=sock,
                 session_type="agent",
+                interactive=bool(interactive),
+                dedicated_command=command is not None,
             )
 
             self._registry.set(session)
@@ -951,6 +986,8 @@ class TerminalSessionManager:
         provider_ref = self._session_provider_ref(session) if session else None
         if not session or not session.is_active or provider_ref is None:
             return False
+        if session.dedicated_command and not session.interactive and data not in {b"\x03", "\x03"}:
+            return False
         payload: dict[str, Any] = {"data": data}
         if session.socket is not None:
             payload["socket"] = session.socket
@@ -994,6 +1031,8 @@ class TerminalSessionManager:
         payload: dict[str, Any] = {"size": size, "timeout": timeout}
         if session.socket is not None:
             payload["socket"] = session.socket
+            if session.exec_id:
+                payload["exec_id"] = session.exec_id
         else:
             payload["session_id"] = provider_ref
             payload["cursor"] = session.output_cursor
@@ -1021,6 +1060,12 @@ class TerminalSessionManager:
             data = delegate.get("data", b"")
             truncated = bool(delegate.get("truncated", False))
             eof = bool(delegate.get("eof", False))
+            process_status = delegate.get("process_status")
+            exit_code_raw = delegate.get("exit_code")
+            try:
+                exit_code = int(exit_code_raw) if exit_code_raw is not None else None
+            except (TypeError, ValueError):
+                exit_code = None
             if isinstance(data, bytes):
                 session.update_activity()
                 return TerminalReadResult(
@@ -1028,6 +1073,8 @@ class TerminalSessionManager:
                     data=data,
                     truncated=truncated,
                     eof=eof,
+                    process_status=str(process_status) if process_status is not None else None,
+                    exit_code=exit_code,
                 )
             if isinstance(data, str):
                 session.update_activity()
@@ -1036,6 +1083,8 @@ class TerminalSessionManager:
                     data=data.encode(),
                     truncated=truncated,
                     eof=eof,
+                    process_status=str(process_status) if process_status is not None else None,
+                    exit_code=exit_code,
                 )
         return TerminalReadResult(ok=True, data=b"")
 
@@ -1087,6 +1136,11 @@ class TerminalSessionManager:
         shell: str,
         cols: int,
         rows: int,
+        session_name: str | None = None,
+        command: str | None = None,
+        cwd: str = "/workspace",
+        env: dict[str, str] | None = None,
+        interactive: bool = True,
     ):
         """Wait for transient runtime startup only inside the terminal-open deadline."""
         loop = asyncio.get_running_loop()
@@ -1136,7 +1190,16 @@ class TerminalSessionManager:
         open_result = await dispatch(
             operation="open_terminal_session",
             call=lambda provider, request: provider.open_terminal_session(request),
-            payload={"shell": shell, "cols": cols, "rows": rows},
+            payload={
+                "shell": shell,
+                "cols": cols,
+                "rows": rows,
+                "session_name": session_name or "runtime",
+                "command": command,
+                "cwd": cwd,
+                "env": dict(env or {}),
+                "interactive": bool(interactive),
+            },
             metadata={
                 "wait_for_result": True,
                 "wait_timeout_seconds": min(5.0, max(0.0, remaining)),

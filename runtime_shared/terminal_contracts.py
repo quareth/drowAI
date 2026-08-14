@@ -57,3 +57,5 @@ class TerminalReadResult:
     error_code: str | None = None
     truncated: bool = False
     eof: bool = False
+    process_status: str | None = None
+    exit_code: int | None = None

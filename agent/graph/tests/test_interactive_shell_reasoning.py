@@ -148,7 +148,10 @@ async def test_shell_coordinator_sends_non_empty_input_directly() -> None:
     begin_execution_session_state(
         sequence_id="batch-start",
         originating_tool_id="shell.utility",
-        originating_parameters={"command": "python3 -u interactive.py"},
+        originating_parameters={
+            "command": "python3 -u interactive.py",
+            "interactive": True,
+        },
     )
     write_calls: list[tuple[ShellSessionIdentity, ShellWriteRequest]] = []
 
@@ -195,11 +198,10 @@ async def test_shell_coordinator_sends_non_empty_input_directly() -> None:
                 runner_id=None,
                 execution_site_id=None,
             ),
-            ShellWriteRequest(
-                session_id=public_session_id,
-                chars="hello\n",
-                yield_time_ms=0,
-            ),
+                ShellWriteRequest(
+                    session_id=public_session_id,
+                    chars="hello\n",
+                ),
         )
     ]
     assert "planner_plan" not in updated_metadata

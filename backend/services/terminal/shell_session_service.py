@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import inspect
 import logging
 import math
+import posixpath
 import secrets
 import shlex
 import time
@@ -48,12 +49,6 @@ from runtime_shared.shell_timeouts import (
     clamp_shell_yield_time_ms,
     shell_preparation_timeout_sec,
 )
-from runtime_shared.shell_session_framing import (
-    PtyCommandFrame,
-    StreamingPtyFramingParser,
-    create_pty_command_frame,
-    wrap_command_with_runtime_artifact_capture,
-)
 from runtime_shared.terminal_contracts import TerminalReadResult
 
 from .contracts import (
@@ -84,9 +79,6 @@ _SHELL_SESSION_ERROR_MESSAGES = {
         "Shell session already has an operation in progress."
     ),
     ShellSessionErrorCode.COMMAND_START_FAILED: "Shell command could not be started.",
-    ShellSessionErrorCode.COMMAND_OUTPUT_INVALID: (
-        "Shell command output did not match the session framing protocol."
-    ),
     ShellSessionErrorCode.COMMAND_TIMED_OUT: (
         "Command exceeded its configured maximum runtime."
     ),
@@ -212,13 +204,12 @@ class ShellSessionService:
             if capability is ShellCapability.ASSESSMENT
             else None
         )
-        prepared_command = self._prepare_command(request)
+        prepared_command = request.command
         if artifact_path is not None:
-            prepared_command = wrap_command_with_runtime_artifact_capture(
+            prepared_command = self._wrap_assessment_capture(
                 prepared_command,
                 artifact_path=artifact_path,
             )
-        frame = create_pty_command_frame(prepared_command)
         reservation: _StartCapacityReservation | None = None
         terminal_session_id: str | None = None
         registered = False
@@ -242,7 +233,7 @@ class ShellSessionService:
                     request=request,
                     terminal_workspace_path=terminal_workspace_path,
                     public_session_id=public_session_id,
-                    frame=frame,
+                    prepared_command=prepared_command,
                     capability=capability,
                     origin=origin,
                     artifact_path=artifact_path,
@@ -251,11 +242,6 @@ class ShellSessionService:
                 terminal_session_id, record = terminal_session
                 registered = True
                 start_error_code = ShellSessionErrorCode.RUNTIME_TRANSPORT_FAILED
-                if not await self._send_input_with_deadline(
-                    terminal_session_id,
-                    frame.wrapped_command.encode(),
-                ):
-                    raise RuntimeError("send_terminal_input failed")
 
             return await self._read_update(
                 record=record,
@@ -348,7 +334,16 @@ class ShellSessionService:
             return self._error_update(error_code=error_code, duration_ms=0)
 
         try:
+            if not record.interactive and request.chars != "\u0003":
+                await self._registry.release(record)
+                return self._error_update(
+                    error_code=ShellSessionErrorCode.SESSION_UNAVAILABLE,
+                    duration_ms=self._duration_ms(started_at),
+                    process_status=ShellProcessStatus.RUNNING,
+                    session_status=ShellSessionLifecycleStatus.ACTIVE,
+                )
             if request.chars == "\u0003":
+                record.interrupt_requested = True
                 if not await self._send_input_with_deadline(
                     record.terminal_session_id,
                     request.chars.encode(),
@@ -573,7 +568,6 @@ class ShellSessionService:
     ) -> ShellSessionUpdate:
         deadline = self._clock() + (float(yield_time_ms) / 1000.0)
         output = ShellSessionOutputAccumulator(
-            parser=record.framing_parser,
             max_output_chars=max_output_chars,
         )
         output_quiescent_at: float | None = None
@@ -650,24 +644,56 @@ class ShellSessionService:
                     ShellSessionErrorCode.RUNTIME_TRANSPORT_FAILED,
                     started_at,
                 )
-            if result.eof:
-                return await self._fail_claimed_record(
-                    record,
-                    ShellSessionErrorCode.RUNTIME_TRANSPORT_FAILED,
-                    started_at,
-                )
             if result.truncated:
                 record.pending_utf8_bytes = b""
-            try:
-                completion = output.ingest(
-                    self._decode_bytes(record, result.data),
-                    provider_output_truncated=result.truncated,
+            output.ingest(
+                self._decode_bytes(record, result.data),
+                provider_output_truncated=result.truncated,
+            )
+            if result.eof:
+                stdout, truncated = output.stdout()
+                exit_code = result.exit_code
+                process_status = (
+                    ShellProcessStatus.TERMINATED
+                    if record.interrupt_requested
+                    else ShellProcessStatus.COMPLETED
+                    if result.process_status == "completed" and exit_code == 0
+                    else ShellProcessStatus.TERMINATED
+                    if result.process_status == "terminated"
+                    else ShellProcessStatus.TIMED_OUT
+                    if result.process_status == "timed_out"
+                    else ShellProcessStatus.FAILED
                 )
-            except ValueError:
-                return await self._fail_claimed_record(
-                    record,
-                    ShellSessionErrorCode.COMMAND_OUTPUT_INVALID,
-                    started_at,
+                self._observe_process_completed(record, process_status)
+                await self._remove_and_close_record(
+                    record.public_session_id,
+                    interrupt=False,
+                    expected_record=record,
+                    close_reason="process_completed",
+                )
+                artifacts = await self._resolved_terminal_artifacts(record)
+                success = process_status is ShellProcessStatus.COMPLETED
+                return ShellSessionUpdate(
+                    success=success,
+                    status="success" if success else "error",
+                    process_status=process_status,
+                    session_status=ShellSessionLifecycleStatus.CLOSED,
+                    interaction_boundary=ShellInteractionBoundary.TERMINAL,
+                    session_id=None,
+                    stdout=stdout,
+                    stdout_ends_with_newline=output.stdout_ends_with_newline,
+                    stderr=(
+                        ""
+                        if success
+                        else f"Command exited with code {exit_code}."
+                        if exit_code is not None
+                        else "Command did not complete successfully."
+                    ),
+                    artifacts=artifacts,
+                    exit_code=exit_code,
+                    stdin_available=False,
+                    truncated=truncated,
+                    duration_ms=self._duration_ms(started_at),
                 )
             if not result.data:
                 stdout, _truncated = output.stdout()
@@ -684,51 +710,9 @@ class ShellSessionService:
                     if self._registry.is_deadline_expired(record, self._clock()):
                         continue
                     break
+                await asyncio.sleep(0)
                 continue
             record.last_activity_at = self._clock()
-            if completion is not None:
-                if terminate_after_window:
-                    break
-                stdout, truncated = output.stdout()
-                exit_code = completion.exit_code
-                process_status = (
-                    ShellProcessStatus.COMPLETED
-                    if exit_code == 0
-                    else ShellProcessStatus.FAILED
-                )
-                self._observe_process_completed(record, process_status)
-                await self._remove_and_close_record(
-                    record.public_session_id,
-                    interrupt=False,
-                    expected_record=record,
-                    close_reason="process_completed",
-                )
-                artifacts = await self._resolved_terminal_artifacts(record)
-                return ShellSessionUpdate(
-                    success=exit_code == 0,
-                    status="success" if exit_code == 0 else "error",
-                    process_status=process_status,
-                    session_status=ShellSessionLifecycleStatus.CLOSED,
-                    interaction_boundary=ShellInteractionBoundary.TERMINAL,
-                    session_id=None,
-                    stdout=stdout,
-                    stdout_ends_with_newline=output.stdout_ends_with_newline,
-                    stderr=(
-                        ""
-                        if exit_code == 0
-                        else f"Command exited with code {exit_code}."
-                    ),
-                    artifacts=artifacts,
-                    exit_code=exit_code,
-                    stdin_available=False,
-                    truncated=truncated,
-                    duration_ms=self._duration_ms(started_at),
-                    summary=(
-                        "Command completed successfully."
-                        if exit_code == 0
-                        else f"Command failed with exit code {exit_code}."
-                    ),
-                )
             stdout, _truncated = output.stdout()
             if return_on_output_boundary and stdout:
                 quiescence = max(0.0, float(self._config.output_quiescence_sec))
@@ -776,7 +760,7 @@ class ShellSessionService:
                 stdout_ends_with_newline=output.stdout_ends_with_newline,
                 stderr="",
                 exit_code=None,
-                stdin_available=True,
+                stdin_available=record.interactive,
                 truncated=truncated,
                 duration_ms=self._duration_ms(started_at),
             )
@@ -800,7 +784,7 @@ class ShellSessionService:
                 stdout="",
                 stderr="",
                 exit_code=None,
-                stdin_available=True,
+                stdin_available=record.interactive,
                 truncated=False,
                 duration_ms=self._duration_ms(started_at),
             )
@@ -816,7 +800,7 @@ class ShellSessionService:
             stdout_ends_with_newline=output.stdout_ends_with_newline,
             stderr="",
             exit_code=None,
-            stdin_available=True,
+            stdin_available=record.interactive,
             truncated=truncated,
             duration_ms=self._duration_ms(started_at),
         )
@@ -849,7 +833,7 @@ class ShellSessionService:
         request: ShellExecRequest,
         terminal_workspace_path: str | None,
         public_session_id: str,
-        frame: PtyCommandFrame,
+        prepared_command: str,
         capability: ShellCapability,
         origin: ShellSessionOrigin | None,
         artifact_path: str | None,
@@ -857,11 +841,13 @@ class ShellSessionService:
     ) -> tuple[str, ShellSessionRecord]:
         terminal_session_id: str | None = None
         try:
-            terminal_session = await self._terminal_manager.prepare_agent_session(
+            terminal_session = await self._terminal_manager.create_agent_command_session(
                 task_id=identity.task_id,
-                workspace_path=terminal_workspace_path,
+                command=prepared_command,
+                cwd=self._resolve_runtime_cwd(request.cwd, terminal_workspace_path),
+                env=dict(request.env),
+                interactive=request.interactive,
                 session_name=f"shell_{public_session_id}",
-                reset=True,
             )
             terminal_session_id = str(terminal_session.session_id)
             now = self._clock()
@@ -871,9 +857,9 @@ class ShellSessionService:
                 identity=identity,
                 originating_capability=capability,
                 origin=origin,
-                framing_parser=StreamingPtyFramingParser(frame),
                 last_activity_at=now,
                 deadline_at=now + float(request.max_runtime_sec),
+                interactive=request.interactive,
                 operation_in_progress=True,
                 artifact_path=artifact_path,
             )
@@ -1039,19 +1025,47 @@ class ShellSessionService:
         )
         return error, terminal_workspace_path
 
-    def _prepare_command(self, request: ShellExecRequest) -> str:
-        parts: list[str] = []
-        if request.cwd:
-            parts.append(f"cd -- {shlex.quote(request.cwd)}")
-        command = f"bash -lc {shlex.quote(request.command)}"
-        if request.env:
-            env_args = " ".join(
-                shlex.quote(f"{key}={value}")
-                for key, value in sorted(request.env.items())
-            )
-            command = f"env -- {env_args} {command}"
-        parts.append(command)
-        return " && ".join(parts)
+    @staticmethod
+    def _resolve_runtime_cwd(requested: str | None, workspace_path: str | None) -> str:
+        workspace = workspace_path or CONTAINER_WORKSPACE_PATH
+        if not requested:
+            return workspace
+        normalized = str(requested).replace("\\", "/")
+        if normalized.startswith("/"):
+            return posixpath.normpath(normalized)
+        return posixpath.normpath(posixpath.join(workspace, normalized))
+
+    @staticmethod
+    def _wrap_assessment_capture(command: str, *, artifact_path: str) -> str:
+        """Capture combined output inside Kali while preserving command exit."""
+        normalized_path = str(artifact_path or "").replace("\\", "/").strip()
+        parts = normalized_path.split("/")
+        if (
+            not normalized_path
+            or normalized_path.startswith("/")
+            or parts[0] != "artifacts"
+            or any(part in {"", ".", ".."} for part in parts)
+        ):
+            raise ValueError("artifact_path must be a safe artifacts-relative path")
+        final_path = posixpath.join(CONTAINER_WORKSPACE_PATH, normalized_path)
+        parent = posixpath.dirname(final_path)
+        temporary_path = f"{final_path}.incomplete"
+        quoted_command = shlex.quote(command)
+        quoted_parent = shlex.quote(parent)
+        quoted_final = shlex.quote(final_path)
+        quoted_temporary = shlex.quote(temporary_path)
+        return (
+            f"if mkdir -p -- {quoted_parent}; then "
+            f"trap 'rm -f -- {quoted_temporary}' EXIT; "
+            f"bash -c {quoted_command} 2>&1 | tee -- {quoted_temporary}; "
+            "__drowai_pipe_status=(\"${PIPESTATUS[@]}\"); "
+            "__drowai_command_ec=${__drowai_pipe_status[0]}; "
+            "__drowai_tee_ec=${__drowai_pipe_status[1]}; "
+            f"if [ \"$__drowai_tee_ec\" -eq 0 ] && mv -f -- {quoted_temporary} {quoted_final}; "
+            f"then trap - EXIT; else rm -f -- {quoted_temporary}; fi; "
+            "exit \"$__drowai_command_ec\"; "
+            f"else bash -c {quoted_command}; exit $?; fi"
+        )
 
     def _decode_bytes(self, record: ShellSessionRecord, chunk: bytes) -> str:
         """Decode one PTY chunk while retaining only an incomplete UTF-8 tail."""

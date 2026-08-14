@@ -130,12 +130,6 @@ class RemoteRuntimeHandler:
             task_id=inbound.task_id,
         )
         websocket.send(event.to_json())
-        self._frame_lifecycle.sync_publisher_for_event(
-            websocket=websocket,
-            identity=identity,
-            event_type=event_type,
-            event_payload=payload,
-        )
         for frame_payload in terminal_frames:
             frame_session_id = str(frame_payload.get("session_id") or "").strip()
             frame_runtime_job_id = ""
@@ -157,6 +151,12 @@ class RemoteRuntimeHandler:
                 task_id=inbound.task_id,
             )
             websocket.send(frame_event.to_json())
+        self._frame_lifecycle.sync_publisher_for_event(
+            websocket=websocket,
+            identity=identity,
+            event_type=event_type,
+            event_payload=payload,
+        )
 
     def _execute_runtime_operation(
         self,

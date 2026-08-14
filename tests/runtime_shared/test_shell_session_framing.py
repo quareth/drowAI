@@ -9,7 +9,6 @@ from runtime_shared.shell_session_framing import (
     create_pty_command_frame,
     parse_marked_command_output,
     strip_pty_artifacts,
-    wrap_command_with_runtime_artifact_capture,
 )
 
 
@@ -32,33 +31,6 @@ def test_create_pty_command_frame_uses_unique_markers_and_wrapper() -> None:
     assert frame.end_marker in frame.wrapped_command
     assert f"{PTY_EXIT_CODE_MARKER}%s" in frame.wrapped_command
     assert "echo ok" in frame.wrapped_command
-
-
-def test_runtime_artifact_capture_wraps_command_without_backend_paths() -> None:
-    wrapped = wrap_command_with_runtime_artifact_capture(
-        "env -- APP_MODE=test bash -lc 'printf intended'",
-        artifact_path="artifacts/shell-assessment-session123.txt",
-    )
-
-    assert "script -qefc" in wrapped
-    assert "/workspace/artifacts/shell-assessment-session123.txt" in wrapped
-    assert "DROWAI_SHELL_CAPTURE_COMMAND=" in wrapped
-    assert "sed -i '1d;$d'" in wrapped
-    assert "(exit \"$__drowai_capture_ec\")" in wrapped
-
-
-@pytest.mark.parametrize(
-    "artifact_path",
-    ["../escape.txt", "/tmp/escape.txt", "results/not-an-artifact.txt"],
-)
-def test_runtime_artifact_capture_rejects_non_artifact_paths(
-    artifact_path: str,
-) -> None:
-    with pytest.raises(ValueError):
-        wrap_command_with_runtime_artifact_capture(
-            "printf intended",
-            artifact_path=artifact_path,
-        )
 
 
 @pytest.mark.parametrize("split_at", range(1, 5))

@@ -21,8 +21,6 @@ from runtime_shared.shell_session_contracts import (
     ShellSessionIdentity,
     ShellSessionOrigin,
 )
-from runtime_shared.shell_session_framing import StreamingPtyFramingParser
-
 from ...core.time_utils import utc_now
 from .models import TerminalSession
 from .shell_session_observability import ShellSessionOperationalObserver
@@ -148,13 +146,14 @@ class ShellSessionRecord:
     identity: ShellSessionIdentity
     originating_capability: ShellCapability
     origin: ShellSessionOrigin | None
-    framing_parser: StreamingPtyFramingParser
     last_activity_at: float
     deadline_at: float
+    interactive: bool = False
     operation_in_progress: bool = False
     pending_utf8_bytes: bytes = b""
     initial_quiet_boundary_emitted: bool = False
     artifact_path: str | None = None
+    interrupt_requested: bool = False
 
 
 @dataclass(slots=True)

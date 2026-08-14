@@ -129,3 +129,10 @@ and other security-oriented Kali operations. Do not select it merely because
 the surrounding task is a security assessment; ordinary filesystem and
 operating-system support work belongs to shell.utility. Its output is eligible
 for the existing assessment evidence path.
+
+Execution mode:
+Leave interactive=false for ordinary commands, including commands that emit
+early output, become quiet, or take time to finish. Set interactive=true only
+when the running program genuinely requires later stdin. Only an explicitly
+interactive execution may use shell.write_stdin; never resend the originating
+command as continuation input.

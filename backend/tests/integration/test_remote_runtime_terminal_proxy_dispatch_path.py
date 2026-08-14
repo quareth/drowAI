@@ -48,7 +48,7 @@ from backend.services.terminal.shell_session_service import (
     ShellSessionService,
     ShellSessionServiceConfig,
 )
-from backend.tests.test_shell_session_service import _noop_lifecycle_projector
+from backend.tests.test_shell_session_service import _NoopProjector
 from drowai_runner.cloud_client import RunnerCloudClient
 from drowai_runner.config import RunnerConfig
 from drowai_runner.control_channel.identity.models import CloudChannelIdentity
@@ -62,26 +62,66 @@ from runtime_shared.shell_session_contracts import (
     ShellWaitRequest,
     ShellWriteRequest,
 )
-from runtime_shared.shell_session_framing import PTY_EXIT_CODE_MARKER
 from runtime_shared.runner_protocol import parse_runner_envelope_json
+from runtime_shared.terminal_contracts import TerminalReadResult
 
 
 class _RecordingPtyAdapter:
     def __init__(self) -> None:
         self.open_calls: list[tuple[str, str, int, int]] = []
+        self.command_calls: list[dict[str, object]] = []
         self.input_calls: list[tuple[str, str]] = []
         self.resize_calls: list[tuple[str, int, int]] = []
         self.close_calls: list[str] = []
         self._buffers: dict[str, bytearray] = {}
         self._read_chunk_sizes: dict[str, list[int]] = {}
-        self._session_markers: dict[str, tuple[str, str]] = {}
-        self.shell_echo_seen: list[str] = []
+        self._terminal_exit_codes: dict[str, int] = {}
+        self._interactive_sessions: set[str] = set()
         self.split_read_count = 0
         self.ctrl_c_writes = 0
 
-    def open_session(self, *, container_id: str, session_id: str, cols: int, rows: int) -> None:
+    def open_session(
+        self,
+        *,
+        container_id: str,
+        session_id: str,
+        cols: int,
+        rows: int,
+        command: str | None = None,
+        cwd: str = "/workspace",
+        env=None,
+        interactive: bool = True,
+    ) -> None:
         self.open_calls.append((container_id, session_id, cols, rows))
-        self._buffers[session_id] = bytearray(b"__DROWAI_PROMPT__> ")
+        self._buffers[session_id] = bytearray()
+        if command is None:
+            self._buffers[session_id].extend(b"__DROWAI_PROMPT__> ")
+            self._interactive_sessions.add(session_id)
+            return
+        self.command_calls.append(
+            {
+                "session_id": session_id,
+                "command": command,
+                "cwd": cwd,
+                "env": dict(env or {}),
+                "interactive": interactive,
+            }
+        )
+        if interactive:
+            self._interactive_sessions.add(session_id)
+        if "printf quick" in command:
+            self._buffers[session_id].extend(b"quick\n")
+            self._terminal_exit_codes[session_id] = 0
+        elif "delayed-managed" in command:
+            self._buffers[session_id].extend(b"started\n")
+        elif "interactive-managed" in command:
+            pass
+        elif "split-managed" in command:
+            self._buffers[session_id].extend(b"split managed\n")
+            self._read_chunk_sizes[session_id] = [1, 2, 3, 5, 8, 13, 21, 34]
+            self._terminal_exit_codes[session_id] = 0
+        else:
+            self._terminal_exit_codes[session_id] = 0
 
     def send_input(self, *, session_id: str, data: str) -> None:
         self.input_calls.append((session_id, data))
@@ -90,26 +130,26 @@ class _RecordingPtyAdapter:
         if data == "\x03":
             self.ctrl_c_writes += 1
             buffer.extend(b"managed interrupted\n")
+            self._terminal_exit_codes[session_id] = 130
             return
-        shell_output = self._shell_output_for_input(session_id=session_id, data=data)
-        if shell_output is None:
-            markers = self._session_markers.get(session_id)
-            if markers is not None and data not in {
-                "export PS1='__DROWAI_PROMPT__> '\n",
-                "cd /workspace 2>/dev/null || true\n",
-                "unset HISTFILE\n",
-            }:
-                _start, end = markers
-                buffer.extend(
-                    data.encode("utf-8")
-                    + f"managed answer:{data}{end}={PTY_EXIT_CODE_MARKER}0\n".encode()
-                )
-                return
+        if session_id in self._interactive_sessions and self.command_calls:
+            buffer.extend(b"managed answer:" + payload)
+            self._terminal_exit_codes[session_id] = 0
+        else:
             buffer.extend(payload)
-            return
-        buffer.extend(shell_output)
 
     def read_output(self, *, session_id: str, max_bytes: int) -> bytes:
+        return self.read_output_result(
+            session_id=session_id,
+            max_bytes=max_bytes,
+        ).data
+
+    def read_output_result(
+        self,
+        *,
+        session_id: str,
+        max_bytes: int,
+    ) -> TerminalReadResult:
         buffer = self._buffers.get(session_id, bytearray())
         chunk_size = max_bytes
         split_sizes = self._read_chunk_sizes.get(session_id, [])
@@ -119,7 +159,17 @@ class _RecordingPtyAdapter:
         chunk = bytes(buffer[:chunk_size])
         del buffer[:chunk_size]
         self._buffers[session_id] = buffer
-        return chunk
+        if chunk:
+            return TerminalReadResult(ok=True, data=chunk, process_status="running")
+        if session_id in self._terminal_exit_codes:
+            exit_code = self._terminal_exit_codes.pop(session_id)
+            return TerminalReadResult(
+                ok=True,
+                eof=True,
+                process_status="completed" if exit_code == 0 else "failed",
+                exit_code=exit_code,
+            )
+        return TerminalReadResult(ok=True, process_status="running")
 
     def resize_session(self, *, session_id: str, cols: int, rows: int) -> None:
         self.resize_calls.append((session_id, cols, rows))
@@ -130,35 +180,8 @@ class _RecordingPtyAdapter:
         self._read_chunk_sizes.pop(session_id, None)
 
     def complete_delayed_session(self, session_id: str) -> None:
-        _start, end = self._session_markers[session_id]
-        self._buffers.setdefault(session_id, bytearray()).extend(
-            f"done\n{end}={PTY_EXIT_CODE_MARKER}0\n".encode()
-        )
-
-    def _shell_output_for_input(self, *, session_id: str, data: str) -> bytes | None:
-        if "__DROWAI_CMD_START_" not in data:
-            return None
-        start = data.split("printf '", 1)[1].split("\\n';", 1)[0]
-        end = data.split("\\n__DROWAI_CMD_END_", 1)[1].split("=", 1)[0]
-        end = f"__DROWAI_CMD_END_{end}"
-        self._session_markers[session_id] = (start, end)
-        self.shell_echo_seen.append(data)
-        echoed = data.encode("utf-8")
-
-        if "printf quick" in data:
-            return echoed + f"{start}\nquick\n{end}={PTY_EXIT_CODE_MARKER}0\n".encode()
-        if "delayed-managed" in data:
-            return echoed + f"{start}\nstarted\n".encode()
-        if "interactive-managed" in data:
-            return echoed + f"{start}\nmanaged waiting\n".encode()
-        if "split-managed" in data:
-            protocol = (
-                echoed
-                + f"{start}\nsplit managed\n{end}={PTY_EXIT_CODE_MARKER}0\n".encode()
-            )
-            self._read_chunk_sizes[session_id] = [1, 2, 3, 5, 8, 13, 21, 34]
-            return protocol
-        return echoed + f"{start}\n{end}={PTY_EXIT_CODE_MARKER}0\n".encode()
+        self._buffers.setdefault(session_id, bytearray()).extend(b"done\n")
+        self._terminal_exit_codes[session_id] = 0
 
 
 class _TerminalLoopbackOperationService:
@@ -247,11 +270,24 @@ class _TerminalLoopbackOperationService:
             }
 
         if operation == "terminal_open":
+            raw_env = params.get("env")
             response = self._terminal_proxy.open_terminal_session(
                 runtime_job_id=str(params["runtime_job_id"]),
                 session_name=str(params.get("session_name") or "runtime"),
                 cols=int(params.get("cols") or 120),
                 rows=int(params.get("rows") or 30),
+                command=(
+                    str(params["command"])
+                    if isinstance(params.get("command"), str)
+                    else None
+                ),
+                cwd=str(params.get("cwd") or "/workspace"),
+                env=(
+                    {str(key): str(value) for key, value in raw_env.items()}
+                    if isinstance(raw_env, dict)
+                    else {}
+                ),
+                interactive=bool(params.get("interactive", True)),
             )
             return {
                 "accepted": response.accepted,
@@ -844,7 +880,7 @@ def test_remote_runtime_terminal_operations_route_through_provider_dispatcher_an
         terminal_manager = TerminalSessionManager()
         shell_service = ShellSessionService(
             terminal_manager=terminal_manager,
-            lifecycle_projector=_noop_lifecycle_projector(),
+            lifecycle_projector=_NoopProjector(),
             config=ShellSessionServiceConfig(
                 max_active_per_owner=8,
                 max_active_per_task=16,
@@ -899,10 +935,22 @@ def test_remote_runtime_terminal_operations_route_through_provider_dispatcher_an
         interactive = await _drive_provider_wait(
             shell_service.execute(
                 identity=identity,
-                request=ShellExecRequest(command="interactive-managed", yield_time_ms=0),
+                request=ShellExecRequest(
+                    command="interactive-managed",
+                    interactive=True,
+                    yield_time_ms=0,
+                ),
             )
         )
         assert interactive.session_id is not None
+        interactive_terminal_id = pty_adapter.open_calls[-1][1]
+        pty_adapter._buffers.setdefault(
+            interactive_terminal_id,
+            bytearray(),
+        ).extend(b"managed waiting\n")
+        transport.pump_terminal_frames()
+        transport.flush_inbound_events()
+        channel_db.commit()
         interactive_stdout_parts = [interactive.stdout]
         for _ in range(20):
             if "managed waiting" in "".join(interactive_stdout_parts):
@@ -931,7 +979,11 @@ def test_remote_runtime_terminal_operations_route_through_provider_dispatcher_an
         interruptible = await _drive_provider_wait(
             shell_service.execute(
                 identity=identity,
-                request=ShellExecRequest(command="interactive-managed", yield_time_ms=0),
+                request=ShellExecRequest(
+                    command="interactive-managed",
+                    interactive=True,
+                    yield_time_ms=0,
+                ),
             )
         )
         assert interruptible.session_id is not None
@@ -968,7 +1020,11 @@ def test_remote_runtime_terminal_operations_route_through_provider_dispatcher_an
         cleanup_candidate = await _drive_provider_wait(
             shell_service.execute(
                 identity=identity,
-                request=ShellExecRequest(command="interactive-managed", yield_time_ms=0),
+                request=ShellExecRequest(
+                    command="interactive-managed",
+                    interactive=True,
+                    yield_time_ms=0,
+                ),
             )
         )
         assert cleanup_candidate.session_id is not None
@@ -1019,29 +1075,26 @@ def test_remote_runtime_terminal_operations_route_through_provider_dispatcher_an
     assert quick.success is True
     assert quick.session_id is None
     assert quick.exit_code == 0
-    assert quick.stdout == "quick"
+    assert quick.stdout == "quick\n"
     assert delayed.process_status is ShellProcessStatus.RUNNING
     assert delayed.session_id is not None and delayed.session_id.startswith("shs_")
-    assert delayed.stdout == "started"
+    assert delayed.stdout == "started\n"
     assert completed.process_status is ShellProcessStatus.COMPLETED
     assert completed.session_id is None
-    assert completed.stdout == "done"
+    assert completed.stdout == "done\n"
     assert interactive.process_status is ShellProcessStatus.RUNNING
     assert interactive.session_id is not None and interactive.session_id.startswith("shs_")
     assert answered.process_status is ShellProcessStatus.COMPLETED
-    assert answered.stdout.splitlines() == [
-        "managed input",
-        "managed answer:managed input",
-    ]
+    assert answered.stdout == "managed answer:managed input\n"
     assert interruptible.process_status is ShellProcessStatus.RUNNING
     assert interrupted.process_status is ShellProcessStatus.TERMINATED
     assert interrupted.session_id is None
     assert split.process_status is ShellProcessStatus.COMPLETED
-    assert split_stdout == "split managed"
+    assert split_stdout == "split managed\n"
     assert cleanup_candidate.process_status is ShellProcessStatus.RUNNING
     assert pty_adapter.ctrl_c_writes >= 2
     assert pty_adapter.split_read_count >= 2
-    assert any("__DROWAI_CMD_START_" in echo for echo in pty_adapter.shell_echo_seen)
+    assert all("__DROWAI_CMD_START_" not in str(call["command"]) for call in pty_adapter.command_calls)
     assert "managed input\n" in [
         input_data for _session, input_data in pty_adapter.input_calls
     ]

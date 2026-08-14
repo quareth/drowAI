@@ -160,6 +160,11 @@ class PromptRegistry:
             family="shell_capability_profiles",
             filename="assessment.txt",
         )
+        self.register_template_id(
+            "shell_execution_mode",
+            family="shell_capability_profiles",
+            filename="execution_mode.txt",
+        )
 
     def _register_builtin_builders(self) -> None:
         # Keep imports local to avoid import-time cycles for tests that only use TemplateLoader.

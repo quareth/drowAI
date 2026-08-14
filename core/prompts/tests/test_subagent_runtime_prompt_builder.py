@@ -50,6 +50,8 @@ def test_subagent_runtime_system_prompt_uses_versioned_canonical_guidance() -> N
     assert "Selector Decision" not in prompt
     assert prompt.count("Use shell.utility for ordinary") == 1
     assert prompt.count("Use shell.assessment for commands") == 1
+    assert prompt.count("Leave interactive=false for ordinary commands") == 1
+    assert prompt.count("never resend the originating") == 1
 
 
 def test_subagent_runtime_user_prompt_injects_assignment_tools_observations_and_limits() -> None:

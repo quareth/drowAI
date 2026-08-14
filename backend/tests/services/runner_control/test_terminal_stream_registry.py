@@ -6,6 +6,8 @@ import asyncio
 from datetime import UTC, datetime
 from uuid import uuid4
 
+import pytest
+
 from backend.services.runner_control import terminal_stream_registry as stream_registry_module
 from backend.services.runner_control.terminal_stream_registry import RunnerTerminalStreamRegistry
 from runtime_shared.runner_protocol import (
@@ -15,6 +17,119 @@ from runtime_shared.runner_protocol import (
     RunnerEnvelope,
     RunnerMessageType,
 )
+
+
+@pytest.mark.asyncio
+async def test_stream_reader_drains_data_before_structured_exec_exit() -> None:
+    registry = RunnerTerminalStreamRegistry()
+    runner_id = uuid4()
+    registry.register_stream(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=2,
+        session_id="session-exit",
+    )
+    assert registry.append_stream_frame(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=2,
+        session_id="session-exit",
+        data="tail\n",
+    )
+    assert registry.append_stream_frame(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=2,
+        session_id="session-exit",
+        data="",
+        eof=True,
+        process_status="completed",
+        exit_code=0,
+    )
+
+    output = await registry.read_stream_output_result(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=2,
+        session_id="session-exit",
+        size=4096,
+        timeout=0,
+    )
+    terminal = await registry.read_stream_output_result(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=2,
+        session_id="session-exit",
+        size=4096,
+        timeout=0,
+    )
+
+    assert output.data == b"tail\n"
+    assert output.eof is False
+    assert terminal.eof is True
+    assert terminal.process_status == "completed"
+    assert terminal.exit_code == 0
+
+
+@pytest.mark.asyncio
+async def test_stream_frames_arriving_before_consumer_registration_are_retained() -> None:
+    registry = RunnerTerminalStreamRegistry()
+    runner_id = uuid4()
+
+    async def _sender(_envelope: RunnerEnvelope) -> None:
+        return None
+
+    registry.register_channel(
+        tenant_id=1,
+        runner_id=runner_id,
+        connection_id="conn-early-frame",
+        sender=_sender,
+    )
+    assert registry.append_stream_frame(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=2,
+        session_id="session-early-frame",
+        data="fast output\n",
+    )
+    assert registry.append_stream_frame(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=2,
+        session_id="session-early-frame",
+        data="",
+        eof=True,
+        process_status="completed",
+        exit_code=0,
+    )
+
+    registry.register_stream(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=2,
+        session_id="session-early-frame",
+    )
+    output = await registry.read_stream_output_result(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=2,
+        session_id="session-early-frame",
+        size=4096,
+        timeout=0,
+    )
+    terminal = await registry.read_stream_output_result(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=2,
+        session_id="session-early-frame",
+        size=4096,
+        timeout=0,
+    )
+
+    assert output.data == b"fast output\n"
+    assert terminal.eof is True
+    assert terminal.process_status == "completed"
+    assert terminal.exit_code == 0
 
 
 def test_stale_channel_unregister_cannot_remove_replacement_route() -> None:

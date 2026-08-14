@@ -26,6 +26,10 @@ The format is based on
 
 ### Fixed
 
+- Shell commands now run as dedicated Kali exec processes whose local provider
+  or managed runner reports structured completion and exit codes, so banners and
+  partial output cannot trigger duplicate execution or unnecessary interaction
+  reasoning while live output continues through the existing tool stream.
 - Post-tool reasoning now inspects referenced runtime artifacts with bounded
   utility-shell reads before repeating assessments that already captured the
   missing evidence.

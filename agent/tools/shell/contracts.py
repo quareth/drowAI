@@ -43,6 +43,7 @@ class ShellExecArgs(BaseModel):
         command: Shell command interpreted by the runtime shell.
         cwd: Optional runtime working directory. Relative paths resolve from /workspace.
         env: Additional bounded environment variables for the runtime command.
+        interactive: Enable stdin-driven continuation for the dedicated command process.
         yield_time_ms: Maximum silent wait before returning a live session.
         max_output_chars: Maximum output delta characters returned in this response.
         max_runtime_sec: Hard process lifetime measured from session creation.
@@ -62,6 +63,13 @@ class ShellExecArgs(BaseModel):
     env: Optional[Dict[str, str]] = Field(
         default=None,
         description="Additional bounded environment variables for the runtime command.",
+    )
+    interactive: bool = Field(
+        default=False,
+        description=(
+            "Enable stdin-driven interaction for this dedicated command process. "
+            "Leave false for ordinary commands."
+        ),
     )
     yield_time_ms: int = Field(
         default=SHELL_SESSION_DEFAULT_YIELD_TIME_MS,

@@ -621,6 +621,10 @@ class RunnerTerminalOpenPayload:
     session_name: str
     cols: int
     rows: int
+    command: str | None
+    cwd: str | None
+    env: Mapping[str, str]
+    interactive: bool
     params: Mapping[str, Any]
 
 
@@ -825,6 +829,9 @@ class RunnerTerminalFramePayload:
     sequence: int
     stream: str
     data: str
+    eof: bool = False
+    process_status: str | None = None
+    exit_code: int | None = None
 
 
 RunnerPayload: TypeAlias = (
@@ -1951,6 +1958,20 @@ def _parse_terminal_open_payload(payload: Mapping[str, Any]) -> RunnerTerminalOp
         raise RunnerProtocolValidationError("params.cols is required and must be >= 1.")
     if rows < 1:
         raise RunnerProtocolValidationError("params.rows is required and must be >= 1.")
+    command_value = base_payload.params.get("command")
+    if command_value is not None and not isinstance(command_value, str):
+        raise RunnerProtocolValidationError("params.command must be a string when provided.")
+    command = (
+        command_value
+        if isinstance(command_value, str) and command_value.strip()
+        else None
+    )
+    cwd = _optional_string(base_payload.params, "cwd")
+    env_value = base_payload.params.get("env", {})
+    if not isinstance(env_value, Mapping):
+        raise RunnerProtocolValidationError("params.env must be an object when provided.")
+    env = {str(key): str(value) for key, value in env_value.items()}
+    interactive = _optional_bool(base_payload.params, "interactive")
     return RunnerTerminalOpenPayload(
         operation_id=base_payload.operation_id,
         workspace_id=base_payload.workspace_id,
@@ -1959,6 +1980,10 @@ def _parse_terminal_open_payload(payload: Mapping[str, Any]) -> RunnerTerminalOp
         session_name=session_name,
         cols=cols,
         rows=rows,
+        command=command,
+        cwd=cwd,
+        env=MappingProxyType(env),
+        interactive=interactive,
         params=base_payload.params,
     )
 
@@ -2158,11 +2183,25 @@ def _parse_terminal_frame_payload(payload: Mapping[str, Any]) -> RunnerTerminalF
         raise RunnerProtocolValidationError(
             f"terminal.frame data must be <= {RUNNER_TERMINAL_FRAME_MAX_BYTES} bytes."
         )
+    eof = _optional_bool(payload, "eof")
+    process_status = _optional_string(payload, "process_status")
+    if process_status is not None:
+        process_status = process_status.strip().lower()
+        if process_status not in {"running", "completed", "failed", "terminated", "timed_out"}:
+            raise RunnerProtocolValidationError(
+                "process_status must be one of: running, completed, failed, terminated, timed_out."
+            )
+    exit_code = _optional_int(payload, "exit_code")
+    if eof and process_status == "running":
+        raise RunnerProtocolValidationError("terminal EOF cannot report process_status=running.")
     return RunnerTerminalFramePayload(
         session_id=session_id,
         sequence=sequence,
         stream=stream.strip().lower(),
         data=data_value,
+        eof=eof,
+        process_status=process_status,
+        exit_code=exit_code,
     )
 
 
@@ -2372,12 +2411,19 @@ def _serialize_payload(payload: RunnerPayload) -> Any:
             "result": dict(payload.result),
         }
     if isinstance(payload, RunnerTerminalFramePayload):
-        return {
+        frame_payload = {
             "session_id": payload.session_id,
             "sequence": payload.sequence,
             "stream": payload.stream,
             "data": payload.data,
         }
+        if payload.eof:
+            frame_payload["eof"] = True
+        if payload.process_status is not None:
+            frame_payload["process_status"] = payload.process_status
+        if payload.exit_code is not None:
+            frame_payload["exit_code"] = payload.exit_code
+        return frame_payload
     return dict(payload)
 
 

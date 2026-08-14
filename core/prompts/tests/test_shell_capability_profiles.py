@@ -29,6 +29,8 @@ def test_profiles_are_conditioned_on_callable_start_aliases(
     if expected:
         assert rendered.count("Use shell.utility for ordinary") == 1
         assert rendered.count("Use shell.assessment for commands") == 1
+        assert rendered.count("Leave interactive=false for ordinary commands") == 1
+        assert rendered.count("never resend the originating") == 1
 
 
 def test_duplicate_aliases_do_not_duplicate_profile_text() -> None:
@@ -38,6 +40,7 @@ def test_duplicate_aliases_do_not_duplicate_profile_text() -> None:
 
     assert rendered.count("Use shell.utility for ordinary") == 1
     assert rendered.count("Use shell.assessment for commands") == 1
+    assert rendered.count("Leave interactive=false for ordinary commands") == 1
 
 
 def test_main_tool_parameter_system_prompt_uses_exact_callable_ids() -> None:
@@ -54,6 +57,7 @@ def test_main_tool_parameter_system_prompt_uses_exact_callable_ids() -> None:
     assert with_shell.count("Shell Capability Profiles:") == 1
     assert with_shell.count("Use shell.utility for ordinary") == 1
     assert with_shell.count("Use shell.assessment for commands") == 1
+    assert with_shell.count("Leave interactive=false for ordinary commands") == 1
 
 
 def test_main_tool_selector_prompt_uses_visible_shell_ids() -> None:
@@ -77,3 +81,4 @@ def test_main_tool_selector_prompt_uses_visible_shell_ids() -> None:
     assert with_shell.count("Shell Capability Profiles:") == 1
     assert with_shell.count("Use shell.utility for ordinary") == 1
     assert with_shell.count("Use shell.assessment for commands") == 1
+    assert with_shell.count("Leave interactive=false for ordinary commands") == 1

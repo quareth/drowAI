@@ -794,7 +794,10 @@ async def test_default_interaction_boundary_uses_model_structured_decision(
     begin_execution_session_state(
         sequence_id=sequence_id,
         originating_tool_id="shell.utility",
-        originating_parameters={"command": "python3 -u prompt.py"},
+        originating_parameters={
+            "command": "python3 -u prompt.py",
+            "interactive": True,
+        },
     )
     append_shell_interaction_transcript(
         sequence_id=sequence_id,
@@ -923,7 +926,7 @@ async def test_decision_failure_interrupts_instead_of_waiting_forever(
     begin_execution_session_state(
         sequence_id=sequence_id,
         originating_tool_id="shell.utility",
-        originating_parameters={"command": "bc"},
+        originating_parameters={"command": "bc", "interactive": True},
     )
     append_shell_interaction_transcript(
         sequence_id=sequence_id,
@@ -1218,7 +1221,10 @@ async def test_running_command_continuation_completes_inside_one_subgraph() -> N
                             {
                                 "tool_call_id": "call-start",
                                 "tool_id": "shell.utility",
-                                "parameters": {"command": "sleep 11"},
+                                "parameters": {
+                                    "command": "sleep 11",
+                                    "interactive": True,
+                                },
                                 "intent": "Run the requested command.",
                             }
                         ],
@@ -1504,7 +1510,7 @@ async def test_wait_with_later_output_stays_in_subgraph_without_write_calls(
     runtime = read_compact_evidence(result["facts"]["metadata"], prefer_runtime=True)
 
     assert dispatch_calls == ["shell.utility"]
-    assert decisions == ["wait_for_output", "wait_for_output"]
+    assert decisions == []
     assert wait_updates == []
     assert runtime is not None
     assert [row["compact_tool_result"]["stdout"] for row in runtime.rows] == [

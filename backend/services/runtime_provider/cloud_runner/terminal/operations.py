@@ -223,6 +223,9 @@ class CloudRunnerTerminalOperations:
                     "data": stream_result.data,
                     "success": stream_result.ok,
                     "truncated": stream_result.truncated,
+                    "eof": stream_result.eof,
+                    "process_status": stream_result.process_status,
+                    "exit_code": stream_result.exit_code,
                 },
             },
         )

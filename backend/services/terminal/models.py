@@ -43,6 +43,8 @@ class TerminalSession:
     session_type: str = "user"
     command_history: list = None
     last_command_timestamp: Optional[datetime] = None
+    interactive: bool = True
+    dedicated_command: bool = False
 
     def __post_init__(self) -> None:
         if self.created_at is None:
@@ -84,4 +86,6 @@ class TerminalSession:
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "last_activity": self.last_activity.isoformat() if self.last_activity else None,
             "is_active": self.is_active,
+            "interactive": self.interactive,
+            "dedicated_command": self.dedicated_command,
         }

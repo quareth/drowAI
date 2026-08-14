@@ -18,10 +18,6 @@ from runtime_shared.shell_session_contracts import (
     ShellSessionErrorCode,
     ShellSessionIdentity,
 )
-from runtime_shared.shell_session_framing import (
-    StreamingPtyFramingParser,
-    create_pty_command_frame,
-)
 
 
 def _identity(
@@ -69,11 +65,9 @@ def _record(
         identity=identity or _identity(),
         originating_capability=ShellCapability.ASSESSMENT,
         origin=None,
-        framing_parser=StreamingPtyFramingParser(
-            create_pty_command_frame("printf test")
-        ),
         last_activity_at=last_activity_at,
         deadline_at=deadline_at,
+        interactive=True,
         pending_utf8_bytes=b"tail",
         initial_quiet_boundary_emitted=True,
     )

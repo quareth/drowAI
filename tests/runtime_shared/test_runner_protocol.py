@@ -519,6 +519,32 @@ def test_parse_runner_envelope_rejects_terminal_open_without_terminal_dimensions
         parse_runner_envelope(payload)
 
 
+def test_terminal_open_preserves_dedicated_command_and_mode_fields() -> None:
+    payload = _base_envelope()
+    payload["schema_version"] = "remote_runtime.v1"
+    payload["type"] = "terminal.open"
+    payload["payload"] = _remote_runtime_operation_payload(
+        operation="terminal.open",
+        params={
+            "session_name": "shell-command",
+            "cols": 120,
+            "rows": 30,
+            "command": " printf exact \n",
+            "cwd": "/workspace/results",
+            "env": {"APP_MODE": "test"},
+            "interactive": False,
+        },
+    )
+
+    envelope = parse_runner_envelope(payload)
+
+    assert isinstance(envelope.payload, RunnerTerminalOpenPayload)
+    assert envelope.payload.command == " printf exact \n"
+    assert envelope.payload.cwd == "/workspace/results"
+    assert dict(envelope.payload.env) == {"APP_MODE": "test"}
+    assert envelope.payload.interactive is False
+
+
 def test_parse_runner_envelope_rejects_terminal_input_without_data() -> None:
     payload = _base_envelope()
     payload["schema_version"] = "remote_runtime.v1"
@@ -885,6 +911,32 @@ def test_parse_runner_envelope_rejects_terminal_frame_with_negative_sequence() -
 
     with pytest.raises(RunnerProtocolValidationError):
         parse_runner_envelope(payload)
+
+
+def test_terminal_frame_round_trip_preserves_structured_exec_exit() -> None:
+    payload = _base_envelope()
+    payload["schema_version"] = "remote_runtime.v1"
+    payload["type"] = "terminal.frame"
+    payload["payload"] = {
+        "session_id": "task-42-shell",
+        "sequence": 8,
+        "stream": "stdout",
+        "data": "",
+        "eof": True,
+        "process_status": "completed",
+        "exit_code": 0,
+    }
+
+    envelope = parse_runner_envelope(payload)
+    serialized = serialize_runner_envelope(envelope)
+
+    assert isinstance(envelope.payload, RunnerTerminalFramePayload)
+    assert envelope.payload.eof is True
+    assert envelope.payload.process_status == "completed"
+    assert envelope.payload.exit_code == 0
+    assert serialized["payload"]["eof"] is True
+    assert serialized["payload"]["process_status"] == "completed"
+    assert serialized["payload"]["exit_code"] == 0
 
 
 def test_parse_runner_envelope_rejects_terminal_frame_with_oversized_data() -> None:

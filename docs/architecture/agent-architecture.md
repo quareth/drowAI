@@ -183,32 +183,34 @@ Tool execution boundaries:
 - Container-scoped tools use file-comm or PTY for local placement.
 - `shell.utility`, `shell.assessment`, and `shell.write_stdin` are universal
   runtime-session-scoped tools. The two start aliases share the hidden
-  `shell.exec` implementation schema, command policy, and PTY transport while
-  retaining distinct capabilities: utility output is transient, while
-  assessment output is eligible for durable evidence. Their adapters fail
-  closed for direct execution; the graph dispatcher routes them through
+  `shell.exec` implementation schema and command policy while retaining distinct
+  capabilities: utility output is transient, while assessment output is
+  eligible for durable evidence. Their adapters fail closed for direct
+  execution; the graph dispatcher routes them through
   `runtime_session_control`.
 - Runtime-session shell tools use `ShellSessionService` through the
   runtime-shared service port, then `TerminalSessionManager`, then the selected
-  runtime provider PTY implementation. The model-facing shell aliases and
-  `shell.write_stdin` do not fall back to file-comm, host subprocess execution,
-  or runner command transport.
-- `shell.utility` or `shell.assessment` starts a new provider-backed PTY session
-  and may return a public `shs_` continuation handle when the process is still
-  running.
+  runtime provider. Each start creates one dedicated Kali exec whose local
+  provider or managed runner owns output, structured process exit, and exit
+  code. Managed output reuses the task-scoped `terminal.frame` stream. The
+  model-facing shell aliases and `shell.write_stdin` do not fall back to
+  file-comm, host subprocess execution, or runner command transport.
+- `shell.utility` or `shell.assessment` may return a public `shs_` continuation
+  handle while its dedicated process is still running.
   `shell.write_stdin` uses that handle only for exact non-empty input or
-  interruption. Runtime-owned waits for additional output stay below the
-  model-visible tool boundary.
+  interruption on an explicitly interactive start. Non-interactive progress
+  automatically returns to runtime-owned waiting below the model-visible tool
+  boundary and does not invoke the shell interaction-decision model.
 - Shell-session result projection keeps only bounded public continuation fields
   needed by the next model turn: `process_status`, public `session_id`,
   nullable `exit_code`, `stdin_available`, bounded `stdout`/`stderr`,
   `truncated`, `summary`, stable `error_code`, and provider-confirmed artifact
   references on terminal assessment updates.
-- Assessment transcripts are written by the selected Kali runtime under
-  `/workspace/artifacts` through the existing PTY session. The backend confirms
-  the relative path through the runtime provider and never creates a duplicate
-  shell-output file. Utility sessions use the unwrapped PTY path and create no
-  artifact.
+- Assessment transcripts are written by a Kali-side `tee` under
+  `/workspace/artifacts`, atomically finalized after capture, and exposed only
+  after runtime-provider confirmation. The backend never creates a duplicate
+  shell-output file. Utility sessions use the unwrapped dedicated exec path and
+  create no artifact.
 - `shell.script` remains on its existing compatibility execution path and is
   not migrated by the shell-session foundation.
 - Runner placement supports only tools allowed by runner runtime policy.
@@ -322,9 +324,10 @@ parent's wait/delegate/finalize policy.
 - File-comm uses `commands.jsonl`, `results.jsonl`, and lock files in the active
   workspace.
 - `shell.utility`, `shell.assessment`, and `shell.write_stdin` use
-  provider-backed PTY sessions through the runtime provider boundary. The
-  process-local shell-session registry owns public handles, capacity, claims,
-  and idle/deadline selection. The shell-session service coordinates PTY I/O,
+  provider-backed dedicated exec sessions through the runtime provider
+  boundary. The process-local shell-session registry owns public handles,
+  capacity, claims, and idle/deadline selection. The shell-session service
+  coordinates PTY I/O,
   owner cleanup for terminal main and subagent runs, task retirement cleanup,
   and managed-runner disconnect handle expiry.
 - Legacy PTY use outside the shell-session tools remains policy- and

@@ -257,8 +257,32 @@ async def coordinate_shell_interaction(
         return interactive.as_graph_update()
 
     sequence_id = str(session["sequence_id"])
-    if read_shell_interaction_transcript(sequence_id) is None:
+    transcript = read_shell_interaction_transcript(sequence_id)
+    if transcript is None:
         _publish_unavailable_execution_session(metadata, session=session)
+        interactive.facts.metadata = metadata
+        return interactive.as_graph_update()
+    if not bool(transcript.get("interactive", False)):
+        update = await _wait_for_shell_output(
+            interactive=interactive,
+            metadata=metadata,
+            active=active,
+            context=context,
+            wait_fn=wait_fn,
+        )
+        _publish_direct_shell_update(
+            metadata,
+            sequence_id=sequence_id,
+            session=session,
+            active=active,
+            update=update,
+            row_tool_id=str(
+                session.get("originating_tool_id")
+                or active.get("originating_tool_id")
+                or ""
+            ).strip(),
+            intent="Runtime-owned wait for the existing shell session.",
+        )
         interactive.facts.metadata = metadata
         return interactive.as_graph_update()
     decision = _normalize_interaction_decision(

@@ -23,6 +23,7 @@ from backend.services.docker.runtime_config import contains_llm_secret_fields
 from backend.services.unified_docker_service import unified_docker_service
 from backend.services.runtime_provider.local_file_comm_cancel import append_file_comm_cancellations
 from backend.services.workspace.manager import WorkspaceManager
+from runtime_shared.docker_contracts import CONTAINER_WORKSPACE_PATH
 from runtime_shared.workspace_write_mode import (
     WORKSPACE_WRITE_MODE_APPEND,
     WORKSPACE_WRITE_MODE_WRITE,
@@ -841,6 +842,10 @@ class LocalDockerRuntimeProvider(TaskExecutionRuntimeProvider):
             shell=request.payload.get("shell", "/bin/bash"),
             cols=int(request.payload.get("cols", 80)),
             rows=int(request.payload.get("rows", 24)),
+            command=request.payload.get("command"),
+            cwd=str(request.payload.get("cwd") or CONTAINER_WORKSPACE_PATH),
+            env=dict(request.payload.get("env") or {}),
+            interactive=bool(request.payload.get("interactive", True)),
         )
         return {
             "success": True,
@@ -869,6 +874,7 @@ class LocalDockerRuntimeProvider(TaskExecutionRuntimeProvider):
 
     async def _read_terminal_output(self, request: RuntimeOperationRequest) -> dict[str, Any]:
         socket_obj = request.payload.get("socket")
+        exec_id = request.payload.get("exec_id")
         if not socket_obj:
             return {"success": False, "error": "missing_socket"}
         import asyncio
@@ -897,12 +903,60 @@ class LocalDockerRuntimeProvider(TaskExecutionRuntimeProvider):
                     timeout=timeout_seconds,
                 )
             except asyncio.TimeoutError:
-                return {"success": True, "data": b"", "eof": False}
+                return self._local_terminal_process_result(exec_id, data=b"")
             eof = data == b""
         else:
             data = await loop.sock_recv(raw_sock, size)
             eof = data == b""
-        return {"success": True, "data": data, "eof": eof}
+        if data:
+            return {"success": True, "data": data, "eof": False, "process_status": "running"}
+        return self._local_terminal_process_result(exec_id, data=b"", socket_eof=eof)
+
+    def _local_terminal_process_result(
+        self,
+        exec_id: object,
+        *,
+        data: bytes,
+        socket_eof: bool = False,
+    ) -> dict[str, Any]:
+        """Resolve a local Docker exec terminal state without parsing output."""
+        if not isinstance(exec_id, str) or not exec_id:
+            return {
+                "success": True,
+                "data": data,
+                "eof": socket_eof,
+                "process_status": "failed" if socket_eof else "running",
+            }
+        try:
+            inspection = self._docker_service.inspect_exec(exec_id)
+        except Exception:
+            return {
+                "success": True,
+                "data": data,
+                "eof": socket_eof,
+                "process_status": "failed" if socket_eof else "running",
+            }
+        if bool(inspection.get("Running")):
+            return {
+                "success": True,
+                "data": data,
+                "eof": False,
+                "process_status": "running",
+            }
+        if not socket_eof:
+            return {"success": True, "data": data, "eof": False, "process_status": "running"}
+        exit_code_raw = inspection.get("ExitCode")
+        try:
+            exit_code = int(exit_code_raw) if exit_code_raw is not None else None
+        except (TypeError, ValueError):
+            exit_code = None
+        return {
+            "success": True,
+            "data": data,
+            "eof": True,
+            "process_status": "completed" if exit_code == 0 else "failed",
+            "exit_code": exit_code,
+        }
 
     def _resize_terminal_session(self, request: RuntimeOperationRequest) -> dict[str, Any]:
         exec_id = request.payload.get("exec_id")

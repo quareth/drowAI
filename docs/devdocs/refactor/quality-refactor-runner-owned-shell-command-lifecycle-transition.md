@@ -2,7 +2,7 @@
 
 # Runner-Owned Shell Command Lifecycle Transition
 
-**Status:** Approved design direction; implementation pending
+**Status:** Implemented and validated
 
 **Decision date:** 2026-08-14
 
@@ -43,7 +43,7 @@ The file-communication transport is prohibited from this design. No new shell
 path, fallback, compatibility bridge, artifact capture, or status polling may
 use file-comm. Its eventual repository-wide retirement is a separate change.
 
-## Current code-verified state
+## Pre-transition code-verified state
 
 The existing implementation already has a strong execution-plane foundation:
 
@@ -70,6 +70,28 @@ The ownership gap is at the individual command boundary:
 
 The runner therefore owns the terminal transport today, but it does not own or
 report the lifecycle of each command typed into the persistent shell.
+
+## Implemented outcome
+
+The final wired shell path now follows the target ownership model:
+
+- local and managed providers start one dedicated exec for each shell command;
+- the exec owner reports structured EOF, process status, and exit code;
+- managed output uses the existing task-scoped `terminal.frame` stream, including
+  frames emitted before the backend attaches its consumer;
+- non-interactive progress returns to runtime-owned waiting without invoking the
+  interaction-decision model;
+- explicit interactive starts alone accept later stdin through
+  `shell.write_stdin`;
+- assessment capture uses a Kali-side `tee`, atomically publishes one confirmed
+  artifact, and has no backend or file-comm fallback;
+- utility execution creates no synthetic artifact; and
+- shell-specific marker lifecycle parsing, util-linux `script` capture, and the
+  obsolete `.shell-capture` wrapper have been removed from the wired shell path.
+
+The shared marker-framing helper was retained only for the separately wired
+purpose-built PTY tool transport that still imports it. It is not reachable from
+`shell.utility`, `shell.assessment`, or `shell.write_stdin`.
 
 ## Problem statement
 
