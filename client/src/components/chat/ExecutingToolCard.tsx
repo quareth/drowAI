@@ -42,6 +42,8 @@ interface ExecutingToolCardProps {
   compactToolResult?: CompactToolResult | null;
   /** Sanitized command text carried by the live shell tool-start event. */
   commandDisplay?: string;
+  /** Accumulated same-turn output from correlated shell lifecycle deltas. */
+  transientOutput?: string;
 }
 
 function formatCompactOutput(
@@ -57,6 +59,13 @@ function formatCompactOutput(
     .map((value) => String(value || "").trim())
     .filter(Boolean);
   return Array.from(new Set(lines)).join("\n");
+}
+
+function formatTransientOutput(output: string | undefined, commandDisplay?: string): string {
+  const command = String(commandDisplay || "").trim();
+  const body = String(output || "").trim();
+  if (!body) return "";
+  return [command ? `$ ${command}` : "", body].filter(Boolean).join("\n");
 }
 
 function getUnavailableMessage(reason: ToolRawOutputNotAvailableReason): string {
@@ -90,13 +99,16 @@ export function ExecutingToolCard({
   layout = "standalone",
   compactToolResult,
   commandDisplay,
+  transientOutput,
 }: ExecutingToolCardProps) {
   const { toast } = useToast();
   const [isOpen, setIsOpen] = useCardToggleState(stateKey, false);
   const normalizedToolCallId = typeof toolCallId === "string" ? toolCallId.trim() : "";
   const hasLookupIdentity = taskId != null && normalizedToolCallId.length > 0;
   const compactOutputText = formatCompactOutput(compactToolResult, commandDisplay);
-  const hasCompactOutput = compactOutputText.length > 0;
+  const streamedOutputText = formatTransientOutput(transientOutput, commandDisplay);
+  const inlineOutputText = streamedOutputText || compactOutputText;
+  const hasInlineOutput = inlineOutputText.length > 0;
 
   const isExecuting = status === "executing";
   const isCompleted = status === "completed";
@@ -125,9 +137,9 @@ export function ExecutingToolCard({
   const rawOutput = useToolRawOutput({
     taskId,
     toolCallId,
-    enabled: !isExecuting && isOpen && hasLookupIdentity && !hasCompactOutput,
+    enabled: !isExecuting && isOpen && hasLookupIdentity && !hasInlineOutput,
   });
-  const canExpand = hasCompactOutput || (!isExecuting && hasLookupIdentity);
+  const canExpand = hasInlineOutput || (!isExecuting && hasLookupIdentity);
   const {
     processLabel: sessionProcessLabel,
     activityLabel: sessionActivityLabel,
@@ -137,8 +149,8 @@ export function ExecutingToolCard({
     interactionBoundary,
   });
 
-  const readyOutputText = hasCompactOutput
-    ? compactOutputText
+  const readyOutputText = hasInlineOutput
+    ? inlineOutputText
     : rawOutput.state.status === "ready"
       ? rawOutput.state.outputText
       : "";
@@ -230,23 +242,23 @@ export function ExecutingToolCard({
       </div>
 
       {/* Content - tool output */}
-      {(isOpen || (isExecuting && hasCompactOutput)) && (
+      {(isOpen || (isExecuting && hasInlineOutput)) && (
         <div className="min-w-0 max-w-full border-t border-slate-800/70 bg-slate-950/80 px-3 py-2">
-          {hasCompactOutput && (
+          {hasInlineOutput && (
             <ToolCardTerminalOutput
-              outputText={compactOutputText}
+              outputText={inlineOutputText}
               isExpanded={isOpen || isExecuting}
               isReady
               testId={testId ? `${testId}-terminal` : undefined}
             />
           )}
-          {!hasCompactOutput && rawOutput.state.status === "loading" && (
+          {!hasInlineOutput && rawOutput.state.status === "loading" && (
             <div className="flex items-center gap-2 text-xs text-slate-400/90 font-mono">
               <Loader2 className="w-3 h-3 animate-spin" />
               <span>Loading raw output...</span>
             </div>
           )}
-          {!hasCompactOutput && rawOutput.state.status === "ready" && (
+          {!hasInlineOutput && rawOutput.state.status === "ready" && (
             <ToolCardTerminalOutput
               outputText={rawOutput.state.outputText}
               isExpanded={isOpen}
@@ -254,12 +266,12 @@ export function ExecutingToolCard({
               testId={testId ? `${testId}-terminal` : undefined}
             />
           )}
-          {!hasCompactOutput && rawOutput.state.status === "not_available" && (
+          {!hasInlineOutput && rawOutput.state.status === "not_available" && (
             <p className="font-mono text-xs text-slate-400/90 leading-relaxed">
               {getUnavailableMessage(rawOutput.state.reason)}
             </p>
           )}
-          {!hasCompactOutput && rawOutput.state.status === "error" && (
+          {!hasInlineOutput && rawOutput.state.status === "error" && (
             <p className="font-mono text-xs text-slate-400/90 leading-relaxed">
               Raw output unavailable due to a retrieval error.
             </p>

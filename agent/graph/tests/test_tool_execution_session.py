@@ -1347,6 +1347,7 @@ async def test_lifecycle_progress_uses_immutable_origin_after_plan_mutates(
     )
 
     assert [event["type"] for event in emitted_events] == ["tool_delta", "tool_end"]
+    assert [event["shell_output_chunk"] for event in emitted_events] == [True, True]
     assert {event["tool_call_id"] for event in emitted_events} == {"call-origin"}
     assert {event["tool_batch_id"] for event in emitted_events} == {
         "batch-fresh-dispatch"

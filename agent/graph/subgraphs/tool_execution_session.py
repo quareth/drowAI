@@ -761,6 +761,7 @@ def _emit_shell_lifecycle_progress(
         )
         if part
     )
+    has_output_chunk = bool(output)
     if not output:
         output = str(compact.get("summary") or "").strip()
     display_compact = {
@@ -808,6 +809,7 @@ def _emit_shell_lifecycle_progress(
             "compact_tool_result": masked_display_compact,
             "output_persistence": "transient",
             "shell_lifecycle_event": True,
+            "shell_output_chunk": has_output_chunk,
         }
     )
 

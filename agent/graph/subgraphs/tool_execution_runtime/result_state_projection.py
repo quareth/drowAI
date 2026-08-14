@@ -1235,6 +1235,75 @@ def project_trace_history_and_outbound_events(
         execution_duration = outcome.result.get("duration", 0)
         exit_code = outcome.result.get("exit_code")
 
+        resolved_tool_id = str(outcome.tool_id or tool_name)
+        if (
+            process_status == "running"
+            and resolved_tool_id in SHELL_SESSION_TOOL_IDS
+            and resolved_tool_id != SHELL_WRITE_STDIN_TOOL_ID
+        ):
+            initial_output = "\n".join(
+                value.rstrip()
+                for value in (
+                    str(result_for_metadata.get("stdout") or ""),
+                    str(result_for_metadata.get("stderr") or ""),
+                )
+                if value
+            )[:4000]
+            if initial_output:
+                display_compact = {
+                    "schema_version": "2.0",
+                    "tool": resolved_tool_id,
+                    "status": "success" if outcome.result.get("success") else "failed",
+                    "success": bool(outcome.result.get("success")),
+                    "exit_code": exit_code,
+                    "summary": initial_output,
+                    "key_findings": [],
+                    "errors": [],
+                    "report_recommendations": [],
+                    "structured_signals": [],
+                    "decision_evidence": [],
+                    "lossiness_risk": "high",
+                    "artifact_refs": [],
+                    "compression": None,
+                    "process_status": "running",
+                    "session_status": compact_result_dict.get("session_status"),
+                    "interaction_boundary": "output_available",
+                    "session_id": compact_result_dict.get("session_id"),
+                }
+                masked_display_compact = _mask_durable_mapping(
+                    display_compact,
+                    source="initial_shell_output_delta",
+                )
+                masked_output = str(masked_display_compact.get("summary") or "")
+                writer(
+                    {
+                        "type": "tool_delta",
+                        "tool": resolved_tool_id,
+                        "tool_call_id": tool_call_id,
+                        "tool_batch_id": tool_batch_id,
+                        "conversation_id": conversation_id,
+                        "turn_id": turn_id,
+                        "status": (
+                            "success" if outcome.result.get("success") else "error"
+                        ),
+                        "process_status": "running",
+                        "session_status": compact_result_dict.get("session_status"),
+                        "interaction_boundary": "output_available",
+                        "session_id": compact_result_dict.get("session_id"),
+                        "exit_code": exit_code,
+                        "content": masked_output,
+                        "summary": {"summary": masked_output},
+                        "compact_tool_result": masked_display_compact,
+                        "output_persistence": "transient",
+                        "shell_lifecycle_event": True,
+                        "shell_output_chunk": True,
+                        "ind": 1,
+                        "step_type": "tool_delta",
+                        "turn_sequence": turn_sequence,
+                        "sub_turn_index": sub_turn_index,
+                    }
+                )
+
         writer(
             {
                 "type": "tool_end",

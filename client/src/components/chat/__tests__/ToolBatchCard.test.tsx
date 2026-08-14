@@ -531,6 +531,125 @@ describe("ToolBatchCard", () => {
     );
   });
 
+  it("keeps the accumulated shell stream when the terminal lifecycle event arrives", () => {
+    const messages: ChatMessage[] = [
+      makeMsg({
+        id: "shell-start",
+        metadata: {
+          step_type: "tool_start",
+          tool_batch_id: "tb_shell_transcript",
+          tool_call_id: "tc_shell_transcript",
+          tool_name: "shell.assessment",
+          command_display: "nmap -p 5432 127.0.0.1; bc",
+        },
+      }),
+      makeMsg({
+        id: "shell-output-1",
+        content: "Starting Nmap\n5432/tcp closed",
+        metadata: {
+          step_type: "tool_delta",
+          tool_batch_id: "tb_shell_transcript",
+          tool_call_id: "tc_shell_transcript",
+          tool_name: "shell.assessment",
+          status: "success",
+          process_status: "running",
+          session_status: "active",
+          interaction_boundary: "output_available",
+          output_persistence: "transient",
+          shell_lifecycle_event: true,
+        },
+      }),
+      makeMsg({
+        id: "shell-quiet",
+        content: "Shell session is still running; no new output was received.",
+        metadata: {
+          step_type: "tool_delta",
+          tool_batch_id: "tb_shell_transcript",
+          tool_call_id: "tc_shell_transcript",
+          tool_name: "shell.assessment",
+          status: "success",
+          process_status: "running",
+          session_status: "active",
+          interaction_boundary: "quiet_boundary",
+          output_persistence: "transient",
+          shell_lifecycle_event: true,
+        },
+      }),
+      makeMsg({
+        id: "shell-output-2",
+        content: "x\n7",
+        metadata: {
+          step_type: "tool_delta",
+          tool_batch_id: "tb_shell_transcript",
+          tool_call_id: "tc_shell_transcript",
+          tool_name: "shell.assessment",
+          status: "success",
+          process_status: "running",
+          session_status: "active",
+          interaction_boundary: "output_available",
+          output_persistence: "transient",
+          shell_lifecycle_event: true,
+        },
+      }),
+      makeMsg({
+        id: "shell-final-output",
+        content: "done",
+        metadata: {
+          step_type: "tool_end",
+          tool_batch_id: "tb_shell_transcript",
+          tool_call_id: "tc_shell_transcript",
+          tool_name: "shell.assessment",
+          status: "success",
+          process_status: "completed",
+          session_status: "closed",
+          interaction_boundary: "terminal",
+          output_persistence: "transient",
+          shell_lifecycle_event: true,
+          shell_output_chunk: true,
+        },
+      }),
+      makeMsg({
+        id: "shell-cleanup-end",
+        content: "Shell session closed.",
+        metadata: {
+          step_type: "tool_end",
+          tool_batch_id: "tb_shell_transcript",
+          tool_call_id: "tc_shell_transcript",
+          tool_name: "shell.assessment",
+          status: "success",
+          process_status: "completed",
+          session_status: "closed",
+          interaction_boundary: "terminal",
+          output_persistence: "transient",
+          shell_lifecycle_event: true,
+          compact_tool_result: {
+            schema_version: "2.0",
+            tool: "shell.assessment",
+            status: "success",
+            success: true,
+            summary: "Shell session closed.",
+            key_findings: [],
+            errors: [],
+            report_recommendations: [],
+            structured_signals: [],
+            decision_evidence: [],
+            lossiness_risk: "high",
+          },
+        },
+      }),
+    ];
+
+    render(<ToolBatchCard messages={messages} groupKey="shell-transcript" taskId={42} />);
+    fireEvent.click(screen.getByRole("button", { name: "Toggle tool output" }));
+
+    expect(
+      screen.getByTestId("tool-batch-card-shell-transcript-row-tc_shell_transcript-terminal")
+        .textContent,
+    ).toBe(
+      "$ nmap -p 5432 127.0.0.1; bc\nStarting Nmap\n5432/tcp closed\nx\n7\ndone",
+    );
+  });
+
   it("renders terminal batch rows when no per-tool events were emitted", () => {
     const messages: ChatMessage[] = [
       makeMsg({

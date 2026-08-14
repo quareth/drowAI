@@ -753,6 +753,84 @@ def test_project_trace_history_masks_checkpoint_and_cache_without_masking_runtim
     assert "<DURABLE_SECRET_MASK:" in serialized_cache
 
 
+def test_running_shell_start_emits_initial_stdout_as_correlated_delta() -> None:
+    initial_stdout = "Starting Nmap\n5432/tcp closed postgresql\n"
+    facts = _Facts(metadata={})
+    interactive = SimpleNamespace(
+        trace=SimpleNamespace(reasoning=[], observations=[], executed_tools=[]),
+    )
+    emitted_events: list[Mapping[str, Any]] = []
+    compact_result = {
+        "schema_version": "2.0",
+        "tool": "shell.assessment",
+        "status": "success",
+        "success": True,
+        "process_status": "running",
+        "session_status": "active",
+        "interaction_boundary": "output_available",
+        "session_id": "shs-initial-output",
+        "summary": "Command is still running; new output was received.",
+        "key_findings": [],
+        "errors": [],
+        "report_recommendations": [],
+    }
+    outcome = SimpleNamespace(
+        tool_id="shell.assessment",
+        parameters={"command": "nmap -p 5432 127.0.0.1; bc"},
+        result={
+            "success": True,
+            "exit_code": None,
+            "process_status": "running",
+            "session_status": "active",
+            "interaction_boundary": "output_available",
+            "session_id": "shs-initial-output",
+            "stdout": initial_stdout,
+            "stderr": "",
+        },
+        summary="Command is still running; new output was received.",
+        reasoning=[],
+    )
+
+    project_trace_history_and_outbound_events(
+        interactive=interactive,
+        facts=facts,
+        outcome=outcome,
+        compact_result_dict=compact_result,
+        result_for_metadata=outcome.result,
+        graph_metadata={},
+        action_record={"parameters": outcome.parameters},
+        approval_response=None,
+        tool_name="shell.assessment",
+        tool_call_id="tc-initial-output",
+        tool_batch_id="tb-initial-output",
+        conversation_id="conv-1",
+        turn_id="turn-1",
+        turn_sequence=9,
+        sub_turn_index=None,
+        interrupt_id=None,
+        has_writer=True,
+        writer=emitted_events.append,
+        compact_observation_text_fn=lambda compact, fallback=None: str(
+            compact.get("summary") or fallback or ""
+        ),
+        tool_execution_record_cls=SimpleNamespace,
+        store_dispatch_cache_result_fn=store_dispatch_cache_result,
+        tool_dispatch_cache_key="tool_dispatch_cache",
+        diag_info_fn=lambda *_args, **_kwargs: None,
+        logger=SimpleNamespace(info=lambda *_args, **_kwargs: None),
+        persistence_decision=resolve_output_persistence("shell.assessment"),
+    )
+
+    assert [event["type"] for event in emitted_events] == ["tool_delta", "tool_end"]
+    delta = emitted_events[0]
+    assert delta["tool_call_id"] == "tc-initial-output"
+    assert delta["tool_batch_id"] == "tb-initial-output"
+    assert delta["content"] == initial_stdout.rstrip()
+    assert delta["interaction_boundary"] == "output_available"
+    assert delta["output_persistence"] == "transient"
+    assert delta["shell_lifecycle_event"] is True
+
+
 def test_utility_dispatch_cache_retains_only_operational_fields() -> None:
     sentinel = "UTILITY_EVENT_SENTINEL"
     facts = _Facts(metadata={})

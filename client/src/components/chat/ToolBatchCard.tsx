@@ -44,6 +44,7 @@ interface BatchRowState {
   retryAttempt?: number;
   retryMaxAttempts?: number;
   compactToolResult?: CompactToolResult;
+  shellOutputChunks?: string[];
   /** First-seen index in the message stream — used as a stable order key when
    * the batch_start manifest is absent. */
   firstSeenIndex: number;
@@ -218,8 +219,25 @@ function buildRows(messages: ChatMessage[], manifest: Map<string, number>): Batc
       row.interactionBoundary =
         readString(metadata, "interaction_boundary") ?? row.interactionBoundary;
       if (metadata?.output_persistence === "transient") {
+        const isShellLifecycle = metadata.shell_lifecycle_event === true;
+        const isShellOutputChunk =
+          (stepType === "tool_delta" &&
+            readString(metadata, "interaction_boundary") === "output_available") ||
+          (stepType === "tool_end" && metadata.shell_output_chunk === true);
+        if (
+          isShellLifecycle &&
+          isShellOutputChunk &&
+          typeof msg.content === "string" &&
+          msg.content.trim()
+        ) {
+          (row.shellOutputChunks ??= []).push(msg.content.trim());
+        }
         const compact = metadata.compact_tool_result;
-        if (compact && typeof compact === "object") {
+        if (
+          compact &&
+          typeof compact === "object" &&
+          (!isShellLifecycle || (stepType === "tool_end" && !row.shellOutputChunks?.length))
+        ) {
           row.compactToolResult = compact as CompactToolResult;
         }
       }
@@ -321,6 +339,7 @@ export function ToolBatchCard({ messages, groupKey, taskId }: ToolBatchCardProps
         retryMaxAttempts={only.retryMaxAttempts}
         compactToolResult={only.compactToolResult}
         commandDisplay={only.commandDisplay}
+        transientOutput={only.shellOutputChunks?.join("\n")}
       />
     );
   }
@@ -361,6 +380,7 @@ export function ToolBatchCard({ messages, groupKey, taskId }: ToolBatchCardProps
             retryMaxAttempts={row.retryMaxAttempts}
             compactToolResult={row.compactToolResult}
             commandDisplay={row.commandDisplay}
+            transientOutput={row.shellOutputChunks?.join("\n")}
             layout="batch-row"
           />
         ))}
