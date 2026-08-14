@@ -399,7 +399,7 @@ async def test_shell_exec_running_update_maps_session_continuation_fields(
 @pytest.mark.parametrize(
     ("tool_id", "expected_capability"),
     [
-        ("shell.utility", ShellCapability.ASSESSMENT),
+        ("shell.utility", ShellCapability.UTILITY),
         ("shell.assessment", ShellCapability.ASSESSMENT),
     ],
 )
@@ -453,6 +453,62 @@ async def test_shell_start_alias_retains_originating_capability(
     assert result["metadata"]["runtime_session"]["originating_capability"] == (
         expected_capability.value
     )
+    if expected_capability is ShellCapability.ASSESSMENT:
+        assert result["metadata"]["runtime_session"]["artifact_capture"] == {
+            "status": "pending",
+            "artifact_count": 0,
+        }
+    else:
+        assert "artifact_capture" not in result["metadata"]["runtime_session"]
+
+
+@pytest.mark.asyncio
+async def test_assessment_terminal_result_exposes_runtime_artifact_metadata(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    artifact_path = "artifacts/shell-assessment-shs_verified.txt"
+    service = _FakeShellSessionService(
+        ShellSessionUpdate(
+            success=True,
+            status="success",
+            process_status=ShellProcessStatus.COMPLETED,
+            session_id=None,
+            stdout="verified\n",
+            artifacts=[artifact_path],
+            exit_code=0,
+            stdin_available=False,
+            duration_ms=10,
+        )
+    )
+    monkeypatch.setattr(
+        shell_session_port,
+        "_shell_session_service_resolver",
+        lambda: service,
+    )
+
+    result = await GraphToolExecutor(executor=_StubExecutor()).execute_tool(
+        {
+            "tool": "shell.assessment",
+            "parameters": {"command": "printf verified"},
+            "tool_call_id": "call-artifact",
+            "timeout_plan": {
+                "tool_id": "shell.assessment",
+                "deadline_seconds": 5.0,
+                "native_timeout_seconds": 5,
+                "normalized_parameters": {"command": "printf verified"},
+                "source": "test",
+            },
+        },
+        context=_shell_context(tmp_path),
+    )
+
+    assert result["artifacts"] == [artifact_path]
+    assert result["metadata"]["artifact_scope"] == "runtime_workspace"
+    assert result["metadata"]["runtime_session"]["artifact_capture"] == {
+        "status": "succeeded",
+        "artifact_count": 1,
+    }
 
 
 @pytest.mark.asyncio
@@ -501,6 +557,12 @@ async def test_shell_exec_nonzero_completion_maps_failed_without_fake_exit_code(
     assert result["status"] == "failed"
     assert result["process_status"] == "completed"
     assert result["exit_code"] == 7
+    assert result["artifacts"] == []
+    assert result["metadata"]["runtime_session"]["artifact_capture"] == {
+        "status": "failed",
+        "artifact_count": 0,
+    }
+    assert "artifact_scope" not in result["metadata"]
 
 
 @pytest.mark.asyncio
@@ -603,7 +665,7 @@ async def test_shell_write_stdin_builds_write_request(
     assert result["success"] is True
     assert result["process_status"] == "running"
     assert result["metadata"]["runtime_session"]["originating_capability"] == (
-        "assessment"
+        "utility"
     )
     assert service.write_calls
     _, write_request = service.write_calls[0]

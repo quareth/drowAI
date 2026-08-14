@@ -16,8 +16,8 @@ The format is based on
 
 ### Changed
 
-- Shell commands retain explicit utility and assessment aliases while both use
-  the assessment execution, graph-state, artifact, and knowledge-retention path.
+- Shell utility output is transient while shell assessment output remains
+  eligible for durable artifacts, provenance, and knowledge retention.
 - Interactive shell policy now reserves hard blocks for obvious environment
   destruction, shutdown, resource exhaustion, and container escape while
   permitting pentesting workflows in the default permissive mode.
@@ -26,6 +26,14 @@ The format is based on
 
 ### Fixed
 
+- Post-tool reasoning now inspects referenced runtime artifacts with bounded
+  utility-shell reads before repeating assessments that already captured the
+  missing evidence.
+- Tool-output compression now allows up to 4,096 output tokens so large
+  structured summaries can complete without removing downstream context caps.
+- Shell assessment transcripts are now created inside the selected Kali runtime,
+  exposed only after provider verification, and never duplicated by the backend;
+  utility shell commands create no artifact.
 - Direct execution now honors valid Pathfinder delegation selected by
   post-tool reasoning, reusing the existing subagent lifecycle and parent
   continuation instead of prematurely finalizing the response.

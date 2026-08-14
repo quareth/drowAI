@@ -14,6 +14,10 @@ from backend.services.chat.shell_session_lifecycle_projector import (
 )
 from backend.services.runtime_provider import RuntimeActorType
 from backend.services.runtime_provider.context import RuntimeProviderContextResolver
+from backend.services.runtime_provider.runtime_artifact_access import (
+    execute_runtime_artifact_query,
+    runtime_artifact_query_contains,
+)
 from backend.services.streaming.in_memory_hub import get_in_memory_stream_hub
 from runtime_shared.shell_session_port import set_shell_session_service_resolver
 from runtime_shared.shell_session_contracts import ShellSessionIdentity
@@ -43,6 +47,25 @@ def _resolve_shell_runtime_context(identity: ShellSessionIdentity):
         db.close()
 
 
+async def _shell_runtime_artifact_exists(
+    identity: ShellSessionIdentity,
+    artifact_path: str,
+) -> bool:
+    """Confirm a shell artifact through the task's selected runtime provider."""
+    db = SessionLocal()
+    try:
+        result = await execute_runtime_artifact_query(
+            db,
+            task_id=identity.task_id,
+            prefix=artifact_path,
+            actor_type=RuntimeActorType.AGENT,
+            actor_id=f"shell_session:{identity.execution_owner_id}",
+        )
+        return runtime_artifact_query_contains(result, path=artifact_path)
+    finally:
+        db.close()
+
+
 shell_session_service = ShellSessionService(
     terminal_manager=terminal_session_manager,
     lifecycle_projector=ShellSessionLifecycleProjector(
@@ -51,6 +74,7 @@ shell_session_service = ShellSessionService(
         wall_clock=time.time,
     ),
     runtime_context_resolver=_resolve_shell_runtime_context,
+    artifact_exists_resolver=_shell_runtime_artifact_exists,
 )
 
 

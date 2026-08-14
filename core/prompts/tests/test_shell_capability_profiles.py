@@ -54,3 +54,26 @@ def test_main_tool_parameter_system_prompt_uses_exact_callable_ids() -> None:
     assert with_shell.count("Shell Capability Profiles:") == 1
     assert with_shell.count("Use shell.utility for ordinary") == 1
     assert with_shell.count("Use shell.assessment for commands") == 1
+
+
+def test_main_tool_selector_prompt_uses_visible_shell_ids() -> None:
+    builder = ToolPlanningPromptBuilder()
+    common = {
+        "target": "localhost",
+        "phase": "enumeration",
+        "constraints": {},
+    }
+
+    without_shell = builder.build_select_tools_prompt(
+        resolved_tools=["information_gathering.network_discovery.nmap"],
+        **common,
+    )
+    with_shell = builder.build_select_tools_prompt(
+        resolved_tools=["shell.utility", "shell.assessment"],
+        **common,
+    )
+
+    assert "Shell Capability Profiles:" not in without_shell
+    assert with_shell.count("Shell Capability Profiles:") == 1
+    assert with_shell.count("Use shell.utility for ordinary") == 1
+    assert with_shell.count("Use shell.assessment for commands") == 1

@@ -618,7 +618,7 @@ class ToolPlanningPromptBuilder:
         if committed_cap_value < 1:
             committed_cap_value = 1
 
-        return _render_latest(
+        rendered = _render_latest(
             "select_tools.txt",
             resolved_tools=available_tools_text,
             target=target,
@@ -637,6 +637,10 @@ class ToolPlanningPromptBuilder:
             max_tools_per_action=cap_value,
             max_committed_tools_per_batch=committed_cap_value,
         )
+        profile_section = build_shell_capability_profiles(visible_tool_ids)
+        if not profile_section:
+            return rendered
+        return f"{rendered.rstrip()}\n\n{profile_section}\n"
 
     def build_tool_parameters_prompt(
         self,

@@ -11,10 +11,10 @@ from runtime_shared.shell_capabilities import (
 )
 
 
-def test_model_aliases_map_to_assessment_capability_and_one_implementation() -> None:
+def test_model_aliases_map_to_distinct_capabilities_and_one_implementation() -> None:
     assert (
         resolve_shell_start_capability("shell.utility")
-        is ShellCapability.ASSESSMENT
+        is ShellCapability.UTILITY
     )
     assert (
         resolve_shell_start_capability("shell.assessment")
@@ -40,6 +40,6 @@ def test_session_start_capability_includes_legacy_implementation_id() -> None:
     )
     assert (
         resolve_shell_session_start_capability("shell.utility")
-        is ShellCapability.ASSESSMENT
+        is ShellCapability.UTILITY
     )
     assert resolve_shell_session_start_capability(SHELL_WRITE_STDIN_TOOL_ID) is None

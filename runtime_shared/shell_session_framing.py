@@ -8,8 +8,10 @@ services.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import posixpath
 import re
 import secrets
+import shlex
 
 from runtime_shared.terminal_contracts import (
     AGENT_PROMPT_ENV,
@@ -22,6 +24,8 @@ PTY_EXIT_CODE_MARKER = "__DROWAI_EXIT_CODE__="
 # bracketed paste mode toggles. Use a broad ECMA-48/VT100-compatible matcher.
 ANSI_ESCAPE_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 EXIT_CODE_PATTERN = re.compile(r"__DROWAI_EXIT_CODE__=\d+")
+_RUNTIME_WORKSPACE_PATH = "/workspace"
+_RUNTIME_ARTIFACT_DIRECTORY = "artifacts"
 
 
 class ShellSessionFramingError(ValueError):
@@ -40,6 +44,46 @@ class PtyCommandFrame:
     start_marker: str
     end_marker: str
     wrapped_command: str
+
+
+def wrap_command_with_runtime_artifact_capture(
+    command: str,
+    *,
+    artifact_path: str,
+) -> str:
+    """Wrap a command so the runtime writes its transcript under `/workspace`."""
+    normalized_path = str(artifact_path or "").replace("\\", "/").strip()
+    path_parts = normalized_path.split("/")
+    if (
+        not normalized_path
+        or normalized_path.startswith("/")
+        or path_parts[0] != _RUNTIME_ARTIFACT_DIRECTORY
+        or any(part in {"", ".", ".."} for part in path_parts)
+    ):
+        raise ValueError("artifact_path must be a safe artifacts-relative path")
+
+    runtime_path = posixpath.join(_RUNTIME_WORKSPACE_PATH, normalized_path)
+    runtime_parent = posixpath.dirname(runtime_path)
+    capture_temp_path = posixpath.join(
+        _RUNTIME_WORKSPACE_PATH,
+        ".shell-capture",
+        f"{normalized_path.replace('/', '_')}.incomplete",
+    )
+    capture_temp_parent = posixpath.dirname(capture_temp_path)
+    capture_command = 'bash -c "$DROWAI_SHELL_CAPTURE_COMMAND"'
+    return (
+        f"mkdir -p -- {shlex.quote(runtime_parent)} "
+        f"{shlex.quote(capture_temp_parent)} && "
+        f"{{ DROWAI_SHELL_CAPTURE_COMMAND={shlex.quote(str(command))} "
+        f"script -qefc {shlex.quote(capture_command)} "
+        f"{shlex.quote(capture_temp_path)}; "
+        "__drowai_capture_ec=$?; "
+        f"if sed -i '1d;$d' -- {shlex.quote(capture_temp_path)} && "
+        f"mv -f -- {shlex.quote(capture_temp_path)} {shlex.quote(runtime_path)}; "
+        f"then :; else rm -f -- {shlex.quote(capture_temp_path)}; fi; "
+        f"rmdir -- {shlex.quote(capture_temp_parent)} 2>/dev/null || true; "
+        '(exit "$__drowai_capture_ec"); }'
+    )
 
 
 def create_pty_command_frame(

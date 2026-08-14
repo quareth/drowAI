@@ -61,6 +61,7 @@ _PUBLIC_ASSERT_FIELDS = {
     "stdin_available",
     "truncated",
     "error_code",
+    "artifacts",
 }
 
 
@@ -533,12 +534,14 @@ def _service(
     *,
     context=None,
     config: ShellSessionServiceConfig | None = None,
+    artifact_exists_resolver=None,
 ) -> ShellSessionService:
     return ShellSessionService(
         terminal_manager=terminal_manager,
         lifecycle_projector=_noop_lifecycle_projector(),
         config=config or _config(),
         runtime_context_resolver=lambda _identity: context or _context(),
+        artifact_exists_resolver=artifact_exists_resolver,
     )
 
 
@@ -671,6 +674,54 @@ async def test_quick_command_returns_completed_update_and_closes_terminal() -> N
     assert update.stdout == "quick"
     assert manager.prepare_calls[0]["workspace_path"] == "/workspace"
     assert manager.closed_sessions == ["terminal-1"]
+
+
+@pytest.mark.asyncio
+async def test_assessment_command_returns_one_verified_runtime_artifact() -> None:
+    manager = FakeTerminalManager()
+    resolved: list[tuple[ShellSessionIdentity, str]] = []
+
+    async def artifact_exists(identity: ShellSessionIdentity, path: str) -> bool:
+        resolved.append((identity, path))
+        return True
+
+    service = _service(manager, artifact_exists_resolver=artifact_exists)
+    update = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(command="echo quick", yield_time_ms=0),
+        capability=ShellCapability.ASSESSMENT,
+    )
+
+    assert update.process_status is ShellProcessStatus.COMPLETED
+    assert len(update.artifacts) == 1
+    assert update.artifacts[0].startswith("artifacts/shell-assessment-shs_")
+    assert update.artifacts[0].endswith(".txt")
+    assert resolved == [(_identity(), update.artifacts[0])]
+    sent = manager.sent_inputs[0][1].decode()
+    assert "script -qefc" in sent
+    assert f"/workspace/{update.artifacts[0]}" in sent
+
+
+@pytest.mark.asyncio
+async def test_utility_command_never_wraps_or_resolves_artifact() -> None:
+    manager = FakeTerminalManager()
+    resolver_calls: list[tuple[ShellSessionIdentity, str]] = []
+
+    async def artifact_exists(identity: ShellSessionIdentity, path: str) -> bool:
+        resolver_calls.append((identity, path))
+        return True
+
+    service = _service(manager, artifact_exists_resolver=artifact_exists)
+    update = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(command="echo quick", yield_time_ms=0),
+        capability=ShellCapability.UTILITY,
+    )
+
+    assert update.process_status is ShellProcessStatus.COMPLETED
+    assert update.artifacts == []
+    assert resolver_calls == []
+    assert "script -qefc" not in manager.sent_inputs[0][1].decode()
 
 
 @pytest.mark.asyncio
@@ -877,6 +928,36 @@ async def test_delayed_command_yields_public_session_id_and_later_completes() ->
     assert second.exit_code == 0
     assert second.stdout == "done"
     assert manager.closed_sessions == ["terminal-1"]
+
+
+@pytest.mark.asyncio
+async def test_assessment_artifact_is_exposed_only_on_terminal_update() -> None:
+    manager = FakeTerminalManager()
+    resolved: list[str] = []
+
+    async def artifact_exists(_identity: ShellSessionIdentity, path: str) -> bool:
+        resolved.append(path)
+        return True
+
+    service = _service(manager, artifact_exists_resolver=artifact_exists)
+    first = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(command="delayed", yield_time_ms=0),
+        capability=ShellCapability.ASSESSMENT,
+    )
+
+    assert first.process_status is ShellProcessStatus.RUNNING
+    assert first.artifacts == []
+    assert resolved == []
+
+    second = await service.wait_for_output(
+        identity=_identity(),
+        request=ShellWaitRequest(session_id=first.session_id),
+    )
+
+    assert second.process_status is ShellProcessStatus.COMPLETED
+    assert len(second.artifacts) == 1
+    assert resolved == second.artifacts
 
 
 @pytest.mark.asyncio
@@ -1443,6 +1524,7 @@ async def test_managed_provider_contract_matches_local_public_fields(
         "session_id": None,
         "exit_code": 0,
         "stdout": "quick",
+        "artifacts": [],
         "stdin_available": False,
         "truncated": False,
         "error_code": None,
@@ -1499,6 +1581,7 @@ def _stable_update_contract(update):
         "exit_code": update.exit_code,
         "stdout": update.stdout,
         "stderr": update.stderr,
+        "artifacts": update.artifacts,
         "stdin_available": update.stdin_available,
         "truncated": update.truncated,
         "summary": update.summary,
@@ -2237,11 +2320,18 @@ async def test_idle_expiry_closes_through_common_cleanup_path() -> None:
 async def test_deadline_expiry_poll_returns_timed_out_and_closes() -> None:
     manager = FakeTerminalManager()
     clock = MutableClock()
+    resolved: list[str] = []
+
+    async def artifact_exists(_identity: ShellSessionIdentity, path: str) -> bool:
+        resolved.append(path)
+        return True
+
     service = ShellSessionService(
         terminal_manager=manager,
         lifecycle_projector=_noop_lifecycle_projector(),
         config=_config(),
         runtime_context_resolver=lambda _identity: _context(),
+        artifact_exists_resolver=artifact_exists,
         clock=clock,
     )
     first = await service.execute(
@@ -2271,6 +2361,8 @@ async def test_deadline_expiry_poll_returns_timed_out_and_closes() -> None:
     assert update.success is False
     assert update.process_status is ShellProcessStatus.TIMED_OUT
     assert update.error_code is ShellSessionErrorCode.COMMAND_TIMED_OUT
+    assert update.artifacts == resolved
+    assert len(update.artifacts) == 1
     assert update.session_id is None
     assert update.summary == "Command exceeded its configured maximum runtime."
     assert b"\x03" in [payload for _session, payload in manager.sent_inputs]

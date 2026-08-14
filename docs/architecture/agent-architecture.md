@@ -183,9 +183,11 @@ Tool execution boundaries:
 - Container-scoped tools use file-comm or PTY for local placement.
 - `shell.utility`, `shell.assessment`, and `shell.write_stdin` are universal
   runtime-session-scoped tools. The two start aliases share the hidden
-  `shell.exec` implementation schema, command policy, runtime capability, and
-  output-persistence path. Their adapters fail closed for direct execution; the
-  graph dispatcher routes them through `runtime_session_control`.
+  `shell.exec` implementation schema, command policy, and PTY transport while
+  retaining distinct capabilities: utility output is transient, while
+  assessment output is eligible for durable evidence. Their adapters fail
+  closed for direct execution; the graph dispatcher routes them through
+  `runtime_session_control`.
 - Runtime-session shell tools use `ShellSessionService` through the
   runtime-shared service port, then `TerminalSessionManager`, then the selected
   runtime provider PTY implementation. The model-facing shell aliases and
@@ -200,7 +202,13 @@ Tool execution boundaries:
 - Shell-session result projection keeps only bounded public continuation fields
   needed by the next model turn: `process_status`, public `session_id`,
   nullable `exit_code`, `stdin_available`, bounded `stdout`/`stderr`,
-  `truncated`, `summary`, and stable `error_code`.
+  `truncated`, `summary`, stable `error_code`, and provider-confirmed artifact
+  references on terminal assessment updates.
+- Assessment transcripts are written by the selected Kali runtime under
+  `/workspace/artifacts` through the existing PTY session. The backend confirms
+  the relative path through the runtime provider and never creates a duplicate
+  shell-output file. Utility sessions use the unwrapped PTY path and create no
+  artifact.
 - `shell.script` remains on its existing compatibility execution path and is
   not migrated by the shell-session foundation.
 - Runner placement supports only tools allowed by runner runtime policy.

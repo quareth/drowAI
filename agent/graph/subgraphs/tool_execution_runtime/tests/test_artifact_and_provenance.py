@@ -5,6 +5,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from typing import Any
 
+import pytest
+
 from agent.graph.subgraphs.tool_execution_runtime.artifact_and_provenance import (
     save_execution_artifact,
     should_skip_backend_execution_artifact_save,
@@ -70,7 +72,12 @@ def test_should_skip_backend_execution_artifact_save_when_runner_materialized() 
     assert should_skip_backend_execution_artifact_save(outcome=outcome) is True
 
 
-def test_save_execution_artifact_persists_utility_like_assessment(
+@pytest.mark.parametrize(
+    "tool_id",
+    ["shell.utility", "shell.assessment", "shell.exec", "shell.write_stdin"],
+)
+def test_save_execution_artifact_never_writes_shell_output_on_backend(
+    tool_id: str,
     tmp_path,
 ) -> None:
     calls: list[dict[str, Any]] = []
@@ -79,10 +86,10 @@ def test_save_execution_artifact_persists_utility_like_assessment(
 
     artifact_path = save_execution_artifact(
         outcome=SimpleNamespace(
-            tool_id="shell.utility",
+            tool_id=tool_id,
             result={"stdout": "transient output", "stderr": ""},
         ),
-        tool_name="shell.utility",
+        tool_name=tool_id,
         workspace_path=str(tmp_path),
         facts=SimpleNamespace(task_id=34, metadata={}),
         interactive=interactive,
@@ -91,12 +98,12 @@ def test_save_execution_artifact_persists_utility_like_assessment(
         ),
         safe_inc_fn=increments.append,
         logger=SimpleNamespace(debug=lambda *_args, **_kwargs: None),
-        persistence_decision=resolve_output_persistence("shell.utility"),
+        persistence_decision=resolve_output_persistence(tool_id),
     )
 
-    assert artifact_path == "artifacts/tool_output.txt"
-    assert len(calls) == 1
-    assert increments == ["langgraph_artifact_saves_successful"]
+    assert artifact_path is None
+    assert calls == []
+    assert increments == []
     assert interactive.trace.reasoning == []
 
 

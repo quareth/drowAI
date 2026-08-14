@@ -154,6 +154,7 @@ class ShellSessionRecord:
     operation_in_progress: bool = False
     pending_utf8_bytes: bytes = b""
     initial_quiet_boundary_emitted: bool = False
+    artifact_path: str | None = None
 
 
 @dataclass(slots=True)

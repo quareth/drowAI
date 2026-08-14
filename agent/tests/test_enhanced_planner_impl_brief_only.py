@@ -254,7 +254,7 @@ def test_try_llm_action_plan_passes_intent_brief_to_builders(monkeypatch) -> Non
     assert params_kwargs["execution_strategy"] == "sequential"
 
 
-def test_main_parameter_request_profiles_match_callable_shell_alias() -> None:
+def test_main_selector_and_parameter_prompts_share_shell_profiles() -> None:
     fake_llm = _BriefOnlyFakeLLM(tool_id="shell.utility")
     planner = EnhancedActionPlanner(_BriefOnlyDummyConfig(), llm_client=fake_llm)
     action = Action(
@@ -301,6 +301,12 @@ def test_main_parameter_request_profiles_match_callable_shell_alias() -> None:
     assert "Use shell.utility for ordinary operating-system" not in selector_request[
         "system_prompt"
     ]
+    assert selector_request["user_prompt"].count(
+        "Use shell.utility for ordinary operating-system"
+    ) == 1
+    assert selector_request["user_prompt"].count(
+        "Use shell.assessment for commands whose purpose"
+    ) == 1
 
 
 def test_try_llm_action_plan_does_not_fallback_selector_to_planner_summary(monkeypatch) -> None:

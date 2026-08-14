@@ -12,6 +12,7 @@ from agent.semantic.enrichment import extract_runtime_semantic_inputs
 from agent.tool_runtime.output_persistence_policy import OutputPersistenceDecision
 from agent.tool_runtime.workspace_artifacts import should_persist_workspace_artifact
 from runtime_shared.durable_secret_masking import mask_durable_secrets
+from runtime_shared.shell_capabilities import SHELL_SESSION_TOOL_IDS
 
 
 def get_provenance_service(
@@ -174,6 +175,17 @@ def save_execution_artifact(
     persistence_decision: OutputPersistenceDecision | None = None,
 ) -> Optional[str]:
     """Best-effort artifact save block with unchanged failure tolerance."""
+    current_tool_id = str(getattr(outcome, "tool_id", None) or tool_name or "").strip()
+    if (
+        current_tool_id in SHELL_SESSION_TOOL_IDS
+        or (persistence_decision is not None and persistence_decision.is_shell_call)
+    ):
+        logger.debug(
+            "[TOOL_EXECUTION] Skipping backend artifact save for shell result: %s",
+            current_tool_id,
+        )
+        return None
+
     artifact_path: Optional[str] = None
     try:
         resolved_workspace = resolve_execution_artifact_workspace(
@@ -190,7 +202,6 @@ def save_execution_artifact(
             stdout = outcome.result.get("stdout", "")
             stderr = outcome.result.get("stderr", "")
 
-            current_tool_id = outcome.tool_id or tool_name
             should_persist = (
                 persistence_decision.persist_workspace_artifact
                 if persistence_decision is not None

@@ -41,6 +41,8 @@ _TERMINAL_SESSION_STATE_KEYS = (
     "stdin_available",
     "truncated",
     "error_code",
+    "artifacts",
+    "metadata",
 )
 
 

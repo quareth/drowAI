@@ -53,6 +53,7 @@ from runtime_shared.shell_session_contracts import (
     ShellSessionOrigin,
     ShellSessionUpdate,
     ShellWriteRequest,
+    project_shell_session_artifacts,
 )
 from runtime_shared.shell_session_port import get_shell_session_service
 from runtime_shared.shell_capabilities import (
@@ -605,6 +606,17 @@ class GraphToolExecutor:
             metadata["runtime_session"]["originating_capability"] = (
                 originating_capability.value
             )
+        artifact_projection = project_shell_session_artifacts(
+            update,
+            originating_capability,
+        )
+        artifacts = list(artifact_projection["artifacts"])
+        artifact_capture = artifact_projection.get("artifact_capture")
+        if isinstance(artifact_capture, dict):
+            metadata["runtime_session"]["artifact_capture"] = artifact_capture
+        artifact_scope = artifact_projection.get("artifact_scope")
+        if isinstance(artifact_scope, str):
+            metadata["artifact_scope"] = artifact_scope
 
         status = "success" if update.success else "failed"
         if error_code == ShellSessionErrorCode.SHELL_RUNTIME_UNAVAILABLE.value:
@@ -618,6 +630,7 @@ class GraphToolExecutor:
             "stdout": stdout,
             "stdout_ends_with_newline": update.stdout_ends_with_newline,
             "stderr": stderr,
+            "artifacts": artifacts,
             "stdout_excerpt": stdout_excerpt,
             "stderr_excerpt": stderr_excerpt,
             "exit_code": update.exit_code,

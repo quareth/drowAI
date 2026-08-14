@@ -74,6 +74,7 @@ def _shell_update(
     exit_code: int | None = None,
     stdin_available: bool = False,
     error_code: ShellSessionErrorCode | None = None,
+    artifacts: list[str] | None = None,
 ) -> ShellSessionUpdate:
     return ShellSessionUpdate(
         success=success,
@@ -84,6 +85,7 @@ def _shell_update(
         session_id=session_id,
         stdout=stdout,
         stderr=stderr,
+        artifacts=list(artifacts or []),
         exit_code=exit_code,
         stdin_available=stdin_available,
         truncated=False,
@@ -429,7 +431,7 @@ def _terminal_state(
     return state
 
 
-def test_terminal_utility_session_retains_aggregate_like_assessment() -> None:
+def test_terminal_utility_session_retains_runtime_only_aggregate() -> None:
     sequence_id = "batch-start-utility"
     final_batch_id = "batch-finish-utility"
     start_row = _row(
@@ -464,10 +466,8 @@ def test_terminal_utility_session_retains_aggregate_like_assessment() -> None:
         "shell.write_stdin",
     ]
     assert runtime.raw["execution_session_aggregate"] is True
-    assert metadata["last_tool_result_compact_batch"] == runtime.raw
-    assert metadata["last_tool_result_compact"] == (
-        runtime.raw["results"][-1]["compact_tool_result"]
-    )
+    assert "last_tool_result_compact_batch" not in metadata
+    assert "last_tool_result_compact" not in metadata
     assert read_execution_session_control(metadata) is None
     prompt_context = _build_previous_tool_context(
         InteractiveState.from_mapping(updated)
@@ -513,7 +513,7 @@ def test_terminal_assessment_session_retains_its_aggregate_durably() -> None:
     assert durable["execution_session_aggregate"] is True
 
 
-def test_mixed_session_persists_utility_and_other_rows() -> None:
+def test_mixed_session_persists_only_non_utility_rows() -> None:
     sequence_id = "batch-start-mixed"
     final_batch_id = "batch-finish-mixed"
     utility_row = _row(
@@ -549,11 +549,11 @@ def test_mixed_session_persists_utility_and_other_rows() -> None:
         "shell.utility",
         "information_gathering.network_discovery.nmap",
     ]
-    assert selected_is_durable is True
+    assert selected_is_durable is False
     assert [
         row["tool_id"]
         for row in metadata["last_tool_result_compact_batch"]["results"]
-    ] == ["shell.utility", "information_gathering.network_discovery.nmap"]
+    ] == ["information_gathering.network_discovery.nmap"]
 
 
 def test_lost_process_local_session_fails_closed_as_unavailable() -> None:
@@ -664,6 +664,48 @@ def test_legacy_shell_exec_continuation_keeps_assessment_provenance() -> None:
     assert compact["metadata"]["runtime_session"]["originating_capability"] == (
         "assessment"
     )
+
+
+def test_direct_assessment_continuation_preserves_runtime_artifact_reference() -> None:
+    artifact_path = "artifacts/shell-assessment-shs_verified.txt"
+    compact = session_module._compact_from_shell_update(
+        tool_id="shell.write_stdin",
+        update=_shell_update(
+            process_status=ShellProcessStatus.COMPLETED,
+            session_status=ShellSessionLifecycleStatus.CLOSED,
+            session_id=None,
+            interaction_boundary=ShellInteractionBoundary.TERMINAL,
+            exit_code=0,
+            artifacts=[artifact_path],
+        ),
+        originating_tool_id="shell.assessment",
+    )
+
+    assert compact["artifacts"] == [artifact_path]
+    assert compact["metadata"]["artifact_scope"] == "runtime_workspace"
+    assert compact["metadata"]["runtime_session"]["artifact_capture"] == {
+        "status": "succeeded",
+        "artifact_count": 1,
+    }
+
+
+def test_direct_utility_continuation_never_projects_artifacts() -> None:
+    compact = session_module._compact_from_shell_update(
+        tool_id="shell.write_stdin",
+        update=_shell_update(
+            process_status=ShellProcessStatus.COMPLETED,
+            session_status=ShellSessionLifecycleStatus.CLOSED,
+            session_id=None,
+            interaction_boundary=ShellInteractionBoundary.TERMINAL,
+            exit_code=0,
+            artifacts=["artifacts/unexpected.txt"],
+        ),
+        originating_tool_id="shell.utility",
+    )
+
+    assert compact["artifacts"] == []
+    assert "artifact_scope" not in compact["metadata"]
+    assert "artifact_capture" not in compact["metadata"]["runtime_session"]
 
 
 @pytest.mark.asyncio
@@ -1581,7 +1623,7 @@ async def test_terminal_interactive_aggregate_is_compressed_once_before_reasonin
         "results": [
             _row(
                 call_id="call-start",
-                tool_id="shell.utility",
+                tool_id="shell.assessment",
                 summary="Session is running.",
                 stdout="READY\n",
                 process_status="running",
@@ -1600,6 +1642,22 @@ async def test_terminal_interactive_aggregate_is_compressed_once_before_reasonin
         ],
         "deferred_followups": [],
     }
+    artifact_path = "artifacts/shell-assessment-shs-terminal-compression.txt"
+    aggregate["results"][-1]["compact_tool_result"].update(
+        {
+            "artifacts": [artifact_path],
+            "metadata": {
+                "artifact_scope": "runtime_workspace",
+                "runtime_session": {
+                    "originating_capability": "assessment",
+                    "artifact_capture": {
+                        "status": "succeeded",
+                        "artifact_count": 1,
+                    },
+                },
+            },
+        }
+    )
     register_runtime_compact_evidence(
         aggregate,
         single_compact=aggregate["results"][-1]["compact_tool_result"],
@@ -1620,7 +1678,7 @@ async def test_terminal_interactive_aggregate_is_compressed_once_before_reasonin
         def to_dict(self) -> dict[str, Any]:
             return {
                 "schema_version": "2.0",
-                "tool": "shell.utility",
+                "tool": "shell.assessment",
                 "status": "success",
                 "success": True,
                 "exit_code": 0,
@@ -1663,14 +1721,17 @@ async def test_terminal_interactive_aggregate_is_compressed_once_before_reasonin
     )
 
     assert len(compression_calls) == 1
-    assert compression_calls[0]["tool_name"] == "shell.utility"
+    assert compression_calls[0]["tool_name"] == "shell.assessment"
     assert compression_calls[0]["raw_result"]["stdout"] == "READY\n7\n42\n50\n"
     assert compression_calls[0]["raw_result"]["stderr"] == "warning\n"
+    assert compression_calls[0]["raw_result"]["artifacts"] == [artifact_path]
     assert runtime is not None
     terminal = runtime.rows[-1]["compact_tool_result"]
     assert terminal["summary"] == "Calculator returned all requested values."
     assert terminal["key_findings"] == ["7", "42", "50"]
     assert terminal["process_status"] == "completed"
+    assert terminal["artifacts"] == [artifact_path]
+    assert terminal["metadata"]["artifact_scope"] == "runtime_workspace"
     assert "stdout" not in terminal
     assert "stderr" not in terminal
     ptr_sections = extract_last_tool_sections(

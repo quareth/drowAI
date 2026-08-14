@@ -41,6 +41,7 @@ from runtime_shared.shell_session_contracts import (
     ShellSessionUpdate,
     ShellWaitRequest,
     ShellWriteRequest,
+    project_shell_session_artifacts,
 )
 from runtime_shared.shell_session_port import get_shell_session_service
 
@@ -831,6 +832,17 @@ def _compact_from_shell_update(
     )
     if originating_capability is not None:
         runtime_session["originating_capability"] = originating_capability.value
+    artifact_projection = project_shell_session_artifacts(
+        update,
+        originating_capability,
+    )
+    artifact_capture = artifact_projection.get("artifact_capture")
+    if isinstance(artifact_capture, dict):
+        runtime_session["artifact_capture"] = artifact_capture
+    result_metadata = {"runtime_session": runtime_session}
+    artifact_scope = artifact_projection.get("artifact_scope")
+    if isinstance(artifact_scope, str):
+        result_metadata["artifact_scope"] = artifact_scope
     return {
         "schema_version": "2.0",
         "tool": tool_id,
@@ -844,11 +856,12 @@ def _compact_from_shell_update(
         "stdout": update.stdout,
         "stdout_ends_with_newline": update.stdout_ends_with_newline,
         "stderr": update.stderr,
+        "artifacts": list(artifact_projection["artifacts"]),
         "exit_code": update.exit_code,
         "stdin_available": update.stdin_available,
         "truncated": update.truncated,
         "error_code": error_code,
-        "metadata": {"runtime_session": runtime_session},
+        "metadata": result_metadata,
     }
 
 

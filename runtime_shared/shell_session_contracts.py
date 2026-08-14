@@ -14,6 +14,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from runtime_shared.docker_contracts import build_runtime_contract_environment
+from runtime_shared.shell_capabilities import ShellCapability
 from runtime_shared.shell_timeouts import (
     SHELL_SESSION_DEFAULT_MAX_RUNTIME_SEC,
     SHELL_SESSION_DEFAULT_YIELD_TIME_MS,
@@ -288,6 +289,7 @@ class ShellSessionUpdate(BaseModel):
     stdout: str = Field(default="", max_length=SHELL_SESSION_MAX_OUTPUT_CHARS)
     stdout_ends_with_newline: bool = False
     stderr: str = Field(default="", max_length=SHELL_SESSION_MAX_OUTPUT_CHARS)
+    artifacts: list[str] = Field(default_factory=list)
     exit_code: int | None = None
     stdin_available: bool = False
     truncated: bool = False
@@ -335,3 +337,27 @@ class ShellSessionUpdate(BaseModel):
                 else "Shell session failed."
             )
         return self
+
+
+def project_shell_session_artifacts(
+    update: ShellSessionUpdate,
+    capability: ShellCapability | None,
+) -> dict[str, object]:
+    """Return consistent artifact fields for shell result adapters."""
+    if capability is not ShellCapability.ASSESSMENT:
+        return {"artifacts": []}
+
+    artifacts = list(update.artifacts)
+    projection: dict[str, object] = {"artifacts": artifacts}
+    is_terminal = update.process_status is not ShellProcessStatus.RUNNING
+    projection["artifact_capture"] = {
+        "status": (
+            "pending"
+            if not is_terminal
+            else "succeeded" if artifacts else "failed"
+        ),
+        "artifact_count": len(artifacts),
+    }
+    if artifacts:
+        projection["artifact_scope"] = "runtime_workspace"
+    return projection

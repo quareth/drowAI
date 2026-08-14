@@ -76,6 +76,75 @@ def build_runtime_artifact_read_payload(
     return payload
 
 
+async def execute_runtime_artifact_query(
+    db: Session,
+    *,
+    task_id: int,
+    prefix: str,
+    actor_type: RuntimeActorType,
+    actor_id: str | int | None,
+    user_id: int | None = None,
+    wait_timeout_seconds: float = RUNTIME_ARTIFACT_IO_WAIT_TIMEOUT_SECONDS,
+) -> RuntimeOperationResult | None:
+    """Query runtime workspace artifacts through the existing provider boundary."""
+    normalized_prefix = normalize_runtime_artifact_relative_path(prefix)
+    runtime_operations = RuntimeOperationService(db)
+    context = runtime_operations.context_for_internal_task(
+        task_id=int(task_id),
+        actor_type=actor_type,
+        actor_id=actor_id,
+        user_id=user_id,
+    )
+    return await runtime_operations.run_for_context(
+        context=context,
+        operation="query_runtime_artifacts",
+        call=lambda provider, request: provider.query_runtime_artifacts(request),
+        payload={"prefix": normalized_prefix},
+        metadata=runtime_artifact_wait_metadata(
+            wait_timeout_seconds=wait_timeout_seconds
+        ),
+    )
+
+
+def runtime_artifact_query_contains(
+    result: RuntimeOperationResult | None,
+    *,
+    path: str,
+) -> bool:
+    """Return whether a successful provider query contains the exact artifact path."""
+    if result is None or not result.ok:
+        return False
+    expected = normalize_runtime_artifact_relative_path(path)
+    metadata = result.metadata
+    candidates: list[Mapping[str, Any]] = []
+    if isinstance(metadata, Mapping):
+        candidates.append(metadata)
+        delegate = metadata.get("delegate_result")
+        if isinstance(delegate, Mapping):
+            candidates.append(delegate)
+            delegate_metadata = delegate.get("metadata")
+            if isinstance(delegate_metadata, Mapping):
+                candidates.append(delegate_metadata)
+    for candidate in candidates:
+        items = candidate.get("items")
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, Mapping):
+                continue
+            candidate_path = normalize_runtime_artifact_relative_path(
+                str(
+                    item.get("path")
+                    or item.get("relative_path")
+                    or item.get("artifact_path")
+                    or ""
+                )
+            )
+            if candidate_path == expected:
+                return True
+    return False
+
+
 async def execute_runtime_artifact_read(
     db: Session,
     *,

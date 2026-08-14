@@ -52,6 +52,7 @@ from runtime_shared.shell_session_framing import (
     PtyCommandFrame,
     StreamingPtyFramingParser,
     create_pty_command_frame,
+    wrap_command_with_runtime_artifact_capture,
 )
 from runtime_shared.terminal_contracts import TerminalReadResult
 
@@ -94,6 +95,10 @@ _SHELL_SESSION_ERROR_MESSAGES = {
     ),
 }
 ContextResolver = Callable[[ShellSessionIdentity], Awaitable[Any] | Any]
+ArtifactExistsResolver = Callable[
+    [ShellSessionIdentity, str],
+    Awaitable[bool] | bool,
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -140,12 +145,14 @@ class ShellSessionService:
         lifecycle_projector: ShellSessionLifecycleProjectorPort,
         config: ShellSessionServiceConfig | None = None,
         runtime_context_resolver: ContextResolver,
+        artifact_exists_resolver: ArtifactExistsResolver | None = None,
         clock: Callable[[], float] | None = None,
     ) -> None:
         self._terminal_manager = terminal_manager
         self._lifecycle_projector = lifecycle_projector
         self._config = config or ShellSessionServiceConfig.from_backend_config()
         self._runtime_context_resolver = runtime_context_resolver
+        self._artifact_exists_resolver = artifact_exists_resolver
         self._clock = clock or time.monotonic
         self._observer = ShellSessionOperationalObserver()
         self._registry = ShellSessionStateRegistry(
@@ -200,7 +207,18 @@ class ShellSessionService:
             )
 
         public_session_id = self._generate_public_session_id()
-        frame = create_pty_command_frame(self._prepare_command(request))
+        artifact_path = (
+            f"artifacts/shell-assessment-{public_session_id}.txt"
+            if capability is ShellCapability.ASSESSMENT
+            else None
+        )
+        prepared_command = self._prepare_command(request)
+        if artifact_path is not None:
+            prepared_command = wrap_command_with_runtime_artifact_capture(
+                prepared_command,
+                artifact_path=artifact_path,
+            )
+        frame = create_pty_command_frame(prepared_command)
         reservation: _StartCapacityReservation | None = None
         terminal_session_id: str | None = None
         registered = False
@@ -227,6 +245,7 @@ class ShellSessionService:
                     frame=frame,
                     capability=capability,
                     origin=origin,
+                    artifact_path=artifact_path,
                     reservation=reservation,
                 )
                 terminal_session_id, record = terminal_session
@@ -309,7 +328,7 @@ class ShellSessionService:
                 error_code=error_code,
                 duration_ms=self._duration_ms(started_at),
             )
-        record, error_code = await self._claim_existing_record(
+        record, error_code, artifacts = await self._claim_existing_record(
             identity=identity,
             public_session_id=request.session_id,
         )
@@ -324,6 +343,7 @@ class ShellSessionService:
                     stdout="",
                     truncated=False,
                     duration_ms=self._duration_ms(started_at),
+                    artifacts=artifacts,
                 )
             return self._error_update(error_code=error_code, duration_ms=0)
 
@@ -398,7 +418,7 @@ class ShellSessionService:
                 session_status=ShellSessionLifecycleStatus.UNAVAILABLE,
             )
 
-        record, error_code = await self._claim_existing_record(
+        record, error_code, artifacts = await self._claim_existing_record(
             identity=identity,
             public_session_id=request.session_id,
         )
@@ -413,6 +433,7 @@ class ShellSessionService:
                     stdout="",
                     truncated=False,
                     duration_ms=self._duration_ms(started_at),
+                    artifacts=artifacts,
                 )
             return self._error_update(
                 error_code=error_code,
@@ -575,11 +596,13 @@ class ShellSessionService:
                     close_reason="deadline_expired",
                 )
                 stdout, truncated = output.stdout()
+                artifacts = await self._resolved_terminal_artifacts(record)
                 return self._timeout_update(
                     stdout=stdout,
                     stdout_ends_with_newline=output.stdout_ends_with_newline,
                     truncated=truncated,
                     duration_ms=self._duration_ms(started_at),
+                    artifacts=artifacts,
                 )
 
             stdout, _truncated = output.stdout()
@@ -680,6 +703,7 @@ class ShellSessionService:
                     expected_record=record,
                     close_reason="process_completed",
                 )
+                artifacts = await self._resolved_terminal_artifacts(record)
                 return ShellSessionUpdate(
                     success=exit_code == 0,
                     status="success" if exit_code == 0 else "error",
@@ -694,6 +718,7 @@ class ShellSessionService:
                         if exit_code == 0
                         else f"Command exited with code {exit_code}."
                     ),
+                    artifacts=artifacts,
                     exit_code=exit_code,
                     stdin_available=False,
                     truncated=truncated,
@@ -720,6 +745,7 @@ class ShellSessionService:
                 expected_record=record,
                 close_reason="interrupted",
             )
+            artifacts = await self._resolved_terminal_artifacts(record)
             return ShellSessionUpdate(
                 success=True,
                 status="success",
@@ -730,6 +756,7 @@ class ShellSessionService:
                 stdout=stdout,
                 stdout_ends_with_newline=output.stdout_ends_with_newline,
                 stderr="",
+                artifacts=artifacts,
                 exit_code=None,
                 stdin_available=False,
                 truncated=truncated,
@@ -799,7 +826,7 @@ class ShellSessionService:
         *,
         identity: ShellSessionIdentity,
         public_session_id: str,
-    ) -> tuple[ShellSessionRecord | None, ShellSessionErrorCode]:
+    ) -> tuple[ShellSessionRecord | None, ShellSessionErrorCode, list[str]]:
         record, retired_record, error_code, close_reason = await self._registry.claim(
             identity=identity,
             public_session_id=public_session_id,
@@ -811,7 +838,9 @@ class ShellSessionService:
                 interrupt=True,
                 close_reason=close_reason,
             )
-        return record, error_code
+            artifacts = await self._resolved_terminal_artifacts(retired_record)
+            return record, error_code, artifacts
+        return record, error_code, []
 
     async def _prepare_reserved_terminal(
         self,
@@ -823,6 +852,7 @@ class ShellSessionService:
         frame: PtyCommandFrame,
         capability: ShellCapability,
         origin: ShellSessionOrigin | None,
+        artifact_path: str | None,
         reservation: _StartCapacityReservation,
     ) -> tuple[str, ShellSessionRecord]:
         terminal_session_id: str | None = None
@@ -845,6 +875,7 @@ class ShellSessionService:
                 last_activity_at=now,
                 deadline_at=now + float(request.max_runtime_sec),
                 operation_in_progress=True,
+                artifact_path=artifact_path,
             )
             await self._registry.register(record, reservation=reservation)
             return terminal_session_id, record
@@ -891,13 +922,38 @@ class ShellSessionService:
             public_session_id=record.public_session_id,
         )
         self._observe_process_completed(record, ShellProcessStatus.FAILED)
+        artifacts = await self._resolved_terminal_artifacts(record)
         return self._error_update(
             error_code=error_code,
             duration_ms=self._duration_ms(started_at),
             process_status=ShellProcessStatus.FAILED,
             session_status=ShellSessionLifecycleStatus.CLOSED,
             interaction_boundary=ShellInteractionBoundary.TERMINAL,
+            artifacts=artifacts,
         )
+
+    async def _resolved_terminal_artifacts(
+        self,
+        record: ShellSessionRecord,
+    ) -> list[str]:
+        """Return the runtime artifact only after provider-backed confirmation."""
+        artifact_path = record.artifact_path
+        resolver = self._artifact_exists_resolver
+        if artifact_path is None or resolver is None:
+            return []
+        try:
+            exists = resolver(record.identity, artifact_path)
+            if inspect.isawaitable(exists):
+                exists = await exists
+            return [artifact_path] if bool(exists) else []
+        except Exception:
+            logger.debug(
+                "shell_session runtime artifact confirmation failed task_id=%s owner_fp=%s",
+                record.identity.task_id,
+                safe_identifier_fingerprint(record.identity.execution_owner_id),
+                exc_info=True,
+            )
+            return []
 
     async def _remove_and_close_record(
         self,
@@ -1062,6 +1118,7 @@ class ShellSessionService:
             ShellSessionLifecycleStatus.UNAVAILABLE
         ),
         interaction_boundary: ShellInteractionBoundary | None = None,
+        artifacts: list[str] | None = None,
     ) -> ShellSessionUpdate:
         message = _SHELL_SESSION_ERROR_MESSAGES[error_code]
         return ShellSessionUpdate(
@@ -1073,6 +1130,7 @@ class ShellSessionService:
             session_id=None,
             stdout="",
             stderr=message,
+            artifacts=list(artifacts or []),
             exit_code=None,
             stdin_available=False,
             truncated=False,
@@ -1088,6 +1146,7 @@ class ShellSessionService:
         stdout_ends_with_newline: bool = False,
         truncated: bool,
         duration_ms: int,
+        artifacts: list[str] | None = None,
     ) -> ShellSessionUpdate:
         message = _SHELL_SESSION_ERROR_MESSAGES[
             ShellSessionErrorCode.COMMAND_TIMED_OUT
@@ -1102,6 +1161,7 @@ class ShellSessionService:
             stdout=stdout,
             stdout_ends_with_newline=stdout_ends_with_newline,
             stderr=message,
+            artifacts=list(artifacts or []),
             exit_code=None,
             stdin_available=False,
             truncated=truncated,

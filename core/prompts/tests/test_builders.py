@@ -365,12 +365,12 @@ def test_post_tool_builder_renders_shared_last_tool_special_sections() -> None:
     assert prompt.index(lossiness_heading) < prompt.index(output_heading)
 
 
-def test_post_tool_latest_version_is_merged_ptr_commit_v5() -> None:
+def test_post_tool_latest_version_is_saved_evidence_policy_v6() -> None:
     from core.prompts.registry import PromptRegistry
 
     registry = PromptRegistry()
 
-    assert registry.get_latest_version("post_tool") == "v5"
+    assert registry.get_latest_version("post_tool") == "v6"
 
 
 def test_post_tool_builder_injects_direct_executor_policy_only_for_direct_route() -> None:
