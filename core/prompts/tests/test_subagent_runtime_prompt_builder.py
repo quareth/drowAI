@@ -47,6 +47,8 @@ def test_subagent_runtime_system_prompt_uses_versioned_canonical_guidance() -> N
     assert "Remaining tool budget is permission, not a requirement" in prompt
     assert "Never repeat an equivalent successful tool call" in prompt
     assert "When more evidence is required, call between 1 and 3" in prompt
+    assert "Execute dependent commands as separate tool calls" in prompt
+    assert "Never append an interactive or persistent program" in prompt
     assert "Selector Decision" not in prompt
     assert prompt.count("Use shell.utility for ordinary") == 1
     assert prompt.count("Use shell.assessment for commands") == 1

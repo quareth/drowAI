@@ -56,6 +56,15 @@ Sequential execution:
 - Sequential execution means independent, fully parameterized calls run in order. Do not treat sequential calls as dependent steps or assume an earlier call's output will parameterize a later call.
 </execution_strategy_guidance>
 
+<dependent_shell_command_guidance>
+Dependent shell commands:
+- Execute dependent commands as separate tool calls. If command B requires command A to complete successfully, call only A first. Continue with B in a later tool-planning turn after A returns an authoritative completed result with a successful exit code.
+- This includes install then launch, build then run, create then read, authenticate then query, and any discovery command whose result is needed by the next command.
+- Do not treat partial output, echoed input, temporary silence, process_status "running", a session ID, or writable stdin as proof that a prerequisite completed.
+- Never append an interactive or persistent program to its setup command. Complete and verify setup first, then start the interactive or persistent program in a separate tool call.
+- Combine multiple shell commands into one invocation only when they are independent, non-interactive, and no command requires another command's result, success, output, or state.
+</dependent_shell_command_guidance>
+
 <examples>
 Pattern: parallel, same tool
 - Required work: same operation over multiple already-known parameter sets.
