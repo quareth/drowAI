@@ -922,6 +922,70 @@ class TestToolEventProcessing:
         mock_persist.assert_called_once()
         assert "Created /workspace/boris.txt." not in repr(mock_persist.call_args.kwargs)
 
+    def test_terminal_assessment_replaces_partial_durable_output(self, adapter):
+        """Refresh replays terminal assessment output instead of its start banner."""
+        state_container = ChatStateContainer()
+        base = {
+            "type": "tool_end",
+            "tool": "shell.assessment",
+            "tool_call_id": "call-assessment-refresh",
+            "tool_batch_id": "batch-assessment-refresh",
+            "conversation_id": "conv-1",
+            "turn_id": "turn-1",
+            "status": "success",
+            "output_persistence": "durable",
+            "shell_lifecycle_event": True,
+        }
+        adapter.process_streaming_event(
+            {
+                **base,
+                "process_status": "running",
+                "session_status": "active",
+                "interaction_boundary": "output_available",
+                "session_id": "shs-assessment-refresh",
+                "compact_tool_result": {
+                    "status": "success",
+                    "success": True,
+                    "summary": "Kali banner",
+                    "process_status": "running",
+                },
+            },
+            state_container=state_container,
+        )
+        adapter.process_streaming_event(
+            {
+                **base,
+                "process_status": "completed",
+                "session_status": "closed",
+                "interaction_boundary": "terminal",
+                "session_id": None,
+                "compact_tool_result": {
+                    "status": "success",
+                    "success": True,
+                    "summary": "HTTP response body",
+                    "process_status": "completed",
+                    "artifact_refs": [
+                        {
+                            "path": (
+                                "artifacts/shell-assessment-"
+                                "shs-assessment-refresh.txt"
+                            )
+                        }
+                    ],
+                },
+            },
+            state_container=state_container,
+        )
+
+        [stored] = state_container.get_tool_calls()
+        assert stored["output_persistence"] == "durable"
+        assert stored["process_status"] == "completed"
+        assert stored["tool_result"]["summary"] == "HTTP response body"
+        assert stored["tool_result"]["artifact_refs"][0]["path"] == (
+            "artifacts/shell-assessment-shs-assessment-refresh.txt"
+        )
+        assert "Kali banner" not in repr(stored)
+
     def test_shell_write_stdin_arguments_are_redacted_before_turn_event_persistence(
         self,
         adapter,

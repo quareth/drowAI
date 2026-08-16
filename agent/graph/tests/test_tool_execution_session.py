@@ -11,6 +11,7 @@ import pytest
 import agent.graph.nodes.terminal_session_compressor as terminal_compressor_module
 import agent.graph.subgraphs.shell_interaction_decision as interaction_decision_module
 import agent.graph.subgraphs.tool_execution_session as session_module
+import agent.graph.subgraphs.tool_execution_terminal_finalization as terminal_finalization_module
 from agent.graph.nodes.terminal_session_compressor import (
     compress_terminal_execution_session_output,
 )
@@ -492,6 +493,8 @@ def test_terminal_assessment_session_retains_its_aggregate_durably() -> None:
         summary="Assessment completed.",
         originating_capability="assessment",
     )
+    artifact_path = "artifacts/shell-assessment-shs_2.txt"
+    finish_row["compact_tool_result"]["artifacts"] = [artifact_path]
     register_runtime_compact_evidence(
         _view(final_batch_id, [finish_row]).raw,
         single_compact=finish_row["compact_tool_result"],
@@ -511,6 +514,149 @@ def test_terminal_assessment_session_retains_its_aggregate_durably() -> None:
         "shell.write_stdin",
     ]
     assert durable["execution_session_aggregate"] is True
+    assert durable["results"][-1]["compact_tool_result"]["artifact_refs"] == [
+        {"path": artifact_path, "count": 1}
+    ]
+    ptr_sections = extract_last_tool_sections(
+        updated["facts"]["metadata"],
+        updated["facts"],
+    )
+    assert artifact_path in ptr_sections["artifact_refs"]
+
+
+def test_terminal_assessment_finalizes_existing_provenance_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sequence_id = "batch-assessment-provenance"
+    final_batch_id = "batch-assessment-provenance-finish"
+    start_row = _row(
+        call_id="call-assessment-origin",
+        tool_id="shell.assessment",
+        summary="Assessment started.",
+        stdout="banner\n",
+        process_status="running",
+        session_id="shs_assessment_provenance",
+    )
+    artifact_path = "artifacts/shell-assessment-shs_assessment_provenance.txt"
+    finish_row = _row(
+        call_id="call-assessment-finish",
+        tool_id="shell.write_stdin",
+        summary="Assessment completed.",
+        originating_capability="assessment",
+        stdout="response body\n",
+        process_status="completed",
+        exit_code=0,
+    )
+    finish_row["compact_tool_result"]["artifacts"] = [artifact_path]
+    register_runtime_compact_evidence(
+        _view(final_batch_id, [finish_row]).raw,
+        single_compact=finish_row["compact_tool_result"],
+    )
+    state = _terminal_state(
+        final_batch_id=final_batch_id,
+        sequence_id=sequence_id,
+        originating_tool_id="shell.assessment",
+    )
+    set_execution_session_control(
+        state.facts.ensure_metadata(),
+        turn_sequence=7,
+        sequence_id=sequence_id,
+        originating_tool_id="shell.assessment",
+        originating_tool_call_id="call-assessment-origin",
+        originating_tool_batch_id=sequence_id,
+        provenance_execution_id="execution-assessment-1",
+    )
+    append_execution_session_evidence(sequence_id, _view(sequence_id, [start_row]))
+    append_shell_interaction_transcript(
+        sequence_id=sequence_id,
+        evidence=_view(sequence_id, [start_row]),
+        metadata=state.facts.metadata,
+    )
+    finalizations: list[dict[str, Any]] = []
+    emitted_events: list[dict[str, Any]] = []
+
+    def _finalize(**kwargs: Any) -> list[dict[str, Any]]:
+        finalizations.append(dict(kwargs))
+        return [
+            {
+                "artifact_id": "artifact-assessment-1",
+                "execution_id": "execution-assessment-1",
+                "tool_call_id": "call-assessment-origin",
+                "tool_name": "shell.assessment",
+                "artifact_kind": "tool_file",
+                "path": artifact_path,
+                "relative_path": artifact_path,
+                "label": "assessment output",
+            }
+        ]
+
+    monkeypatch.setattr(
+        terminal_finalization_module,
+        "finalize_provenance_execution",
+        _finalize,
+    )
+    monkeypatch.setattr(
+        session_module,
+        "get_stream_writer",
+        lambda: emitted_events.append,
+    )
+
+    updated = collect_tool_execution_session_result(state)
+    terminal = updated["facts"]["metadata"]["last_tool_result_compact"]
+
+    assert len(finalizations) == 1
+    assert finalizations[0]["execution_id"] == "execution-assessment-1"
+    assert finalizations[0]["tool_call_id"] == "call-assessment-origin"
+    assert finalizations[0]["outcome"].result["stdout"] == (
+        "banner\nresponse body\n"
+    )
+    assert terminal["artifact_refs"][0]["artifact_id"] == (
+        "artifact-assessment-1"
+    )
+    assert len(emitted_events) == 1
+    assert emitted_events[0]["type"] == "tool_end"
+    assert emitted_events[0]["output_persistence"] == "durable"
+    assert emitted_events[0]["content"] == "banner\nresponse body"
+    assert emitted_events[0]["compact_tool_result"]["artifact_refs"][0][
+        "artifact_id"
+    ] == "artifact-assessment-1"
+
+
+def test_terminal_shell_lifecycle_is_durable_only_for_assessment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    emitted: list[dict[str, Any]] = []
+    monkeypatch.setattr(session_module, "get_stream_writer", lambda: emitted.append)
+    compact = {
+        "process_status": "completed",
+        "session_status": "closed",
+        "interaction_boundary": "terminal",
+        "summary": "Command completed.",
+        "stdout": "done\n",
+        "exit_code": 0,
+    }
+
+    session_module._emit_shell_lifecycle_progress(
+        {"turn_sequence": 7},
+        tool_id="shell.assessment",
+        tool_call_id="call-assessment",
+        tool_batch_id="batch-assessment",
+        compact=compact,
+        success=True,
+    )
+    session_module._emit_shell_lifecycle_progress(
+        {"turn_sequence": 7},
+        tool_id="shell.utility",
+        tool_call_id="call-utility",
+        tool_batch_id="batch-utility",
+        compact=compact,
+        success=True,
+    )
+
+    assert [event["output_persistence"] for event in emitted] == [
+        "durable",
+        "transient",
+    ]
 
 
 def test_mixed_session_persists_only_non_utility_rows() -> None:
@@ -1653,6 +1799,7 @@ async def test_terminal_interactive_aggregate_is_compressed_once_before_reasonin
     aggregate["results"][-1]["compact_tool_result"].update(
         {
             "artifacts": [artifact_path],
+            "artifact_refs": [{"path": artifact_path, "count": 1}],
             "metadata": {
                 "artifact_scope": "runtime_workspace",
                 "runtime_session": {
@@ -1738,6 +1885,7 @@ async def test_terminal_interactive_aggregate_is_compressed_once_before_reasonin
     assert terminal["key_findings"] == ["7", "42", "50"]
     assert terminal["process_status"] == "completed"
     assert terminal["artifacts"] == [artifact_path]
+    assert terminal["artifact_refs"] == [{"path": artifact_path, "count": 1}]
     assert terminal["metadata"]["artifact_scope"] == "runtime_workspace"
     assert "stdout" not in terminal
     assert "stderr" not in terminal

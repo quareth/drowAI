@@ -42,6 +42,7 @@ _TERMINAL_SESSION_STATE_KEYS = (
     "truncated",
     "error_code",
     "artifacts",
+    "artifact_refs",
     "metadata",
 )
 

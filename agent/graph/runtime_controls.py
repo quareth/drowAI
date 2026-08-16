@@ -111,7 +111,11 @@ def set_active_execution_control(
         "session_id": str(active_execution.get("session_id") or "").strip(),
         "stdin_available": bool(active_execution.get("stdin_available")),
     }
-    for key in ("originating_tool_call_id", "originating_tool_batch_id"):
+    for key in (
+        "originating_tool_call_id",
+        "originating_tool_batch_id",
+        "provenance_execution_id",
+    ):
         normalized = str(active_execution.get(key) or "").strip()
         if normalized:
             active_payload[key] = normalized
@@ -144,6 +148,7 @@ def set_execution_session_control(
     originating_tool_id: str | None = None,
     originating_tool_call_id: str | None = None,
     originating_tool_batch_id: str | None = None,
+    provenance_execution_id: str | None = None,
 ) -> None:
     """Set or clear an output-free execution-session control envelope."""
 
@@ -165,6 +170,7 @@ def set_execution_session_control(
     for key, raw_value in (
         ("originating_tool_call_id", originating_tool_call_id),
         ("originating_tool_batch_id", originating_tool_batch_id),
+        ("provenance_execution_id", provenance_execution_id),
     ):
         normalized = str(raw_value or "").strip()
         if normalized:

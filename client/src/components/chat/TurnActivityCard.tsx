@@ -11,7 +11,9 @@ import { ChevronDown, ChevronRight, ListChecks } from "lucide-react";
 import { useCardToggleState } from "@/hooks/useCardToggleState";
 import type { MessageGroup } from "@/hooks/useMessageGrouping";
 import { ActivityChain } from "./ActivityChain";
+import { ActivityStatusIcon } from "./ActivityStatusIcon";
 import { MessageGroupRenderer } from "./MessageGroup";
+import { deriveToolLifecycleStatus } from "./toolLifecycleStatus";
 import type { TurnActivityBlock, TurnActivitySummary } from "./turnActivityBlocks";
 
 interface TurnActivityCardProps {
@@ -85,6 +87,57 @@ function groupIsStreaming(group: MessageGroup): boolean {
   });
 }
 
+function toolGroupIsTerminal(group: MessageGroup): boolean {
+  if (group.primaryType !== "tool") return false;
+
+  const terminalByCall = new Map<string, boolean>();
+
+  for (const message of group.messages) {
+    const metadata = message.metadata ?? {};
+    const stepType = metadata.step_type ?? metadata.stepType;
+
+    if (stepType === "tool_batch_end" && Array.isArray(metadata.results)) {
+      for (const entry of metadata.results) {
+        if (!entry || typeof entry !== "object") continue;
+        const result = entry as Record<string, unknown>;
+        const callId = result.tool_call_id;
+        if (typeof callId !== "string" || !callId.trim()) continue;
+        terminalByCall.set(
+          callId.trim(),
+          deriveToolLifecycleStatus(
+            typeof result.status === "string" ? result.status : undefined,
+            typeof result.process_status === "string" ? result.process_status : undefined,
+          ) !== "executing",
+        );
+      }
+      continue;
+    }
+
+    if (stepType !== "tool_start" && stepType !== "tool_delta" && stepType !== "tool_end") {
+      continue;
+    }
+
+    const callId = readToolCallId(message) ?? "single-tool";
+    if (stepType === "tool_start") {
+      terminalByCall.set(callId, false);
+      continue;
+    }
+
+    terminalByCall.set(
+      callId,
+      deriveToolLifecycleStatus(
+        typeof metadata.status === "string" ? metadata.status : undefined,
+        typeof metadata.process_status === "string" ? metadata.process_status : undefined,
+      ) !== "executing",
+    );
+  }
+
+  if (terminalByCall.size > 0) {
+    return Array.from(terminalByCall.values()).every(Boolean);
+  }
+  return false;
+}
+
 function renderDetailGroups(
   groups: MessageGroup[],
   {
@@ -140,6 +193,27 @@ export function TurnActivityCard({
     onGroupRetry,
     renderGroup,
   });
+  const lastGroup = block.groups[block.groups.length - 1];
+  const showProcessingResult =
+    !block.isComplete && Boolean(lastGroup) && toolGroupIsTerminal(lastGroup);
+
+  if (showProcessingResult) {
+    activeIndexes.add(detailContent.length);
+    detailContent.push(
+      <div
+        key={`${block.turnKey}-processing-result`}
+        data-testid={`turn-activity-processing-result-${block.turnKey}`}
+        className="mb-1 mr-auto inline-flex items-center gap-2 rounded-lg bg-slate-950/40 px-3 py-1.5 text-xs text-slate-300"
+      >
+        <ActivityStatusIcon
+          isInProgress
+          icon={ListChecks}
+          className="h-3 w-3 shrink-0 text-slate-400"
+        />
+        <span className="animate-pulse text-slate-300">Processing result…</span>
+      </div>,
+    );
+  }
 
   if (!block.isComplete) {
     return (

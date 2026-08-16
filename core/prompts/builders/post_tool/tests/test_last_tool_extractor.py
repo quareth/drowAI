@@ -404,7 +404,12 @@ def test_compact_only_fields_render_when_compact_provides_them() -> None:
             "structured_signals": [{"signal": "port_open", "port": 80}],
             "decision_evidence": ["evidence-A", "evidence-B"],
             "artifact_refs": [
-                {"artifact_id": "a-1", "label": "nmap output", "tool_name": "nmap.scan"},
+                {
+                    "artifact_id": "a-1",
+                    "label": "nmap output",
+                    "tool_name": "nmap.scan",
+                    "path": "artifacts/runtime-selected-output.xml",
+                },
             ],
             "lossiness_risk": "medium",
         },
@@ -417,6 +422,7 @@ def test_compact_only_fields_render_when_compact_provides_them() -> None:
     assert "evidence-A" in result["decision_evidence"]
     assert "evidence-B" in result["decision_evidence"]
     assert "artifact_id=a-1" in result["artifact_refs"]
+    assert "path=artifacts/runtime-selected-output.xml" in result["artifact_refs"]
     assert result["compression_lossiness"] == "lossiness_risk: medium"
 
 

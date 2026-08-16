@@ -22,7 +22,6 @@ from runtime_shared.shell_timeouts import (
     DEFAULT_TOOL_TIMEOUT_SECONDS,
     SHELL_SESSION_CLEANUP_TIMEOUT_SEC,
     SHELL_SESSION_MAX_YIELD_TIME_MS,
-    SHELL_SESSION_PREPARATION_TIMEOUT_SEC,
     SHELL_SESSION_DEFAULT_TERMINAL_IO_GRACE_SEC,
     clamp_shell_runtime_sec,
     clamp_shell_yield_time_ms,

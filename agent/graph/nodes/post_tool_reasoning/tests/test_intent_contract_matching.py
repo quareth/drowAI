@@ -13,6 +13,7 @@ from agent.graph.nodes.post_tool_reasoning.policies.intent_contract.matching imp
     _evaluate_simple_tool_intent_contract,
 )
 from agent.graph.state import FactsState, InteractiveState, TraceState
+from core.prompts.builders.post_tool.sections import format_intent_contract
 
 
 def _planner_plan(tool_id: str, params: Dict[str, Any]) -> Dict[str, Any]:
@@ -73,6 +74,32 @@ def test_intent_contract_matches_current_step() -> None:
     assert contract["executed_tool"] == "nmap"
     assert contract["executed_targets"] == ["127.0.0.1"]
     assert contract["executed_ports"] == ["5000"]
+
+
+def test_shell_parameters_are_advisory_for_intent_contract_matching() -> None:
+    state = _make_state(
+        message="scan 10.129.90.241 with nmap for port 80",
+        selected_tool="shell.assessment",
+        metadata={
+            "turn_sequence": 3,
+            "planner_plan": _planner_plan(
+                "shell.assessment",
+                {"command": "nmap -p 80 10.129.90.241"},
+            ),
+        },
+    )
+
+    contract = _evaluate_simple_tool_intent_contract(state)
+
+    assert contract["satisfied"] is True
+    assert contract["matched_via"] == "current_step_advisory"
+    assert contract["parameter_authority"] == "advisory"
+    assert contract["target_match"] is None
+    assert contract["ports_match"] is None
+    assert contract["mismatches"] == []
+    rendered = format_intent_contract(contract)
+    assert "Parameter authority: advisory" in rendered
+    assert "not grounds for an automatic invalid-parameters retry" in rendered
 
 
 def test_intent_contract_matches_prior_same_turn_step() -> None:

@@ -13,6 +13,8 @@ def test_post_tool_system_prompt_hides_artifact_db_tools() -> None:
     assert "artifact.read" not in prompt
     assert "Saved Evidence Policy" in prompt
     assert "inspect the referenced artifact before rerunning" in prompt
+    assert "exact runtime-reported workspace-relative path" in prompt
+    assert "do not search for or reconstruct the filename first" in prompt
     assert "runtime workspace artifacts with `shell.utility`" in prompt
     assert "rerun it with materially changed parameters" in prompt
     assert "do not invent a path or create a backend artifact" in prompt

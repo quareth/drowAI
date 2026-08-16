@@ -22,6 +22,7 @@ from agent.graph.context.builder import (
 )
 from agent.graph.infrastructure.state_models import GraphRuntimeContext
 from agent.graph.state import FactsState, InteractiveState
+from agent.graph.runtime_controls import read_active_execution_control
 import types
 from agent.tool_runtime import ToolCatalogEntry, ToolExecutionOutcome
 
@@ -38,7 +39,9 @@ import agent.graph.subgraphs.tool_execution as tool_execution_module
 from agent.graph.subgraphs.tool_execution import run_tool_execution, _get_provenance_service
 from agent.graph.subgraphs.tool_execution_runtime.artifact_and_provenance import (
     finalize_provenance_execution,
+    record_provenance_execution_start,
 )
+from agent.tool_runtime.output_persistence_policy import resolve_output_persistence
 
 
 def _base_metadata(*, reserved_message_id: int | None = None) -> dict[str, Any]:
@@ -138,6 +141,127 @@ def test_finalize_provenance_derives_structured_command_text() -> None:
     )
 
     assert captured["command_text"] == "nmap -T4 -p 443 -sV -oX - 127.0.0.1"
+
+
+def test_utility_shell_does_not_start_provenance() -> None:
+    service_calls = 0
+
+    def _get_service() -> tuple[None, None]:
+        nonlocal service_calls
+        service_calls += 1
+        return None, None
+
+    execution_id = record_provenance_execution_start(
+        get_provenance_service_fn=_get_service,
+        request=SimpleNamespace(task_id=42, metadata={}),
+        metadata={},
+        facts=SimpleNamespace(capability="simple_tool_execution", iterations=0, metadata={}),
+        tool_name="shell.utility",
+        tool_params={"command": "ifconfig"},
+        tool_call_id="tool-call-utility",
+        conversation_id="conversation-1",
+        turn_id="turn-1",
+        turn_sequence=1,
+        workspace_path="/tmp/ws",
+        logger=SimpleNamespace(
+            info=lambda *_args, **_kwargs: None,
+            warning=lambda *_args, **_kwargs: None,
+            error=lambda *_args, **_kwargs: None,
+            debug=lambda *_args, **_kwargs: None,
+        ),
+        safe_inc_fn=lambda *_args, **_kwargs: None,
+        persistence_decision=resolve_output_persistence("shell.utility"),
+    )
+
+    assert execution_id is None
+    assert service_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_running_assessment_defers_provenance_until_terminal_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ENABLE_ARTIFACT_PROVENANCE", "true")
+    execution_id = uuid4()
+    completion_calls: list[dict[str, Any]] = []
+
+    class _RunningAssessmentCoordinator:
+        async def run(self, request: Any) -> ToolExecutionOutcome:
+            return ToolExecutionOutcome(
+                tool_id="shell.exec",
+                parameters={"command": "curl http://10.129.90.241/"},
+                catalog=[],
+                result={
+                    "success": True,
+                    "status": "success",
+                    "stdout": "Kali banner\n",
+                    "stderr": "",
+                    "process_status": "running",
+                    "session_status": "active",
+                    "session_id": "shs_assessment_running",
+                    "stdin_available": True,
+                    "artifacts": [
+                        "artifacts/shell-assessment-shs_assessment_running.txt"
+                    ],
+                    "metadata": {
+                        "runtime_session": {
+                            "originating_capability": "assessment",
+                            "tool_call_id": "tc_provenance_single",
+                            "tool_batch_id": "tb_provenance_single",
+                        }
+                    },
+                },
+                summary="Command is still running.",
+                reasoning=[],
+                duration=0.1,
+            )
+
+    class _ProvenanceService:
+        def record_tool_execution(self, **_kwargs: Any) -> Any:
+            return SimpleNamespace(id=execution_id)
+
+        def complete_tool_execution(self, **kwargs: Any) -> Any:
+            completion_calls.append(dict(kwargs))
+            return SimpleNamespace(id=execution_id)
+
+    monkeypatch.setattr(
+        tool_execution_module,
+        "ToolExecutionCoordinator",
+        lambda config: _RunningAssessmentCoordinator(),
+    )
+    monkeypatch.setattr(
+        tool_execution_module,
+        "_get_provenance_service",
+        lambda: (_ProvenanceService(), None),
+    )
+    monkeypatch.setattr(tool_execution_module, "get_stream_writer", lambda: None)
+
+    metadata = _base_metadata()
+    metadata["turn_sequence"] = 1
+    state = InteractiveState(
+        facts=FactsState(
+            task_id=106,
+            message="Use curl against 10.129.90.241.",
+            capability="simple_tool_execution",
+            metadata=metadata,
+        )
+    )
+    context = GraphRuntimeContext(
+        task_id=106,
+        user_id=1,
+        workspace_path="/tmp/ws",
+        feature_flags={},
+        api_key="key",
+        model="model",
+    )
+
+    result = await run_tool_execution(state.as_graph_state(), context=context)
+    updated = InteractiveState.from_mapping(result)
+    active = read_active_execution_control(updated.facts.safe_metadata)
+
+    assert completion_calls == []
+    assert active is not None
+    assert active["provenance_execution_id"] == str(execution_id)
 
 
 def test_finalize_provenance_skips_legacy_artifact_reads_for_runner_data_plane() -> None:

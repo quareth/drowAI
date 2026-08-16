@@ -73,6 +73,9 @@ from .tool_execution_session_state import (
     read_shell_interaction_transcript,
     remember_shell_input as _remember_shell_input,
 )
+from .tool_execution_terminal_finalization import (
+    finalize_terminal_shell_assessment,
+)
 
 _SHELL_INTERACTION_WAIT_BATCH_KEY = "shell_interaction_wait_batch"
 
@@ -135,6 +138,10 @@ def initialize_tool_execution_session(
         originating_tool_id=active_call.tool_id,
         originating_tool_call_id=active_call.tool_call_id,
         originating_tool_batch_id=sequence_id,
+        provenance_execution_id=str(
+            active.get("provenance_execution_id") or ""
+        ).strip()
+        or None,
     )
     interactive.facts.metadata = metadata
     return interactive.as_graph_update()
@@ -195,6 +202,12 @@ def collect_tool_execution_session_result(
         aggregate,
         transcript=transcript,
     )
+    aggregate = finalize_terminal_shell_assessment(
+        aggregate,
+        session=session,
+        transcript=transcript,
+        facts=interactive.facts,
+    )
     terminal_rows = aggregate.get("results")
     terminal_compact = (
         terminal_rows[-1].get("compact_tool_result")
@@ -203,6 +216,26 @@ def collect_tool_execution_session_result(
         and isinstance(terminal_rows[-1], Mapping)
         else None
     )
+    originating_tool_id = str(session.get("originating_tool_id") or "").strip()
+    if (
+        isinstance(terminal_compact, Mapping)
+        and resolve_output_persistence(
+            originating_tool_id,
+            terminal_compact,
+        ).assessment_evidence_eligible
+    ):
+        terminal_row = terminal_rows[-1]
+        _emit_shell_lifecycle_progress(
+            metadata,
+            tool_id=originating_tool_id,
+            tool_call_id=_originating_tool_call_id(metadata, session=session),
+            tool_batch_id=_originating_tool_batch_id(
+                session,
+                fallback=sequence_id,
+            ),
+            compact=terminal_compact,
+            success=bool(terminal_row.get("success")),
+        )
     register_runtime_compact_evidence(
         aggregate,
         single_compact=(
@@ -643,14 +676,22 @@ def _publish_direct_shell_update(
     )
     originating_call_id = _originating_tool_call_id(metadata, session=session)
     originating_batch_id = _originating_tool_batch_id(session, fallback=sequence_id)
-    _emit_shell_lifecycle_progress(
-        metadata,
-        tool_id=originating_tool or normalized_row_tool_id,
-        tool_call_id=originating_call_id,
-        tool_batch_id=originating_batch_id,
-        compact=compact,
-        success=bool(update.success),
+    originating_persistence = resolve_output_persistence(
+        originating_tool or normalized_row_tool_id,
+        compact,
     )
+    if (
+        update.process_status is ShellProcessStatus.RUNNING
+        or not originating_persistence.assessment_evidence_eligible
+    ):
+        _emit_shell_lifecycle_progress(
+            metadata,
+            tool_id=originating_tool or normalized_row_tool_id,
+            tool_call_id=originating_call_id,
+            tool_batch_id=originating_batch_id,
+            compact=compact,
+            success=bool(update.success),
+        )
     row = {
         "tool_call_id": call_id,
         "tool_id": normalized_row_tool_id,
@@ -682,6 +723,11 @@ def _publish_direct_shell_update(
                 "process_status": "running",
                 "session_id": update.session_id,
                 "stdin_available": update.stdin_available,
+                "provenance_execution_id": str(
+                    session.get("provenance_execution_id")
+                    or active.get("provenance_execution_id")
+                    or ""
+                ).strip(),
             },
         )
     else:
@@ -747,6 +793,12 @@ def _emit_shell_lifecycle_progress(
     if not process_status and not session_status and not boundary:
         return
     event_type = "tool_delta" if process_status == ShellProcessStatus.RUNNING.value else "tool_end"
+    persistence = resolve_output_persistence(tool_id, compact)
+    output_persistence = (
+        "durable"
+        if event_type == "tool_end" and persistence.assessment_evidence_eligible
+        else "transient"
+    )
     try:
         writer = get_stream_writer()
     except RuntimeError:
@@ -777,7 +829,11 @@ def _emit_shell_lifecycle_progress(
         "structured_signals": [],
         "decision_evidence": [],
         "lossiness_risk": "high",
-        "artifact_refs": [],
+        "artifact_refs": [
+            dict(item)
+            for item in compact.get("artifact_refs", [])
+            if isinstance(item, Mapping)
+        ],
         "compression": None,
         "process_status": process_status or None,
         "session_status": session_status or None,
@@ -807,7 +863,7 @@ def _emit_shell_lifecycle_progress(
             "content": masked_output,
             "summary": {"summary": masked_output},
             "compact_tool_result": masked_display_compact,
-            "output_persistence": "transient",
+            "output_persistence": output_persistence,
             "shell_lifecycle_event": True,
             "shell_output_chunk": has_output_chunk,
         }

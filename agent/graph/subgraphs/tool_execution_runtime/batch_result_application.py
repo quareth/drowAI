@@ -149,6 +149,12 @@ def _enqueue_completed_execution_ingestions(
             if outcome is not None and isinstance(getattr(outcome, "result", None), Mapping)
             else None
         )
+        if (
+            isinstance(result_metadata, Mapping)
+            and str(result_metadata.get("process_status") or "").strip().lower()
+            == "running"
+        ):
+            continue
         if not resolve_output_persistence(
             call.tool_id,
             result_metadata,

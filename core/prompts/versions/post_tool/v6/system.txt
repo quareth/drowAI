@@ -186,6 +186,7 @@ When the Outcome Source is `subagent_handoff_batch`:
 
 - If compact output already answers the active question, do not read an artifact or rerun the command.
 - If required evidence is missing and the original command could have captured it, inspect the referenced artifact before rerunning.
+- An Artifact References `path` is the exact runtime-reported workspace-relative path. Use it directly with `shell.utility`; do not search for or reconstruct the filename first.
 - Read or search runtime workspace artifacts with `shell.utility`, using a bounded command targeting the missing evidence.
 - If the original command could not have captured the missing evidence, rerun it with materially changed parameters.
 - If no artifact reference was exposed, do not invent a path or create a backend artifact.

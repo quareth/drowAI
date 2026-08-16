@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
 
-from agent.tool_runtime.output_persistence_policy import resolve_output_persistence
+from agent.tool_runtime.output_persistence_policy import (
+    OutputPersistenceDecision,
+    resolve_output_persistence,
+)
 
 from agent.execution_strategy import ExecutionStrategy
 from agent.tool_runtime.batch.types import ToolBatch, ToolCall, ToolCallResult, ToolCallStatus
@@ -22,6 +25,20 @@ from ..tool_execution_session_state import (
     SHELL_STDIN_REDACTED_MARKER,
     read_shell_input,
 )
+
+
+def _should_defer_provenance_finalization(
+    *,
+    result: Mapping[str, Any],
+    persistence_decision: OutputPersistenceDecision,
+) -> bool:
+    """Keep assessment provenance open while its shell process is running."""
+
+    return bool(
+        persistence_decision.is_shell_call
+        and persistence_decision.assessment_evidence_eligible
+        and str(result.get("process_status") or "").strip().lower() == "running"
+    )
 
 
 def _project_tool_call_status(*, success: bool, status: Any) -> ToolCallStatus:
@@ -450,6 +467,10 @@ def build_run_one_call_callback(
             str(outcome.tool_id or tool_name),
             outcome.result if isinstance(outcome.result, Mapping) else None,
         )
+        defer_provenance_finalization = _should_defer_provenance_finalization(
+            result=outcome.result,
+            persistence_decision=persistence_decision,
+        )
 
         dr_tool_for_display: Optional[str] = None
         dr_command_display: Optional[str] = None
@@ -484,7 +505,7 @@ def build_run_one_call_callback(
             selected_tool=tool_name,
         )
 
-        if execution_id is not None:
+        if execution_id is not None and not defer_provenance_finalization:
             persisted_artifact_refs = deps["finalize_provenance_execution_service"](
                 get_provenance_service_fn=deps["_get_provenance_service"],
                 execution_id=execution_id,

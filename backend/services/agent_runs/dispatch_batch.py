@@ -16,7 +16,6 @@ from backend.services.langgraph_chat.contracts import LangGraphRuntimeConfig
 from backend.services.llm_provider.runtime_services import attach_runtime_services
 
 from .assignment_builder import parent_run_id_from_metadata
-from .completion import AgentRunCompletion
 from .contracts import AgentAssignment
 from .dispatch_contracts import (
     AgentRunDispatchStop,

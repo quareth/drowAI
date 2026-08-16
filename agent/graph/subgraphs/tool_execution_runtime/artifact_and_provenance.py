@@ -84,8 +84,10 @@ def collect_persistable_tool_artifact_paths(
     *,
     raw_artifacts: Any,
     synthetic_output_path: Optional[str],
-    path_lookup_keys_fn: Callable[[Any], List[str]],
-    normalize_artifact_ref_path_fn: Callable[[Any], Optional[str]],
+    path_lookup_keys_fn: Callable[[Any], List[str]] = path_lookup_keys,
+    normalize_artifact_ref_path_fn: Callable[
+        [Any], Optional[str]
+    ] = normalize_artifact_ref_path,
 ) -> List[str]:
     """Return unique tool artifact paths suitable for provenance persistence."""
     if not isinstance(raw_artifacts, list):
@@ -244,7 +246,7 @@ def collect_provenance_artifact_refs(
     tool_call_id: Optional[str],
     execution_id: Optional[str],
     turn_sequence: Optional[int],
-    build_artifact_ref_label_fn: Callable[..., str],
+    build_artifact_ref_label_fn: Callable[..., str] = build_artifact_ref_label,
 ) -> List[Dict[str, Any]]:
     """Build compact metadata-first refs from persisted artifact provenance rows."""
     collected: List[Dict[str, Any]] = []
@@ -294,8 +296,8 @@ def enrich_artifact_refs_with_provenance(
     tool_call_id: Optional[str],
     execution_id: Optional[str],
     turn_sequence: Optional[int],
-    path_lookup_keys_fn: Callable[[Any], List[str]],
-    build_artifact_ref_label_fn: Callable[..., str],
+    path_lookup_keys_fn: Callable[[Any], List[str]] = path_lookup_keys,
+    build_artifact_ref_label_fn: Callable[..., str] = build_artifact_ref_label,
 ) -> List[Dict[str, Any]]:
     """Enrich compact artifact refs with stable provenance metadata fields."""
     by_artifact_id: Dict[str, Mapping[str, Any]] = {}
@@ -377,6 +379,16 @@ def record_provenance_execution_start(
     persistence_decision: OutputPersistenceDecision | None = None,
 ) -> Optional[Any]:
     """Record provenance execution start; always non-fatal."""
+    if (
+        persistence_decision is not None
+        and persistence_decision.is_shell_call
+        and not persistence_decision.assessment_evidence_eligible
+    ):
+        logger.debug(
+            "[ARTIFACT_PROVENANCE] Skipping provenance for transient shell utility: %s",
+            tool_name,
+        )
+        return None
     execution_id = None
     provenance_db = None
     try:

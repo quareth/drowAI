@@ -400,6 +400,56 @@ def _sanitize_artifact_refs_for_memory(
     return sanitized
 
 
+def project_artifact_refs_for_memory(
+    *,
+    compact_result: Mapping[str, Any],
+    raw_artifacts: Any,
+    artifact_path: Optional[str],
+    persisted_artifact_refs: Sequence[Mapping[str, Any]],
+    retain_durable_output: bool,
+    tool_name: str,
+    tool_call_id: Optional[str],
+    execution_id: Optional[Any],
+    turn_sequence: Optional[int],
+    enrich_artifact_refs_with_provenance_fn: Callable[..., list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Project raw and persisted artifacts into the shared stable-ref shape."""
+
+    refs: list[dict[str, Any]] = []
+    compact_refs = compact_result.get("artifact_refs")
+    if isinstance(compact_refs, list):
+        refs = [dict(item) for item in compact_refs if isinstance(item, Mapping)]
+    if not refs and artifact_path:
+        refs = [{"path": artifact_path, "count": 1}]
+    elif not refs and isinstance(raw_artifacts, list):
+        refs = [
+            {"path": str(path), "count": 1}
+            for path in raw_artifacts
+            if isinstance(path, str) and path
+        ]
+    if not refs and persisted_artifact_refs:
+        refs = [
+            {
+                "path": str(item["path"]),
+                "artifact_id": item.get("artifact_id"),
+                "count": 1,
+            }
+            for item in persisted_artifact_refs
+            if isinstance(item.get("path"), str) and str(item.get("path")).strip()
+        ]
+    if persisted_artifact_refs and retain_durable_output:
+        refs = enrich_artifact_refs_with_provenance_fn(
+            refs=refs,
+            provenance_refs=persisted_artifact_refs,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            execution_id=str(execution_id) if execution_id is not None else None,
+            turn_sequence=turn_sequence,
+        )
+    refs = _sanitize_artifact_refs_for_memory(refs)
+    return refs if retain_durable_output else []
+
+
 def _resolve_artifact_projection_metadata(
     *,
     existing_metadata: Mapping[str, Any],
@@ -587,6 +637,7 @@ def _update_active_execution_control(
     tool_id: str,
     tool_result: Mapping[str, Any],
     compact_result: Mapping[str, Any],
+    execution_id: Optional[Any],
 ) -> None:
     """Project shell lifecycle state without retaining shell output."""
 
@@ -650,6 +701,9 @@ def _update_active_execution_control(
                 tool_result.get("stdin_available")
                 if "stdin_available" in tool_result
                 else compact_result.get("stdin_available")
+            ),
+            "provenance_execution_id": (
+                str(execution_id) if execution_id is not None else ""
             ),
         },
     )
@@ -834,44 +888,25 @@ async def project_result_state(
     retain_durable_output = (
         persistence_decision is None or persistence_decision.retain_durable_output
     )
-    artifact_refs_for_memory: list[dict[str, Any]] = []
-    compact_artifact_refs = compact_result_dict.get("artifact_refs")
-    if isinstance(compact_artifact_refs, list):
-        artifact_refs_for_memory = [
-            dict(item) for item in compact_artifact_refs if isinstance(item, Mapping)
-        ]
-    if not artifact_refs_for_memory and artifact_path:
-        artifact_refs_for_memory = [{"path": artifact_path, "count": 1}]
-    elif not artifact_refs_for_memory:
-        tool_artifacts = outcome.result.get("artifacts")
-        if isinstance(tool_artifacts, list):
-            artifact_refs_for_memory = [
-                {"path": str(path), "count": 1}
-                for path in tool_artifacts
-                if isinstance(path, str) and path
-            ]
-    if not artifact_refs_for_memory and persisted_artifact_refs:
-        artifact_refs_for_memory = [
-            {
-                "path": str(item["path"]),
-                "artifact_id": item.get("artifact_id"),
-                "count": 1,
-            }
-            for item in persisted_artifact_refs
-            if isinstance(item.get("path"), str) and str(item.get("path")).strip()
-        ]
-    if persisted_artifact_refs and retain_durable_output:
-        artifact_refs_for_memory = enrich_artifact_refs_with_provenance_fn(
-            refs=artifact_refs_for_memory,
-            provenance_refs=persisted_artifact_refs,
-            tool_name=resolved_tool_id,
-            tool_call_id=tool_call_id,
-            execution_id=str(execution_id) if execution_id is not None else None,
-            turn_sequence=turn_sequence,
-        )
-    artifact_refs_for_memory = _sanitize_artifact_refs_for_memory(artifact_refs_for_memory)
-    if not retain_durable_output:
-        artifact_refs_for_memory = []
+    artifact_refs_for_memory = project_artifact_refs_for_memory(
+        compact_result=compact_result_dict,
+        raw_artifacts=outcome.result.get("artifacts"),
+        artifact_path=artifact_path,
+        persisted_artifact_refs=persisted_artifact_refs,
+        retain_durable_output=retain_durable_output,
+        tool_name=resolved_tool_id,
+        tool_call_id=tool_call_id,
+        execution_id=(
+            execution_id
+            if persistence_decision is None
+            or persistence_decision.assessment_evidence_eligible
+            else None
+        ),
+        turn_sequence=turn_sequence,
+        enrich_artifact_refs_with_provenance_fn=(
+            enrich_artifact_refs_with_provenance_fn
+        ),
+    )
     if artifact_refs_for_memory:
         compact_result_dict["artifact_refs"] = artifact_refs_for_memory
         if deterministic_compact_result_dict is not None:
@@ -1031,6 +1066,12 @@ def apply_result_state_projection(
         tool_id=resolved_tool_id,
         tool_result=dict(outcome.result),
         compact_result=compact_result_dict,
+        execution_id=(
+            execution_id
+            if persistence_decision is None
+            or persistence_decision.assessment_evidence_eligible
+            else None
+        ),
     )
     if persistence_decision is not None and not persistence_decision.retain_durable_output:
         for key in (
