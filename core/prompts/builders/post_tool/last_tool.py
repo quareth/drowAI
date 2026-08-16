@@ -171,7 +171,6 @@ def extract_last_tool_sections(
     *,
     prefer_runtime_evidence: bool = False,
     evidence_override: Optional[EvidenceView] = None,
-    include_terminal_session_output: bool = True,
 ) -> dict[str, str]:
     """Project last-tool runtime state into formatted prompt section bodies.
 
@@ -190,10 +189,6 @@ def extract_last_tool_sections(
         evidence_override: Preselected evidence whose row membership and
             persistence eligibility were resolved by the caller. When set,
             the helper does not independently reread runtime evidence.
-        include_terminal_session_output: Include bounded terminal stdout and
-            stderr for completed interactive-session aggregates. Callers that
-            persist reasoning memory can disable this while retaining status,
-            summaries, findings, and errors.
 
     Returns:
         Dict with exactly the ten keys documented in the module
@@ -285,8 +280,7 @@ def extract_last_tool_sections(
 
     terminal_session_output = (
         _format_terminal_session_output(compact_result)
-        if include_terminal_session_output
-        and evidence is not None
+        if evidence is not None
         and evidence.raw.get("execution_session_aggregate") is True
         else ""
     )

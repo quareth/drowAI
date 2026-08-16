@@ -16,6 +16,9 @@ from core.prompts.builders.post_tool.last_tool import (
 )
 
 from ...memory.findings import extract_observed_findings
+from ...nodes.post_tool_reasoning.core.failure_detection import (
+    classify_failure_category,
+)
 from ...runtime_controls import (
     ensure_current_turn_runtime_controls,
     read_active_execution_control,
@@ -510,27 +513,6 @@ def _tool_failed(
     return False
 
 
-def _classify_failure_category(error_text: str, exit_code: Optional[int]) -> str:
-    """Classify failure category from deterministic runtime signals."""
-    lowered = str(error_text or "").lower()
-
-    if "connection refused" in lowered or "network unreachable" in lowered:
-        return "network_error"
-    if "permission denied" in lowered or "operation not permitted" in lowered:
-        return "permission_denied"
-    if exit_code == 124 or "timeout" in lowered:
-        return "timeout"
-    if exit_code == 127:
-        return "missing_dependency"
-    if "not found" in lowered or "command not found" in lowered:
-        return "tool_unavailable"
-    if "invalid" in lowered or "error" in lowered or "failed" in lowered:
-        return "invalid_params"
-    if not lowered.strip():
-        return "empty_output"
-    return "unknown"
-
-
 def _evaluate_tool_phase_outcome(
     *,
     tool_result: Mapping[str, Any],
@@ -564,7 +546,7 @@ def _evaluate_tool_phase_outcome(
     elif status == "denied":
         failure_category = "denied"
     else:
-        failure_category = _classify_failure_category(failure_text, exit_code)
+        failure_category = classify_failure_category(failure_text, exit_code)
     result = "negative"
     if failed:
         result = "timeout" if failure_category == "timeout" else "error"
@@ -678,8 +660,6 @@ def append_tool_phase_snapshot_from_metadata(
     facts: Any,
     turn_sequence: Optional[int],
     logger: Any,
-    prefer_runtime_evidence: bool = False,
-    include_terminal_session_output: bool = True,
 ) -> Optional[Mapping[str, Any]]:
     """Append one tool phase snapshot from finalized PTR-readable metadata."""
     if not isinstance(turn_sequence, int):
@@ -691,13 +671,7 @@ def append_tool_phase_snapshot_from_metadata(
         return None
 
     metadata = facts.metadata if isinstance(getattr(facts, "metadata", None), Mapping) else {}
-    projected_sections = extract_last_tool_sections(
-        metadata,
-        facts,
-        synthesized=None,
-        prefer_runtime_evidence=prefer_runtime_evidence,
-        include_terminal_session_output=include_terminal_session_output,
-    )
+    projected_sections = extract_last_tool_sections(metadata, facts, synthesized=None)
     sections = [
         {"heading": heading, "body": body}
         for heading, body in iter_renderable_last_tool_sections(projected_sections)

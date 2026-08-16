@@ -795,13 +795,14 @@ def _existing_phase_memory_prompt_metadata(
 ) -> dict[str, Any]:
     """Exclude the separately appended subagent outcome from legacy phase text."""
 
-    projected = deepcopy(dict(metadata))
-    working_memory = projected.get("working_memory")
-    if not isinstance(working_memory, Mapping):
-        return projected
-    memory = dict(working_memory)
+    working_memory = metadata.get("working_memory")
+    raw_records = (
+        working_memory.get("current_turn_phases")
+        if isinstance(working_memory, Mapping)
+        else None
+    )
     records: list[dict[str, Any]] = []
-    for raw_record in memory.get("current_turn_phases") or []:
+    for raw_record in raw_records or []:
         if not isinstance(raw_record, Mapping):
             continue
         record = dict(raw_record)
@@ -812,9 +813,7 @@ def _existing_phase_memory_prompt_metadata(
             and section.get("heading") != SUBAGENT_TOOL_OUTCOME_SECTION_HEADING
         ]
         records.append(record)
-    memory["current_turn_phases"] = records
-    projected["working_memory"] = memory
-    return projected
+    return {"working_memory": {"current_turn_phases": records}}
 
 
 def _build_prior_tool_outcomes(
