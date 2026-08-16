@@ -26,11 +26,16 @@ from agent.graph.subgraphs.tool_execution_runtime.approval_and_idempotency impor
 )
 from agent.graph.subgraphs.tool_execution_runtime.result_state_projection import (
     _append_tool_execution_record,
+    _evaluate_tool_phase_outcome,
+    _record_current_turn_unavailable_tool,
     _sanitize_artifact_refs_for_memory,
     apply_result_state_projection,
     preserve_shell_session_result_fields,
     project_trace_history_and_outbound_events,
     sanitize_tool_result_for_metadata,
+)
+from agent.graph.subgraphs.tool_execution_runtime.per_call_execution import (
+    _failure_category_from_projection,
 )
 from agent.tool_runtime.batch.types import (
     BatchResult,
@@ -56,6 +61,50 @@ class _Facts:
 class _Outcome:
     result: Mapping[str, Any]
     duration: float
+
+
+def test_exit_127_does_not_mark_shell_utility_unavailable() -> None:
+    outcome = _evaluate_tool_phase_outcome(
+        tool_result={
+            "status": "failed",
+            "success": False,
+            "exit_code": 127,
+            "stderr": "bc: command not found",
+        },
+        compact_result={
+            "status": "failed",
+            "success": False,
+            "exit_code": 127,
+            "errors": ["bc: command not found"],
+        },
+        summary="Command exited with code 127.",
+    )
+    metadata: dict[str, Any] = {"turn_sequence": 12}
+
+    _record_current_turn_unavailable_tool(
+        metadata,
+        turn_sequence=12,
+        tool_id="shell.utility",
+        failure_category=outcome["failure_category"],
+    )
+
+    assert outcome["failure_category"] == "missing_dependency"
+    assert "current_turn_runtime_controls" not in metadata
+
+
+def test_per_call_failure_category_uses_deterministic_phase_outcome() -> None:
+    category = _failure_category_from_projection(
+        success=False,
+        projection={
+            "tool_phase_outcome": {
+                "failed": True,
+                "failure_category": "missing_dependency",
+            }
+        },
+        result={"status": "failed", "exit_code": 127},
+    )
+
+    assert category == "missing_dependency"
 
 
 def test_completed_batch_enqueues_each_persisted_execution_and_isolates_failures() -> None:

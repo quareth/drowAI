@@ -18,9 +18,11 @@ from agent.models import ExecutionResult
 from runtime_shared import shell_session_port
 from runtime_shared.shell_session_contracts import (
     ShellExecRequest,
+    ShellInteractionBoundary,
     ShellProcessStatus,
     ShellSessionErrorCode,
     ShellSessionIdentity,
+    ShellSessionLifecycleStatus,
     ShellSessionOrigin,
     ShellSessionUpdate,
     ShellWriteRequest,
@@ -341,6 +343,8 @@ async def test_shell_exec_running_update_maps_session_continuation_fields(
             success=True,
             status="success",
             process_status=ShellProcessStatus.RUNNING,
+            session_status=ShellSessionLifecycleStatus.ACTIVE,
+            interaction_boundary=ShellInteractionBoundary.OUTPUT_AVAILABLE,
             session_id="shs_public123",
             stdout="progress\n",
             stderr="",
@@ -377,10 +381,17 @@ async def test_shell_exec_running_update_maps_session_continuation_fields(
     assert result["success"] is True
     assert result["status"] == "success"
     assert result["process_status"] == "running"
+    assert result["session_status"] == "active"
+    assert result["interaction_boundary"] == "output_available"
     assert result["session_id"] == "shs_public123"
     assert result["exit_code"] is None
     assert result["stdin_available"] is True
     assert result["metadata"]["runtime_session"]["session_id"] == "shs_public123"
+    assert result["metadata"]["runtime_session"]["session_status"] == "active"
+    assert (
+        result["metadata"]["runtime_session"]["interaction_boundary"]
+        == "output_available"
+    )
     identity, request = service.exec_calls[0]
     assert identity == ShellSessionIdentity(
         tenant_id=3,

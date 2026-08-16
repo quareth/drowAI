@@ -520,6 +520,8 @@ def _classify_failure_category(error_text: str, exit_code: Optional[int]) -> str
         return "permission_denied"
     if exit_code == 124 or "timeout" in lowered:
         return "timeout"
+    if exit_code == 127:
+        return "missing_dependency"
     if "not found" in lowered or "command not found" in lowered:
         return "tool_unavailable"
     if "invalid" in lowered or "error" in lowered or "failed" in lowered:
@@ -555,7 +557,14 @@ def _evaluate_tool_phase_outcome(
         )
         if part
     )
-    failure_category = _classify_failure_category(failure_text, exit_code) if failed else None
+    if not failed:
+        failure_category = None
+    elif status in {"cancelled", "canceled"}:
+        failure_category = "cancelled"
+    elif status == "denied":
+        failure_category = "denied"
+    else:
+        failure_category = _classify_failure_category(failure_text, exit_code)
     result = "negative"
     if failed:
         result = "timeout" if failure_category == "timeout" else "error"
@@ -917,9 +926,15 @@ async def project_result_state(
     if isinstance(turn_sequence, int):
         action_record["turn_sequence"] = turn_sequence
 
+    tool_phase_outcome = _evaluate_tool_phase_outcome(
+        tool_result=dict(outcome.result),
+        compact_result=compact_result_dict,
+        summary=str(compact_result_dict.get("summary") or outcome.summary or ""),
+    )
     projection = {
         "compact_result_dict": compact_result_dict,
         "deterministic_compact_result_dict": deterministic_compact_result_dict,
+        "tool_phase_outcome": tool_phase_outcome,
         "result_for_metadata": result_for_metadata,
         "graph_metadata": graph_metadata,
         "action_record": action_record,
@@ -1096,10 +1111,15 @@ def apply_result_state_projection(
     if len(result_summary) > 200:
         result_summary = result_summary[:197] + "..."
 
-    tool_phase_outcome = _evaluate_tool_phase_outcome(
-        tool_result=dict(outcome.result),
-        compact_result=compact_result_dict,
-        summary=result_summary,
+    projected_phase_outcome = projection.get("tool_phase_outcome")
+    tool_phase_outcome = (
+        dict(projected_phase_outcome)
+        if isinstance(projected_phase_outcome, Mapping)
+        else _evaluate_tool_phase_outcome(
+            tool_result=dict(outcome.result),
+            compact_result=compact_result_dict,
+            summary=result_summary,
+        )
     )
     _record_current_turn_unavailable_tool(
         facts.metadata,

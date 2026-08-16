@@ -85,7 +85,8 @@ def classify_failure_category(stderr: str, exit_code: Optional[int]) -> str:
         
     Returns:
         Failure category string (one of: network_error, permission_denied,
-        timeout, tool_unavailable, invalid_params, empty_output, unknown)
+        timeout, missing_dependency, tool_unavailable, invalid_params,
+        empty_output, unknown)
     """
     lowered_stderr = stderr.lower()
     
@@ -100,6 +101,11 @@ def classify_failure_category(stderr: str, exit_code: Optional[int]) -> str:
     # Timeout errors
     if exit_code == 124 or "timeout" in lowered_stderr:
         return "timeout"
+
+    # The shell capability ran successfully enough to report POSIX exit 127;
+    # the command it was asked to invoke is the unavailable dependency.
+    if exit_code == 127:
+        return "missing_dependency"
     
     # Tool not found errors
     if "not found" in lowered_stderr or "command not found" in lowered_stderr:

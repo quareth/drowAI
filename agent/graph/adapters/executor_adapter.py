@@ -47,9 +47,11 @@ from ..utils.llm_resolver import DEFAULT_MODEL
 from .tool_interface import ToolInterface, normalize_tool_arguments
 from runtime_shared.shell_session_contracts import (
     ShellExecRequest,
+    ShellInteractionBoundary,
     ShellProcessStatus,
     ShellSessionErrorCode,
     ShellSessionIdentity,
+    ShellSessionLifecycleStatus,
     ShellSessionOrigin,
     ShellSessionUpdate,
     ShellWriteRequest,
@@ -570,6 +572,16 @@ class GraphToolExecutor:
             if isinstance(update.process_status, ShellProcessStatus)
             else update.process_status
         )
+        session_status = (
+            update.session_status.value
+            if isinstance(update.session_status, ShellSessionLifecycleStatus)
+            else update.session_status
+        )
+        interaction_boundary = (
+            update.interaction_boundary.value
+            if isinstance(update.interaction_boundary, ShellInteractionBoundary)
+            else update.interaction_boundary
+        )
         error_code = (
             update.error_code.value
             if isinstance(update.error_code, ShellSessionErrorCode)
@@ -593,6 +605,8 @@ class GraphToolExecutor:
                 "tool_batch_id": str(dispatch_input.tool_batch_id or ""),
                 "authority": decision.authority,
                 "process_status": process_status,
+                "session_status": session_status,
+                "interaction_boundary": interaction_boundary,
                 "session_id": update.session_id,
                 "stdin_available": update.stdin_available,
                 "truncated": update.truncated,
@@ -642,6 +656,8 @@ class GraphToolExecutor:
             "metadata": metadata,
             "status": status,
             "process_status": process_status,
+            "session_status": session_status,
+            "interaction_boundary": interaction_boundary,
             "session_id": update.session_id,
             "stdin_available": update.stdin_available,
             "truncated": update.truncated,

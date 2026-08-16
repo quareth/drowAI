@@ -783,7 +783,7 @@ class TestToolLedgerAppend:
         }
         assert _LEGACY_PHASE_FIELDS.isdisjoint(record)
 
-    def test_records_runtime_unavailable_tool_control_signal(self) -> None:
+    def test_exit_127_does_not_mark_tool_capability_unavailable(self) -> None:
         facts = _StubFacts(metadata={"turn_sequence": 11})
         outcome = _StubOutcome(
             tool_id="information_gathering.network_discovery.netdiscover",
@@ -821,12 +821,7 @@ class TestToolLedgerAppend:
             },
         )
 
-        assert facts.metadata["current_turn_runtime_controls"] == {
-            "turn_sequence": 11,
-            "unavailable_tools": [
-                "information_gathering.network_discovery.netdiscover"
-            ],
-        }
+        assert "current_turn_runtime_controls" not in facts.metadata
 
     def test_section_snapshot_omits_legacy_target_field(self) -> None:
         facts = _StubFacts(metadata={"turn_sequence": 4})

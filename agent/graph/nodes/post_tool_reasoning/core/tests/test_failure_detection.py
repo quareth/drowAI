@@ -150,10 +150,10 @@ class TestClassifyFailureCategory:
         category = classify_failure_category("connection timeout", 1)
         assert category == "timeout"
     
-    def test_classify_tool_unavailable_not_found(self):
-        """Verify tool not found classified correctly."""
+    def test_classify_exit_127_as_missing_dependency(self):
+        """Exit 127 means the invoked command is missing, not the tool capability."""
         category = classify_failure_category("command not found: nmap", 127)
-        assert category == "tool_unavailable"
+        assert category == "missing_dependency"
     
     def test_classify_invalid_params(self):
         """Verify invalid parameters classified correctly."""
@@ -258,4 +258,3 @@ class TestBuildFailureContextFromState:
         assert context.stderr == ""
         assert failure is True
         assert category == "empty_output"
-

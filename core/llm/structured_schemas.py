@@ -575,6 +575,7 @@ POST_TOOL_DECISION_STRUCTURED_OUTPUT = _spec(
                     "network_error",
                     "permission_denied",
                     "timeout",
+                    "missing_dependency",
                     "invalid_params",
                     "tool_unavailable",
                     "empty_output",

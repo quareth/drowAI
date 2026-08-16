@@ -34,6 +34,27 @@ def _project_tool_call_status(*, success: bool, status: Any) -> ToolCallStatus:
     return ToolCallStatus.FAILED
 
 
+def _failure_category_from_projection(
+    *,
+    success: bool,
+    projection: Mapping[str, Any],
+    result: Mapping[str, Any],
+) -> Optional[str]:
+    """Return the deterministic failure category produced during projection."""
+
+    if success:
+        return None
+    phase_outcome = projection.get("tool_phase_outcome")
+    if isinstance(phase_outcome, Mapping):
+        category = str(phase_outcome.get("failure_category") or "").strip()
+        if category:
+            return category
+    status = str(result.get("status") or "").strip().lower()
+    if status and status not in {"error", "failed", "failure"}:
+        return status
+    return "tool_error"
+
+
 def _single_call_planner_plan(
     original_plan: Mapping[str, Any],
     call: ToolCall,
@@ -613,13 +634,15 @@ def build_run_one_call_callback(
             success=success_value,
             status=outcome.result.get("status"),
         )
-        failure_category = None
-        if not success_value:
-            failure_category = (
-                str(outcome.result.get("status") or "tool_error")
-                if isinstance(outcome.result, dict)
-                else "tool_error"
-            )
+        failure_category = _failure_category_from_projection(
+            success=success_value,
+            projection=projection,
+            result=(
+                outcome.result
+                if isinstance(outcome.result, Mapping)
+                else {}
+            ),
+        )
         return ToolCallResult(
             tool_call_id=tool_call_id,
             tool_id=str(outcome.tool_id or tool_name),
