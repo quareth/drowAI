@@ -41,6 +41,7 @@ def test_shell_exec_schema_matches_session_contract_surface() -> None:
         "command",
         "cwd",
         "env",
+        "interactive",
         "yield_time_ms",
         "max_output_chars",
         "max_runtime_sec",
@@ -52,6 +53,7 @@ def test_shell_exec_schema_matches_session_contract_surface() -> None:
         "idempotent",
         "redact_output",
     } & _schema_fields(ShellExecArgs)
+    assert ShellExecArgs(command="sleep 20").interactive is False
     assert ShellExecArgs(command="sleep 20").yield_time_ms == 10_000
     assert ShellExecArgs(command="sleep 20", yield_time_ms=None).yield_time_ms == 10_000
     assert ShellExecArgs(command="sleep 20", yield_time_ms=500).yield_time_ms == 500

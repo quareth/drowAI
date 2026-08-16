@@ -6,7 +6,8 @@
 
 DrowAI is an active pre-v1 AI agent platform for running task-isolated security
 workflows through a web control plane, LangGraph-based agent orchestration, and
-Docker/Kali execution runtimes.
+provider-backed Docker/Kali execution runtimes with general-purpose interactive
+terminal access.
 
 The project is public as work in progress. It is functional, but not a polished
 v1 release: setup, deployment packaging, APIs, and documentation may still
@@ -56,27 +57,38 @@ Development updates currently live in the [changelog](CHANGELOG.md) and the
 
 ## Tooling Surface
 
-The implemented tool registry and the LLM-facing tool catalog are intentionally
-not the same thing.
+DrowAI provides two overlapping execution surfaces:
 
-> **Alpha shell notice:** The LLM can currently invoke general-purpose shell
-> commands allowed by runtime policy. Skill-based guidance for reserving shell
-> access for utility and supporting work is not yet implemented.
+- **Structured assessment tools:** a curated catalog of tools explicitly wired
+  for model planning, parameter validation, normalized result parsing,
+  artifacts, provenance, semantic evidence, and Knowledge integration. See the
+  [LLM-Visible Toolset](docs/tooling/llm-visible-tools.md) and the broader
+  [Complete Registered Toolset](docs/tooling/registered-toolset.md).
+- **Interactive shell:** general-purpose terminal access inside the task's Kali
+  runtime. Through the shell, the agent can invoke installed security tools,
+  utilities, and custom scripts even when they do not have a dedicated DrowAI
+  tool definition.
 
-- **Current LLM-visible toolset:** tools completed for model planning and
-  self-selection, including wired parsing, normalized result projection, and
-  knowledge/evidence-layer integration. See
-  [LLM-Visible Toolset](docs/tooling/llm-visible-tools.md).
-- **Complete registered toolset:** all executable `BaseTool` classes discovered
-  by the runtime registry. See [Complete Registered Toolset](docs/tooling/registered-toolset.md).
+The structured catalog is not a command allowlist. Its purpose is to define
+which tools have dedicated result integration. Assessment-shell runs can retain
+verified output, artifacts, and provenance, but invoking a CLI through the shell
+does not automatically give its output tool-specific parsing, normalized
+Knowledge records, or dedicated visualization in the Knowledge tab.
+Utility-shell output remains transient and is not retained as reusable
+assessment evidence.
 
-Only the completed tool subset is visible to the LLM. A tool may be implemented
-and registered in code, but it should not be exposed for model self-selection
-until its argument contract, output parsing, compact result projection,
-artifact/provenance behavior, and knowledge/evidence hooks are wired well enough
-for the agent to reason over the result reliably. The full registry still
-matters: it shows the broader implemented tool surface and the backlog of tools
-that can be promoted into the LLM-visible catalog as they reach that standard.
+The roadmap will expand the structured catalog for mission-critical tools that
+produce meaningful assessment information. It is not intended to add dedicated
+Knowledge integration for every utility or binary available in Kali.
+
+> **Interactive shell safety warning:** The agent can execute general-purpose
+> commands and send traffic to any destination reachable from its Kali runtime.
+> A task's `scope.md` is prompt guidance only; it is not a command, target, or
+> network enforcement boundary. Container isolation limits the execution
+> environment, but it does not prevent out-of-scope activity. Use DrowAI only
+> against systems you own or are explicitly authorized to test, and apply
+> firewall, VPN, egress, or lab-level restrictions when technical scope
+> enforcement is required.
 
 ## Current Architecture
 

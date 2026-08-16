@@ -10,9 +10,9 @@ The format is based on
 
 ### Added
 
-- Main agents and subagents can run provider-backed interactive shell commands,
-  continue yielded sessions with exact input or runtime-owned waits, and receive
-  bounded, task-isolated output with lifecycle cleanup.
+- A provider-backed interactive shell capability is now available to main agents
+  and subagents, with exact input, runtime-owned waits, bounded task-isolated
+  output, and lifecycle cleanup for yielded sessions.
 
 ### Changed
 
@@ -39,9 +39,16 @@ The format is based on
   partial output cannot trigger duplicate execution or unnecessary interaction
   reasoning, while the existing tool stream preserves the complete live output
   through terminal completion.
-- Post-tool reasoning now inspects referenced runtime artifacts with bounded
-  utility-shell reads before repeating assessments that already captured the
-  missing evidence.
+- Completed shell assessments now finalize verified artifact references before
+  post-tool reasoning, which uses the exact runtime-reported workspace-relative
+  path for bounded utility-shell reads instead of searching for or rerunning
+  already captured evidence.
+- Free-form shell commands now treat expected tool, target, and port values as
+  advisory during intent validation, preventing false invalid-parameter retries
+  while dedicated tools retain strict parameter matching.
+- Turn activity now shows `Processing result…` after terminal shell output
+  completes and until observation or final-response processing begins, removing
+  an unexplained gap in visible progress.
 - Tool-output compression now allows up to 4,096 output tokens so large
   structured summaries can complete without removing downstream context caps.
 - Shell assessment transcripts are now created inside the selected Kali runtime,
