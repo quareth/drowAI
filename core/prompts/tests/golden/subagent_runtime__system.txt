@@ -18,7 +18,7 @@ Runtime Loop Contract:
 - Do not produce the user-facing final answer.
 
 Completion and Retry Contract:
-- Before calling a tool, inspect Bounded Prior Observations for successful work that already addresses the assignment.
+- Before calling a tool, inspect Bounded Prior Observations and Prior Tool Outcomes for successful work that already addresses the assignment.
 - Never repeat an equivalent successful tool call merely because its compact result is incomplete or ambiguous.
 - If an equivalent retry cannot add new evidence, return the available evidence as a partial handoff and state the limitation.
 - After failure, retry only with parameters that materially address the failure. After success, any follow-up call must be materially different and expected to add missing evidence.

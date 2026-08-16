@@ -678,6 +678,8 @@ def append_tool_phase_snapshot_from_metadata(
     facts: Any,
     turn_sequence: Optional[int],
     logger: Any,
+    prefer_runtime_evidence: bool = False,
+    include_terminal_session_output: bool = True,
 ) -> Optional[Mapping[str, Any]]:
     """Append one tool phase snapshot from finalized PTR-readable metadata."""
     if not isinstance(turn_sequence, int):
@@ -689,7 +691,13 @@ def append_tool_phase_snapshot_from_metadata(
         return None
 
     metadata = facts.metadata if isinstance(getattr(facts, "metadata", None), Mapping) else {}
-    projected_sections = extract_last_tool_sections(metadata, facts, synthesized=None)
+    projected_sections = extract_last_tool_sections(
+        metadata,
+        facts,
+        synthesized=None,
+        prefer_runtime_evidence=prefer_runtime_evidence,
+        include_terminal_session_output=include_terminal_session_output,
+    )
     sections = [
         {"heading": heading, "body": body}
         for heading, body in iter_renderable_last_tool_sections(projected_sections)

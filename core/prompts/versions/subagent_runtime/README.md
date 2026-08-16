@@ -8,7 +8,8 @@ Files:
 - `system.txt` - definition-bound role, instructions, runtime loop contract,
   native tool-call guidance, scheduling metadata, and boundary rules.
 - `user.txt` - bounded assignment, candidate tool profile, scoped runbooks,
-  remaining limits, prior observations, and assignment JSON.
+  remaining limits, prior observations, assignment JSON, and additive compact
+  prior tool-batch outcomes.
 
 Loaded through `core.prompts.registry.PromptRegistry` using
 `subagent_runtime_system` and `subagent_runtime_user`. Bump by creating

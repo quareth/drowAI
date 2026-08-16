@@ -26,6 +26,14 @@ The format is based on
 
 ### Fixed
 
+- Main agents and subagents now separate dependent shell stages and verify each
+  prerequisite completes successfully before starting the next command.
+- Shell-session lifecycle status and interaction boundaries now remain intact
+  when runtime results enter agent graph context.
+- Subagents now retain bounded, sanitized phase memory for every transient tool
+  outcome, keeping earlier attempts visible without making raw shell output
+  durable; exit code 127 identifies a missing command dependency without
+  disabling the `shell.utility` capability.
 - Shell commands now run as dedicated Kali exec processes whose local provider
   or managed runner reports structured completion and exit codes, so banners and
   partial output cannot trigger duplicate execution or unnecessary interaction

@@ -28,12 +28,17 @@ from agent.graph.context.runtime_state import refresh_bundle_from_working_memory
 from agent.graph.infrastructure.state_models import GraphRuntimeContext
 from agent.graph.memory.memory_manager import MemoryManager
 from agent.graph.state import FactsState, InteractiveState, TraceState
+from agent.graph.utils import iteration_memory
 from agent.subagents.contracts import AgentAssignment, AgentKind, AgentRuntimeIdentity
 from agent.subagents.definition import SubagentDefinition
 from agent.subagents.runtime.profile import (
     SubagentToolProfile,
     effective_subagent_tool_profile,
     resolve_subagent_tool_profile,
+)
+from agent.subagents.runtime.tool_outcomes import (
+    SUBAGENT_PRIOR_TOOL_OUTCOMES_CONTEXT_KEY,
+    outcome_section_payload,
 )
 
 
@@ -239,7 +244,7 @@ def _initial_working_memory(
         if isinstance(turn_sequence, int) and not isinstance(turn_sequence, bool)
         else 0
     )
-    return MemoryManager.reduce_turn_start(
+    memory = MemoryManager.reduce_turn_start(
         previous=None,
         user_message=assignment.objective,
         conversation_history_tail=[],
@@ -272,6 +277,21 @@ def _initial_working_memory(
             "blocking_reason": "",
         },
     )
+    metadata = {"working_memory": memory}
+    prior_outcomes = assignment.relevant_context.get(
+        SUBAGENT_PRIOR_TOOL_OUTCOMES_CONTEXT_KEY
+    )
+    if isinstance(prior_outcomes, (list, tuple)):
+        for raw_outcome in prior_outcomes:
+            if not isinstance(raw_outcome, Mapping) or not raw_outcome.get("calls"):
+                continue
+            iteration_memory.append(
+                metadata,
+                turn_sequence=normalized_turn_sequence,
+                source="handoff",
+                payload=outcome_section_payload(raw_outcome),
+            )
+    return dict(metadata["working_memory"])
 
 
 def _initial_memory_constraints(

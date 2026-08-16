@@ -46,6 +46,12 @@ from agent.subagents.runtime.state import (
     SubagentRuntimeState,
     subagent_state_from_graph_state,
 )
+from agent.subagents.runtime.tool_outcomes import (
+    SUBAGENT_TOOL_OUTCOME_SECTION_HEADING,
+    outcome_section_payload,
+    project_tool_batch_outcome,
+)
+from agent.tool_runtime.batch.plan_view import serialized_tool_calls_from_metadata
 from agent.tool_runtime.batch.types import ToolBatch, ToolCall
 from agent.tools.builder_intent import split_builder_intent
 from agent.tools.tool_call_specs import build_function_tool_specs_for
@@ -64,7 +70,6 @@ SUBAGENT_RESULT_METADATA_KEY = "subagent_result"
 SUBAGENT_EXECUTION_STRATEGY_KEY = "_execution_strategy"
 SUBAGENT_FORCED_FINAL_METADATA_KEY = "subagent_forced_final"
 SUBAGENT_COUNTED_TOOL_BATCH_METADATA_KEY = "subagent_counted_tool_batch_id"
-
 _SUBAGENT_EXECUTION_STRATEGY_SCHEMA: dict[str, Any] = {
     "type": "string",
     "enum": ["parallel", "sequential"],
@@ -146,6 +151,7 @@ async def run_subagent_model_turn(
         tool_ids=subagent.tool_profile.tool_ids,
         working_memory=_working_memory_prompt_context(interactive.facts.safe_metadata),
         previous_tool_summary=_build_previous_tool_context(interactive),
+        prior_tool_outcomes=_build_prior_tool_outcomes(interactive),
         remaining_limits=_build_remaining_limits(
             definition,
             interactive,
@@ -610,13 +616,58 @@ def record_subagent_observation_and_budget(
     context: GraphRuntimeContext | None = None,
     config: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Synchronize completed execution budget from canonical phase memory."""
+    """Record bounded tool context and synchronize the child execution budget."""
 
     _ = (context, config)
     interactive = InteractiveState.from_mapping(state)
     subagent_state_from_graph_state(interactive, definition=definition)
+    _record_missing_subagent_tool_phase(interactive)
     _sync_completed_execution_iterations(interactive)
     return interactive.as_graph_update()
+
+
+def _record_missing_subagent_tool_phase(interactive: InteractiveState) -> None:
+    """Record one authoritative compact outcome for an uncounted tool batch."""
+
+    metadata = interactive.facts.ensure_metadata()
+    batch_id = _current_tool_batch_id(metadata)
+    counted_batch_id = str(
+        metadata.get(SUBAGENT_COUNTED_TOOL_BATCH_METADATA_KEY) or ""
+    ).strip()
+    if not batch_id or batch_id == counted_batch_id:
+        return
+
+    completed = max(int(interactive.facts.iterations or 0), 0)
+    tool_phase_count = _completed_tool_phase_count(metadata)
+
+    turn_sequence = _phase_memory_turn_sequence(metadata)
+    if not isinstance(turn_sequence, int):
+        return
+    evidence, _ = select_compact_evidence_for_reasoning(metadata)
+    if evidence is None:
+        return
+    outcome = project_tool_batch_outcome(
+        evidence,
+        tool_calls=serialized_tool_calls_from_metadata(metadata),
+    )
+    if not outcome.get("calls"):
+        return
+    payload = outcome_section_payload(outcome)
+    if tool_phase_count > completed:
+        attached = iteration_memory.append_sections_to_latest_record(
+            metadata,
+            turn_sequence=turn_sequence,
+            source="tool",
+            payload=payload,
+        )
+        if attached is not None:
+            return
+    iteration_memory.append(
+        metadata,
+        turn_sequence=turn_sequence,
+        source="tool",
+        payload=payload,
+    )
 
 
 def _serialize_tool_batch(batch: ToolBatch) -> dict[str, Any]:
@@ -657,23 +708,6 @@ def _append_usage(
     interactive.trace.usage_records.append(usage)
 
 
-def _bounded_mapping(value: Any) -> dict[str, Any]:
-    """Return checkpoint-safe prompt context when a mapping is available."""
-
-    if not isinstance(value, Mapping):
-        return {}
-    return dict(value)
-
-
-def _working_memory_prompt_context(metadata: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the existing bounded runtime-state projection for the child prompt."""
-
-    bundle = metadata.get(METADATA_CONTEXT_BUNDLE_KEY)
-    if not isinstance(bundle, Mapping):
-        return {}
-    return _bounded_mapping(bundle.get("runtime_state"))
-
-
 def _max_committed_calls(definition: SubagentDefinition) -> int:
     """Return the per-turn native call cap allowed for this definition."""
 
@@ -711,6 +745,23 @@ def _build_remaining_limits(
     }
 
 
+def _bounded_mapping(value: Any) -> dict[str, Any]:
+    """Return checkpoint-safe prompt context when a mapping is available."""
+
+    if not isinstance(value, Mapping):
+        return {}
+    return dict(value)
+
+
+def _working_memory_prompt_context(metadata: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the existing bounded runtime-state projection for the child prompt."""
+
+    bundle = metadata.get(METADATA_CONTEXT_BUNDLE_KEY)
+    if not isinstance(bundle, Mapping):
+        return {}
+    return _bounded_mapping(bundle.get("runtime_state"))
+
+
 def _build_previous_tool_context(interactive: InteractiveState) -> dict[str, Any]:
     """Return the terminal session result plus canonical phase memory."""
 
@@ -727,7 +778,7 @@ def _build_previous_tool_context(interactive: InteractiveState) -> dict[str, Any
             _bounded_mapping(metadata.get("last_tool_result_compact"))
         )
     phase_memory = iteration_memory.render_phase_memory_section(
-        dict(metadata),
+        _existing_phase_memory_prompt_metadata(metadata),
         turn_sequence=_phase_memory_turn_sequence(metadata),
     )
 
@@ -739,13 +790,71 @@ def _build_previous_tool_context(interactive: InteractiveState) -> dict[str, Any
     return context
 
 
+def _existing_phase_memory_prompt_metadata(
+    metadata: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Exclude the separately appended subagent outcome from legacy phase text."""
+
+    projected = deepcopy(dict(metadata))
+    working_memory = projected.get("working_memory")
+    if not isinstance(working_memory, Mapping):
+        return projected
+    memory = dict(working_memory)
+    records: list[dict[str, Any]] = []
+    for raw_record in memory.get("current_turn_phases") or []:
+        if not isinstance(raw_record, Mapping):
+            continue
+        record = dict(raw_record)
+        record["sections"] = [
+            dict(section)
+            for section in raw_record.get("sections") or []
+            if isinstance(section, Mapping)
+            and section.get("heading") != SUBAGENT_TOOL_OUTCOME_SECTION_HEADING
+        ]
+        records.append(record)
+    memory["current_turn_phases"] = records
+    projected["working_memory"] = memory
+    return projected
+
+
+def _build_prior_tool_outcomes(
+    interactive: InteractiveState,
+) -> list[dict[str, Any]]:
+    """Read canonical compact outcomes from current-turn tool-phase records."""
+
+    metadata = interactive.facts.safe_metadata
+    turn_sequence = _phase_memory_turn_sequence(metadata)
+    outcomes: list[dict[str, Any]] = []
+    for record in iteration_memory.get_ledger(dict(metadata)):
+        if record.get("source") not in {"handoff", "tool"}:
+            continue
+        if turn_sequence is not None and record.get("turn_sequence") != turn_sequence:
+            continue
+        for section in record.get("sections") or []:
+            if not isinstance(section, Mapping):
+                continue
+            if section.get("heading") != SUBAGENT_TOOL_OUTCOME_SECTION_HEADING:
+                continue
+            try:
+                outcome = json.loads(str(section.get("body") or ""))
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(outcome, Mapping):
+                continue
+            projected = dict(outcome)
+            projected["phase"] = record.get("phase_sequence")
+            outcomes.append(projected)
+            break
+    return outcomes
+
+
 def _sync_completed_execution_iterations(interactive: InteractiveState) -> None:
     """Count each terminal tool batch once, including transient sessions."""
 
     metadata = interactive.facts.ensure_metadata()
     completed = max(int(interactive.facts.iterations or 0), 0)
     tool_phase_count = _completed_tool_phase_count(metadata)
-    batch_id = str(metadata.get("tool_batch_id") or "").strip()
+    batch_id = _current_tool_batch_id(metadata)
     counted_batch_id = str(
         metadata.get(SUBAGENT_COUNTED_TOOL_BATCH_METADATA_KEY) or ""
     ).strip()
@@ -769,6 +878,18 @@ def _completed_tool_phase_count(metadata: Mapping[str, Any]) -> int:
         for record in iteration_memory.get_ledger(dict(metadata))
         if record.get("source") == "tool"
     )
+
+
+def _current_tool_batch_id(metadata: Mapping[str, Any]) -> str:
+    """Return the active batch identity from existing compact metadata."""
+
+    batch_id = str(metadata.get("tool_batch_id") or "").strip()
+    if batch_id:
+        return batch_id
+    compact_batch = metadata.get("last_tool_result_compact_batch")
+    if not isinstance(compact_batch, Mapping):
+        return ""
+    return str(compact_batch.get("tool_batch_id") or "").strip()
 
 
 def _phase_memory_turn_sequence(metadata: Mapping[str, Any]) -> int | None:

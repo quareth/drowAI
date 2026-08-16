@@ -305,6 +305,60 @@ def test_subagent_initial_state_rejects_missing_parent_approval_policy() -> None
         )
 
 
+def test_subagent_initial_state_seeds_parent_tool_outcome_into_phase_memory() -> None:
+    base = _assignment().model_dump(mode="json")
+    base["relevant_context"]["prior_tool_outcomes"] = [
+        {
+            "status": "failed",
+            "success": False,
+            "calls": [
+                {
+                    "tool": SHELL_ASSESSMENT_TOOL_ID,
+                    "invocation": {
+                        "command": "missing-program --check",
+                        "cwd": "/workspace",
+                        "interactive": False,
+                    },
+                    "status": "failed",
+                    "success": False,
+                    "failure_category": "missing_dependency",
+                    "summary": "Command failed with exit code 127.",
+                    "exit_code": 127,
+                }
+            ],
+        }
+    ]
+    state = _generic_state_for_assignment(
+        AgentAssignment.model_validate(base),
+        graph_thread_id="child-thread-parent-outcome",
+    )
+    interactive = InteractiveState.from_mapping(state)
+
+    assert runtime_model._build_prior_tool_outcomes(interactive) == [
+        {
+            "phase": 0,
+            "status": "failed",
+            "success": False,
+            "calls": [
+                {
+                    "tool": SHELL_ASSESSMENT_TOOL_ID,
+                    "invocation": {
+                        "command": "missing-program --check",
+                        "cwd": "/workspace",
+                        "interactive": False,
+                    },
+                    "status": "failed",
+                    "success": False,
+                    "failure_category": "missing_dependency",
+                    "summary": "Command failed with exit code 127.",
+                    "exit_code": 127,
+                }
+            ],
+        }
+    ]
+    assert interactive.facts.iterations == 0
+
+
 def _tool_iteration(
     *,
     tool_id: str,
@@ -507,7 +561,7 @@ def _extract_prompt_json(user_prompt: str, label: str) -> dict[str, Any]:
     return json.loads(match.group(1))
 
 
-def _extract_prompt_section_json(user_prompt: str, label: str) -> dict[str, Any]:
+def _extract_prompt_section_json(user_prompt: str, label: str) -> Any:
     match = re.search(
         rf"^{re.escape(label)}:\n(.+?)(?:\n\n|$)",
         user_prompt,
@@ -876,6 +930,7 @@ async def test_runtime_model_exposes_and_commits_universal_shell_utilities() -> 
         "command": "printf ready",
         "cwd": None,
         "env": None,
+        "interactive": False,
         "yield_time_ms": 10_000,
         "max_output_chars": 32000,
         "max_runtime_sec": 120,
@@ -935,6 +990,7 @@ async def test_runtime_model_blocks_empty_write_poll_after_bounded_repair() -> N
     assert len(llm.requests) == 2
     assert SHELL_WRITE_STDIN_TOOL_ID in request["tool_ids"]
     assert public_session_id in request["user_prompt"]
+    assert "Prior Tool Outcomes:\n[]" in request["user_prompt"]
     assert metadata[SUBAGENT_ACTION_METADATA_KEY]["route"] == "handoff"
     assert metadata[SUBAGENT_RESULT_METADATA_KEY]["outcome"] == "blocked"
 
@@ -1400,6 +1456,38 @@ def test_subagent_tool_projection_uses_canonical_phase_memory_without_transcript
                 },
                 {"heading": "Key Findings", "body": "- 10.0.0.10 is alive."},
                 {"heading": "Compression Lossiness", "body": "lossiness_risk: low"},
+                {
+                    "heading": "Subagent Tool Outcome",
+                    "body": json.dumps(
+                        {
+                            "calls": [
+                                {
+                                    "artifact_refs": [
+                                        {
+                                            "label": "exec-fping-1",
+                                            "path": (
+                                                "/workspace/artifacts/"
+                                                "exec-fping-1.json"
+                                            ),
+                                        }
+                                    ],
+                                    "exit_code": 0,
+                                    "intent": f"Run {FPING_TOOL_ID}",
+                                    "key_findings": ["10.0.0.10 is alive."],
+                                    "status": "success",
+                                    "success": True,
+                                    "summary": "fping found 10.0.0.10 alive.",
+                                    "tool": FPING_TOOL_ID,
+                                }
+                            ],
+                            "status": "completed",
+                            "success": True,
+                        },
+                        ensure_ascii=True,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                },
             ],
         }
     ]
@@ -1458,6 +1546,10 @@ async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> Non
         provider="baseline",
         model="subagent-characterization",
     )
+    prior_tool_outcomes = _extract_prompt_section_json(
+        multi_iteration_user_prompt,
+        "Prior Tool Outcomes",
+    )
     previous_tool_summary = _extract_prompt_json(
         multi_iteration_user_prompt,
         "Previous tool executed",
@@ -1466,9 +1558,8 @@ async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> Non
         multi_iteration_user_prompt,
         "Working memory snapshot",
     )
-    phase_memory = iteration_memory.render_phase_memory_section(
-        multi_iteration_state["facts"]["metadata"],
-        turn_sequence=1,
+    expected_tool_outcomes = runtime_model._build_prior_tool_outcomes(
+        InteractiveState.from_mapping(multi_iteration_state)
     )
     completed_for_parent_handoff = complete_subagent_result(
         _pathfinder_definition(),
@@ -1481,10 +1572,15 @@ async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> Non
         {"completed_agent_results": [parent_handoff_projection]}
     )
 
-    assert previous_tool_summary == {
-        "last_tool_result": multi_iteration_state["facts"]["last_tool_result_compact"],
-        "current_turn_phase_memory": phase_memory,
-    }
+    assert prior_tool_outcomes == expected_tool_outcomes
+    assert [outcome["phase"] for outcome in prior_tool_outcomes] == [0, 1]
+    assert previous_tool_summary["last_tool_result"] == multi_iteration_state[
+        "facts"
+    ]["last_tool_result_compact"]
+    phase_memory = previous_tool_summary["current_turn_phase_memory"]
+    assert "## Prior Current-Turn Phase Memory" in phase_memory
+    assert "Tool Output Summary" in phase_memory
+    assert "Subagent Tool Outcome" not in phase_memory
     assert "current_turn_phases" not in working_memory_summary
     assert "current_turn_phase_counter" not in working_memory_summary
     assert "current_turn_phase_turn" not in working_memory_summary
@@ -1495,6 +1591,8 @@ async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> Non
     assert "subagent_observation_transcript" not in multi_iteration_user_prompt
     assert "subagent_observations" not in multi_iteration_user_prompt
     assert "current_turn_phase_memory" in multi_iteration_user_prompt
+    assert "last_tool_result" in multi_iteration_user_prompt
+    assert "Working memory snapshot" in multi_iteration_user_prompt
 
     baseline = {
         "one_tool_model_calls": len(one_tool_llm.requests),
@@ -1531,10 +1629,10 @@ async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> Non
     assert baseline == {
         "one_tool_model_calls": 1,
         "multi_iteration_model_calls": 1,
-        "one_tool_serialized_state_chars": 9808,
-        "multi_iteration_serialized_state_chars": 11030,
-        "multi_iteration_prompt_chars": 13025,
-        "multi_iteration_prompt_tokens": 4653,
+        "one_tool_serialized_state_chars": 10334,
+        "multi_iteration_serialized_state_chars": 12037,
+        "multi_iteration_prompt_chars": 15322,
+        "multi_iteration_prompt_tokens": 5473,
         "bounded_parent_handoff_projection_chars": 501,
         "bounded_parent_handoff_render_chars": 281,
         "parent_handoff_projection_model_calls": 0,
@@ -1840,8 +1938,24 @@ def test_runtime_completion_marks_nested_partial_batch_row_as_partial() -> None:
     ]
 
 
-def test_subagent_previous_tool_context_uses_complete_terminal_session_aggregate() -> None:
+def test_subagent_context_preserves_terminal_aggregate_and_appends_outcome() -> None:
     batch_id = "batch-subagent-long-terminal-session"
+    origin_row = {
+        "tool_call_id": "tc-origin",
+        "tool_id": SHELL_UTILITY_TOOL_ID,
+        "intent": "Start one interactive calculator process.",
+        "status": "success",
+        "success": True,
+        "compact_tool_result": {
+            "tool": SHELL_UTILITY_TOOL_ID,
+            "summary": "Calculator is running and waiting for input.",
+            "stdout": "RAW_START_OUTPUT",
+            "process_status": "running",
+            "session_status": "active",
+            "session_id": "shs-subagent-long",
+            "stdin_available": True,
+        },
+    }
     running_rows = [
         {
             "tool_call_id": f"tc-running-{index}",
@@ -1867,6 +1981,8 @@ def test_subagent_previous_tool_context_uses_complete_terminal_session_aggregate
         "compact_tool_result": {
             "tool": SHELL_WRITE_STDIN_TOOL_ID,
             "summary": "Calculator returned all requested values.",
+            "key_findings": ["Displayed totals: 7, 42, and 50."],
+            "errors": [],
             "stdout": "7\n42\n50\n50\n",
             "input": "quit\n",
             "process_status": "completed",
@@ -1881,7 +1997,7 @@ def test_subagent_previous_tool_context_uses_complete_terminal_session_aggregate
             "execution_session_aggregate": True,
             "status": "completed",
             "success": True,
-            "results": [*running_rows, terminal_row],
+            "results": [origin_row, *running_rows, terminal_row],
             "deferred_followups": [],
         },
         single_compact=terminal_row["compact_tool_result"],
@@ -1890,38 +2006,292 @@ def test_subagent_previous_tool_context_uses_complete_terminal_session_aggregate
         _generic_state_with_universal_shell_tools()
     )
     interactive.facts.metadata["tool_batch_id"] = batch_id
+    interactive.facts.metadata["turn_sequence"] = 1
+    interactive.facts.metadata["working_memory"]["current_turn_phase_turn"] = 1
 
-    context = runtime_model._build_previous_tool_context(interactive)
+    updated = record_subagent_observation_and_budget(
+        _pathfinder_definition(),
+        interactive,
+    )
+    outcomes = runtime_model._build_prior_tool_outcomes(
+        InteractiveState.from_mapping(updated)
+    )
 
-    result = context["last_tool_result"]
-    expected_call_ids = [
-        *(f"tc-running-{index}" for index in range(12)),
-        "tc-terminal",
+    assert outcomes == [
+        {
+            "phase": 0,
+            "status": "completed",
+            "success": True,
+            "calls": [
+                {
+                    "tool": SHELL_UTILITY_TOOL_ID,
+                    "intent": "Start one interactive calculator process.",
+                    "status": "success",
+                    "success": True,
+                    "summary": "Calculator returned all requested values.",
+                    "exit_code": 0,
+                    "key_findings": ["Displayed totals: 7, 42, and 50."],
+                    "process_status": "completed",
+                    "session_status": "closed",
+                }
+            ],
+        }
     ]
-    assert [row["tool_call_id"] for row in result["results"]] == expected_call_ids
-    assert {
-        row["compact_tool_result"]["session_id"]
-        for row in result["results"][:-1]
-    } == {"shs-subagent-long"}
-    terminal = result["results"][-1]["compact_tool_result"]
-    assert terminal["process_status"] == "completed"
-    assert terminal["session_status"] == "closed"
-    assert terminal["exit_code"] == 0
-    assert terminal["input"] == "quit\n"
-    assert terminal["stdout"] == "7\n42\n50\n50\n"
-    assert "tc-running-11" in json.dumps(context)
+    outcome_json = json.dumps(outcomes)
+    assert "tc-running" not in outcome_json
+    assert "progress-" not in outcome_json
+    assert "RAW_START_OUTPUT" not in outcome_json
+    assert "session_id" not in outcome_json
 
     prompt = SubagentRuntimePromptBuilder().build_user_prompt(
         display_name="Pathfinder",
         assignment={"objective": "Complete one interactive calculator session."},
         tool_ids=[SHELL_WRITE_STDIN_TOOL_ID],
-        previous_tool_summary=context,
+        previous_tool_summary=runtime_model._build_previous_tool_context(
+            InteractiveState.from_mapping(updated)
+        ),
+        prior_tool_outcomes=outcomes,
     )
 
-    assert '"tool_call_id": "tc-terminal"' in prompt
+    assert '"tool": "shell.utility"' in prompt
     assert '"process_status": "completed"' in prompt
     assert '"session_status": "closed"' in prompt
+    assert '"session_id": "shs-subagent-long"' in prompt
+    assert '"stdout": "7\\n42\\n50\\n50\\n"' in prompt
     assert '"input": "quit\\n"' in prompt
+    assert "tc-running-11" in prompt
+    assert "Prior Tool Outcomes:" in prompt
+
+
+def test_subagent_tool_outcomes_preserve_mixed_multi_call_batch() -> None:
+    batch_id = "batch-subagent-mixed"
+    register_runtime_compact_evidence(
+        {
+            "tool_batch_id": batch_id,
+            "status": "completed_with_errors",
+            "success": False,
+            "results": [
+                {
+                    "tool_call_id": "tc-success",
+                    "tool_id": FPING_TOOL_ID,
+                    "intent": "Check whether the target responds.",
+                    "status": "success",
+                    "success": True,
+                    "compact_tool_result": {
+                        "summary": "10.0.0.10 responded.",
+                        "key_findings": ["10.0.0.10 is alive."],
+                        "errors": [],
+                    },
+                },
+                {
+                    "tool_call_id": "tc-failed",
+                    "tool_id": NMAP_TOOL_ID,
+                    "intent": "Enumerate exposed services.",
+                    "status": "failed",
+                    "success": False,
+                    "failure_category": "timeout",
+                    "compact_tool_result": {
+                        "summary": "Service enumeration timed out.",
+                        "key_findings": [],
+                        "errors": ["Deadline exceeded."],
+                    },
+                },
+            ],
+            "deferred_followups": ["Retry service enumeration with a longer deadline."],
+        }
+    )
+    interactive = InteractiveState.from_mapping(_generic_state())
+    interactive.facts.metadata["tool_batch_id"] = batch_id
+    interactive.facts.metadata["turn_sequence"] = 1
+    interactive.facts.metadata["working_memory"]["current_turn_phase_turn"] = 1
+
+    updated = record_subagent_observation_and_budget(
+        _pathfinder_definition(),
+        interactive,
+    )
+    outcomes = runtime_model._build_prior_tool_outcomes(
+        InteractiveState.from_mapping(updated)
+    )
+
+    assert outcomes == [
+        {
+            "phase": 0,
+            "status": "completed_with_errors",
+            "success": False,
+            "calls": [
+                {
+                    "tool": FPING_TOOL_ID,
+                    "intent": "Check whether the target responds.",
+                    "status": "success",
+                    "success": True,
+                    "summary": "10.0.0.10 responded.",
+                    "key_findings": ["10.0.0.10 is alive."],
+                },
+                {
+                    "tool": NMAP_TOOL_ID,
+                    "intent": "Enumerate exposed services.",
+                    "status": "failed",
+                    "success": False,
+                    "failure_category": "timeout",
+                    "summary": "Service enumeration timed out.",
+                    "errors": ["Deadline exceeded."],
+                },
+            ],
+            "deferred_followups": [
+                "Retry service enumeration with a longer deadline."
+            ],
+        }
+    ]
+
+
+def test_subagent_tool_outcomes_retain_failed_then_successful_recovery_once() -> None:
+    interactive = InteractiveState.from_mapping(_generic_state())
+    interactive.facts.metadata["turn_sequence"] = 1
+    interactive.facts.metadata["working_memory"]["current_turn_phase_turn"] = 1
+
+    failed_batch_id = "batch-subagent-recovery-failed"
+    register_runtime_compact_evidence(
+        {
+            "tool_batch_id": failed_batch_id,
+            "status": "failed",
+            "success": False,
+            "results": [
+                {
+                    "tool_call_id": "tc-missing-tool",
+                    "tool_id": SHELL_UTILITY_TOOL_ID,
+                    "intent": "Start the required interactive program.",
+                    "status": "failed",
+                    "success": False,
+                    "failure_category": "missing_dependency",
+                    "compact_tool_result": {
+                        "summary": "Command failed with exit code 127.",
+                        "exit_code": 127,
+                        "errors": ["Command exited with code 127."],
+                    },
+                }
+            ],
+        }
+    )
+    interactive.facts.metadata["tool_batch_id"] = failed_batch_id
+    failed_state = record_subagent_observation_and_budget(
+        _pathfinder_definition(),
+        interactive,
+    )
+
+    completed_batch_id = "batch-subagent-recovery-completed"
+    register_runtime_compact_evidence(
+        {
+            "tool_batch_id": completed_batch_id,
+            "status": "completed",
+            "success": True,
+            "results": [
+                {
+                    "tool_call_id": "tc-recovery",
+                    "tool_id": SHELL_UTILITY_TOOL_ID,
+                    "intent": "Resolve the confirmed missing dependency.",
+                    "status": "success",
+                    "success": True,
+                    "compact_tool_result": {
+                        "summary": "Dependency installation completed successfully.",
+                        "exit_code": 0,
+                        "key_findings": ["Installed the required dependency."],
+                        "errors": [],
+                    },
+                }
+            ],
+        }
+    )
+    completed = InteractiveState.from_mapping(failed_state)
+    completed.facts.metadata["tool_batch_id"] = completed_batch_id
+    completed_state = record_subagent_observation_and_budget(
+        _pathfinder_definition(),
+        completed,
+    )
+    replayed_state = record_subagent_observation_and_budget(
+        _pathfinder_definition(),
+        completed_state,
+    )
+    final = InteractiveState.from_mapping(replayed_state)
+    outcomes = runtime_model._build_prior_tool_outcomes(final)
+
+    assert final.facts.iterations == 2
+    assert [outcome["phase"] for outcome in outcomes] == [0, 1]
+    assert outcomes[0]["status"] == "failed"
+    assert outcomes[0]["calls"][0]["failure_category"] == "missing_dependency"
+    assert outcomes[0]["calls"][0]["exit_code"] == 127
+    assert outcomes[1]["status"] == "completed"
+    assert outcomes[1]["calls"][0]["success"] is True
+    assert outcomes[1]["calls"][0]["exit_code"] == 0
+    assert len(iteration_memory.get_ledger(final.facts.metadata)) == 2
+
+
+@pytest.mark.parametrize(
+    "shell_tool_id",
+    [SHELL_UTILITY_TOOL_ID, SHELL_ASSESSMENT_TOOL_ID],
+)
+def test_subagent_tool_outcome_includes_shell_invocation_from_planner_batch(
+    shell_tool_id: str,
+) -> None:
+    batch_id = f"batch-shell-invocation-{shell_tool_id}"
+    register_runtime_compact_evidence(
+        {
+            "tool_batch_id": batch_id,
+            "status": "failed",
+            "success": False,
+            "results": [
+                {
+                    "tool_call_id": "tc-shell-invocation",
+                    "tool_id": shell_tool_id,
+                    "intent": "Start the required program.",
+                    "status": "failed",
+                    "success": False,
+                    "failure_category": "missing_dependency",
+                    "compact_tool_result": {
+                        "summary": "Command failed with exit code 127.",
+                        "exit_code": 127,
+                    },
+                }
+            ],
+        }
+    )
+    interactive = InteractiveState.from_mapping(
+        _generic_state_with_universal_shell_tools()
+    )
+    interactive.facts.metadata["tool_batch_id"] = batch_id
+    interactive.facts.metadata["turn_sequence"] = 1
+    interactive.facts.metadata["working_memory"]["current_turn_phase_turn"] = 1
+    interactive.facts.metadata["planner_plan"] = {
+        "tool_batch": {
+            "tool_calls": [
+                {
+                    "tool_call_id": "tc-shell-invocation",
+                    "tool_id": shell_tool_id,
+                    "parameters": {
+                        "command": "bc",
+                        "cwd": "/workspace",
+                        "interactive": True,
+                        "yield_time_ms": 1000,
+                        "max_runtime_sec": 120,
+                    },
+                    "intent": "Start the required program.",
+                }
+            ]
+        }
+    }
+
+    updated = record_subagent_observation_and_budget(
+        _pathfinder_definition(),
+        interactive,
+    )
+    outcomes = runtime_model._build_prior_tool_outcomes(
+        InteractiveState.from_mapping(updated)
+    )
+
+    assert outcomes[0]["calls"][0]["invocation"] == {
+        "command": "bc",
+        "cwd": "/workspace",
+        "interactive": True,
+    }
 
 
 def test_subagent_parent_handoff_baseline_is_bounded_result_projection() -> None:

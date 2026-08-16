@@ -453,6 +453,31 @@ class MemoryManager:
         return memory
 
     @staticmethod
+    def reduce_phase_ledger_extend_record(
+        previous: Mapping[str, Any] | None,
+        *,
+        turn_sequence: int,
+        phase_sequence: int,
+        sections: list[Mapping[str, str]],
+    ) -> dict[str, Any]:
+        """Append sections to one existing current-turn phase record."""
+        memory = normalize_working_memory(previous)
+        ledger = deepcopy(list(memory.get("current_turn_phases") or []))
+        for record in reversed(ledger):
+            if not isinstance(record, dict):
+                continue
+            if record.get("turn_sequence") != int(turn_sequence):
+                continue
+            if record.get("phase_sequence") != int(phase_sequence):
+                continue
+            existing_sections = list(record.get("sections") or [])
+            existing_sections.extend(deepcopy(sections))
+            record["sections"] = existing_sections
+            break
+        memory["current_turn_phases"] = ledger
+        return memory
+
+    @staticmethod
     def reduce_post_tool_decision(
         previous: Mapping[str, Any] | None,
         active_decision: Mapping[str, Any] | None,

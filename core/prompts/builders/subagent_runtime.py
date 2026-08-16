@@ -93,9 +93,10 @@ class SubagentRuntimePromptBuilder:
         tool_ids: Sequence[str],
         working_memory: Mapping[str, Any] | None = None,
         previous_tool_summary: Mapping[str, Any] | None = None,
+        prior_tool_outcomes: Sequence[Mapping[str, Any]] = (),
         remaining_limits: Mapping[str, Any] | None = None,
     ) -> str:
-        """Return bounded assignment, tool, observation, and limit context."""
+        """Return existing bounded context plus compact cross-phase outcomes."""
 
         objective = str(assignment.get("objective") or "").strip()
         targets = list(assignment.get("targets") or [])
@@ -123,6 +124,7 @@ class SubagentRuntimePromptBuilder:
             previous_tool_summary_json=_to_prompt_json(previous_tool_summary or {}),
             working_memory_json=_to_prompt_json(working_memory or {}),
             assignment_json=_to_prompt_json(assignment),
+            prior_tool_outcomes_json=_to_prompt_json(list(prior_tool_outcomes)),
         )
         return _ensure_trailing_newline(rendered)
 

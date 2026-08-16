@@ -56,7 +56,7 @@ def test_subagent_runtime_system_prompt_uses_versioned_canonical_guidance() -> N
     assert prompt.count("never resend the originating") == 1
 
 
-def test_subagent_runtime_user_prompt_injects_assignment_tools_observations_and_limits() -> None:
+def test_subagent_runtime_user_prompt_preserves_context_and_appends_outcomes() -> None:
     builder = SubagentRuntimePromptBuilder()
     long_observation = "observed-service " * 200
 
@@ -91,6 +91,31 @@ def test_subagent_runtime_user_prompt_injects_assignment_tools_observations_and_
             "findings": ["prior ping sweep found one host"],
             "todos": ["confirm exposed services"],
         },
+        prior_tool_outcomes=[
+            {
+                "phase": 0,
+                "status": "completed_with_errors",
+                "success": False,
+                "calls": [
+                    {
+                        "tool": "information_gathering.network_discovery.fping",
+                        "intent": "Check whether the target responds.",
+                        "status": "success",
+                        "success": True,
+                        "summary": "10.0.0.10 responded",
+                    },
+                    {
+                        "tool": "information_gathering.network_discovery.nmap",
+                        "intent": "Enumerate exposed services.",
+                        "status": "failed",
+                        "success": False,
+                        "failure_category": "timeout",
+                        "summary": "Service enumeration timed out.",
+                        "errors": ["Deadline exceeded."],
+                    },
+                ],
+            }
+        ],
         remaining_limits={
             "completed_iterations": 1,
             "max_iterations": 3,
@@ -107,4 +132,9 @@ def test_subagent_runtime_user_prompt_injects_assignment_tools_observations_and_
     ) in prompt
     assert "Remaining Limits:" in prompt
     assert "Bounded Prior Observations:" in prompt
+    assert "Working memory snapshot" in prompt
+    assert "Assignment:" in prompt
+    assert "Prior Tool Outcomes:" in prompt
+    assert "completed_with_errors" in prompt
     assert "...[truncated]" in prompt
+    assert "runtime_identity" not in prompt

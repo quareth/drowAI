@@ -55,7 +55,7 @@ PHASE_MEMORY_SECTION_HEADING = "## Prior Current-Turn Phase Memory"
 LATEST_PHASE_MEMORY_SECTION_HEADING = "## Latest Current-Turn Phase"
 
 
-PhaseMemorySource = Literal["tool", "ptr", "think_more", "reflect"]
+PhaseMemorySource = Literal["handoff", "tool", "ptr", "think_more", "reflect"]
 
 
 class IterationMemoryRecord(TypedDict, total=False):
@@ -247,7 +247,8 @@ def append(
     Args:
         metadata: Graph metadata dict.
         turn_sequence: Canonical runtime-owned turn ordinal.
-        source: ``"tool"`` for deterministic tool phase records,
+        source: ``"handoff"`` for compact parent tool context,
+            ``"tool"`` for deterministic tool phase records,
             ``"ptr"`` for structured PTR phase memory payloads,
             ``"think_more"`` for think-more phase records, and ``"reflect"``
             for reflection phase records.
@@ -296,6 +297,59 @@ def append(
         if isinstance(stored, dict):
             return stored  # type: ignore[return-value]
     return record  # type: ignore[return-value]
+
+
+def append_sections_to_latest_record(
+    metadata: Dict[str, Any],
+    *,
+    turn_sequence: int,
+    source: PhaseMemorySource,
+    payload: Mapping[str, Any],
+) -> Optional[IterationMemoryRecord]:
+    """Attach sections to the latest matching phase without creating a phase."""
+    sections = _sanitize_sections(payload)
+    if not sections:
+        return None
+
+    matching_record: Optional[IterationMemoryRecord] = None
+    for record in reversed(get_ledger(metadata)):
+        if record.get("turn_sequence") != int(turn_sequence):
+            continue
+        if record.get("source") != source:
+            continue
+        matching_record = record
+        break
+    if matching_record is None:
+        return None
+
+    phase_sequence = matching_record.get("phase_sequence")
+    if not isinstance(phase_sequence, int):
+        return None
+    existing_headings = {
+        section.get("heading")
+        for section in matching_record.get("sections") or []
+        if isinstance(section, Mapping)
+    }
+    new_sections = [
+        section for section in sections if section["heading"] not in existing_headings
+    ]
+    if not new_sections:
+        return matching_record
+
+    working_memory = MemoryManager.reduce_phase_ledger_extend_record(
+        _working_memory_previous(metadata),
+        turn_sequence=int(turn_sequence),
+        phase_sequence=phase_sequence,
+        sections=new_sections,
+    )
+    _replace_working_memory(metadata, working_memory)
+    for record in reversed(get_ledger(metadata)):
+        if (
+            record.get("turn_sequence") == int(turn_sequence)
+            and record.get("phase_sequence") == phase_sequence
+        ):
+            return record
+    return None
 
 
 def has_renderable_sections(payload: Mapping[str, Any]) -> bool:
@@ -421,6 +475,7 @@ __all__ = [
     "PHASE_MEMORY_SECTION_HEADING",
     "IterationMemoryRecord",
     "append",
+    "append_sections_to_latest_record",
     "get_current_turn_scope",
     "get_ledger",
     "has_renderable_sections",
