@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -19,11 +19,34 @@ from runtime_shared.runner_protocol import (
 )
 
 
+def _register_authorized_stream(
+    registry: RunnerTerminalStreamRegistry,
+    *,
+    tenant_id: int,
+    runner_id: UUID,
+    task_id: int,
+    session_id: str,
+) -> None:
+    registry.authorize_stream(
+        tenant_id=tenant_id,
+        runner_id=runner_id,
+        task_id=task_id,
+        session_id=session_id,
+    )
+    assert registry.register_stream(
+        tenant_id=tenant_id,
+        runner_id=runner_id,
+        task_id=task_id,
+        session_id=session_id,
+    )
+
+
 @pytest.mark.asyncio
 async def test_stream_reader_drains_data_before_structured_exec_exit() -> None:
     registry = RunnerTerminalStreamRegistry()
     runner_id = uuid4()
-    registry.register_stream(
+    _register_authorized_stream(
+        registry,
         tenant_id=1,
         runner_id=runner_id,
         task_id=2,
@@ -85,6 +108,12 @@ async def test_stream_frames_arriving_before_consumer_registration_are_retained(
         connection_id="conn-early-frame",
         sender=_sender,
     )
+    registry.authorize_stream(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=2,
+        session_id="session-early-frame",
+    )
     assert registry.append_stream_frame(
         tenant_id=1,
         runner_id=runner_id,
@@ -103,7 +132,7 @@ async def test_stream_frames_arriving_before_consumer_registration_are_retained(
         exit_code=0,
     )
 
-    registry.register_stream(
+    assert registry.register_stream(
         tenant_id=1,
         runner_id=runner_id,
         task_id=2,
@@ -130,6 +159,117 @@ async def test_stream_frames_arriving_before_consumer_registration_are_retained(
     assert terminal.eof is True
     assert terminal.process_status == "completed"
     assert terminal.exit_code == 0
+
+
+def test_connected_runner_cannot_allocate_unknown_stream_buffers() -> None:
+    registry = RunnerTerminalStreamRegistry()
+    runner_id = uuid4()
+
+    async def _sender(_envelope: RunnerEnvelope) -> None:
+        return None
+
+    registry.register_channel(
+        tenant_id=1,
+        runner_id=runner_id,
+        connection_id="conn-untrusted-frames",
+        sender=_sender,
+    )
+    assert not registry.register_stream(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=2,
+        session_id="unknown-consumer",
+    )
+
+    for index in range(100):
+        assert not registry.append_stream_frame(
+            tenant_id=1,
+            runner_id=runner_id,
+            task_id=2,
+            session_id=f"unknown-{index}",
+            data="x" * 1024,
+        )
+
+    assert registry._buffers == {}
+
+
+def test_late_frame_cannot_recreate_unregistered_stream() -> None:
+    registry = RunnerTerminalStreamRegistry()
+    runner_id = uuid4()
+
+    async def _sender(_envelope: RunnerEnvelope) -> None:
+        return None
+
+    registry.register_channel(
+        tenant_id=1,
+        runner_id=runner_id,
+        connection_id="conn-late-frame",
+        sender=_sender,
+    )
+    _register_authorized_stream(
+        registry,
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=2,
+        session_id="closed-session",
+    )
+    registry.unregister_stream(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=2,
+        session_id="closed-session",
+    )
+
+    assert not registry.append_stream_frame(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=2,
+        session_id="closed-session",
+        data="late output",
+    )
+    assert registry._buffers == {}
+
+
+def test_task_cleanup_revokes_pending_and_registered_streams_only_for_task() -> None:
+    registry = RunnerTerminalStreamRegistry()
+    runner_id = uuid4()
+    for task_id, session_id in ((2, "pending"), (2, "registered"), (3, "other")):
+        registry.authorize_stream(
+            tenant_id=1,
+            runner_id=runner_id,
+            task_id=task_id,
+            session_id=session_id,
+        )
+    assert registry.register_stream(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=2,
+        session_id="registered",
+    )
+
+    registry.clear_task(tenant_id=1, task_id=2)
+
+    assert not registry.append_stream_frame(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=2,
+        session_id="pending",
+        data="late pending output",
+    )
+    assert not registry.append_stream_frame(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=2,
+        session_id="registered",
+        data="late registered output",
+    )
+    assert registry.append_stream_frame(
+        tenant_id=1,
+        runner_id=runner_id,
+        task_id=3,
+        session_id="other",
+        data="still active",
+    )
 
 
 def test_stale_channel_unregister_cannot_remove_replacement_route() -> None:
@@ -170,7 +310,8 @@ def test_stale_channel_unregister_cannot_remove_replacement_route() -> None:
 def test_terminal_stream_registry_routes_known_frames_only() -> None:
     registry = RunnerTerminalStreamRegistry()
     runner_id = uuid4()
-    registry.register_stream(
+    _register_authorized_stream(
+        registry,
         tenant_id=1,
         runner_id=runner_id,
         task_id=9,
@@ -212,7 +353,8 @@ def test_terminal_stream_registry_reports_bounded_buffer_loss_once(
     monkeypatch.setattr(stream_registry_module, "_MAX_BUFFER_BYTES", 8)
     registry = RunnerTerminalStreamRegistry()
     runner_id = uuid4()
-    registry.register_stream(
+    _register_authorized_stream(
+        registry,
         tenant_id=1,
         runner_id=runner_id,
         task_id=9,
@@ -268,7 +410,8 @@ def test_terminal_stream_registry_reports_loss_when_no_frame_bytes_remain(
     monkeypatch.setattr(stream_registry_module, "_MAX_BUFFER_BYTES", 2)
     registry = RunnerTerminalStreamRegistry()
     runner_id = uuid4()
-    registry.register_stream(
+    _register_authorized_stream(
+        registry,
         tenant_id=1,
         runner_id=runner_id,
         task_id=9,
@@ -302,7 +445,8 @@ def test_terminal_stream_registry_ingest_has_one_buffered_delivery_path() -> Non
     registry = RunnerTerminalStreamRegistry()
     runner_id = uuid4()
 
-    registry.register_stream(
+    _register_authorized_stream(
+        registry,
         tenant_id=1,
         runner_id=runner_id,
         task_id=9,

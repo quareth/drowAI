@@ -2,14 +2,19 @@
 
 Scope:
 - Ensure task retirement cleanup closes terminal sessions for the retired task.
-- Ensure runner terminal frame buffers are cleared for the retired task only.
+- Ensure runner terminal frame and live-stream buffers are cleared for the retired task only.
 """
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 
 from backend.services.runner_control.terminal_frame_buffer import get_runner_terminal_frame_buffer
+from backend.services.runner_control.terminal_stream_registry import (
+    get_runner_terminal_stream_registry,
+)
 from backend.services.task.retirement_service import TaskRetirementService
 from backend.services.terminal.manager import terminal_session_manager
 from backend.services.terminal.models import TerminalSession
@@ -43,6 +48,8 @@ async def test_cleanup_runtime_stream_state_closes_task_sessions_and_clears_task
 ) -> None:
     frame_buffer = get_runner_terminal_frame_buffer()
     frame_buffer.reset()
+    stream_registry = get_runner_terminal_stream_registry()
+    runner_id = uuid4()
 
     frame_buffer.append_frame(
         tenant_id=10,
@@ -62,6 +69,20 @@ async def test_cleanup_runtime_stream_state_closes_task_sessions_and_clears_task
         stream="stdout",
         data="task-42-output",
     )
+    for task_id, session_id in ((41, "live-session-41"), (42, "live-session-42")):
+        stream_registry.authorize_stream(
+            tenant_id=10,
+            runner_id=runner_id,
+            task_id=task_id,
+            session_id=session_id,
+        )
+        assert stream_registry.append_stream_frame(
+            tenant_id=10,
+            runner_id=runner_id,
+            task_id=task_id,
+            session_id=session_id,
+            data=f"task-{task_id}-live-output",
+        )
 
     terminal_session_manager.sessions["session-task-41"] = TerminalSession(
         session_id="session-task-41",
@@ -109,9 +130,24 @@ async def test_cleanup_runtime_stream_state_closes_task_sessions_and_clears_task
     )
     assert retired_task_frames["frames"] == []
     assert active_task_frames["frames"] != []
+    assert not stream_registry.append_stream_frame(
+        tenant_id=10,
+        runner_id=runner_id,
+        task_id=41,
+        session_id="live-session-41",
+        data="late output",
+    )
+    assert stream_registry.append_stream_frame(
+        tenant_id=10,
+        runner_id=runner_id,
+        task_id=42,
+        session_id="live-session-42",
+        data="still active",
+    )
     assert fake_hub.removed_task_ids == [41]
 
     await terminal_session_manager.close_session("session-task-42")
+    stream_registry.clear_task(tenant_id=10, task_id=42)
     frame_buffer.reset()
 
 

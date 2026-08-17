@@ -191,6 +191,7 @@ class RunnerTerminalStreamRegistry:
     def __init__(self) -> None:
         self._channels: dict[tuple[int, UUID], _ChannelBinding] = {}
         self._buffers: dict[tuple[int, UUID, int, str], _StreamBuffer] = {}
+        self._authorized_streams: set[tuple[int, UUID, int, str]] = set()
         self._lock = RLock()
 
     def register_channel(
@@ -243,9 +244,34 @@ class RunnerTerminalStreamRegistry:
             self._channels.pop(key, None)
             stream_keys = [stream_key for stream_key in self._buffers if stream_key[:2] == key]
             buffers = [self._buffers.pop(stream_key) for stream_key in stream_keys]
+            self._authorized_streams.difference_update(
+                {
+                    stream_key
+                    for stream_key in self._authorized_streams
+                    if stream_key[:2] == key
+                }
+            )
         for buffer in buffers:
             buffer.closed = True
             buffer.event.set()
+
+    def authorize_stream(
+        self,
+        *,
+        tenant_id: int,
+        runner_id: UUID,
+        task_id: int,
+        session_id: str,
+    ) -> None:
+        """Authorize frames after a validated terminal-open result."""
+        key = self._stream_key(
+            tenant_id=tenant_id,
+            runner_id=runner_id,
+            task_id=task_id,
+            session_id=session_id,
+        )
+        with self._lock:
+            self._authorized_streams.add(key)
 
     def register_stream(
         self,
@@ -254,8 +280,8 @@ class RunnerTerminalStreamRegistry:
         runner_id: UUID,
         task_id: int,
         session_id: str,
-    ) -> None:
-        """Create an in-memory stream buffer for a runner terminal session."""
+    ) -> bool:
+        """Attach a consumer only to a stream authorized by terminal open."""
         key = self._stream_key(
             tenant_id=tenant_id,
             runner_id=runner_id,
@@ -263,7 +289,10 @@ class RunnerTerminalStreamRegistry:
             session_id=session_id,
         )
         with self._lock:
+            if key not in self._authorized_streams:
+                return False
             self._buffers.setdefault(key, _StreamBuffer())
+        return True
 
     def unregister_stream(
         self,
@@ -281,8 +310,31 @@ class RunnerTerminalStreamRegistry:
             session_id=session_id,
         )
         with self._lock:
+            self._authorized_streams.discard(key)
             buffer = self._buffers.pop(key, None)
         if buffer is not None:
+            buffer.closed = True
+            buffer.event.set()
+
+    def clear_task(self, *, tenant_id: int, task_id: int) -> None:
+        """Remove all authorized and buffered streams for one task."""
+        scoped_tenant_id = int(tenant_id)
+        scoped_task_id = int(task_id)
+        with self._lock:
+            stream_keys = [
+                key
+                for key in self._buffers
+                if key[0] == scoped_tenant_id and key[2] == scoped_task_id
+            ]
+            buffers = [self._buffers.pop(key) for key in stream_keys]
+            self._authorized_streams.difference_update(
+                {
+                    key
+                    for key in self._authorized_streams
+                    if key[0] == scoped_tenant_id and key[2] == scoped_task_id
+                }
+            )
+        for buffer in buffers:
             buffer.closed = True
             buffer.event.set()
 
@@ -331,10 +383,10 @@ class RunnerTerminalStreamRegistry:
         if len(encoded) > _MAX_FRAME_BYTES:
             return False
         with self._lock:
+            if key not in self._authorized_streams:
+                return False
             buffer = self._buffers.get(key)
             if buffer is None:
-                if (int(tenant_id), runner_id) not in self._channels:
-                    return False
                 buffer = _StreamBuffer()
                 self._buffers[key] = buffer
             if buffer.closed:

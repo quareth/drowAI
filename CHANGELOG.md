@@ -26,6 +26,8 @@ The format is based on
 
 ### Fixed
 
+- Managed-runner terminal streams now reject frames for unknown or closed
+  sessions instead of allocating unbounded backend buffers.
 - Interrupted shell sessions and sessions with terminal transport failures now
   remain controllable until the runtime confirms that the command has exited,
   while commands that ignore Ctrl-C retain their provider-confirmed outcome.

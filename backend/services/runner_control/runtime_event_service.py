@@ -728,6 +728,12 @@ class RuntimeEventService:
                         runtime_job_id=binding_runtime_job_id,
                         session_id=payload.session_id,
                     )
+                    get_runner_terminal_stream_registry().authorize_stream(
+                        tenant_id=tenant_id,
+                        runner_id=runner_id,
+                        task_id=task_id,
+                        session_id=payload.session_id,
+                    )
             if (
                 isinstance(payload, RunnerTerminalResultPayload)
                 and payload.terminal_operation == "close"
@@ -746,6 +752,12 @@ class RuntimeEventService:
                     tenant_id=tenant_id,
                     task_id=task_id,
                     runtime_job_id=binding_runtime_job_id,
+                    session_id=payload.session_id,
+                )
+                get_runner_terminal_stream_registry().unregister_stream(
+                    tenant_id=tenant_id,
+                    runner_id=runner_id,
+                    task_id=task_id,
                     session_id=payload.session_id,
                 )
             if isinstance(payload, RunnerToolResultPayload) and tool_result_promotion is not None:

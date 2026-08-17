@@ -2590,6 +2590,12 @@ def test_cloud_runner_terminal_stream_attacher_attaches_when_channel_is_live() -
                 }
             },
         )
+        registry.authorize_stream(
+            tenant_id=12,
+            runner_id=runner_id,
+            task_id=34,
+            session_id="sess-1",
+        )
 
         updated = attacher._attach_terminal_stream_client(request=request, result=result)
     finally:

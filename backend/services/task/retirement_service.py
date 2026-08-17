@@ -192,6 +192,21 @@ class TaskRetirementService:
                 exc_info=True,
             )
         try:
+            from backend.services.runner_control.terminal_stream_registry import (
+                get_runner_terminal_stream_registry,
+            )
+
+            get_runner_terminal_stream_registry().clear_task(
+                tenant_id=tenant_id,
+                task_id=task_id,
+            )
+        except Exception:
+            logger.debug(
+                "Failed to cleanup terminal stream registry during runtime retirement for task %s",
+                task_id,
+                exc_info=True,
+            )
+        try:
             await get_in_memory_stream_hub().remove_task(task_id)
         except Exception:
             logger.debug(
