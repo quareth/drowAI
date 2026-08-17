@@ -8,7 +8,7 @@ The format is based on
 
 ## [Unreleased]
 
-## [0.4.0] - 2026-08-17
+## [0.4.0] - 2026-08-18
 
 ### Added
 
