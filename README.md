@@ -6,8 +6,8 @@
 
 DrowAI is an active pre-v1 AI agent platform for running task-isolated security
 workflows through a web control plane, LangGraph-based agent orchestration, and
-provider-backed Docker/Kali execution runtimes with general-purpose interactive
-terminal access.
+provider-backed Docker/Kali execution runtimes with agent-controlled shell
+access for one-shot commands and interactive sessions.
 
 The project is public as work in progress. It is functional, but not a polished
 v1 release: setup, deployment packaging, APIs, and documentation may still
@@ -18,7 +18,6 @@ change while the architecture is stabilized.
 - [Website](https://www.drowai.com)
 - [User Guide](https://www.drowai.com/user-guide)
 - [Demos](https://www.drowai.com/videos)
-
 
 ## Why This Exists
 
@@ -37,7 +36,7 @@ AI-assisted development to build it, read
 ## What Is In The Repo
 
 - **Backend control plane:** FastAPI app for auth, tenants, tasks, chat,
-  setup, settings, reporting, runner control, and realtime WebSocket/SSE fanout.
+  setup, settings, reporting, runner control, and real-time WebSocket/SSE fanout.
 - **Frontend:** React + TypeScript UI for operating tasks, streams, artifacts,
   terminals, reports, settings, and setup flows.
 - **Agent runtime:** LangGraph-oriented agent and tool runtime modules under
@@ -55,25 +54,28 @@ Development updates currently live in the [changelog](CHANGELOG.md) and the
 
 ## Tooling Surface
 
-DrowAI provides two overlapping execution surfaces:
+DrowAI gives the agent two complementary ways to work inside a task runtime:
 
-- **Structured assessment tools:** a curated catalog of tools explicitly wired
-  for model planning, parameter validation, normalized result parsing,
-  artifacts, provenance, semantic evidence, and Knowledge integration. See the
-  [LLM-Visible Toolset](docs/tooling/llm-visible-tools.md) and the broader
-  [Complete Registered Toolset](docs/tooling/registered-toolset.md).
-- **Interactive shell:** general-purpose terminal access inside the task's Kali
-  runtime. Through the shell, the agent can invoke installed security tools,
-  utilities, and custom scripts even when they do not have a dedicated DrowAI
-  tool definition.
+- **Structured tools:** curated tool definitions provide dedicated parameter
+  validation, normalized result parsing, artifacts, provenance, semantic
+  evidence, and Knowledge integration.
+- **Full shell capability:** the agent can run one-shot commands or maintain an
+  interactive session inside the task's Kali runtime. It can invoke installed
+  security tools, utilities, and custom scripts even when they do not have a
+  dedicated DrowAI tool definition.
 
-The structured catalog is not a command allowlist. Its purpose is to define
-which tools have dedicated result integration. Assessment-shell runs can retain
-verified output, artifacts, and provenance, but invoking a CLI through the shell
-does not automatically give its output tool-specific parsing, normalized
-Knowledge records, or dedicated visualization in the Knowledge tab.
-Utility-shell output remains transient and is not retained as reusable
-assessment evidence.
+The [LLM-Visible Toolset](docs/tooling/llm-visible-tools.md) lists the
+model-facing identifiers for both surfaces. The
+[Complete Registered Toolset](docs/tooling/registered-toolset.md) records the
+broader code-defined tool registry.
+
+The structured catalog is not a command allowlist and does not limit what the
+shell can run. It defines which tools have dedicated result integration.
+Assessment-shell commands can retain verified output, artifacts, and
+provenance, but invoking a CLI through the shell does not automatically give
+its output tool-specific parsing, normalized Knowledge records, or dedicated
+visualization in the Knowledge tab. Utility-shell output remains transient and
+is not retained as reusable assessment evidence.
 
 The roadmap will expand the structured catalog for mission-critical tools that
 produce meaningful assessment information. It is not intended to add dedicated
@@ -93,7 +95,7 @@ Knowledge integration for every utility or binary available in Kali.
 DrowAI is organized around three planes:
 
 - **Management plane:** FastAPI routers, tenant context, task lifecycle,
-  runner-control, runtime dispatch, setup, settings, and realtime gateways.
+  runner-control, runtime dispatch, setup, settings, and real-time gateways.
 - **Data plane:** relational records, task workspaces, stream packets,
   artifacts, reports, knowledge, and evidence.
 - **Execution plane:** task-local Docker/Kali runtimes selected through the

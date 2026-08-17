@@ -1,17 +1,28 @@
 # LLM-Visible Toolset
 
-This document lists the current tool catalog exposed to model planning and self-selection.
-These are the tools currently completed for LLM use: their argument contracts,
-output parsing, compact result projection, artifact/provenance behavior, and
-canonical Knowledge/evidence paths are wired well enough for the agent to
-reason over their results. The reusable full-wiring contract, including the
-producer-owned semantic envelope and shared Knowledge/compact consumers, is
-defined in `docs/architecture/tools.md` under "Current Tool Completion
-Reference." The list is generated from
-`agent.tools.catalog_visibility.visible_available_tools()` and should be treated
-as the prompt-facing subset, not the complete implemented tool registry.
-Inclusion indicates functional agent wiring; it does not by itself represent
-broad runtime or release certification.
+This document lists the current tool catalog exposed to model planning and
+self-selection. It combines two model-facing surfaces:
+
+- structured tools with dedicated argument contracts, result parsing, compact
+  projection, artifact/provenance behavior, and canonical Knowledge/evidence
+  integration; and
+- universal shell controls for one-shot commands and interactive sessions
+  inside the task's Kali runtime.
+
+The shell controls follow capability-specific persistence rules.
+`shell.utility` and utility-origin `shell.write_stdin` output remain transient;
+`shell.assessment` output is eligible for verified artifacts and provenance.
+Running a CLI through the shell does not automatically provide that CLI's
+tool-specific parsing or normalized Knowledge projection.
+
+The reusable structured-tool wiring contract, including the producer-owned
+semantic envelope and shared Knowledge/compact consumers, is defined in
+`docs/architecture/tools.md` under "Current Tool Completion Reference." The
+list is generated from
+`agent.tools.catalog_visibility.visible_available_tools()` and is the
+prompt-facing subset, not the complete implemented tool registry. Inclusion
+indicates functional agent wiring; it does not by itself represent broad
+runtime or release certification.
 
 Current count: 17 tools.
 

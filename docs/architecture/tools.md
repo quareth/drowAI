@@ -15,13 +15,13 @@ manifest, optionally approved by the user, routed through explicit execution
 lanes, and projected back into graph state, stream events, artifacts, and
 provenance records.
 
-The visible structured catalog and the interactive shell are overlapping but
-different execution surfaces. Structured tools carry dedicated schemas,
+The model-visible surface combines a curated structured-tool catalog with
+universal shell controls. Structured tools carry dedicated schemas,
 producer-owned parsing, compact result semantics, and optional Knowledge
-integration. The universal shell tools allow general commands inside the task's
-Kali runtime, including binaries without a dedicated tool definition; that does
-not automatically give those commands tool-specific parsing or Knowledge
-projection.
+integration. The shell controls provide full Kali command capability for
+one-shot commands and interactive sessions, including binaries without a
+dedicated tool definition; that does not automatically give those commands
+tool-specific parsing or Knowledge projection.
 
 ## Responsibility Boundary
 

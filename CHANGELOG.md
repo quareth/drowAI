@@ -10,19 +10,25 @@ The format is based on
 
 ### Added
 
-- A provider-backed interactive shell capability is now available to main agents
-  and subagents, with exact input, runtime-owned waits, bounded task-isolated
-  output, and lifecycle cleanup for yielded sessions.
+- Main agents and subagents can now run one-shot commands or maintain
+  interactive shell sessions inside their task's Kali runtime, with exact stdin
+  handling, runtime-managed waiting, bounded output, and lifecycle cleanup.
 
 ### Changed
 
 - Shell utility output is transient while shell assessment output remains
-  eligible for durable artifacts, provenance, and knowledge retention.
+  eligible for durable artifacts, provenance, and Knowledge retention.
 - Interactive shell policy now reserves hard blocks for obvious environment
   destruction, shutdown, resource exhaustion, and container escape while
   permitting pentesting workflows in the default permissive mode.
 - The inert `SHELL_EXEC_MAX_COMMAND_CHARS` agent setting has been retired;
   command length alone remains accepted and no replacement limit was added.
+- Tool-output compression now allows up to 4,096 output tokens while preserving
+  downstream context limits.
+- Pathfinder now has nine tool-capable iterations and uses a plain final
+  handoff, improving compatibility after its tool budget is exhausted.
+- Agent and UI terminals now start in the task runtime's `/workspace`
+  directory, and fallback planning retains the complete visible tool catalog.
 
 ### Fixed
 
@@ -32,107 +38,38 @@ The format is based on
   required by the managed runner at startup.
 - The distributed frontend health probe now uses the IPv4 loopback address,
   avoiding false unhealthy status when `localhost` resolves to IPv6.
-- Shell policy validation now interprets continued lines and rejects unsupported
-  nested shell execution before applying hard environment-destruction blocks.
-- Graceful backend shutdown now interrupts active shell sessions and records
-  their terminal lifecycle before discarding terminal handles.
-- Managed-runner terminal streams now reject frames for unknown or closed
-  sessions instead of allocating unbounded backend buffers.
-- Interrupted shell sessions and sessions with terminal transport failures now
-  remain controllable until the runtime confirms that the command has exited,
-  while commands that ignore Ctrl-C retain their provider-confirmed outcome.
-- Live interactive shell cards now retain output emitted as the command completes
-  and reconstruct streamed windows without adding line breaks or stripping
-  meaningful whitespace; completed assessments switch from partial live output
-  to their verified durable transcript.
-- Managed-runner terminal output now preserves multibyte UTF-8 characters across
-  PTY read and terminal-frame boundaries.
-- Main agents and subagents now separate dependent shell stages and verify each
-  prerequisite completes successfully before starting the next command.
-- Shell-session lifecycle status and interaction boundaries now remain intact
-  when runtime results enter agent graph context.
-- Subagents now retain bounded, sanitized phase memory for every transient tool
-  outcome, keeping earlier attempts visible without making raw shell output
-  durable; exit code 127 identifies a missing command dependency without
-  disabling the `shell.utility` capability.
-- Shell commands now run as dedicated Kali exec processes whose local provider
-  or managed runner reports structured completion and exit codes, so banners and
-  partial output cannot trigger duplicate execution or unnecessary interaction
-  reasoning, while the existing tool stream preserves the complete live output
-  through terminal completion.
-- Completed shell assessments now finalize verified artifact references before
-  post-tool reasoning, which uses the exact runtime-reported workspace-relative
-  path for bounded utility-shell reads instead of searching for or rerunning
-  already captured evidence.
-- Free-form shell commands now treat expected tool, target, and port values as
-  advisory during intent validation, preventing false invalid-parameter retries
-  while dedicated tools retain strict parameter matching.
-- Turn activity now shows `Processing result…` after terminal shell output
-  completes and until observation or final-response processing begins, removing
-  an unexplained gap in visible progress.
-- Tool-output compression now allows up to 4,096 output tokens so large
-  structured summaries can complete without removing downstream context caps.
-- Shell assessment transcripts are now created inside the selected Kali runtime,
-  exposed only after provider verification, and never duplicated by the backend;
-  utility shell commands create no artifact.
+- Shell commands now preserve authoritative completion, exit codes, and
+  interaction state across local and managed runtimes, preventing duplicate
+  execution and premature finalization.
+- Interrupted, cancelled, timed-out, and transport-failed shell sessions now
+  remain accurately controllable and visible until the runtime reports their
+  terminal outcome, including during cleanup and backend shutdown.
+- Interactive shell output now preserves final chunks, line breaks, meaningful
+  whitespace, multibyte UTF-8 characters, and legitimate exit-token text across
+  live streaming, completion, refresh, and replay.
+- Shell activity cards now remain correlated with their originating command and
+  show consistent running and terminal states, including `Processing result…`
+  while final reasoning is still underway.
+- Completed shell assessments now expose one provider-verified durable
+  transcript and artifact set, while utility commands remain transient and
+  cleanup preserves eligible evidence.
+- Interactive sessions now respect bounded waits, output limits, global
+  deadlines, runtime identity, and same-session serialization without blocking
+  independent sessions or expiring active work.
+- Main agents and subagents now sequence dependent shell stages, avoid false
+  free-form parameter retries, and reject ambiguous batches that attempt to
+  start multiple live shell sessions.
 - Direct execution now honors valid Pathfinder delegation selected by
-  post-tool reasoning, reusing the existing subagent lifecycle and parent
-  continuation instead of prematurely finalizing the response.
-- Subagents now enable parallel tool calls only when the selected route's
-  effective model profile supports them, allowing sequential-only models to
-  execute the same model-agnostic agent workflow.
-- Shell commands now return on process completion, output availability, or a
-  bounded silent wait, preventing silent interactive programs from remaining
-  attached until their hard runtime limit.
-- Pathfinder now has nine tool-capable iterations and uses plain chat for its
-  required final handoff, avoiding compatible-provider failures after its tool
-  budget is exhausted.
-- Temporary LLM API failures now use provider-neutral retry handling, honor
-  bounded `Retry-After` delays, otherwise retry three times with 1/2/4-second
-  exponential backoff plus jitter, preserve the selected provider identity,
-  and offer checkpoint retry after adapter attempts are exhausted.
-- Interactive shell output now preserves legitimate lines containing the static
-  exit-code token while still removing frame-specific protocol records.
-- Terminal cleanup now preserves durable shell assessment evidence while updating
-  the session's final lifecycle state.
-- Shell session environment inputs now require valid variable names and cannot
-  be interpreted as command-line options during runtime command construction.
-- Oversized interactive shell output now remains bounded in session-decision
-  prompts while preserving the latest output needed for continued interaction.
-- Shell process and interaction deadlines now share one timeout authority and
-  honor the operator-configured global tool maximum.
-- Silent interactive shell reads now yield at the shared 10-second boundary so
-  agents can continue stdin-driven sessions without waiting for process expiry.
-- Shell lifecycle state now remains correlated to one originating tool card
-  through progress, cancellation, completion, refresh, and task-stream replay,
-  with running, terminated, timed-out, and failed states presented consistently.
-- Shell continuation now rejects stale runtime bindings, serializes operations on
-  the same session, preserves concurrency across independent sessions, and keeps
-  quiet polls within the original runtime deadline.
-- Active shell operations now remain exempt from idle-session cleanup while hard
-  runtime deadlines and explicit task cleanup continue to take precedence.
-- Mixed tool batches now attribute yielded shell continuation to the actual
-  running call, and batches with multiple shell-session starts are rejected
-  before dispatch so no live session is silently displaced.
-- Local and managed terminal handling now preserves valid output across buffering,
-  framing loss, invalid UTF-8, zero-yield reads, early runner results, and
-  unexpected PTY closure without duplicating delivery or leaving phantom runs.
-- Unsupported managed-runner cancellation requests now remain visibly pending
-  until the runtime reports a terminal outcome instead of claiming the process
-  was terminated, and shell output retains line separators across yield windows.
-- Durable shell history and graph checkpoints, including planner plans, now mask
-  stdin values; recursive environment destruction remains blocked through
-  transparent wrappers, and mixed utility/assessment batches retain only
-  eligible durable evidence.
-- Agent and UI terminals now start in the task runtime's `/workspace` directory,
-  and fallback planning retains the complete visible mission-tool catalog.
+  post-tool reasoning instead of prematurely finalizing the response.
 - Sequential subagent handoffs now retain parent goal, todo, and reasoning state
   while returning bounded child summaries, and refreshed conversations preserve
   parent, subagent, and observation ordering.
-- Subagent activity no longer treats tool or model-action errors as a failed
-  agent run: invalid actions receive bounded recovery, infrastructure loss is
-  reported as interrupted, and parallel progress remains visible while parent
-  reasoning waits for every sibling to finish.
+- Subagents now retain bounded prior tool outcomes, adapt parallel tool calls to
+  the selected model, recover from invalid actions, and distinguish interrupted
+  infrastructure from failed agent work.
+- Temporary LLM API failures now receive bounded provider-neutral retries while
+  preserving the selected provider and offering checkpoint retry after
+  exhaustion.
 - Local development runners now follow verified launcher ownership, preserve
   shutdown recovery across legacy PID files, and avoid terminating unrelated or
   standalone processes.
@@ -145,6 +82,11 @@ The format is based on
 
 - Updated cryptography, Undici, and PostCSS to patched releases that address
   dependency security advisories.
+- Managed-runner terminal streams now reject data for unknown or closed sessions
+  and keep buffered output bounded.
+- Shell environment inputs require valid variable names, durable history masks
+  stdin values, and destructive commands remain blocked through supported
+  wrappers and continued lines.
 
 ## [0.3.0] - 2026-08-04
 
