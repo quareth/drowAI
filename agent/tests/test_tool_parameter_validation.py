@@ -54,6 +54,32 @@ def test_shell_tools_reject_root_removal_hidden_by_line_continuation(
     )
 
 
+@pytest.mark.parametrize(
+    ("tool_id", "command_field"),
+    [
+        ("shell.exec", "command"),
+        ("shell.utility", "command"),
+        ("shell.assessment", "command"),
+        ("shell.script", "script"),
+    ],
+)
+def test_shell_tools_reject_nested_execution_syntax_before_dispatch(
+    tool_id: str,
+    command_field: str,
+) -> None:
+    result = validate_tool_parameters(
+        tool_id,
+        {command_field: 'echo "$(rm -rf /)"'},
+    )
+
+    assert result.valid is False
+    assert result.reason == "semantic_validation_error"
+    assert any(
+        "nested shell execution syntax" in error["message"]
+        for error in result.validation_errors
+    )
+
+
 def test_shell_script_pipeline_cannot_hide_environment_destruction() -> None:
     result = validate_tool_parameters(
         "shell.script",

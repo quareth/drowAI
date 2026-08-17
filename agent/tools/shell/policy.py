@@ -556,6 +556,51 @@ def _join_shell_line_continuations(raw_text: str) -> str:
     return "".join(normalized)
 
 
+def _find_active_nested_shell_execution(raw_text: str) -> Optional[str]:
+    """Return unsupported executable substitution syntax outside literal quotes."""
+    text = str(raw_text or "")
+    quote: Optional[str] = None
+    index = 0
+    while index < len(text):
+        char = text[index]
+
+        if quote == "single":
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+
+        if char == "\\":
+            index += 2
+            continue
+
+        if quote == "double":
+            if char == '"':
+                quote = None
+                index += 1
+                continue
+            if char == "`":
+                return "backtick command substitution"
+            if text.startswith("$(", index) and not text.startswith("$((", index):
+                return "$() command substitution"
+            index += 1
+            continue
+
+        if char == "'":
+            quote = "single"
+        elif char == '"':
+            quote = "double"
+        elif char == "`":
+            return "backtick command substitution"
+        elif text.startswith("$(", index) and not text.startswith("$((", index):
+            return "$() command substitution"
+        elif char in {"<", ">"} and text[index + 1 : index + 2] == "(":
+            return f"{char}() process substitution"
+        index += 1
+
+    return None
+
+
 def validate_shell_exec_command(
     command: str,
     *,
@@ -564,7 +609,6 @@ def validate_shell_exec_command(
 ) -> List[Dict[str, str]]:
     """Validate shell command text and return error descriptors."""
     validation_errors: List[Dict[str, str]] = []
-    command_text = _join_shell_line_continuations(str(command or ""))
 
     if policy is None:
         policy = CommandPolicy()
@@ -604,10 +648,38 @@ def validate_shell_exec_command(
                     source = f"{source} segment {segment_idx}"
                 _validate_policy_segment(segment, source=source)
 
-    _validate_segments_by_line(command_text, source_prefix="command line")
+    def _validate_shell_text(
+        raw_text: str,
+        *,
+        source_prefix: str,
+        wrapper_depth: int,
+    ) -> None:
+        command_text = _join_shell_line_continuations(raw_text)
+        nested_syntax = _find_active_nested_shell_execution(command_text)
+        if (
+            nested_syntax is not None
+            and policy.enforcement is not PolicyEnforcement.DISABLED
+        ):
+            validation_errors.append(
+                {
+                    "field": "command",
+                    "error": f"Policy violation in {source_prefix}",
+                    "message": (
+                        f"Shell policy violation in {source_prefix}: unsupported "
+                        f"nested shell execution syntax ({nested_syntax})."
+                    ),
+                    "suggested_fix": (
+                        "Use separate shell tool calls instead of command or process "
+                        "substitution. Escape the syntax when it is intended as text."
+                    ),
+                }
+            )
+            return
 
-    wrapped_payload = extract_shell_wrapper_payload(command_text)
-    if wrapped_payload is not None:
+        _validate_segments_by_line(command_text, source_prefix=source_prefix)
+        wrapped_payload = extract_shell_wrapper_payload(command_text)
+        if wrapped_payload is None:
+            return
         payload = wrapped_payload.strip()
         if not payload:
             validation_errors.append(
@@ -618,8 +690,28 @@ def validate_shell_exec_command(
                     "suggested_fix": "Provide a command payload after -c/-lc or use a direct shell command.",
                 }
             )
-        else:
-            _validate_segments_by_line(wrapped_payload, source_prefix="wrapper payload line")
+            return
+        if wrapper_depth >= 16:
+            validation_errors.append(
+                {
+                    "field": "command",
+                    "error": f"Policy violation in {source_prefix}",
+                    "message": "Shell policy violation: wrapper nesting exceeds the supported validation depth.",
+                    "suggested_fix": "Split nested shell wrappers into separate shell tool calls.",
+                }
+            )
+            return
+        _validate_shell_text(
+            wrapped_payload,
+            source_prefix=f"{source_prefix} wrapper payload",
+            wrapper_depth=wrapper_depth + 1,
+        )
+
+    _validate_shell_text(
+        str(command or ""),
+        source_prefix="command line",
+        wrapper_depth=0,
+    )
 
     if any("Policy violation" in err.get("error", "") for err in validation_errors):
         if metric_hook:

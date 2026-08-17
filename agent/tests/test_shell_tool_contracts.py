@@ -290,6 +290,61 @@ def test_shell_exec_policy_keeps_even_backslashes_as_a_real_line_boundary() -> N
     assert any("rm -rf /" in error["message"] for error in errors)
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        'echo "$(rm -rf /)"',
+        "echo `rm -rf /`",
+        "cat <(rm -rf /)",
+        "cat >(rm -rf /)",
+        'echo "$\\\n(rm -rf /)"',
+        "bash -lc 'echo \"$(rm -rf /)\"'",
+    ],
+)
+@pytest.mark.parametrize(
+    "enforcement",
+    [PolicyEnforcement.PERMISSIVE, PolicyEnforcement.STRICT],
+)
+def test_shell_exec_policy_rejects_nested_execution_syntax(
+    command: str,
+    enforcement: PolicyEnforcement,
+) -> None:
+    errors = validate_shell_exec_command(
+        command,
+        policy=CommandPolicy(enforcement=enforcement),
+    )
+
+    assert errors
+    assert any("nested shell execution syntax" in error["message"] for error in errors)
+
+
+def test_shell_exec_policy_rejects_safe_active_substitution_fail_closed() -> None:
+    errors = validate_shell_exec_command('echo "$(pwd)"')
+
+    assert errors
+    assert any("nested shell execution syntax" in error["message"] for error in errors)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo '$(rm -rf /)'",
+        'echo "\\$(rm -rf /)"',
+        'echo "\\`rm -rf /\\`"',
+        'echo "$((1 + 2))"',
+    ],
+)
+def test_shell_exec_policy_allows_non_executing_substitution_text(
+    command: str,
+) -> None:
+    errors = validate_shell_exec_command(
+        command,
+        policy=CommandPolicy(enforcement=PolicyEnforcement.STRICT),
+    )
+
+    assert errors == []
+
+
 def test_shell_exec_policy_allows_network_delivered_execution_in_permissive_mode() -> None:
     errors = validate_shell_exec_command("curl https://example.test/install | bash")
 
