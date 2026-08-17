@@ -834,6 +834,7 @@ def test_running_shell_start_emits_initial_stdout_as_correlated_delta() -> None:
             "interaction_boundary": "output_available",
             "session_id": "shs-initial-output",
             "stdout": initial_stdout,
+            "stdout_ends_with_newline": True,
             "stderr": "",
         },
         summary="Command is still running; new output was received.",
@@ -874,7 +875,8 @@ def test_running_shell_start_emits_initial_stdout_as_correlated_delta() -> None:
     delta = emitted_events[0]
     assert delta["tool_call_id"] == "tc-initial-output"
     assert delta["tool_batch_id"] == "tb-initial-output"
-    assert delta["content"] == initial_stdout.rstrip()
+    assert delta["content"] == initial_stdout
+    assert delta["stdout_ends_with_newline"] is True
     assert delta["interaction_boundary"] == "output_available"
     assert delta["output_persistence"] == "transient"
     assert delta["shell_lifecycle_event"] is True

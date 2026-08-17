@@ -74,6 +74,7 @@ def _shell_update(
     status: ShellSessionStatus = "success",
     exit_code: int | None = None,
     stdin_available: bool = False,
+    stdout_ends_with_newline: bool = False,
     error_code: ShellSessionErrorCode | None = None,
     artifacts: list[str] | None = None,
 ) -> ShellSessionUpdate:
@@ -89,6 +90,7 @@ def _shell_update(
         artifacts=list(artifacts or []),
         exit_code=exit_code,
         stdin_available=stdin_available,
+        stdout_ends_with_newline=stdout_ends_with_newline,
         truncated=False,
         duration_ms=11,
         error_code=error_code,
@@ -616,7 +618,7 @@ def test_terminal_assessment_finalizes_existing_provenance_once(
     assert len(emitted_events) == 1
     assert emitted_events[0]["type"] == "tool_end"
     assert emitted_events[0]["output_persistence"] == "durable"
-    assert emitted_events[0]["content"] == "banner\nresponse body"
+    assert emitted_events[0]["content"] == "banner\nresponse body\n"
     assert emitted_events[0]["compact_tool_result"]["artifact_refs"][0][
         "artifact_id"
     ] == "artifact-assessment-1"
@@ -1464,6 +1466,7 @@ async def test_lifecycle_progress_uses_immutable_origin_after_plan_mutates(
                 session_id="shs_origin",
                 interaction_boundary=ShellInteractionBoundary.OUTPUT_AVAILABLE,
                 stdin_available=True,
+                stdout_ends_with_newline=True,
             ),
             _shell_update(
                 stdout="done\n",
@@ -1472,6 +1475,7 @@ async def test_lifecycle_progress_uses_immutable_origin_after_plan_mutates(
                 session_id=None,
                 interaction_boundary=ShellInteractionBoundary.TERMINAL,
                 exit_code=0,
+                stdout_ends_with_newline=True,
             ),
         ]
     )
@@ -1494,6 +1498,10 @@ async def test_lifecycle_progress_uses_immutable_origin_after_plan_mutates(
 
     assert [event["type"] for event in emitted_events] == ["tool_delta", "tool_end"]
     assert [event["shell_output_chunk"] for event in emitted_events] == [True, True]
+    assert [event["stdout_ends_with_newline"] for event in emitted_events] == [
+        True,
+        True,
+    ]
     assert {event["tool_call_id"] for event in emitted_events} == {"call-origin"}
     assert {event["tool_batch_id"] for event in emitted_events} == {
         "batch-fresh-dispatch"

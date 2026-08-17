@@ -557,6 +557,7 @@ describe("ToolBatchCard", () => {
           interaction_boundary: "output_available",
           output_persistence: "transient",
           shell_lifecycle_event: true,
+          stdout_ends_with_newline: true,
         },
       }),
       makeMsg({
@@ -589,6 +590,7 @@ describe("ToolBatchCard", () => {
           interaction_boundary: "output_available",
           output_persistence: "transient",
           shell_lifecycle_event: true,
+          stdout_ends_with_newline: true,
         },
       }),
       makeMsg({
@@ -648,6 +650,81 @@ describe("ToolBatchCard", () => {
     ).toBe(
       "$ nmap -p 5432 127.0.0.1; bc\nStarting Nmap\n5432/tcp closed\nx\n7\ndone",
     );
+  });
+
+  it("reconstructs partial shell lines without trimming meaningful whitespace", () => {
+    const messages: ChatMessage[] = [
+      makeMsg({
+        id: "shell-start",
+        metadata: {
+          step_type: "tool_start",
+          tool_batch_id: "tb_partial_shell",
+          tool_call_id: "tc_partial_shell",
+          tool_name: "shell.utility",
+          command_display: "printf split",
+        },
+      }),
+      makeMsg({
+        id: "shell-partial-1",
+        content: "foo",
+        metadata: {
+          step_type: "tool_delta",
+          tool_batch_id: "tb_partial_shell",
+          tool_call_id: "tc_partial_shell",
+          tool_name: "shell.utility",
+          status: "success",
+          process_status: "running",
+          session_status: "active",
+          interaction_boundary: "output_available",
+          output_persistence: "transient",
+          shell_lifecycle_event: true,
+          stdout_ends_with_newline: false,
+        },
+      }),
+      makeMsg({
+        id: "shell-partial-2",
+        content: "bar\n  indented",
+        metadata: {
+          step_type: "tool_delta",
+          tool_batch_id: "tb_partial_shell",
+          tool_call_id: "tc_partial_shell",
+          tool_name: "shell.utility",
+          status: "success",
+          process_status: "running",
+          session_status: "active",
+          interaction_boundary: "output_available",
+          output_persistence: "transient",
+          shell_lifecycle_event: true,
+          stdout_ends_with_newline: false,
+        },
+      }),
+      makeMsg({
+        id: "shell-partial-final",
+        content: " value\n",
+        metadata: {
+          step_type: "tool_end",
+          tool_batch_id: "tb_partial_shell",
+          tool_call_id: "tc_partial_shell",
+          tool_name: "shell.utility",
+          status: "success",
+          process_status: "completed",
+          session_status: "closed",
+          interaction_boundary: "terminal",
+          output_persistence: "transient",
+          shell_lifecycle_event: true,
+          shell_output_chunk: true,
+          stdout_ends_with_newline: true,
+        },
+      }),
+    ];
+
+    render(<ToolBatchCard messages={messages} groupKey="partial-shell" taskId={42} />);
+    fireEvent.click(screen.getByRole("button", { name: "Toggle tool output" }));
+
+    expect(
+      screen.getByTestId("tool-batch-card-partial-shell-row-tc_partial_shell-terminal")
+        .textContent,
+    ).toBe("$ printf split\nfoobar\n  indented value\n");
   });
 
   it("renders terminal batch rows when no per-tool events were emitted", () => {

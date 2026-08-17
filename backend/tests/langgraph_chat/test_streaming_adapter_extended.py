@@ -497,6 +497,7 @@ class TestToolEventProcessing:
                 "interaction_boundary": "output_available",
                 "session_id": "shs-progress",
                 "content": "progress line\n",
+                "stdout_ends_with_newline": True,
                 "summary": {"summary": "progress line\n"},
                 "compact_tool_result": {
                     "schema_version": "2.0",
@@ -520,6 +521,7 @@ class TestToolEventProcessing:
         assert result["metadata"]["tool_call_id"] == "call-shell-origin"
         assert result["metadata"]["process_status"] == "running"
         assert result["metadata"]["shell_lifecycle_event"] is True
+        assert result["metadata"]["stdout_ends_with_newline"] is True
         assert result["metadata"]["compact_tool_result"]["summary"] == "progress line\n"
         stored_calls = state_container.get_tool_calls()
         assert len(stored_calls) == 1
@@ -542,6 +544,7 @@ class TestToolEventProcessing:
                 "interaction_boundary": "terminal",
                 "session_id": "shs-progress",
                 "content": "done\n",
+                "stdout_ends_with_newline": True,
                 "summary": {"summary": "done\n"},
                 "output_persistence": "transient",
                 "compact_tool_result": {
@@ -564,6 +567,7 @@ class TestToolEventProcessing:
         assert terminal_result["content"] == "done\n"
         assert terminal_result["metadata"]["shell_lifecycle_event"] is True
         assert terminal_result["metadata"]["shell_output_chunk"] is True
+        assert terminal_result["metadata"]["stdout_ends_with_newline"] is True
         terminal_calls = state_container.get_tool_calls()
         assert len(terminal_calls) == 1
         assert terminal_calls[0]["process_status"] == "completed"

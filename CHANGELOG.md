@@ -26,7 +26,11 @@ The format is based on
 
 ### Fixed
 
-- Live interactive shell cards now retain output emitted as the command completes.
+- Interrupted shell sessions now remain controllable until the runtime confirms
+  that the command has exited.
+- Live interactive shell cards now retain output emitted as the command completes
+  and reconstruct streamed windows without adding line breaks or stripping
+  meaningful whitespace.
 - Main agents and subagents now separate dependent shell stages and verify each
   prerequisite completes successfully before starting the next command.
 - Shell-session lifecycle status and interaction boundaries now remain intact

@@ -805,24 +805,29 @@ def _emit_shell_lifecycle_progress(
         writer = None
     if writer is None:
         return
-    output = "\n".join(
-        part
-        for part in (
-            str(compact.get("stdout") or "").strip(),
-            str(compact.get("stderr") or "").strip(),
-        )
-        if part
-    )
+    stdout = str(compact.get("stdout") or "")
+    stderr = str(compact.get("stderr") or "")
+    output = stdout
+    if stderr:
+        if output and not output.endswith(("\n", "\r")):
+            output += "\n"
+        output += stderr
     has_output_chunk = bool(output)
     if not output:
         output = str(compact.get("summary") or "").strip()
+    output = output[:4000]
+    output_ends_with_newline = (
+        stderr.endswith(("\n", "\r"))
+        if stderr
+        else bool(compact.get("stdout_ends_with_newline"))
+    )
     display_compact = {
         "schema_version": "2.0",
         "tool": tool_id,
         "status": "success" if success else "failed",
         "success": success,
         "exit_code": compact.get("exit_code"),
-        "summary": output[:4000],
+        "summary": output,
         "key_findings": [],
         "errors": [],
         "report_recommendations": [],
@@ -839,6 +844,7 @@ def _emit_shell_lifecycle_progress(
         "session_status": session_status or None,
         "interaction_boundary": boundary or None,
         "session_id": compact.get("session_id"),
+        "stdout_ends_with_newline": output_ends_with_newline,
     }
     masked_display_compact = mask_durable_secrets(
         display_compact,
@@ -866,6 +872,7 @@ def _emit_shell_lifecycle_progress(
             "output_persistence": output_persistence,
             "shell_lifecycle_event": True,
             "shell_output_chunk": has_output_chunk,
+            "stdout_ends_with_newline": output_ends_with_newline,
         }
     )
 

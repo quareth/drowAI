@@ -40,6 +40,15 @@ class _CommandTerminalManager:
         self.reads: dict[str, list[TerminalReadResult]] = {}
         self.counter = 0
         self.fail_read = False
+        self.interrupt_results: list[TerminalReadResult] = [
+            TerminalReadResult(ok=True, data=b"interrupted\n"),
+            TerminalReadResult(
+                ok=True,
+                eof=True,
+                process_status="failed",
+                exit_code=130,
+            ),
+        ]
 
     async def create_agent_command_session(self, **kwargs):
         self.create_calls.append(dict(kwargs))
@@ -115,17 +124,7 @@ class _CommandTerminalManager:
         payload = data.encode() if isinstance(data, str) else data
         self.sent_inputs.append((session_id, payload))
         if payload == b"\x03":
-            self.reads.setdefault(session_id, []).extend(
-                [
-                    TerminalReadResult(ok=True, data=b"interrupted\n"),
-                    TerminalReadResult(
-                        ok=True,
-                        eof=True,
-                        process_status="failed",
-                        exit_code=130,
-                    ),
-                ]
-            )
+            self.reads.setdefault(session_id, []).extend(self.interrupt_results)
         else:
             self.reads.setdefault(session_id, []).extend(
                 [
@@ -413,7 +412,7 @@ async def test_provider_read_failure_closes_with_transport_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_interrupt_maps_exec_exit_to_terminated() -> None:
+async def test_interrupt_waits_for_provider_exit_before_reporting_terminated() -> None:
     manager = _CommandTerminalManager()
     service = _service(manager)
     started = await service.execute(
@@ -421,13 +420,89 @@ async def test_interrupt_maps_exec_exit_to_terminated() -> None:
         request=ShellExecRequest(command="silent-running", yield_time_ms=0),
         capability=ShellCapability.UTILITY,
     )
-    terminal = await service.write_stdin(
+    interrupt_pending = await service.write_stdin(
         identity=_identity(),
         request=ShellWriteRequest(session_id=str(started.session_id), chars="\u0003"),
     )
+
+    assert interrupt_pending.process_status is ShellProcessStatus.RUNNING
+    assert interrupt_pending.session_status is ShellSessionLifecycleStatus.ACTIVE
+    assert (
+        interrupt_pending.interaction_boundary
+        is ShellInteractionBoundary.OUTPUT_AVAILABLE
+    )
+    assert interrupt_pending.session_id == started.session_id
+    assert (
+        interrupt_pending.summary
+        == "Interrupt requested; termination is not yet confirmed."
+    )
+    assert manager.closed_sessions == []
+
+    terminal = await service.wait_for_output(
+        identity=_identity(),
+        request=ShellWaitRequest(session_id=str(started.session_id)),
+    )
     assert terminal.process_status is ShellProcessStatus.TERMINATED
     assert terminal.session_status is ShellSessionLifecycleStatus.CLOSED
+    assert terminal.session_id is None
     assert manager.sent_inputs == [("terminal-1", b"\x03")]
+    assert manager.closed_sessions == ["terminal-1"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("interrupt_results", "expected_stdout", "expected_boundary"),
+    [
+        (
+            [
+                TerminalReadResult(
+                    ok=True,
+                    data=b"caught SIGINT; continuing\n",
+                    process_status="running",
+                )
+            ],
+            "caught SIGINT; continuing\n",
+            ShellInteractionBoundary.OUTPUT_AVAILABLE,
+        ),
+        ([], "", ShellInteractionBoundary.QUIET_BOUNDARY),
+    ],
+)
+async def test_unconfirmed_interrupt_keeps_running_session_available(
+    interrupt_results: list[TerminalReadResult],
+    expected_stdout: str,
+    expected_boundary: ShellInteractionBoundary,
+) -> None:
+    manager = _CommandTerminalManager()
+    manager.interrupt_results = interrupt_results
+    service = _service(manager)
+    started = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(command="silent-running", yield_time_ms=0),
+        capability=ShellCapability.UTILITY,
+    )
+
+    interrupt_pending = await service.write_stdin(
+        identity=_identity(),
+        request=ShellWriteRequest(session_id=str(started.session_id), chars="\u0003"),
+    )
+
+    assert interrupt_pending.process_status is ShellProcessStatus.RUNNING
+    assert interrupt_pending.session_status is ShellSessionLifecycleStatus.ACTIVE
+    assert interrupt_pending.interaction_boundary is expected_boundary
+    assert interrupt_pending.session_id == started.session_id
+    assert interrupt_pending.stdout == expected_stdout
+    assert (
+        interrupt_pending.summary
+        == "Interrupt requested; termination is not yet confirmed."
+    )
+    assert manager.closed_sessions == []
+    assert (
+        await service.get_session_capability(
+            identity=_identity(),
+            public_session_id=str(started.session_id),
+        )
+        is ShellCapability.UTILITY
+    )
 
 
 @pytest.mark.asyncio

@@ -362,7 +362,7 @@ class ShellSessionService:
                     ),
                     max_output_chars=request.max_output_chars,
                     started_at=started_at,
-                    terminate_after_window=True,
+                    interrupt_confirmation_window=True,
                 )
 
             if not await self._send_input_with_deadline(
@@ -561,7 +561,7 @@ class ShellSessionService:
         yield_time_ms: int,
         max_output_chars: int,
         started_at: float,
-        terminate_after_window: bool = False,
+        interrupt_confirmation_window: bool = False,
         allow_initial_quiet_boundary: bool = False,
         return_on_empty_window: bool = True,
         return_on_output_boundary: bool = True,
@@ -721,31 +721,27 @@ class ShellSessionService:
                 output_quiescent_at = self._clock() + quiescence
 
         stdout, truncated = output.stdout()
-        if terminate_after_window:
-            self._observe_process_completed(record, ShellProcessStatus.TERMINATED)
-            await self._remove_and_close_record(
-                record.public_session_id,
-                interrupt=False,
-                expected_record=record,
-                close_reason="interrupted",
-            )
-            artifacts = await self._resolved_terminal_artifacts(record)
+        if interrupt_confirmation_window:
+            await self._registry.release(record)
             return ShellSessionUpdate(
                 success=True,
                 status="success",
-                process_status=ShellProcessStatus.TERMINATED,
-                session_status=ShellSessionLifecycleStatus.CLOSED,
-                interaction_boundary=ShellInteractionBoundary.TERMINAL,
-                session_id=None,
+                process_status=ShellProcessStatus.RUNNING,
+                session_status=ShellSessionLifecycleStatus.ACTIVE,
+                interaction_boundary=(
+                    ShellInteractionBoundary.OUTPUT_AVAILABLE
+                    if stdout
+                    else ShellInteractionBoundary.QUIET_BOUNDARY
+                ),
+                session_id=record.public_session_id,
                 stdout=stdout,
                 stdout_ends_with_newline=output.stdout_ends_with_newline,
                 stderr="",
-                artifacts=artifacts,
                 exit_code=None,
-                stdin_available=False,
+                stdin_available=record.interactive,
                 truncated=truncated,
                 duration_ms=self._duration_ms(started_at),
-                summary="Command was interrupted.",
+                summary="Interrupt requested; termination is not yet confirmed.",
             )
         if return_on_output_boundary and stdout:
             await self._registry.release(record)

@@ -1284,14 +1284,19 @@ def project_trace_history_and_outbound_events(
             and resolved_tool_id in SHELL_SESSION_TOOL_IDS
             and resolved_tool_id != SHELL_WRITE_STDIN_TOOL_ID
         ):
-            initial_output = "\n".join(
-                value.rstrip()
-                for value in (
-                    str(result_for_metadata.get("stdout") or ""),
-                    str(result_for_metadata.get("stderr") or ""),
-                )
-                if value
-            )[:4000]
+            initial_stdout = str(result_for_metadata.get("stdout") or "")
+            initial_stderr = str(result_for_metadata.get("stderr") or "")
+            initial_output = initial_stdout
+            if initial_stderr:
+                if initial_output and not initial_output.endswith(("\n", "\r")):
+                    initial_output += "\n"
+                initial_output += initial_stderr
+            initial_output = initial_output[:4000]
+            output_ends_with_newline = (
+                initial_stderr.endswith(("\n", "\r"))
+                if initial_stderr
+                else bool(result_for_metadata.get("stdout_ends_with_newline"))
+            )
             if initial_output:
                 display_compact = {
                     "schema_version": "2.0",
@@ -1312,6 +1317,7 @@ def project_trace_history_and_outbound_events(
                     "session_status": compact_result_dict.get("session_status"),
                     "interaction_boundary": "output_available",
                     "session_id": compact_result_dict.get("session_id"),
+                    "stdout_ends_with_newline": output_ends_with_newline,
                 }
                 masked_display_compact = _mask_durable_mapping(
                     display_compact,
@@ -1340,6 +1346,7 @@ def project_trace_history_and_outbound_events(
                         "output_persistence": "transient",
                         "shell_lifecycle_event": True,
                         "shell_output_chunk": True,
+                        "stdout_ends_with_newline": output_ends_with_newline,
                         "ind": 1,
                         "step_type": "tool_delta",
                         "turn_sequence": turn_sequence,

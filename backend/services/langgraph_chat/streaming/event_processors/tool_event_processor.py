@@ -207,6 +207,13 @@ class ToolEventProcessor:
         session_id = event.get("session_id")
         if session_id is None and isinstance(compact_tool_result, Mapping):
             session_id = compact_tool_result.get("session_id")
+        stdout_ends_with_newline = event.get("stdout_ends_with_newline")
+        if stdout_ends_with_newline is None and isinstance(
+            compact_tool_result, Mapping
+        ):
+            stdout_ends_with_newline = compact_tool_result.get(
+                "stdout_ends_with_newline"
+            )
         status = event.get("status", "success")
         content = str(event.get("content") or "")
         summary = event.get("summary", {})
@@ -271,6 +278,10 @@ class ToolEventProcessor:
         }
         processed["metadata"]["step_type"] = STEP_TOOL_DELTA
         processed["metadata"]["ind"] = event.get("ind", TOOL_PHASE_INDEX)
+        if stdout_ends_with_newline is not None:
+            processed["metadata"]["stdout_ends_with_newline"] = (
+                stdout_ends_with_newline is True
+            )
         self._metric_inc("langgraph_shell_lifecycle_deltas_processed")
         return processed
 
@@ -302,6 +313,13 @@ class ToolEventProcessor:
         session_id = event.get("session_id")
         if session_id is None and isinstance(compact_tool_result, Mapping):
             session_id = compact_tool_result.get("session_id")
+        stdout_ends_with_newline = event.get("stdout_ends_with_newline")
+        if stdout_ends_with_newline is None and isinstance(
+            compact_tool_result, Mapping
+        ):
+            stdout_ends_with_newline = compact_tool_result.get(
+                "stdout_ends_with_newline"
+            )
         error = event.get("error")
         ind = event.get("ind")
         tool_batch_id = event.get("tool_batch_id")
@@ -453,6 +471,10 @@ class ToolEventProcessor:
             processed["metadata"]["shell_lifecycle_event"] = True
         if is_shell_output_chunk:
             processed["metadata"]["shell_output_chunk"] = True
+            if stdout_ends_with_newline is not None:
+                processed["metadata"]["stdout_ends_with_newline"] = (
+                    stdout_ends_with_newline is True
+                )
         processed["metadata"]["step_type"] = STEP_TOOL_END
         processed["metadata"]["ind"] = ind if ind is not None else TOOL_PHASE_INDEX
 

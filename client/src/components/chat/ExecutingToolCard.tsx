@@ -63,9 +63,9 @@ function formatCompactOutput(
 
 function formatTransientOutput(output: string | undefined, commandDisplay?: string): string {
   const command = String(commandDisplay || "").trim();
-  const body = String(output || "").trim();
+  const body = String(output || "");
   if (!body) return "";
-  return [command ? `$ ${command}` : "", body].filter(Boolean).join("\n");
+  return command ? `$ ${command}\n${body}` : body;
 }
 
 function getUnavailableMessage(reason: ToolRawOutputNotAvailableReason): string {

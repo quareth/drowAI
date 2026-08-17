@@ -44,13 +44,18 @@ interface BatchRowState {
   retryAttempt?: number;
   retryMaxAttempts?: number;
   compactToolResult?: CompactToolResult;
-  shellOutputChunks?: string[];
+  shellOutputChunks?: ShellOutputChunk[];
   /** First-seen index in the message stream — used as a stable order key when
    * the batch_start manifest is absent. */
   firstSeenIndex: number;
   /** Manifest order index from the originating ``tool_batch_start`` event,
    * when present. Takes precedence over ``firstSeenIndex``. */
   manifestIndex?: number;
+}
+
+interface ShellOutputChunk {
+  content: string;
+  endsWithNewline: boolean;
 }
 
 interface BatchAggregate {
@@ -77,6 +82,28 @@ function readNumber(metadata: Record<string, unknown> | undefined, key: string):
     return value;
   }
   return undefined;
+}
+
+function reconstructShellOutput(chunks: ShellOutputChunk[] | undefined): string | undefined {
+  if (!chunks?.length) return undefined;
+
+  let output = "";
+  let previousEndedWithNewline = false;
+  for (const chunk of chunks) {
+    if (
+      output &&
+      previousEndedWithNewline &&
+      !output.endsWith("\n") &&
+      !output.endsWith("\r") &&
+      !chunk.content.startsWith("\n") &&
+      !chunk.content.startsWith("\r")
+    ) {
+      output += "\n";
+    }
+    output += chunk.content;
+    previousEndedWithNewline = chunk.endsWithNewline;
+  }
+  return output;
 }
 
 function buildManifestIndex(messages: ChatMessage[]): Map<string, number> {
@@ -228,9 +255,12 @@ function buildRows(messages: ChatMessage[], manifest: Map<string, number>): Batc
           isShellLifecycle &&
           isShellOutputChunk &&
           typeof msg.content === "string" &&
-          msg.content.trim()
+          msg.content.length > 0
         ) {
-          (row.shellOutputChunks ??= []).push(msg.content.trim());
+          (row.shellOutputChunks ??= []).push({
+            content: msg.content,
+            endsWithNewline: metadata.stdout_ends_with_newline === true,
+          });
         }
         const compact = metadata.compact_tool_result;
         if (
@@ -339,7 +369,7 @@ export function ToolBatchCard({ messages, groupKey, taskId }: ToolBatchCardProps
         retryMaxAttempts={only.retryMaxAttempts}
         compactToolResult={only.compactToolResult}
         commandDisplay={only.commandDisplay}
-        transientOutput={only.shellOutputChunks?.join("\n")}
+        transientOutput={reconstructShellOutput(only.shellOutputChunks)}
       />
     );
   }
@@ -380,7 +410,7 @@ export function ToolBatchCard({ messages, groupKey, taskId }: ToolBatchCardProps
             retryMaxAttempts={row.retryMaxAttempts}
             compactToolResult={row.compactToolResult}
             commandDisplay={row.commandDisplay}
-            transientOutput={row.shellOutputChunks?.join("\n")}
+            transientOutput={reconstructShellOutput(row.shellOutputChunks)}
             layout="batch-row"
           />
         ))}
