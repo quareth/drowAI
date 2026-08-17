@@ -26,8 +26,9 @@ The format is based on
 
 ### Fixed
 
-- Interrupted shell sessions now remain controllable until the runtime confirms
-  that the command has exited.
+- Interrupted shell sessions and sessions with terminal transport failures now
+  remain controllable until the runtime confirms that the command has exited,
+  while commands that ignore Ctrl-C retain their provider-confirmed outcome.
 - Live interactive shell cards now retain output emitted as the command completes
   and reconstruct streamed windows without adding line breaks or stripping
   meaningful whitespace; completed assessments switch from partial live output

@@ -40,6 +40,7 @@ class _CommandTerminalManager:
         self.reads: dict[str, list[TerminalReadResult]] = {}
         self.counter = 0
         self.fail_read = False
+        self.fail_send = False
         self.interrupt_results: list[TerminalReadResult] = [
             TerminalReadResult(ok=True, data=b"interrupted\n"),
             TerminalReadResult(
@@ -123,6 +124,8 @@ class _CommandTerminalManager:
     async def send_input(self, session_id: str, data: bytes | str) -> bool:
         payload = data.encode() if isinstance(data, str) else data
         self.sent_inputs.append((session_id, payload))
+        if self.fail_send:
+            return False
         if payload == b"\x03":
             self.reads.setdefault(session_id, []).extend(self.interrupt_results)
         else:
@@ -398,9 +401,13 @@ async def test_nonzero_exec_exit_is_command_failure_not_transport_failure() -> N
 
 
 @pytest.mark.asyncio
-async def test_provider_read_failure_closes_with_transport_error() -> None:
+@pytest.mark.parametrize("interrupt_succeeds", [True, False])
+async def test_provider_read_failure_requests_interrupt_and_retains_session(
+    interrupt_succeeds: bool,
+) -> None:
     manager = _CommandTerminalManager()
     manager.fail_read = True
+    manager.fail_send = not interrupt_succeeds
     service = _service(manager)
     update = await service.execute(
         identity=_identity(),
@@ -408,7 +415,73 @@ async def test_provider_read_failure_closes_with_transport_error() -> None:
         capability=ShellCapability.UTILITY,
     )
     assert update.error_code is ShellSessionErrorCode.RUNTIME_TRANSPORT_FAILED
+    assert update.process_status is ShellProcessStatus.RUNNING
+    assert update.session_status is ShellSessionLifecycleStatus.ACTIVE
+    assert update.session_id is not None
+    assert manager.sent_inputs == [("terminal-1", b"\x03")]
+    assert manager.closed_sessions == []
+    assert (
+        await service.get_session_capability(
+            identity=_identity(),
+            public_session_id=str(update.session_id),
+        )
+        is ShellCapability.UTILITY
+    )
+
+
+@pytest.mark.asyncio
+async def test_transport_failure_can_confirm_exit_after_provider_recovers() -> None:
+    manager = _CommandTerminalManager()
+    manager.fail_read = True
+    service = _service(manager)
+    failed = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(command="silent-running", yield_time_ms=0),
+        capability=ShellCapability.UTILITY,
+    )
+
+    manager.fail_read = False
+    terminal = await service.wait_for_output(
+        identity=_identity(),
+        request=ShellWaitRequest(session_id=str(failed.session_id)),
+    )
+    terminal = await _drain_terminal(service, terminal)
+
+    assert terminal.process_status is ShellProcessStatus.TERMINATED
+    assert terminal.session_status is ShellSessionLifecycleStatus.CLOSED
+    assert terminal.session_id is None
     assert manager.closed_sessions == ["terminal-1"]
+
+
+@pytest.mark.asyncio
+async def test_stdin_transport_failure_retains_session_after_cancellation_attempt() -> None:
+    manager = _CommandTerminalManager()
+    service = _service(manager)
+    started = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(
+            command="interactive-command",
+            interactive=True,
+            yield_time_ms=0,
+        ),
+        capability=ShellCapability.UTILITY,
+    )
+    manager.fail_send = True
+
+    failed = await service.write_stdin(
+        identity=_identity(),
+        request=ShellWriteRequest(session_id=str(started.session_id), chars="next\n"),
+    )
+
+    assert failed.error_code is ShellSessionErrorCode.RUNTIME_TRANSPORT_FAILED
+    assert failed.process_status is ShellProcessStatus.RUNNING
+    assert failed.session_status is ShellSessionLifecycleStatus.ACTIVE
+    assert failed.session_id == started.session_id
+    assert manager.sent_inputs == [
+        ("terminal-1", b"next\n"),
+        ("terminal-1", b"\x03"),
+    ]
+    assert manager.closed_sessions == []
 
 
 @pytest.mark.asyncio
@@ -503,6 +576,47 @@ async def test_unconfirmed_interrupt_keeps_running_session_available(
         )
         is ShellCapability.UTILITY
     )
+
+
+@pytest.mark.asyncio
+async def test_unconfirmed_interrupt_can_later_complete_normally() -> None:
+    manager = _CommandTerminalManager()
+    manager.interrupt_results = [
+        TerminalReadResult(
+            ok=True,
+            data=b"caught SIGINT; continuing\n",
+            process_status="running",
+        )
+    ]
+    service = _service(manager)
+    started = await service.execute(
+        identity=_identity(),
+        request=ShellExecRequest(command="silent-running", yield_time_ms=0),
+        capability=ShellCapability.UTILITY,
+    )
+
+    interrupt_pending = await service.write_stdin(
+        identity=_identity(),
+        request=ShellWriteRequest(session_id=str(started.session_id), chars="\u0003"),
+    )
+    manager.reads["terminal-1"].append(
+        TerminalReadResult(
+            ok=True,
+            eof=True,
+            process_status="completed",
+            exit_code=0,
+        )
+    )
+    terminal = await service.wait_for_output(
+        identity=_identity(),
+        request=ShellWaitRequest(session_id=str(started.session_id)),
+    )
+
+    assert interrupt_pending.process_status is ShellProcessStatus.RUNNING
+    assert terminal.success is True
+    assert terminal.process_status is ShellProcessStatus.COMPLETED
+    assert terminal.session_status is ShellSessionLifecycleStatus.CLOSED
+    assert terminal.exit_code == 0
 
 
 @pytest.mark.asyncio

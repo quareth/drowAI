@@ -653,17 +653,16 @@ class ShellSessionService:
             if result.eof:
                 stdout, truncated = output.stdout()
                 exit_code = result.exit_code
-                process_status = (
-                    ShellProcessStatus.TERMINATED
-                    if record.interrupt_requested
-                    else ShellProcessStatus.COMPLETED
-                    if result.process_status == "completed" and exit_code == 0
-                    else ShellProcessStatus.TERMINATED
-                    if result.process_status == "terminated"
-                    else ShellProcessStatus.TIMED_OUT
-                    if result.process_status == "timed_out"
-                    else ShellProcessStatus.FAILED
-                )
+                if result.process_status == "completed" and exit_code == 0:
+                    process_status = ShellProcessStatus.COMPLETED
+                elif result.process_status == "terminated":
+                    process_status = ShellProcessStatus.TERMINATED
+                elif result.process_status == "timed_out":
+                    process_status = ShellProcessStatus.TIMED_OUT
+                elif record.interrupt_requested and exit_code == 130:
+                    process_status = ShellProcessStatus.TERMINATED
+                else:
+                    process_status = ShellProcessStatus.FAILED
                 self._observe_process_completed(record, process_status)
                 await self._remove_and_close_record(
                     record.public_session_id,
@@ -892,26 +891,34 @@ class ShellSessionService:
         error_code: ShellSessionErrorCode,
         started_at: float,
     ) -> ShellSessionUpdate:
-        await self._remove_and_close_record(
-            record.public_session_id,
-            interrupt=False,
-            expected_record=record,
-            close_reason="operation_failed",
-        )
+        record.interrupt_requested = True
+        try:
+            await self._send_input_with_deadline(
+                record.terminal_session_id,
+                b"\x03",
+            )
+        except Exception:
+            pass
+        finally:
+            record.last_activity_at = self._clock()
+            await self._registry.release(record)
         self._observer.operation_failed(
             identity=record.identity,
             error_code=error_code,
             public_session_id=record.public_session_id,
         )
-        self._observe_process_completed(record, ShellProcessStatus.FAILED)
-        artifacts = await self._resolved_terminal_artifacts(record)
+        message = _SHELL_SESSION_ERROR_MESSAGES[error_code]
         return self._error_update(
             error_code=error_code,
             duration_ms=self._duration_ms(started_at),
-            process_status=ShellProcessStatus.FAILED,
-            session_status=ShellSessionLifecycleStatus.CLOSED,
-            interaction_boundary=ShellInteractionBoundary.TERMINAL,
-            artifacts=artifacts,
+            process_status=ShellProcessStatus.RUNNING,
+            session_status=ShellSessionLifecycleStatus.ACTIVE,
+            session_id=record.public_session_id,
+            stdin_available=record.interactive,
+            summary=(
+                f"{message} Cancellation was requested; termination is not yet "
+                "confirmed."
+            ),
         )
 
     async def _resolved_terminal_artifacts(
@@ -1128,6 +1135,9 @@ class ShellSessionService:
             ShellSessionLifecycleStatus.UNAVAILABLE
         ),
         interaction_boundary: ShellInteractionBoundary | None = None,
+        session_id: str | None = None,
+        stdin_available: bool = False,
+        summary: str | None = None,
         artifacts: list[str] | None = None,
     ) -> ShellSessionUpdate:
         message = _SHELL_SESSION_ERROR_MESSAGES[error_code]
@@ -1137,15 +1147,15 @@ class ShellSessionService:
             process_status=process_status,
             session_status=session_status,
             interaction_boundary=interaction_boundary,
-            session_id=None,
+            session_id=session_id,
             stdout="",
             stderr=message,
             artifacts=list(artifacts or []),
             exit_code=None,
-            stdin_available=False,
+            stdin_available=stdin_available,
             truncated=False,
             duration_ms=duration_ms,
-            summary=message,
+            summary=summary or message,
             error_code=error_code,
         )
 
