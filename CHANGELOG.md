@@ -26,6 +26,10 @@ The format is based on
 
 ### Fixed
 
+- Distributed runner packages now install the process-inspection dependency
+  required by the managed runner at startup.
+- The distributed frontend health probe now uses the IPv4 loopback address,
+  avoiding false unhealthy status when `localhost` resolves to IPv6.
 - Shell policy validation now interprets continued lines and rejects unsupported
   nested shell execution before applying hard environment-destruction blocks.
 - Graceful backend shutdown now interrupts active shell sessions and records
