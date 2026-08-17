@@ -19,8 +19,9 @@
       "notes": "Phase 3 lifecycle, interrupt, and dashboard scoped matrix passed 9/9 cases across Chromium, Firefox, and WebKit in approximately 3.1 minutes; a per-file duration was not recorded."
     },
     "e2e/tests/interrupt-journey.spec.ts": {
-      "trust_status": "useful-slow",
-      "notes": "Phase 3 lifecycle, interrupt, and dashboard scoped matrix passed 9/9 cases across Chromium, Firefox, and WebKit in approximately 3.1 minutes; a per-file duration was not recorded."
+      "trust_status": "trusted-ci-selection",
+      "duration_seconds": 31.1,
+      "notes": "The deterministic HITL journey is selected by the required e2e-pr-core check and validates approval, rejection, clarification, duplicate-resume rejection, refresh persistence, activity ordering, and task-local interrupt isolation."
     },
     "e2e/tests/dashboard-workspaces.spec.ts": {
       "trust_status": "useful-slow",
