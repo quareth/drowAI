@@ -30,6 +30,14 @@ class _NoopProjector:
         del event
 
 
+class _RecordingProjector:
+    def __init__(self) -> None:
+        self.events: list[ShellSessionTerminalEvent] = []
+
+    async def project_terminal_event(self, event: ShellSessionTerminalEvent) -> None:
+        self.events.append(event)
+
+
 class _CommandTerminalManager:
     """Dedicated-command fake with explicit output and exit events."""
 
@@ -221,15 +229,50 @@ def _service(
     clock=None,
     artifact_exists=None,
     context=None,
+    projector=None,
 ) -> ShellSessionService:
     return ShellSessionService(
         terminal_manager=manager,
-        lifecycle_projector=_NoopProjector(),
+        lifecycle_projector=projector or _NoopProjector(),
         config=_config(),
         runtime_context_resolver=lambda _identity: context or _context(),
         artifact_exists_resolver=artifact_exists,
         clock=clock,
     )
+
+
+@pytest.mark.asyncio
+async def test_stop_interrupts_closes_and_projects_every_active_session_once() -> None:
+    manager = _CommandTerminalManager()
+    projector = _RecordingProjector()
+    service = _service(manager, projector=projector)
+    started = [
+        await service.execute(
+            identity=_identity(),
+            request=ShellExecRequest(command="delayed", yield_time_ms=0),
+            capability=ShellCapability.UTILITY,
+        )
+        for _ in range(2)
+    ]
+    service.start()
+
+    await service.stop()
+    await service.stop()
+
+    assert manager.sent_inputs == [
+        ("terminal-1", b"\x03"),
+        ("terminal-2", b"\x03"),
+    ]
+    assert manager.closed_sessions == ["terminal-1", "terminal-2"]
+    assert [event.close_reason for event in projector.events] == [
+        "service_shutdown",
+        "service_shutdown",
+    ]
+    for update in started:
+        assert await service.get_session_capability(
+            identity=_identity(),
+            public_session_id=str(update.session_id),
+        ) is None
 
 
 async def _drain_terminal(

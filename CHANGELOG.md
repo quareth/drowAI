@@ -26,6 +26,8 @@ The format is based on
 
 ### Fixed
 
+- Graceful backend shutdown now interrupts active shell sessions and records
+  their terminal lifecycle before discarding terminal handles.
 - Managed-runner terminal streams now reject frames for unknown or closed
   sessions instead of allocating unbounded backend buffers.
 - Interrupted shell sessions and sessions with terminal transport failures now

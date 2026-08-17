@@ -192,6 +192,7 @@ def _load_rows(session_factory: Callable[[], Session]) -> list[ChatTurnEvent]:
     [
         ("task_cleanup", "cancelled", "terminated", 1),
         ("owner_cleanup", "cancelled", "terminated", 1),
+        ("service_shutdown", "cancelled", "terminated", 1),
         ("idle_expired", "cancelled", "terminated", 1),
         ("interrupted", "cancelled", "terminated", 1),
         ("deadline_expired", "timeout", "timed_out", 1),

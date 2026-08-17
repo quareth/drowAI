@@ -519,17 +519,23 @@ class ShellSessionService:
             self._cleanup_task = asyncio.create_task(self._cleanup_loop())
 
     async def stop(self) -> None:
-        """Stop process-local stale-session cleanup."""
+        """Stop stale cleanup and interrupt every active logical session."""
         task = self._cleanup_task
-        if task is None:
-            return
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-        finally:
-            self._cleanup_task = None
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self._cleanup_task = None
+
+        records = await self._registry.pop_all()
+        await self._close_records(
+            records,
+            interrupt=True,
+            close_reason="service_shutdown",
+        )
 
     async def cleanup_stale_sessions(self) -> None:
         """Close idle or deadline-expired sessions through the common close path."""

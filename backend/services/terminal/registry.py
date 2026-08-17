@@ -376,6 +376,11 @@ class ShellSessionStateRegistry:
             )
         )
 
+    async def pop_all(self) -> list[ShellSessionRecord]:
+        """Remove every logical shell-session record during service shutdown."""
+
+        return await self._pop_matching(lambda _record: True)
+
     async def pop_stale(
         self,
         now: float,

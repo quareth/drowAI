@@ -40,6 +40,7 @@ _TERMINAL_LIFECYCLE_CLOSE_REASONS = frozenset(
         "interrupted",
         "operation_failed",
         "owner_cleanup",
+        "service_shutdown",
         "task_cleanup",
     }
 )

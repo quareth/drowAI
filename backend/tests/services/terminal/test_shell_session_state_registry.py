@@ -279,3 +279,27 @@ async def test_owner_task_and_stale_selection_remain_tenant_isolated() -> None:
         records[1],
         records[2],
     ]
+
+
+@pytest.mark.asyncio
+async def test_pop_all_atomically_drains_every_logical_session() -> None:
+    registry = _registry(owner_limit=5, task_limit=5)
+    identities = [
+        _identity(tenant_id=1, task_id=2, owner="main:a"),
+        _identity(tenant_id=2, task_id=3, owner="main:b"),
+    ]
+    records: list[ShellSessionRecord] = []
+    for index, identity in enumerate(identities):
+        reservation = await registry.reserve_start(identity)
+        assert reservation is not None
+        record = _record(f"shs_shutdown_{index}", identity=identity)
+        records.append(record)
+        await registry.register(record, reservation=reservation)
+
+    assert await registry.pop_all() == records
+    assert await registry.pop_all() == []
+    for identity, record in zip(identities, records, strict=True):
+        assert await registry.get_capability(
+            identity=identity,
+            public_session_id=record.public_session_id,
+        ) is None
