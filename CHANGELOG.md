@@ -26,6 +26,7 @@ The format is based on
 
 ### Fixed
 
+- Live interactive shell cards now retain output emitted as the command completes.
 - Main agents and subagents now separate dependent shell stages and verify each
   prerequisite completes successfully before starting the next command.
 - Shell-session lifecycle status and interaction boundaries now remain intact

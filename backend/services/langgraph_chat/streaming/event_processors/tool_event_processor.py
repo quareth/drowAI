@@ -368,6 +368,9 @@ class ToolEventProcessor:
                 interaction_boundary=interaction_boundary,
             )
         )
+        is_shell_output_chunk = (
+            is_shell_lifecycle_event and event.get("shell_output_chunk") is True
+        )
 
         if state_container is not None:
             if not parameters and tool_call_id:
@@ -417,7 +420,11 @@ class ToolEventProcessor:
 
         processed: dict[str, Any] = {
             "type": "tool_end",
-            "content": f"Tool {tool} completed ({status})",
+            "content": (
+                str(event.get("content") or "")
+                if is_shell_output_chunk
+                else f"Tool {tool} completed ({status})"
+            ),
             "metadata": {
                 "subtype": "tool_end",
                 "tool": tool,
@@ -444,6 +451,8 @@ class ToolEventProcessor:
         }
         if is_shell_lifecycle_event:
             processed["metadata"]["shell_lifecycle_event"] = True
+        if is_shell_output_chunk:
+            processed["metadata"]["shell_output_chunk"] = True
         processed["metadata"]["step_type"] = STEP_TOOL_END
         processed["metadata"]["ind"] = ind if ind is not None else TOOL_PHASE_INDEX
 

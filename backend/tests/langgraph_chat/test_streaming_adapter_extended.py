@@ -541,6 +541,8 @@ class TestToolEventProcessing:
                 "session_status": "closed",
                 "interaction_boundary": "terminal",
                 "session_id": "shs-progress",
+                "content": "done\n",
+                "summary": {"summary": "done\n"},
                 "output_persistence": "transient",
                 "compact_tool_result": {
                     "schema_version": "2.0",
@@ -554,11 +556,14 @@ class TestToolEventProcessing:
                     "session_id": "shs-progress",
                 },
                 "shell_lifecycle_event": True,
+                "shell_output_chunk": True,
             },
             state_container=state_container,
         )
         assert terminal_result is not None
+        assert terminal_result["content"] == "done\n"
         assert terminal_result["metadata"]["shell_lifecycle_event"] is True
+        assert terminal_result["metadata"]["shell_output_chunk"] is True
         terminal_calls = state_container.get_tool_calls()
         assert len(terminal_calls) == 1
         assert terminal_calls[0]["process_status"] == "completed"
@@ -651,6 +656,8 @@ class TestToolEventProcessing:
         assert result["metadata"]["step_type"] == stream_consts.STEP_TOOL_END
         assert result["metadata"]["ind"] == stream_consts.TOOL_PHASE_INDEX
         assert result["metadata"]["streaming"] is False
+        assert result["content"] == "Tool nmap completed (success)"
+        assert "shell_output_chunk" not in result["metadata"]
     
     def test_adapter_processes_tool_end_with_error(self, adapter):
         """Test adapter processes tool_end with error."""
