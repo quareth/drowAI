@@ -6,14 +6,19 @@ timing helpers without changing the calling methods' retry control flow.
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import random
+
+from core.llm.api_retry import (
+    DEFAULT_API_RETRY_COUNT,
+    INITIAL_API_RETRY_DELAY_SECONDS,
+    retry_after_seconds_from_error,
+    sleep_before_retry,
+)
 
 from ....core.exceptions import LLMAPIError
 
-DEFAULT_RETRY_COUNT = 2
-INITIAL_RETRY_DELAY = 0.5
+DEFAULT_RETRY_COUNT = DEFAULT_API_RETRY_COUNT
+INITIAL_RETRY_DELAY = INITIAL_API_RETRY_DELAY_SECONDS
 
 
 def wrap_api_error(error: Exception) -> LLMAPIError:
@@ -26,6 +31,7 @@ def wrap_api_error(error: Exception) -> LLMAPIError:
         f"OpenAI Responses API error: {error}",
         provider="OpenAI",
         status_code=status_code,
+        retry_after_seconds=retry_after_seconds_from_error(error),
     )
 
 
@@ -46,12 +52,13 @@ async def backoff_sleep(
     logger: logging.Logger,
     attempt: int,
     *,
+    error: LLMAPIError | None = None,
     initial_retry_delay: float = INITIAL_RETRY_DELAY,
 ) -> None:
     """Sleep with exponential backoff and jitter."""
-    delay = initial_retry_delay * (2 ** (attempt - 1))
-    jitter = delay * random.random() * 0.25
-    sleep_duration = delay + jitter
-
-    logger.debug(f"Backing off for {sleep_duration:.2f}s before retry")
-    await asyncio.sleep(sleep_duration)
+    await sleep_before_retry(
+        attempt,
+        error=error,
+        initial_retry_delay=initial_retry_delay,
+        logger=logger,
+    )

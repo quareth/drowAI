@@ -240,12 +240,30 @@ class RunnerOperationService:
             session_name = str(params.get("session_name") or "terminal")
             cols = int(params.get("cols") or 120)
             rows = int(params.get("rows") or 30)
+            command_value = params.get("command")
+            command = (
+                command_value
+                if isinstance(command_value, str) and command_value.strip()
+                else None
+            )
+            cwd = str(params.get("cwd") or "/workspace")
+            raw_env = params.get("env")
+            env = (
+                {str(key): str(value) for key, value in raw_env.items()}
+                if isinstance(raw_env, dict)
+                else {}
+            )
+            interactive = bool(params.get("interactive", command is None))
             return self._response_to_payload(
                 self._terminal_proxy.open_terminal_session(
                     runtime_job_id=runtime_job_id,
                     session_name=session_name,
                     cols=cols,
                     rows=rows,
+                    command=command,
+                    cwd=cwd,
+                    env=env,
+                    interactive=interactive,
                 )
             )
         if operation == "terminal_input":

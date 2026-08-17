@@ -46,3 +46,54 @@ class TerminalSessionSnapshot:
     session_name: str
     runtime_job_id: str | None = None
     container_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TerminalReadResult:
+    """Typed result for provider terminal reads."""
+
+    ok: bool
+    data: bytes = b""
+    error_code: str | None = None
+    truncated: bool = False
+    eof: bool = False
+    process_status: str | None = None
+    exit_code: int | None = None
+
+
+@dataclass(slots=True)
+class DedicatedExecDrainState:
+    """Delay terminal publication briefly while a stopped exec drains its PTY tail."""
+
+    stopped_at: float | None = None
+
+    def observe(
+        self,
+        *,
+        running: bool,
+        socket_eof: bool,
+        exit_code: int | None,
+        now: float,
+        drain_grace_seconds: float,
+    ) -> TerminalReadResult:
+        """Return running until EOF or a stopped exec's bounded drain window closes."""
+        if running:
+            self.stopped_at = None
+            return TerminalReadResult(ok=True, process_status="running")
+        if socket_eof:
+            return self._terminal_result(exit_code)
+        if self.stopped_at is None:
+            self.stopped_at = now
+            return TerminalReadResult(ok=True, process_status="running")
+        if now - self.stopped_at < max(0.0, drain_grace_seconds):
+            return TerminalReadResult(ok=True, process_status="running")
+        return self._terminal_result(exit_code)
+
+    @staticmethod
+    def _terminal_result(exit_code: int | None) -> TerminalReadResult:
+        return TerminalReadResult(
+            ok=True,
+            eof=True,
+            process_status="completed" if exit_code == 0 else "failed",
+            exit_code=exit_code,
+        )

@@ -1,0 +1,6 @@
+Use shell.assessment for commands whose purpose is security assessment,
+including scanning, enumeration, validation, exploitation, credential testing,
+and other security-oriented Kali operations. Do not select it merely because
+the surrounding task is a security assessment; ordinary filesystem and
+operating-system support work belongs to shell.utility. Its output is eligible
+for the existing assessment evidence path.

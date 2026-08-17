@@ -121,6 +121,7 @@ MAX_PRIOR_WORK_ENTRIES = 6  # Recent observations to show as "prior work"
 # -----------------------------------------------------------------------------
 
 MAX_REASONING_TOKENS = 800
+TOOL_OUTPUT_COMPRESSOR_MAX_TOKENS = 4096
 
 
 # -----------------------------------------------------------------------------
@@ -600,6 +601,7 @@ __all__ = [
     "POST_TOOL_MAX_PLAN_CHARS",
     "POST_TOOL_MAX_TODO_CHARS",
     "POST_TOOL_MAX_TODOS_IN_PROMPT",
+    "TOOL_OUTPUT_COMPRESSOR_MAX_TOKENS",
     "POST_TOOL_MAX_DECISION_RATIONALE_CHARS",
     "TOOL_RESULT_SUMMARY_MAX_CHARS",
     "COMPACT_SUMMARY_MAX_CHARS",

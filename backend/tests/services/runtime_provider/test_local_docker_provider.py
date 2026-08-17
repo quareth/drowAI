@@ -41,6 +41,10 @@ class _StubWorkspaceManager:
 
 
 class _StubDockerService:
+    def __init__(self) -> None:
+        self.pty_calls: list[dict[str, object]] = []
+        self.exec_inspection = {"Running": False, "ExitCode": 0}
+
     async def create_and_start_container(
         self,
         task_id: int,
@@ -80,15 +84,31 @@ class _StubDockerService:
     async def execute_container_command(self, task_id: int, command: str):
         return {"status": "succeeded", "output": f"executed:{task_id}:{command}"}
 
-    async def start_persistent_pty(self, task_id: int, shell: str, cols: int, rows: int):
-        return {
-            "accepted": True,
-            "status": "running",
-            "session_id": f"pty-{task_id}",
-            "shell": shell,
-            "cols": cols,
-            "rows": rows,
-        }
+    async def start_persistent_pty(
+        self,
+        task_id: int,
+        shell: str,
+        cols: int,
+        rows: int,
+        **kwargs,
+    ):
+        self.pty_calls.append(
+            {
+                "task_id": task_id,
+                "shell": shell,
+                "cols": cols,
+                "rows": rows,
+                **kwargs,
+            }
+        )
+        return f"exec-{task_id}", object()
+
+    def inspect_exec(self, exec_id: str):
+        del exec_id
+        return dict(self.exec_inspection)
+
+    def get_container_name_by_id(self, task_id: int) -> str:
+        return f"drowai-task-{task_id}"
 
     def build_vpn_connect_exec_shell(self, task_id: int, *, reconnect: bool = False) -> str:
         action = "reconnect-vpn" if reconnect else "connect-vpn"
@@ -382,3 +402,147 @@ def test_terminal_read_output_is_provider_mediated():
     assert result.accepted is True
     assert result.status == RuntimeOperationStatus.SUCCEEDED
     assert result.metadata["delegate_result"]["data"] == b"ready\n"
+
+
+def test_terminal_open_starts_the_dedicated_command_with_runtime_fields():
+    docker = _StubDockerService()
+    provider = LocalDockerRuntimeProvider(
+        docker_service=docker,
+        workspace_manager=_StubWorkspaceManager(),
+    )
+    request = _request(
+        "open_terminal_session",
+        shell="/bin/bash",
+        cols=120,
+        rows=30,
+        command="printf exact",
+        cwd="/workspace/results",
+        env={"APP_MODE": "test"},
+        interactive=False,
+    )
+
+    result = asyncio.run(provider.open_terminal_session(request))
+
+    assert result.accepted is True
+    assert docker.pty_calls == [
+        {
+            "task_id": 123,
+            "shell": "/bin/bash",
+            "cols": 120,
+            "rows": 30,
+            "command": "printf exact",
+            "cwd": "/workspace/results",
+            "env": {"APP_MODE": "test"},
+            "interactive": False,
+        }
+    ]
+    assert result.metadata["delegate_result"]["exec_id"] == "exec-123"
+
+
+def test_terminal_read_reports_authoritative_local_exec_exit():
+    docker = _StubDockerService()
+    provider = LocalDockerRuntimeProvider(
+        docker_service=docker,
+        workspace_manager=_StubWorkspaceManager(),
+    )
+    reader, writer = socket.socketpair()
+    writer.close()
+    try:
+        result = asyncio.run(
+            provider.read_terminal_output(
+                _request(
+                    "read_terminal_output",
+                    socket=reader,
+                    exec_id="exec-123",
+                    size=16,
+                    timeout=0.5,
+                )
+            )
+        )
+    finally:
+        reader.close()
+
+    delegate = result.metadata["delegate_result"]
+    assert delegate["eof"] is True
+    assert delegate["process_status"] == "completed"
+    assert delegate["exit_code"] == 0
+
+
+def test_terminal_read_output_idle_zero_timeout_is_successful_empty_read():
+    provider = LocalDockerRuntimeProvider(
+        docker_service=_StubDockerService(),
+        workspace_manager=_StubWorkspaceManager(),
+    )
+    reader, writer = socket.socketpair()
+    try:
+        request = _request("read_terminal_output", socket=reader, size=16, timeout=0.0)
+
+        result = asyncio.run(provider.read_terminal_output(request))
+    finally:
+        reader.close()
+        writer.close()
+
+    assert result.accepted is True
+    assert result.status == RuntimeOperationStatus.SUCCEEDED
+    assert result.metadata["delegate_result"]["data"] == b""
+    assert result.metadata["delegate_result"]["eof"] is False
+
+
+def test_terminal_read_output_buffered_zero_timeout_reads_immediately():
+    provider = LocalDockerRuntimeProvider(
+        docker_service=_StubDockerService(),
+        workspace_manager=_StubWorkspaceManager(),
+    )
+    reader, writer = socket.socketpair()
+    try:
+        writer.sendall(b"ready\n")
+        request = _request("read_terminal_output", socket=reader, size=16, timeout=0.0)
+
+        result = asyncio.run(provider.read_terminal_output(request))
+    finally:
+        reader.close()
+        writer.close()
+
+    assert result.accepted is True
+    assert result.status == RuntimeOperationStatus.SUCCEEDED
+    assert result.metadata["delegate_result"]["data"] == b"ready\n"
+
+
+def test_terminal_read_output_idle_positive_timeout_is_successful_empty_read():
+    provider = LocalDockerRuntimeProvider(
+        docker_service=_StubDockerService(),
+        workspace_manager=_StubWorkspaceManager(),
+    )
+    reader, writer = socket.socketpair()
+    try:
+        request = _request("read_terminal_output", socket=reader, size=16, timeout=0.01)
+
+        result = asyncio.run(provider.read_terminal_output(request))
+    finally:
+        reader.close()
+        writer.close()
+
+    assert result.accepted is True
+    assert result.status == RuntimeOperationStatus.SUCCEEDED
+    assert result.metadata["delegate_result"]["data"] == b""
+    assert result.metadata["delegate_result"]["eof"] is False
+
+
+def test_terminal_read_output_reports_closed_socket_eof():
+    provider = LocalDockerRuntimeProvider(
+        docker_service=_StubDockerService(),
+        workspace_manager=_StubWorkspaceManager(),
+    )
+    reader, writer = socket.socketpair()
+    writer.close()
+    try:
+        request = _request("read_terminal_output", socket=reader, size=16, timeout=0.5)
+
+        result = asyncio.run(provider.read_terminal_output(request))
+    finally:
+        reader.close()
+
+    assert result.accepted is True
+    assert result.status == RuntimeOperationStatus.SUCCEEDED
+    assert result.metadata["delegate_result"]["data"] == b""
+    assert result.metadata["delegate_result"]["eof"] is True

@@ -686,12 +686,86 @@ def test_cancelled_transcript_projects_cancelled_tool_execution_rows() -> None:
 
     assert [item.kind for item in page.items] == ["assistant", "tool"]
     tool_item = page.items[1]
-    assert tool_item.content == "Tool stopped"
+    assert tool_item.content == "Tool cancellation requested"
     assert tool_item.metadata["tool_call_id"] == "tool-call-stop-1"
     assert tool_item.metadata["tool_name"] == "shell.exec"
-    assert tool_item.metadata["status"] == "cancelled"
+    assert tool_item.metadata["status"] == "cancel_requested"
     assert tool_item.metadata["cancellation_source"] == "chat_stop"
     assert tool_item.metadata["process_state"] == "orphaned_until_terminal"
+    assert "process_status" not in tool_item.metadata
+    assert "session_status" not in tool_item.metadata
+    assert "interaction_boundary" not in tool_item.metadata
+
+
+def test_cancelled_transcript_rehydrates_canonical_terminal_tool_event() -> None:
+    conv_id = "conv-canonical-cancelled-tool"
+    turn_id = "task-12-turn-16"
+    assistant_message = _make_message(
+        message_id=89,
+        task_id=12,
+        conversation_id=conv_id,
+        turn_number=16,
+        message_type="assistant",
+        message="[Stopped]",
+    )
+    workflow = _build_workflow_mock(
+        reserved_message_id=89,
+        state="FAILED",
+        graph_name="simple_tool",
+        turn_id=turn_id,
+        turn_sequence=16,
+        workflow_metadata={
+            "error": "run_cancelled",
+            "terminal_status": "cancelled",
+            "cancel_requested": True,
+        },
+    )
+    canonical_event = _make_turn_event(
+        chat_message_id=89,
+        phase_sequence=4,
+        kind="tool",
+        content="Tool stopped",
+        tool_call_id="tool-call-stop-canonical",
+        event_metadata={
+            "tool_name": "shell.exec",
+            "sequence": 44,
+            "status": "cancelled",
+            "process_status": "terminated",
+            "session_status": "closed",
+            "interaction_boundary": "terminal",
+            "session_id": "cmd-stop-canonical",
+            "lifecycle_event": "shell_session_terminal",
+            "cancellation_source": "chat_stop",
+            "process_state": "cancel_requested",
+        },
+    )
+    db = Mock()
+    db.execute.side_effect = [
+        _make_scalar_execute_result([16]),
+        _make_message_execute_result([assistant_message]),
+        _make_scalar_execute_result([canonical_event]),
+        _make_scalar_execute_result([workflow]),
+        _make_scalar_execute_result([]),
+    ]
+
+    page = ChatTranscriptQueryService(db).list_latest_transcript_page(
+        task_id=12,
+        requested_conversation_id=conv_id,
+        limit=10,
+    )
+
+    assert [item.kind for item in page.items] == ["assistant", "tool"]
+    tool_item = page.items[1]
+    assert tool_item.content == "Tool stopped"
+    assert tool_item.metadata["sequence"] == 44
+    assert tool_item.metadata["phase_sequence"] == 4
+    assert tool_item.metadata["sequence_authority"] == "task_stream"
+    assert tool_item.metadata["tool_call_id"] == "tool-call-stop-canonical"
+    assert tool_item.metadata["status"] == "cancelled"
+    assert tool_item.metadata["session_status"] == "closed"
+    assert tool_item.metadata["process_status"] == "terminated"
+    assert tool_item.metadata["interaction_boundary"] == "terminal"
+    assert tool_item.metadata["process_state"] == "cancel_requested"
 
 
 def test_list_latest_transcript_page_failed_retryable_workflow_hides_cta_when_checkpoint_id_missing() -> None:

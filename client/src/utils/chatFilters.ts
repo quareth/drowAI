@@ -25,15 +25,14 @@ export function filterChatMessages(messages: ChatMessage[]): ChatMessage[] {
       return false;
     }
     
-    // Filter out only tool_delta (progress updates that just replace tool_start)
     if (stepType === "tool_delta") {
-      return false;
+      return metadata.shell_lifecycle_event === true;
     }
     
     // Check if this is a special event type first (tool/reasoning events)
     const isSpecialEvent = 
       stepType === "reasoning_start" || stepType === "reasoning_delta" || stepType === "reasoning_section_end" ||
-      stepType === "tool_start" || stepType === "tool_end" || stepType === "tool_progress" ||
+      stepType === "tool_start" || stepType === "tool_delta" || stepType === "tool_end" || stepType === "tool_progress" ||
       stepType === "observation_start" || stepType === "observation_delta" || stepType === "observation_section_end";
     
     if (isSpecialEvent) {
@@ -53,5 +52,4 @@ export function filterChatMessages(messages: ChatMessage[]): ChatMessage[] {
     return m.type === "user" || m.type === "agent" || m.type === "system";
   });
 }
-
 

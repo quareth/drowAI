@@ -102,17 +102,17 @@ def build_completed_entry(
     )
 
 
-def build_failed_entry(
+def build_interrupted_entry(
     entry: LocalAgentRun,
     *,
     safe_error: str,
     completed_at: datetime,
 ) -> LocalAgentRun:
-    """Return the failed terminal snapshot and fallback result."""
+    """Return an infrastructure-interrupted snapshot without a fake result."""
 
     return build_terminal_entry(
         entry,
-        status="failed",
+        status="interrupted",
         completed_at=completed_at,
         safe_error=safe_error,
     )
@@ -146,7 +146,7 @@ def build_terminal_entry(
     """Return a terminal snapshot using the registry's current semantics."""
 
     terminal_result = result
-    if terminal_result is None and status in {"failed", "cancelled"}:
+    if terminal_result is None and status == "cancelled":
         terminal_result = fallback_terminal_result(
             entry,
             status=status,
@@ -178,15 +178,9 @@ def fallback_terminal_result(
     status: AgentRunStatus,
     safe_error: str | None,
 ) -> AgentResult:
-    """Return the current fallback result for failed and cancelled snapshots."""
+    """Return the current fallback result for cancelled snapshots."""
 
-    if status == "failed":
-        summary = f"Subagent run failed: {safe_error or 'Subagent worker failed'}"
-        limitations = (safe_error or "Subagent worker failed",)
-        recommended_next_steps = (
-            "Review the failure and decide whether a new bounded assignment is needed.",
-        )
-    elif status == "cancelled":
+    if status == "cancelled":
         summary = "Subagent run was cancelled before completing its assignment."
         limitations = ("Subagent run was cancelled.",)
         recommended_next_steps = (
@@ -194,7 +188,7 @@ def fallback_terminal_result(
         )
     else:
         raise ValueError(
-            f"fallback result is only supported for terminal status: {status}"
+            f"fallback result is only supported for cancelled status: {status}"
         )
     return AgentResult(
         agent_run_id=entry.agent_run_id,
@@ -211,7 +205,7 @@ __all__ = [
     "build_cancelled_entry",
     "build_cancellation_requested_entry",
     "build_completed_entry",
-    "build_failed_entry",
+    "build_interrupted_entry",
     "build_queued_entry",
     "build_running_entry",
     "build_terminal_entry",

@@ -374,6 +374,44 @@ class TestPtrCandidateDecisionBinding:
         assert outcome["reason"] == "candidate_decision_accepted"
         assert outcome["resolution_source"] == "candidate"
 
+    @pytest.mark.asyncio
+    async def test_transient_evidence_delegation_uses_published_ptr_phase(self) -> None:
+        """Delegation retains its handoff when no phase ledger is persisted."""
+        state = _make_state(
+            {
+                "turn_sequence": 7,
+                "current_ptr_phase_sequence": 0,
+                "runtime_budgets": {
+                    "remaining_iterations": 8,
+                    "remaining_tool_calls": 4,
+                },
+            }
+        )
+        output = PostToolReasoningOutput(
+            observation="The remaining work requires a stateful subagent session.",
+            next_action="delegate_subagent",
+            action_reasoning="Delegate the bounded interactive work to Pathfinder.",
+            agent_handoff={
+                "agent_handoff": "required",
+                "subagent": "pathfinder",
+                "objective": "Complete the remaining interactive shell sequence.",
+            },
+        )
+
+        # Runtime-only evidence skips record_observation/phase-ledger persistence.
+        record_decision(state, output)
+
+        assert get_ledger(state.facts.metadata) == []
+        routed = await decision_router(state.as_graph_state())
+        outcome = routed["facts"]["metadata"]["router_outcome"]
+        assert outcome["action"] == "delegate_subagent"
+        assert outcome["reason"] == "candidate_decision_accepted"
+        assert outcome["agent_handoff"] == {
+            "agent_handoff": "required",
+            "subagent": "pathfinder",
+            "objective": "Complete the remaining interactive shell sequence.",
+        }
+
 
 # ---------------------------------------------------------------------------
 # Compatibility writes continue unchanged

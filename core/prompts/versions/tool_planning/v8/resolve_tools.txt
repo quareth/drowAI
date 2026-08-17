@@ -1,0 +1,12 @@
+Conversation (oldest -> newest, act on the turn tagged latest=true):
+{conversation_history}
+
+Task Details:
+- Target: {target}
+- Phase: {phase}
+- Constraints: {constraints}
+- Relevant Prior Findings: {relevant_findings_count} items
+{relevant_findings}
+
+Based on the latest user turn in the conversation above, call resolve_tools with the appropriate capability to discover available tools.
+Consider what the user actually wants to accomplish, not hardcoded action types.

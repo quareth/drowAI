@@ -119,25 +119,29 @@ def build_deep_reasoning_graph(*, checkpointer=None) -> StateGraph:
     - decision_router: Route to next action (think/tool/reflect/synthesis/finalize)
     - think_more: Pure reasoning node
     - select_categories: LLM selects relevant tool categories (before tool execution)
-    - call_tool: Execute tool with category-filtered catalog
-    - tool_synthesizer: Process tool output with LLM (extract structured findings)
-    - post_tool_reasoning: Unified observation + decision (replaces observation_articulation)
+    - approval_gate + dispatch_tool: Existing ordinary execution boundary
+    - tool_execution_session: Continue an actually running execution to terminal state
+    - post_tool_reasoning: Terminal-outcome observation + decision
     - observation_adapter: Convert findings to compact observations for agent
     - reflect: Failure analysis and replanning
     - synthesis: Graceful loop termination when stuck (triggered by consecutive reflects)
     - finalize: Synthesize final answer
     
-    Tool Execution Flow (NEW - unified reasoning):
-    select_categories → call_tool → tool_synthesizer → post_tool_reasoning → 
-    observation_adapter → decision_router → [router_outcome.action dispatch]
+    Tool Execution Flow:
+    select_categories → approval_gate → dispatch_tool →
+      ordinary: tool_synthesizer → post_tool_reasoning
+      running: tool_execution_session → terminal_session_compressor →
+               tool_synthesizer → post_tool_reasoning
+    → observation_adapter → decision_router → [router_outcome.action dispatch]
     
     This ensures:
     1. Relevant tool categories are selected first (focused tool selection)
-    2. Tool outputs are processed into structured findings
-    3. post_tool_reasoning produces observation + decision in ONE LLM call
-    4. What the observation says = what actually happens next
-    5. Observations flow to adapter for dedup/progress tracking
-    6. Routing happens via deterministic router authority, not builder-local parsing
+    2. Completed ordinary tools retain the established direct processing path
+    3. Running executions alone enter the continuation session boundary
+    4. post_tool_reasoning assesses terminal outcomes in one LLM call
+    5. What the observation says = what actually happens next
+    6. Observations flow to adapter for dedup/progress tracking
+    7. Routing happens via deterministic router authority, not builder-local parsing
     
     The decision_router handles both non-tool and post-tool route authority paths.
     """
@@ -155,12 +159,19 @@ def build_deep_reasoning_graph(*, checkpointer=None) -> StateGraph:
     from ..nodes.reflect import reflect_node
     from ..nodes.select_tool_categories import select_tool_categories_node
     from ..nodes.synthesis import synthesis_node
+    from ..nodes.terminal_session_compressor import (
+        compress_terminal_execution_session_output,
+    )
     from ..nodes.think_more import think_more_node
     from ..nodes.tool_synthesizer import synthesize_tool_output
     from ..subgraphs.tool_execution import (
         approval_gate_node,
         dispatch_tool_execution_node,
         prepare_tool_execution_plan,
+    )
+    from ..subgraphs.tool_execution_session import (
+        build_tool_execution_session_subgraph,
+        route_after_tool_dispatch,
     )
     
     graph = StateGraph(dict)
@@ -258,6 +269,20 @@ def build_deep_reasoning_graph(*, checkpointer=None) -> StateGraph:
         wrap_with_context_async(
             dispatch_tool_execution_node,
             node_name="dispatch_tool",
+            on_wrap_log=_log_node_wrapper_context,
+        ),
+    )
+    graph.add_node(
+        "tool_execution_session",
+        build_tool_execution_session_subgraph(
+            on_wrap_log=_log_node_wrapper_context,
+        ),
+    )
+    graph.add_node(
+        "terminal_session_compressor",
+        wrap_with_context_async(
+            compress_terminal_execution_session_output,
+            node_name="terminal_session_compressor",
             on_wrap_log=_log_node_wrapper_context,
         ),
     )
@@ -395,12 +420,12 @@ def build_deep_reasoning_graph(*, checkpointer=None) -> StateGraph:
     # think_more enriches state and returns to PTR for the next candidate.
     graph.add_edge("think_more", "post_tool_reasoning")
     
-    # Tool execution flow (NEW - with unified post_tool_reasoning):
-    # select_categories → call_tool → tool_synthesizer → post_tool_reasoning → 
-    # observation_adapter → [conditional routing based on decision]
+    # Tool execution flow:
+    # select_categories → prepare_tool_plan → approval → dispatch
+    #   → ordinary synthesis, or running-session continuation/compression
+    #   → post_tool_reasoning → observation_adapter
     #
-    # Key change: post_tool_reasoning produces BOTH observation AND decision in one LLM call.
-    # This guarantees: what observation says = what actually happens.
+    # PTR produces both the observation and decision only after execution ends.
     graph.add_edge("select_categories", "prepare_tool_plan")
     conditional(
         "prepare_tool_plan",
@@ -411,7 +436,16 @@ def build_deep_reasoning_graph(*, checkpointer=None) -> StateGraph:
         },
     )
     graph.add_edge("approval_gate", "dispatch_tool")
-    graph.add_edge("dispatch_tool", "tool_synthesizer")
+    conditional(
+        "dispatch_tool",
+        with_interactive_state(route_after_tool_dispatch),
+        {
+            "execution_session": "tool_execution_session",
+            "terminal": "tool_synthesizer",
+        },
+    )
+    graph.add_edge("tool_execution_session", "terminal_session_compressor")
+    graph.add_edge("terminal_session_compressor", "tool_synthesizer")
     graph.add_edge("tool_synthesizer", "post_tool_reasoning")
     graph.add_edge("post_tool_reasoning", "observation_adapter")
     

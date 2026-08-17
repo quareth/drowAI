@@ -192,6 +192,7 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
         reasoning_effort: str | None = None,
         model_profile: ModelProfile | None = None,
         inference_transport: AsyncLLMInferenceTransport | None = None,
+        provider_id: str = "OpenAI-compatible",
     ) -> None:
         validated_base_url = _validate_base_url(
             base_url,
@@ -214,6 +215,7 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
             dialect_policy=dialect_policy,
         )
         request_policy = resolve_compatible_request_policy(request_policy_id)
+        provider_name = _validate_provider_id(provider_id)
 
         if inference_transport is not None:
             sdk_client = _GuardedCompatibleSDKClient(inference_transport)
@@ -237,6 +239,7 @@ class OpenAICompatibleChatClient(OpenAIChatClient):
         self._dialect_policy = dialect_policy
         self._default_reasoning_effort = default_reasoning_effort
         self._model_profile = model_profile
+        self._provider_name = provider_name
 
     async def chat(
         self,
@@ -643,6 +646,17 @@ def _validate_wire_model_id(wire_model_id: str) -> str:
             provider="OpenAI-compatible",
         )
     return wire_model_id
+
+
+def _validate_provider_id(provider_id: str) -> str:
+    """Return the selected provider identity used in normalized failures."""
+
+    if not isinstance(provider_id, str) or not provider_id.strip():
+        raise LLMConfigurationError(
+            "provider_id must be non-empty",
+            provider="OpenAI-compatible",
+        )
+    return provider_id.strip()
 
 
 def _validate_default_reasoning_effort(

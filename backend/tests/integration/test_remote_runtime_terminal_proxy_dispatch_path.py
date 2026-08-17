@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID
@@ -32,40 +33,143 @@ from backend.services.runner_control.dispatcher import (
 from backend.services.runtime_provider.cloud_runner_provider import CloudRunnerRuntimeProvider
 from backend.services.runtime_provider.contracts import (
     RuntimeActorType,
+    RuntimeCallScope,
     RuntimeOperationRequest,
     RuntimePlacementMode,
 )
+from backend.services.runtime_provider.operations import RuntimeOperationService
+from backend.services.runtime_provider.registry import RuntimeProviderRegistry
+from backend.services.runner_control.terminal_stream_registry import (
+    get_runner_terminal_stream_registry,
+)
+from backend.services.terminal import manager as terminal_manager_module
+from backend.services.terminal.manager import TerminalSessionManager
+from backend.services.terminal.shell_session_service import (
+    ShellSessionService,
+    ShellSessionServiceConfig,
+)
+from backend.tests.test_shell_session_service import _NoopProjector
 from drowai_runner.cloud_client import RunnerCloudClient
 from drowai_runner.config import RunnerConfig
 from drowai_runner.control_channel.identity.models import CloudChannelIdentity
 from drowai_runner.control_channel.session.state import ConnectionSessionState
 from drowai_runner.job_store import initialize_runner_job_store
 from drowai_runner.terminal_proxy import RunnerTerminalProxy
+from runtime_shared.shell_session_contracts import (
+    ShellExecRequest,
+    ShellProcessStatus,
+    ShellSessionIdentity,
+    ShellWaitRequest,
+    ShellWriteRequest,
+)
 from runtime_shared.runner_protocol import parse_runner_envelope_json
+from runtime_shared.terminal_contracts import TerminalReadResult
 
 
 class _RecordingPtyAdapter:
     def __init__(self) -> None:
         self.open_calls: list[tuple[str, str, int, int]] = []
+        self.command_calls: list[dict[str, object]] = []
         self.input_calls: list[tuple[str, str]] = []
         self.resize_calls: list[tuple[str, int, int]] = []
         self.close_calls: list[str] = []
         self._buffers: dict[str, bytearray] = {}
+        self._read_chunk_sizes: dict[str, list[int]] = {}
+        self._terminal_exit_codes: dict[str, int] = {}
+        self._interactive_sessions: set[str] = set()
+        self.split_read_count = 0
+        self.ctrl_c_writes = 0
 
-    def open_session(self, *, container_id: str, session_id: str, cols: int, rows: int) -> None:
+    def open_session(
+        self,
+        *,
+        container_id: str,
+        session_id: str,
+        cols: int,
+        rows: int,
+        command: str | None = None,
+        cwd: str = "/workspace",
+        env=None,
+        interactive: bool = True,
+    ) -> None:
         self.open_calls.append((container_id, session_id, cols, rows))
-        self._buffers[session_id] = bytearray(b"runner$ ")
+        self._buffers[session_id] = bytearray()
+        if command is None:
+            self._buffers[session_id].extend(b"__DROWAI_PROMPT__> ")
+            self._interactive_sessions.add(session_id)
+            return
+        self.command_calls.append(
+            {
+                "session_id": session_id,
+                "command": command,
+                "cwd": cwd,
+                "env": dict(env or {}),
+                "interactive": interactive,
+            }
+        )
+        if interactive:
+            self._interactive_sessions.add(session_id)
+        if "printf quick" in command:
+            self._buffers[session_id].extend(b"quick\n")
+            self._terminal_exit_codes[session_id] = 0
+        elif "delayed-managed" in command:
+            self._buffers[session_id].extend(b"started\n")
+        elif "interactive-managed" in command:
+            pass
+        elif "split-managed" in command:
+            self._buffers[session_id].extend(b"split managed\n")
+            self._read_chunk_sizes[session_id] = [1, 2, 3, 5, 8, 13, 21, 34]
+            self._terminal_exit_codes[session_id] = 0
+        else:
+            self._terminal_exit_codes[session_id] = 0
 
     def send_input(self, *, session_id: str, data: str) -> None:
         self.input_calls.append((session_id, data))
-        self._buffers.setdefault(session_id, bytearray()).extend(data.encode("utf-8"))
+        buffer = self._buffers.setdefault(session_id, bytearray())
+        payload = data.encode("utf-8")
+        if data == "\x03":
+            self.ctrl_c_writes += 1
+            buffer.extend(b"managed interrupted\n")
+            self._terminal_exit_codes[session_id] = 130
+            return
+        if session_id in self._interactive_sessions and self.command_calls:
+            buffer.extend(b"managed answer:" + payload)
+            self._terminal_exit_codes[session_id] = 0
+        else:
+            buffer.extend(payload)
 
     def read_output(self, *, session_id: str, max_bytes: int) -> bytes:
+        return self.read_output_result(
+            session_id=session_id,
+            max_bytes=max_bytes,
+        ).data
+
+    def read_output_result(
+        self,
+        *,
+        session_id: str,
+        max_bytes: int,
+    ) -> TerminalReadResult:
         buffer = self._buffers.get(session_id, bytearray())
-        chunk = bytes(buffer[:max_bytes])
-        del buffer[:max_bytes]
+        chunk_size = max_bytes
+        split_sizes = self._read_chunk_sizes.get(session_id, [])
+        if split_sizes:
+            chunk_size = min(max_bytes, split_sizes.pop(0))
+            self.split_read_count += 1
+        chunk = bytes(buffer[:chunk_size])
+        del buffer[:chunk_size]
         self._buffers[session_id] = buffer
-        return chunk
+        if chunk:
+            return TerminalReadResult(ok=True, data=chunk, process_status="running")
+        if session_id in self._terminal_exit_codes:
+            exit_code = self._terminal_exit_codes.pop(session_id)
+            return TerminalReadResult(
+                ok=True,
+                eof=True,
+                process_status="completed" if exit_code == 0 else "failed",
+                exit_code=exit_code,
+            )
+        return TerminalReadResult(ok=True, process_status="running")
 
     def resize_session(self, *, session_id: str, cols: int, rows: int) -> None:
         self.resize_calls.append((session_id, cols, rows))
@@ -73,12 +177,18 @@ class _RecordingPtyAdapter:
     def close_session(self, *, session_id: str) -> None:
         self.close_calls.append(session_id)
         self._buffers.pop(session_id, None)
+        self._read_chunk_sizes.pop(session_id, None)
+
+    def complete_delayed_session(self, session_id: str) -> None:
+        self._buffers.setdefault(session_id, bytearray()).extend(b"done\n")
+        self._terminal_exit_codes[session_id] = 0
 
 
 class _TerminalLoopbackOperationService:
     def __init__(self, *, job_store, pty_adapter: _RecordingPtyAdapter) -> None:
         self._job_store = job_store
         self._terminal_proxy = RunnerTerminalProxy(job_store=job_store, pty_adapter=pty_adapter)
+        self.runtime_status_payloads: list[object] = []
 
     def dispatch_operation(self, *, operation: str, params: dict[str, object]) -> dict[str, object]:
         if operation == "materialize_runtime":
@@ -117,15 +227,24 @@ class _TerminalLoopbackOperationService:
                 },
             }
         if operation == "runtime_status":
-            return {
-                "accepted": True,
-                "status": "succeeded",
-                "metadata": {
-                    "runtime_job_id": str(params["runtime_job_id"]),
+            status_payload = (
+                self.runtime_status_payloads.pop(0)
+                if self.runtime_status_payloads
+                else {
                     "job_status": "running",
                     "container_status": "running",
                     "workspace_id": "task-123",
-                },
+                }
+            )
+            return {
+                "accepted": True,
+                "status": "succeeded",
+                "metadata": {"runtime_job_id": str(params["runtime_job_id"])}
+                | (
+                    status_payload
+                    if isinstance(status_payload, dict)
+                    else {"job_status": str(status_payload)}
+                ),
             }
         if operation == "runtime_logs":
             return {
@@ -151,11 +270,24 @@ class _TerminalLoopbackOperationService:
             }
 
         if operation == "terminal_open":
+            raw_env = params.get("env")
             response = self._terminal_proxy.open_terminal_session(
                 runtime_job_id=str(params["runtime_job_id"]),
                 session_name=str(params.get("session_name") or "runtime"),
                 cols=int(params.get("cols") or 120),
                 rows=int(params.get("rows") or 30),
+                command=(
+                    str(params["command"])
+                    if isinstance(params.get("command"), str)
+                    else None
+                ),
+                cwd=str(params.get("cwd") or "/workspace"),
+                env=(
+                    {str(key): str(value) for key, value in raw_env.items()}
+                    if isinstance(raw_env, dict)
+                    else {}
+                ),
+                interactive=bool(params.get("interactive", True)),
             )
             return {
                 "accepted": response.accepted,
@@ -216,9 +348,18 @@ class _TerminalLoopbackOperationService:
 class _LoopbackWebSocket:
     def __init__(self) -> None:
         self.sent: list[str] = []
+        self._lock = threading.Lock()
 
     def send(self, payload: str) -> None:
-        self.sent.append(payload)
+        with self._lock:
+            self.sent.append(payload)
+
+    def drain(self) -> list[str]:
+        """Return every frame published since the previous atomic drain."""
+        with self._lock:
+            payloads = list(self.sent)
+            self.sent.clear()
+        return payloads
 
 
 class _RunnerLoopbackTransport(RunnerOutboundTransport):
@@ -244,7 +385,6 @@ class _RunnerLoopbackTransport(RunnerOutboundTransport):
         del timeout_seconds
         self.envelopes.append(envelope)
         parsed_envelope = parse_runner_envelope_json(envelope.to_json())
-        sent_before = len(self._websocket.sent)
         if self._client._remote_runtime_handler.is_request(parsed_envelope):
             self._client._remote_runtime_handler.handle(
                 websocket=self._websocket,
@@ -252,10 +392,11 @@ class _RunnerLoopbackTransport(RunnerOutboundTransport):
                 inbound=parsed_envelope,
                 session_state=self._session_state,
             )
-        self._pending_inbound_payloads.extend(self._websocket.sent[sent_before:])
+        self._pending_inbound_payloads.extend(self._websocket.drain())
         return DispatchAttemptResult(delivered=True, acked=True)
 
     def flush_inbound_events(self) -> None:
+        self._pending_inbound_payloads.extend(self._websocket.drain())
         payloads = list(self._pending_inbound_payloads)
         self._pending_inbound_payloads.clear()
         for payload_json in payloads:
@@ -266,12 +407,11 @@ class _RunnerLoopbackTransport(RunnerOutboundTransport):
                     self.protocol_errors.append(error_code)
 
     def pump_terminal_frames(self) -> None:
-        sent_before = len(self._websocket.sent)
         self._client._terminal_frame_lifecycle.emit_for_active_sessions(
             websocket=self._websocket,
             identity=self._identity,
         )
-        self._pending_inbound_payloads.extend(self._websocket.sent[sent_before:])
+        self._pending_inbound_payloads.extend(self._websocket.drain())
 
 
 def _build_cloud_config(tmp_path: Path) -> RunnerConfig:
@@ -395,7 +535,7 @@ def test_remote_runtime_terminal_operations_route_through_provider_dispatcher_an
                 "created_at": "2026-05-23T12:00:00+00:00",
                 "payload": {
                     "version": "1.0.0",
-                    "capabilities": ["docker"],
+                    "capabilities": ["docker", "terminal_stream_v1"],
                     "labels": {"site": "hq"},
                 },
             }
@@ -407,12 +547,18 @@ def test_remote_runtime_terminal_operations_route_through_provider_dispatcher_an
     runner_client = RunnerCloudClient(config=config)
     job_store = initialize_runner_job_store(config.runner_root / "jobs.sqlite")
     runner_client._composition._job_store = job_store
+    monkeypatch.setattr(
+        runner_client._terminal_frame_lifecycle,
+        "start_frame_publisher",
+        lambda **_kwargs: None,
+    )
 
     pty_adapter = _RecordingPtyAdapter()
-    runner_client._composition._operation_service = _TerminalLoopbackOperationService(
+    operation_service = _TerminalLoopbackOperationService(
         job_store=job_store,
         pty_adapter=pty_adapter,
     )
+    runner_client._composition._operation_service = operation_service
 
     identity = CloudChannelIdentity(
         tenant_id=tenant_id,
@@ -430,6 +576,14 @@ def test_remote_runtime_terminal_operations_route_through_provider_dispatcher_an
         channel_manager=channel_manager,
         channel_session=channel_session,
     )
+    stream_registry = get_runner_terminal_stream_registry()
+
+    async def _send_stream_envelope(envelope) -> None:
+        await transport.send(envelope, timeout_seconds=5.0)
+        transport.pump_terminal_frames()
+        transport.flush_inbound_events()
+        channel_db.commit()
+
     dispatcher = RunnerOutboundDispatcher(dispatch_db)
     provider = CloudRunnerRuntimeProvider(session_factory=session_factory)
 
@@ -671,6 +825,287 @@ def test_remote_runtime_terminal_operations_route_through_provider_dispatcher_an
     assert pty_adapter.input_calls == [(session_id, "whoami\n")]
     assert pty_adapter.resize_calls == [(session_id, 140, 42)]
     assert pty_adapter.close_calls == [session_id]
+
+    provider_registry = RuntimeProviderRegistry(
+        provider_overrides={RuntimePlacementMode.RUNNER: provider}
+    )
+
+    class _ManagedShellRuntimeOperationService(RuntimeOperationService):
+        def __init__(self, db: Session) -> None:
+            super().__init__(db, registry=provider_registry)
+
+    monkeypatch.setattr(
+        terminal_manager_module,
+        "RuntimeOperationService",
+        _ManagedShellRuntimeOperationService,
+    )
+    monkeypatch.setattr(terminal_manager_module, "SessionLocal", session_factory)
+
+    def _resolve_shell_context(identity: ShellSessionIdentity):
+        db: Session = session_factory()
+        try:
+            return _ManagedShellRuntimeOperationService(db).context_for_internal_task(
+                task_id=identity.task_id,
+                actor_type=RuntimeActorType.AGENT,
+                actor_id=f"shell_session:{identity.execution_owner_id}",
+                runtime_call_scope=RuntimeCallScope.PRODUCT_TASK,
+            )
+        finally:
+            db.close()
+
+    async def _dispatch_pending_async() -> int:
+        result = await dispatcher.dispatch_for_connection(
+            tenant_id=tenant_id,
+            runner_id=runner_uuid,
+            connection_id=channel_session.connection_id,
+            transport=transport,
+            max_messages=20,
+        )
+        transport.pump_terminal_frames()
+        dispatch_db.commit()
+        transport.flush_inbound_events()
+        channel_db.commit()
+        return int(result.claimed_count)
+
+    async def _drive_provider_wait(awaitable):
+        task = asyncio.create_task(awaitable)
+        for _ in range(800):
+            if task.done():
+                return await task
+            await asyncio.sleep(0.01)
+            await _dispatch_pending_async()
+        return await asyncio.wait_for(task, timeout=5.0)
+
+    async def _run_managed_shell_parity():
+        terminal_manager = TerminalSessionManager()
+        shell_service = ShellSessionService(
+            terminal_manager=terminal_manager,
+            lifecycle_projector=_NoopProjector(),
+            config=ShellSessionServiceConfig(
+                max_active_per_owner=8,
+                max_active_per_task=16,
+                idle_timeout_sec=300.0,
+                cleanup_interval_sec=60.0,
+                termination_grace_sec=0.0,
+                terminal_io_grace_sec=0.0,
+            ),
+            runtime_context_resolver=_resolve_shell_context,
+        )
+        identity = ShellSessionIdentity(
+            tenant_id=tenant_id,
+            task_id=task_id,
+            execution_owner_id="main:turn-managed-shell-parity",
+            runtime_placement_mode="runner",
+            workspace_id=f"task-{task_id}",
+            workspace_path="/workspace",
+            runner_id=runner_id,
+            execution_site_id=None,
+        )
+
+        operation_service.runtime_status_payloads = [
+            "unknown",
+            {"container_status": "starting", "job_status": "running"},
+            {"container_status": "running", "job_status": "running"},
+        ]
+        quick = await _drive_provider_wait(
+            shell_service.execute(
+                identity=identity,
+                request=ShellExecRequest(command="printf quick", yield_time_ms=1_000),
+            )
+        )
+        delayed = await _drive_provider_wait(
+            shell_service.execute(
+                identity=identity,
+                request=ShellExecRequest(command="delayed-managed", yield_time_ms=0),
+            )
+        )
+        assert delayed.session_id is not None
+        pty_adapter.complete_delayed_session(pty_adapter.open_calls[-1][1])
+        transport.pump_terminal_frames()
+        transport.flush_inbound_events()
+        channel_db.commit()
+        completed = await _drive_provider_wait(
+            shell_service.wait_for_output(
+                identity=identity,
+                request=ShellWaitRequest(
+                    session_id=delayed.session_id,
+                ),
+            )
+        )
+        interactive = await _drive_provider_wait(
+            shell_service.execute(
+                identity=identity,
+                request=ShellExecRequest(
+                    command="interactive-managed",
+                    interactive=True,
+                    yield_time_ms=0,
+                ),
+            )
+        )
+        assert interactive.session_id is not None
+        interactive_terminal_id = pty_adapter.open_calls[-1][1]
+        pty_adapter._buffers.setdefault(
+            interactive_terminal_id,
+            bytearray(),
+        ).extend(b"managed waiting\n")
+        transport.pump_terminal_frames()
+        transport.flush_inbound_events()
+        channel_db.commit()
+        interactive_stdout_parts = [interactive.stdout]
+        for _ in range(20):
+            if "managed waiting" in "".join(interactive_stdout_parts):
+                break
+            interactive = await _drive_provider_wait(
+                shell_service.wait_for_output(
+                    identity=identity,
+                    request=ShellWaitRequest(
+                        session_id=interactive.session_id,
+                    ),
+                )
+            )
+            assert interactive.session_id is not None
+            interactive_stdout_parts.append(interactive.stdout)
+        assert "managed waiting" in "".join(interactive_stdout_parts)
+        answered = await _drive_provider_wait(
+            shell_service.write_stdin(
+                identity=identity,
+                request=ShellWriteRequest(
+                    session_id=interactive.session_id,
+                    chars="managed input\n",
+                    yield_time_ms=1_000,
+                ),
+            )
+        )
+        interruptible = await _drive_provider_wait(
+            shell_service.execute(
+                identity=identity,
+                request=ShellExecRequest(
+                    command="interactive-managed",
+                    interactive=True,
+                    yield_time_ms=0,
+                ),
+            )
+        )
+        assert interruptible.session_id is not None
+        interrupted = await _drive_provider_wait(
+            shell_service.write_stdin(
+                identity=identity,
+                request=ShellWriteRequest(
+                    session_id=interruptible.session_id,
+                    chars="\u0003",
+                    yield_time_ms=0,
+                ),
+            )
+        )
+        split = await _drive_provider_wait(
+            shell_service.execute(
+                identity=identity,
+                request=ShellExecRequest(command="split-managed", yield_time_ms=0),
+            )
+        )
+        split_stdout_parts = [split.stdout]
+        for _ in range(20):
+            if split.process_status is not ShellProcessStatus.RUNNING:
+                break
+            assert split.session_id is not None
+            split = await _drive_provider_wait(
+                shell_service.wait_for_output(
+                    identity=identity,
+                    request=ShellWaitRequest(
+                        session_id=split.session_id,
+                    ),
+                )
+            )
+            split_stdout_parts.append(split.stdout)
+        cleanup_candidate = await _drive_provider_wait(
+            shell_service.execute(
+                identity=identity,
+                request=ShellExecRequest(
+                    command="interactive-managed",
+                    interactive=True,
+                    yield_time_ms=0,
+                ),
+            )
+        )
+        assert cleanup_candidate.session_id is not None
+        await _drive_provider_wait(
+            shell_service.close_task_sessions(tenant_id=tenant_id, task_id=task_id)
+        )
+        assert await shell_service.get_session_capability(
+            identity=identity,
+            public_session_id=cleanup_candidate.session_id,
+        ) is None
+        return (
+            [
+                quick,
+                delayed,
+                completed,
+                interactive,
+                answered,
+                interruptible,
+                interrupted,
+                split,
+                cleanup_candidate,
+            ],
+            "".join(split_stdout_parts),
+        )
+
+    stream_registry.register_channel(
+        tenant_id=tenant_id,
+        runner_id=runner_uuid,
+        sender=_send_stream_envelope,
+    )
+    try:
+        shell_updates, split_stdout = asyncio.run(_run_managed_shell_parity())
+    finally:
+        stream_registry.unregister_channel(tenant_id=tenant_id, runner_id=runner_uuid)
+    (
+        quick,
+        delayed,
+        completed,
+        interactive,
+        answered,
+        interruptible,
+        interrupted,
+        split,
+        cleanup_candidate,
+    ) = shell_updates
+
+    assert quick.process_status is ShellProcessStatus.COMPLETED, quick.model_dump()
+    assert quick.success is True
+    assert quick.session_id is None
+    assert quick.exit_code == 0
+    assert quick.stdout == "quick\n"
+    assert delayed.process_status is ShellProcessStatus.RUNNING
+    assert delayed.session_id is not None and delayed.session_id.startswith("shs_")
+    assert delayed.stdout == "started\n"
+    assert completed.process_status is ShellProcessStatus.COMPLETED
+    assert completed.session_id is None
+    assert completed.stdout == "done\n"
+    assert interactive.process_status is ShellProcessStatus.RUNNING
+    assert interactive.session_id is not None and interactive.session_id.startswith("shs_")
+    assert answered.process_status is ShellProcessStatus.COMPLETED
+    assert answered.stdout == "managed answer:managed input\n"
+    assert interruptible.process_status is ShellProcessStatus.RUNNING
+    assert interrupted.process_status is ShellProcessStatus.TERMINATED
+    assert interrupted.session_id is None
+    assert split.process_status is ShellProcessStatus.COMPLETED
+    assert split_stdout == "split managed\n"
+    assert cleanup_candidate.process_status is ShellProcessStatus.RUNNING
+    assert pty_adapter.ctrl_c_writes >= 2
+    assert pty_adapter.split_read_count >= 2
+    assert all("__DROWAI_CMD_START_" not in str(call["command"]) for call in pty_adapter.command_calls)
+    assert "managed input\n" in [
+        input_data for _session, input_data in pty_adapter.input_calls
+    ]
+
+    private_terminal_ids = {call[1] for call in pty_adapter.open_calls}
+    public_payload = "\n".join(update.model_dump_json() for update in shell_updates)
+    assert all(private_id not in public_payload for private_id in private_terminal_ids)
+    assert all(
+        update.session_id is None or str(update.session_id).startswith("shs_")
+        for update in shell_updates
+    )
 
     verify_db.close()
     dispatch_db.close()

@@ -18,6 +18,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+from runtime_shared.shell_session_contracts import format_shell_execution_owner_id
 
 from agent.graph.context.builder import (
     METADATA_CONTEXT_BUNDLE_KEY,
@@ -27,11 +28,17 @@ from agent.graph.context.runtime_state import refresh_bundle_from_working_memory
 from agent.graph.infrastructure.state_models import GraphRuntimeContext
 from agent.graph.memory.memory_manager import MemoryManager
 from agent.graph.state import FactsState, InteractiveState, TraceState
+from agent.graph.utils import iteration_memory
 from agent.subagents.contracts import AgentAssignment, AgentKind, AgentRuntimeIdentity
 from agent.subagents.definition import SubagentDefinition
 from agent.subagents.runtime.profile import (
     SubagentToolProfile,
+    effective_subagent_tool_profile,
     resolve_subagent_tool_profile,
+)
+from agent.subagents.runtime.tool_outcomes import (
+    SUBAGENT_PRIOR_TOOL_OUTCOMES_CONTEXT_KEY,
+    outcome_section_payload,
 )
 
 
@@ -116,12 +123,19 @@ class SubagentRuntimeState(BaseModel):
             raise ValueError("assignment.agent_kind must match definition.kind")
         if definition is not None and assignment.agent_id != definition.id:
             raise ValueError("assignment.agent_id must match definition.id")
-        if isinstance(tool_profile, SubagentToolProfileState):
-            profile_state = tool_profile
-        elif tool_profile is not None:
-            profile_state = SubagentToolProfileState.from_profile(tool_profile)
+        if definition is None:
+            if isinstance(tool_profile, SubagentToolProfileState):
+                profile_state = tool_profile
+            elif tool_profile is not None:
+                profile_state = SubagentToolProfileState.from_profile(tool_profile)
+            else:
+                profile_state = SubagentToolProfileState()
         else:
-            profile_state = SubagentToolProfileState()
+            effective_profile = effective_subagent_tool_profile(
+                definition,
+                tool_profile,
+            )
+            profile_state = SubagentToolProfileState.from_profile(effective_profile)
 
         return cls(
             assignment=assignment,
@@ -230,7 +244,7 @@ def _initial_working_memory(
         if isinstance(turn_sequence, int) and not isinstance(turn_sequence, bool)
         else 0
     )
-    return MemoryManager.reduce_turn_start(
+    memory = MemoryManager.reduce_turn_start(
         previous=None,
         user_message=assignment.objective,
         conversation_history_tail=[],
@@ -263,6 +277,21 @@ def _initial_working_memory(
             "blocking_reason": "",
         },
     )
+    metadata = {"working_memory": memory}
+    prior_outcomes = assignment.relevant_context.get(
+        SUBAGENT_PRIOR_TOOL_OUTCOMES_CONTEXT_KEY
+    )
+    if isinstance(prior_outcomes, (list, tuple)):
+        for raw_outcome in prior_outcomes:
+            if not isinstance(raw_outcome, Mapping) or not raw_outcome.get("calls"):
+                continue
+            iteration_memory.append(
+                metadata,
+                turn_sequence=normalized_turn_sequence,
+                source="handoff",
+                payload=outcome_section_payload(raw_outcome),
+            )
+    return dict(metadata["working_memory"])
 
 
 def _initial_memory_constraints(
@@ -417,6 +446,9 @@ def _graph_runtime_context_from_subagent_state(
                 bool,
             )
             else None
+        ),
+        execution_owner_id=format_shell_execution_owner_id(
+            "subagent", subagent.agent_run_id
         ),
     ).model_dump()
     payload.pop("credential_ref", None)

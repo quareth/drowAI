@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import replace
-from typing import Any, Callable, Dict, Mapping, Optional
+from typing import Any, Callable, Dict, Mapping, Optional, cast
 
 from agent.context.token_counter_registry import estimate_llm_request_tokens
 from agent.graph.context.builder import METADATA_CONTEXT_BUNDLE_KEY
@@ -72,6 +72,7 @@ from .handlers import (
     DeepReasoningHandler,
     NormalChatHandler,
     SimpleToolHandler,
+    SubagentHandler,
 )
 from backend.services.langgraph_chat.intent.briefs import (
     ensure_intent_brief_seed_present,
@@ -91,6 +92,7 @@ from backend.services.langgraph_chat.routing.mode_policy import (
 from backend.services.langgraph_chat.routing.selectors import (
     ChatBranch,
     resolve_branch,
+    resolve_late_subagent_handoff,
 )
 from backend.services.langgraph_chat.streaming.adapter import LangGraphStreamingAdapter
 from backend.services.langgraph_chat.subagent_composition import (
@@ -216,6 +218,22 @@ class LangGraphChatFacade:
             or (lambda db: ConversationHistoryReader(db))
         )
 
+        subagent_handler = build_subagent_handler(
+            self._checkpointer_service,
+            self._executor,
+            self._streaming_adapter,
+            registry=self._agent_run_registry,
+            launcher=resolved_agent_run_launcher,
+            lifecycle_publisher=resolved_agent_run_lifecycle_publisher,
+            parent_handoff_continuation_broker=(
+                resolved_parent_handoff_continuation_broker
+            ),
+            parent_handoff_guard_pool=(
+                resolved_agent_run_handoff_guard_pool
+            ),
+            result_projector=self._agent_run_result_projector,
+            subagent_registry=self._subagent_registry,
+        )
         self._handlers = {
             ChatBranch.NORMAL_CHAT: NormalChatHandler(
                 self._checkpointer_service, self._executor, self._streaming_adapter
@@ -226,22 +244,7 @@ class LangGraphChatFacade:
             ChatBranch.SIMPLE_TOOL: SimpleToolHandler(
                 self._checkpointer_service, self._executor, self._streaming_adapter
             ),
-            ChatBranch.SUBAGENT: build_subagent_handler(
-                self._checkpointer_service,
-                self._executor,
-                self._streaming_adapter,
-                registry=self._agent_run_registry,
-                launcher=resolved_agent_run_launcher,
-                lifecycle_publisher=resolved_agent_run_lifecycle_publisher,
-                parent_handoff_continuation_broker=(
-                    resolved_parent_handoff_continuation_broker
-                ),
-                parent_handoff_guard_pool=(
-                    resolved_agent_run_handoff_guard_pool
-                ),
-                result_projector=self._agent_run_result_projector,
-                subagent_registry=self._subagent_registry,
-            ),
+            ChatBranch.SUBAGENT: subagent_handler,
         }
 
         self._continuation = CheckpointContinuationService(
@@ -497,6 +500,28 @@ class LangGraphChatFacade:
             f"[FACADE] agent_mode in metadata: {runtime_config.metadata.get('agent_mode')}"
         )
         result = await handler.handle(runtime_config)
+        if branch is ChatBranch.SIMPLE_TOOL and result.interactive_state is not None:
+            late_runtime_config = resolve_late_subagent_handoff(
+                runtime_config,
+                result.interactive_state,
+                active_subagent_run_counts=await self._active_subagent_run_counts(
+                    runtime_config
+                ),
+                subagent_registry=self._subagent_registry,
+            )
+            if late_runtime_config is not None:
+                logger.info(
+                    "[FACADE] Continuing late PTR handoff through canonical "
+                    "subagent handler for task %s",
+                    chat_inputs.task_id,
+                )
+                subagent_handler = self._handlers.get(ChatBranch.SUBAGENT)
+                if subagent_handler is None:
+                    raise RuntimeError("Subagent handler is not configured")
+                result = await cast(SubagentHandler, subagent_handler).handle(
+                    late_runtime_config,
+                    continuation_state=result.interactive_state,
+                )
         await self._mark_completed_agent_results_consumed(
             runtime_config,
             completed_agent_result_handoff,

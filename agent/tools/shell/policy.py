@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Dict, List, Optional
 from pydantic import ValidationError
+from runtime_shared.shell_capabilities import canonical_shell_implementation_tool_id
 
 
 class PolicyEnforcement(str, Enum):
@@ -29,8 +30,159 @@ class PolicyResult:
     severity: str = "info"  # "info", "warning", "error"
 
 
+_PROTECTED_RECURSIVE_REMOVAL_TARGETS = frozenset({"/", "/*", "~", "~/*"})
+
+
+def _is_env_assignment(token: str) -> bool:
+    """Return whether ``env`` treats a token as an environment assignment."""
+    name, separator, _value = token.partition("=")
+    return bool(separator and name)
+
+
+def _unwrap_env_prefix(tokens: List[str]) -> List[str]:
+    """Return the executable portion of one parsed ``env`` invocation."""
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "--":
+            index += 1
+            while index < len(tokens) and _is_env_assignment(tokens[index]):
+                index += 1
+            return tokens[index:]
+        if token == "-":
+            index += 1
+            continue
+        if token.startswith("--"):
+            signal_options = (
+                "--block-signal",
+                "--default-signal",
+                "--ignore-signal",
+            )
+            if token in {
+                "--ignore-environment",
+                "--null",
+                "--debug",
+                "--list-signal-handling",
+                *signal_options,
+            } or any(
+                token.startswith(f"{option}=") for option in signal_options
+            ):
+                index += 1
+                continue
+            if token in {"--unset", "--chdir", "--argv0"}:
+                if index + 1 >= len(tokens):
+                    return []
+                index += 2
+                continue
+            if token.startswith(("--unset=", "--chdir=", "--argv0=")):
+                index += 1
+                continue
+            if token == "--split-string":
+                if index + 1 >= len(tokens):
+                    return []
+                expanded = shlex.split(tokens[index + 1], posix=True)
+                tokens = ["env", *expanded, *tokens[index + 2 :]]
+                index = 1
+                continue
+            if token.startswith("--split-string="):
+                value = token.split("=", 1)[1]
+                expanded = shlex.split(value, posix=True)
+                tokens = ["env", *expanded, *tokens[index + 1 :]]
+                index = 1
+                continue
+            return []
+        if token.startswith("-"):
+            options = token[1:]
+            option_index = 0
+            while option_index < len(options):
+                option = options[option_index]
+                if option in {"0", "i", "v"}:
+                    option_index += 1
+                    continue
+                if option not in {"u", "C", "P", "S", "a"}:
+                    return []
+                attached_value = options[option_index + 1 :]
+                if attached_value:
+                    value = attached_value
+                    next_index = index + 1
+                elif index + 1 < len(tokens):
+                    value = tokens[index + 1]
+                    next_index = index + 2
+                else:
+                    return []
+                if option == "S":
+                    expanded = shlex.split(value, posix=True)
+                    tokens = ["env", *expanded, *tokens[next_index:]]
+                    index = 1
+                    break
+                index = next_index
+                break
+            else:
+                index += 1
+            continue
+        if _is_env_assignment(token):
+            index += 1
+            continue
+        break
+    return tokens[index:]
+
+
+def _unwrap_execution_prefixes(tokens: List[str]) -> List[str]:
+    """Remove bounded transparent ``command`` and ``env`` execution prefixes."""
+    remaining = list(tokens)
+    while remaining:
+        wrapper = os.path.basename(remaining[0]).lower()
+        if wrapper == "command":
+            index = 1
+            while index < len(remaining):
+                token = remaining[index]
+                if token == "--":
+                    index += 1
+                    break
+                if token == "-p":
+                    index += 1
+                    continue
+                if token.startswith("-"):
+                    return []
+                break
+            remaining = remaining[index:]
+            continue
+
+        if wrapper != "env":
+            break
+        remaining = _unwrap_env_prefix(remaining)
+    return remaining
+
+
+def _is_protected_recursive_removal(command: str) -> bool:
+    """Return whether ``rm`` recursively targets the runtime root or home."""
+    try:
+        tokens = _unwrap_execution_prefixes(shlex.split(command, posix=True))
+    except Exception:
+        return False
+    if not tokens or os.path.basename(tokens[0]).lower() != "rm":
+        return False
+
+    recursive = False
+    targets: List[str] = []
+    options_ended = False
+    for token in tokens[1:]:
+        if not options_ended and token == "--":
+            options_ended = True
+        elif not options_ended and token == "--recursive":
+            recursive = True
+        elif not options_ended and token.startswith("-"):
+            recursive = recursive or "r" in token[1:] or "R" in token[1:]
+        else:
+            targets.append(token)
+
+    return recursive and any(
+        target in _PROTECTED_RECURSIVE_REMOVAL_TARGETS for target in targets
+    )
+
+
 class CommandPolicy:
-    """Validates shell commands against allowlist and denylist rules."""
+    """Apply an optional allowlist and a small set of obvious-hazard blocks."""
 
     def __init__(self, enforcement: Optional[PolicyEnforcement] = None):
         """Initialize policy with enforcement level from env or default to PERMISSIVE for pentesting."""
@@ -104,6 +256,8 @@ class CommandPolicy:
         for pattern in self._denylist_patterns:
             if self._matches_pattern(command, pattern):
                 return pattern
+        if _is_protected_recursive_removal(command):
+            return "recursive removal of runtime root/home"
         return None
 
     def _matches_pattern(self, command: str, pattern: str) -> bool:
@@ -133,8 +287,8 @@ class CommandPolicy:
         In PERMISSIVE mode (default), this is advisory - unlisted commands will warn but still execute.
         In STRICT mode, only these commands are allowed.
         
-        Note: Pentesting tools (nmap, metasploit, etc.) should use structured tool implementations
-        rather than raw shell execution. This allowlist focuses on core utilities and troubleshooting.
+        The allowlist is deliberately not a complete list of pentesting commands. Permissive mode
+        allows commands outside it after applying the small obvious-hazard denylist below.
         """
         return [
             # Package managers (for installing pentesting tools)
@@ -261,48 +415,21 @@ class CommandPolicy:
         ]
 
     def _build_denylist(self) -> List[str]:
-        """Build denylist of explicitly forbidden command patterns."""
+        """Build hard blocks for runtime destruction, exhaustion, and escape."""
         return [
-            # Destructive filesystem operations
+            # Destructive runtime operations
             "rm -rf /",
             "rm -rf /*",
             "rm -rf ~",
             "rm -rf ~/*",
-            "rm -rf .",
-            "rm -rf ./*",
-            "rm -rf *",  # Too broad
-            "dd if=*",
+            "dd *of=/dev/sd*",
+            "dd *of=/dev/vd*",
+            "dd *of=/dev/xvd*",
+            "dd *of=/dev/nvme*",
+            "dd *of=/dev/mmcblk*",
+            "dd *of=/dev/mapper/*",
+            "dd *of=/dev/disk/*",
             "mkfs*",
-            "fdisk *",
-            "parted *",
-            "shred *",
-            # Privilege escalation
-            "sudo su",
-            "sudo -i",
-            "sudo bash",
-            "sudo sh",
-            "passwd",
-            "passwd *",
-            "useradd *",
-            "usermod *",
-            "groupadd *",
-            "chown root *",
-            "chmod 777 *",
-            "chmod -R 777 *",
-            # Code execution from network
-            "curl * | bash",
-            "curl * | sh",
-            "wget * | bash",
-            "wget * | sh",
-            "curl * -o - | bash",
-            # Network listeners (exfiltration risk)
-            "nc -l *",
-            "ncat -l *",
-            "netcat -l *",
-            "python -m http.server",
-            "python -m SimpleHTTPServer",
-            "php -S *",
-            # System modification
             "reboot",
             "shutdown *",
             "halt",
@@ -311,26 +438,14 @@ class CommandPolicy:
             "init 6",
             "systemctl reboot",
             "systemctl poweroff",
-            # Kernel/system
-            "insmod *",
-            "rmmod *",
-            "modprobe *",
-            "sysctl *",
             # Fork bombs and resource exhaustion
             ":(){:|:&};:",
             ":(){ :|:& };:",
-            "while true; do *",
-            # Sensitive file access
-            "cat /etc/shadow",
-            "cat /etc/passwd",
-            "cat ~/.ssh/*",
-            "cat /root/*",
             # Docker escape attempts
-            "docker run --privileged *",
-            "docker run -v /:/host *",
-            # Cron/scheduled tasks
-            "crontab *",
-            "at *",
+            "docker run *--privileged*",
+            "docker run *-v /:/*",
+            "docker run *--volume /:/*",
+            "docker run *--mount *src=/*",
         ]
 
 
@@ -357,8 +472,12 @@ def extract_shell_wrapper_payload(command: str) -> Optional[str]:
     return None
 
 
-def split_shell_chained_segments(command_line: str) -> List[str]:
-    """Split a shell command line into top-level segments by `;`, `&&`, `||`."""
+def _split_shell_segments(
+    command_line: str,
+    *,
+    separators: set[str],
+) -> List[str]:
+    """Split a shell command line on the selected top-level control operators."""
     line = (command_line or "").strip()
     if not line:
         return []
@@ -371,12 +490,11 @@ def split_shell_chained_segments(command_line: str) -> List[str]:
     except Exception:
         return [line]
 
-    split_tokens = {";", "&&", "||"}
     segments: List[str] = []
     current: List[str] = []
 
     for token in tokens:
-        if token in split_tokens:
+        if token in separators:
             segment = " ".join(current).strip()
             if segment:
                 segments.append(segment)
@@ -391,40 +509,106 @@ def split_shell_chained_segments(command_line: str) -> List[str]:
     return segments or [line]
 
 
-def is_removal_segment(segment: str) -> bool:
-    """Detect whether a segment executes `rm` directly."""
-    try:
-        tokens = shlex.split(segment, posix=True)
-    except Exception:
-        return False
-    if not tokens:
-        return False
-    return os.path.basename(tokens[0]).lower() == "rm"
+def split_shell_chained_segments(command_line: str) -> List[str]:
+    """Split command chains while preserving each pipeline as one policy unit."""
+    return _split_shell_segments(
+        command_line,
+        separators={";", "&&", "||", "&"},
+    )
+
+
+def split_shell_executable_segments(command_line: str) -> List[str]:
+    """Split control flow into the individual commands that may execute."""
+    return _split_shell_segments(
+        command_line,
+        separators={";", "&&", "||", "&", "|"},
+    )
+
+
+def _join_shell_line_continuations(raw_text: str) -> str:
+    """Remove shell continuations while preserving escaped backslash newlines."""
+    text = str(raw_text or "")
+    normalized: List[str] = []
+    index = 0
+    while index < len(text):
+        if text[index] != "\\":
+            normalized.append(text[index])
+            index += 1
+            continue
+
+        run_start = index
+        while index < len(text) and text[index] == "\\":
+            index += 1
+        backslash_count = index - run_start
+        newline_width = 0
+        if index < len(text) and text[index] == "\n":
+            newline_width = 1
+        elif text[index : index + 2] == "\r\n":
+            newline_width = 2
+
+        if newline_width and backslash_count % 2 == 1:
+            normalized.append("\\" * (backslash_count - 1))
+            index += newline_width
+            continue
+
+        normalized.append("\\" * backslash_count)
+
+    return "".join(normalized)
+
+
+def _find_active_nested_shell_execution(raw_text: str) -> Optional[str]:
+    """Return unsupported executable substitution syntax outside literal quotes."""
+    text = str(raw_text or "")
+    quote: Optional[str] = None
+    index = 0
+    while index < len(text):
+        char = text[index]
+
+        if quote == "single":
+            if char == "'":
+                quote = None
+            index += 1
+            continue
+
+        if char == "\\":
+            index += 2
+            continue
+
+        if quote == "double":
+            if char == '"':
+                quote = None
+                index += 1
+                continue
+            if char == "`":
+                return "backtick command substitution"
+            if text.startswith("$(", index) and not text.startswith("$((", index):
+                return "$() command substitution"
+            index += 1
+            continue
+
+        if char == "'":
+            quote = "single"
+        elif char == '"':
+            quote = "double"
+        elif char == "`":
+            return "backtick command substitution"
+        elif text.startswith("$(", index) and not text.startswith("$((", index):
+            return "$() command substitution"
+        elif char in {"<", ">"} and text[index + 1 : index + 2] == "(":
+            return f"{char}() process substitution"
+        index += 1
+
+    return None
 
 
 def validate_shell_exec_command(
     command: str,
     *,
-    max_command_chars: int = 320,
     policy: Optional[CommandPolicy] = None,
     metric_hook: Optional[Callable[[str], None]] = None,
 ) -> List[Dict[str, str]]:
     """Validate shell command text and return error descriptors."""
     validation_errors: List[Dict[str, str]] = []
-    command_text = str(command or "")
-    max_chars = int(max_command_chars or 320)
-
-    if len(command_text) > max_chars:
-        validation_errors.append(
-            {
-                "field": "command",
-                "error": f"Command too long ({len(command_text)} > {max_chars} characters)",
-                "message": f"Command exceeds max length of {max_chars} characters (received {len(command_text)}).",
-                "suggested_fix": "Use a shorter command for the immediate objective, then continue in a follow-up tool call.",
-            }
-        )
-        if metric_hook:
-            metric_hook("executor_shell_exec_length_rejected")
 
     if policy is None:
         policy = CommandPolicy()
@@ -448,7 +632,15 @@ def validate_shell_exec_command(
             if not line:
                 continue
 
-            segments = split_shell_chained_segments(line)
+            chained_segments = split_shell_chained_segments(line)
+            for chained_segment in chained_segments:
+                if "|" in chained_segment:
+                    pipeline_result = policy.validate(chained_segment)
+                    if not pipeline_result.allowed and pipeline_result.matched_pattern:
+                        source = f"{source_prefix} {line_no} pipeline"
+                        _validate_policy_segment(chained_segment, source=source)
+
+            segments = split_shell_executable_segments(line)
             multi_segment = len(segments) > 1
             for segment_idx, segment in enumerate(segments, start=1):
                 source = f"{source_prefix} {line_no}"
@@ -456,32 +648,38 @@ def validate_shell_exec_command(
                     source = f"{source} segment {segment_idx}"
                 _validate_policy_segment(segment, source=source)
 
-            # Lightweight guardrail: disallow `rm` segments hidden in chained commands.
-            if multi_segment:
-                for segment_idx, segment in enumerate(segments, start=1):
-                    if not is_removal_segment(segment):
-                        continue
-                    source = f"{source_prefix} {line_no} segment {segment_idx}"
-                    validation_errors.append(
-                        {
-                            "field": "command",
-                            "error": f"Chained removal blocked in {source}",
-                            "message": (
-                                f"Chained removal is blocked in {source}. "
-                                "Run removal as a separate explicit command."
-                            ),
-                            "suggested_fix": (
-                                "Split this into separate commands so removal is explicit and isolated."
-                            ),
-                        }
-                    )
-                    if metric_hook:
-                        metric_hook("executor_shell_exec_chained_removal_rejected")
+    def _validate_shell_text(
+        raw_text: str,
+        *,
+        source_prefix: str,
+        wrapper_depth: int,
+    ) -> None:
+        command_text = _join_shell_line_continuations(raw_text)
+        nested_syntax = _find_active_nested_shell_execution(command_text)
+        if (
+            nested_syntax is not None
+            and policy.enforcement is not PolicyEnforcement.DISABLED
+        ):
+            validation_errors.append(
+                {
+                    "field": "command",
+                    "error": f"Policy violation in {source_prefix}",
+                    "message": (
+                        f"Shell policy violation in {source_prefix}: unsupported "
+                        f"nested shell execution syntax ({nested_syntax})."
+                    ),
+                    "suggested_fix": (
+                        "Use separate shell tool calls instead of command or process "
+                        "substitution. Escape the syntax when it is intended as text."
+                    ),
+                }
+            )
+            return
 
-    _validate_segments_by_line(command_text, source_prefix="command line")
-
-    wrapped_payload = extract_shell_wrapper_payload(command_text)
-    if wrapped_payload is not None:
+        _validate_segments_by_line(command_text, source_prefix=source_prefix)
+        wrapped_payload = extract_shell_wrapper_payload(command_text)
+        if wrapped_payload is None:
+            return
         payload = wrapped_payload.strip()
         if not payload:
             validation_errors.append(
@@ -492,8 +690,28 @@ def validate_shell_exec_command(
                     "suggested_fix": "Provide a command payload after -c/-lc or use a direct shell command.",
                 }
             )
-        else:
-            _validate_segments_by_line(wrapped_payload, source_prefix="wrapper payload line")
+            return
+        if wrapper_depth >= 16:
+            validation_errors.append(
+                {
+                    "field": "command",
+                    "error": f"Policy violation in {source_prefix}",
+                    "message": "Shell policy violation: wrapper nesting exceeds the supported validation depth.",
+                    "suggested_fix": "Split nested shell wrappers into separate shell tool calls.",
+                }
+            )
+            return
+        _validate_shell_text(
+            wrapped_payload,
+            source_prefix=f"{source_prefix} wrapper payload",
+            wrapper_depth=wrapper_depth + 1,
+        )
+
+    _validate_shell_text(
+        str(command or ""),
+        source_prefix="command line",
+        wrapper_depth=0,
+    )
 
     if any("Policy violation" in err.get("error", "") for err in validation_errors):
         if metric_hook:
@@ -508,12 +726,12 @@ def validate_shell_tool_parameters(
     *,
     get_tool_fn: Callable[[str], object],
     generate_fix_suggestion_fn: Callable[[dict], str],
-    max_command_chars: int = 320,
     metric_hook: Optional[Callable[[str], None]] = None,
     logger: object = None,
 ) -> List[Dict[str, str]]:
-    """Validate strict shell tool parameters for ``shell.exec`` and ``shell.script``."""
-    if tool_id not in {"shell.exec", "shell.script"}:
+    """Validate shell parameters for implementation ids and model-facing aliases."""
+    canonical_tool_id = canonical_shell_implementation_tool_id(tool_id)
+    if canonical_tool_id not in {"shell.exec", "shell.script"}:
         return []
 
     try:
@@ -531,21 +749,16 @@ def validate_shell_tool_parameters(
 
         args = args_model(**dict(parameters or {}))
 
-        # shell.script keeps existing behavior (line-by-line policy validation in tool.run).
-        if tool_id != "shell.exec":
-            return []
-
-        command = str(getattr(args, "command", "") or "")
-        max_chars = int(max_command_chars or 320)
+        command_field = "command" if canonical_tool_id == "shell.exec" else "script"
+        command = str(getattr(args, command_field, "") or "")
         validation_errors = validate_shell_exec_command(
             command,
-            max_command_chars=max_chars,
             metric_hook=metric_hook,
         )
         if validation_errors and logger and hasattr(logger, "log_operation"):
             logger.log_operation(
                 "WARNING",
-                "EnhancedExecutor: shell.exec quality gate rejected command",
+                "EnhancedExecutor: shell policy gate rejected command",
                 metadata={
                     "tool_id": tool_id,
                     "error_count": len(validation_errors),
@@ -580,8 +793,6 @@ __all__ = [
     "PolicyEnforcement",
     "extract_shell_wrapper_payload",
     "split_shell_chained_segments",
-    "is_removal_segment",
     "validate_shell_exec_command",
     "validate_shell_tool_parameters",
 ]
-

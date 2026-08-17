@@ -246,6 +246,8 @@ def test_tool_parameters_system_prompt_contains_native_builder_policy() -> None:
     assert "repeat the same tool with different concrete parameters" in system_prompt
     assert "Per-call intent (`_builder_intent`)" in system_prompt
     assert "positive confirmation and negative failure indicators" in system_prompt
+    assert "Execute dependent commands as separate tool calls" in system_prompt
+    assert "Never append an interactive or persistent program" in system_prompt
     assert "Candidate Tools list above" not in system_prompt
     assert "Turn Execution Brief above" not in system_prompt
 
@@ -272,6 +274,8 @@ def test_shared_native_guidance_is_independent_of_planner_wrapper_prose(
     assert "Changed main-planner framing" not in guidance
     assert "Selector Decision" not in guidance
     assert "<execution_strategy_guidance>" in guidance
+    assert "Execute dependent commands as separate tool calls" in guidance
+    assert "authoritative completed result with a successful exit code" in guidance
 
 
 def test_tool_parameters_prompt_renders_selector_decision_and_multiple_targets() -> None:

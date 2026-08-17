@@ -249,9 +249,9 @@ def test_tooling_plane_provider_enqueues_tool_command_and_times_out_without_resu
         operation="send_tool_command",
         runner_id=str(runner_uuid),
         payload={
-            "tool": "shell.exec",
+            "tool": "filesystem.read_file",
             "command_id": "cmd-timeout-integration",
-            "command": "id",
+            "command": "cat /workspace/file.txt",
             "timeout_seconds": 5.0,
             "timeout_policy": {"deadline_seconds": 0.01, "grace_seconds": 0.01},
         },
@@ -492,8 +492,8 @@ def test_tooling_plane_mixed_lane_routing_keeps_runner_and_management_boundaries
     artifact_read = resolve_tool_lane_dispatch(tool_id="artifact.read", runtime_placement_mode="runner")
     artifact_search = resolve_tool_lane_dispatch(tool_id="artifact.search", runtime_placement_mode="runner")
 
-    assert shell.lane == "container_scoped"
-    assert shell.authority == "container_runner_transport"
+    assert shell.lane == "runtime_session_scoped"
+    assert shell.authority == "runtime_session_control"
     assert filesystem.lane == "container_scoped"
     assert filesystem.authority == "container_runner_transport"
 
@@ -511,7 +511,7 @@ def test_tooling_plane_mixed_lane_routing_keeps_runner_and_management_boundaries
         artifact_search.authority,
     ]
     assert mixed_authorities == [
-        "container_runner_transport",
+        "runtime_session_control",
         "backend_direct",
         "artifact_direct",
     ]

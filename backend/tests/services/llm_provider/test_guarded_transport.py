@@ -181,6 +181,20 @@ async def test_async_inference_request_does_not_block_event_loop() -> None:
 
 
 @pytest.mark.asyncio
+async def test_async_inference_preserves_bounded_retry_after() -> None:
+    """Transient response metadata survives the guarded transport boundary."""
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(429, headers={"Retry-After": "7"})
+
+    with pytest.raises(GuardedTransportError) as exc_info:
+        await _async_transport(handler).request_json({"model": "gpt-5.2"})
+
+    assert exc_info.value.status_code == 429
+    assert exc_info.value.retry_after_seconds == 7.0
+
+
+@pytest.mark.asyncio
 async def test_async_inference_stream_yields_first_sse_event_before_eof() -> None:
     """SSE parsing forwards a provider event without buffering later bytes."""
 

@@ -13,6 +13,9 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence
 from agent.graph.memory.findings import format_relevant_findings
 from agent.tools.catalog_visibility import filter_visible_tool_ids
 from core.prompts.builders._text import strip_referenced_prior_turns_label
+from core.prompts.builders.shell_capability_profiles import (
+    build_shell_capability_profiles,
+)
 from core.prompts.constants import render_intent_brief_block
 from core.prompts.loader import TemplateLoader
 from core.runbooks.models import RunbookStage
@@ -437,6 +440,7 @@ class ToolPlanningPromptBuilder:
         self,
         *,
         max_committed_tools_per_batch: int = 1,
+        callable_tool_ids: Sequence[str] = (),
     ) -> str:
         """Build the native tool-call builder system prompt."""
         cap_value = _normalize_committed_tool_cap(max_committed_tools_per_batch)
@@ -448,10 +452,14 @@ class ToolPlanningPromptBuilder:
             call_requirement=call_requirement,
             selector_strategy=_MAIN_SELECTOR_STRATEGY_GUIDANCE,
         ).rstrip("\n")
-        return _render_latest(
+        rendered = _render_latest(
             "tool_parameters_system.txt",
             native_tool_call_guidance=native_tool_call_guidance,
         )
+        profile_section = build_shell_capability_profiles(callable_tool_ids)
+        if not profile_section:
+            return rendered
+        return f"{rendered.rstrip()}\n\n{profile_section}\n"
 
     def build_native_tool_call_shared_guidance(
         self,
@@ -610,7 +618,7 @@ class ToolPlanningPromptBuilder:
         if committed_cap_value < 1:
             committed_cap_value = 1
 
-        return _render_latest(
+        rendered = _render_latest(
             "select_tools.txt",
             resolved_tools=available_tools_text,
             target=target,
@@ -629,6 +637,10 @@ class ToolPlanningPromptBuilder:
             max_tools_per_action=cap_value,
             max_committed_tools_per_batch=committed_cap_value,
         )
+        profile_section = build_shell_capability_profiles(visible_tool_ids)
+        if not profile_section:
+            return rendered
+        return f"{rendered.rstrip()}\n\n{profile_section}\n"
 
     def build_tool_parameters_prompt(
         self,

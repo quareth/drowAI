@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from agent.graph.state import FactsState, InteractiveState, TraceState
 from backend.services.langgraph_chat.contracts import (
     AgentMode,
     ChatInputs,
@@ -76,6 +77,25 @@ def _stub_recon_classifier() -> IntentClassifier:
         '"agent_handoffs": [{"agent_handoff": "required", '
         '"subagent": "pathfinder", "objective": "Scan ports on 10.0.0.10."}], '
         '"risk_flags": [], '
+        '"target_status": "resolved", '
+        '"target_source": "explicit_current_message", '
+        '"resolved_target": "10.0.0.10"}'
+    )
+
+    class _StubClient:
+        async def chat_with_usage(self, *args: Any, **kwargs: Any) -> Any:
+            return SimpleNamespace(content=response, usage=None, structured_output=None)
+
+    return IntentClassifier(client_factory=lambda *_: _StubClient())
+
+
+def _stub_direct_classifier_without_handoff() -> IntentClassifier:
+    """Return direct execution output that requires PTR recovery delegation."""
+    response = (
+        '{"label": "direct_executor", "confidence": 0.45, '
+        '"reasoning": "bounded direct work", '
+        '"suggested_capabilities": ["port scanning"], '
+        '"agent_handoffs": [], "risk_flags": [], '
         '"target_status": "resolved", '
         '"target_source": "explicit_current_message", '
         '"resolved_target": "10.0.0.10"}'
@@ -213,6 +233,81 @@ async def test_recon_candidate_routes_to_pathfinder_by_default() -> None:
     assert capture["branch"] is ChatBranch.SUBAGENT
     assert capture["execution_mode"] is ExecutionMode.SIMPLE_TOOL
     assert capture["metadata_snapshot"]["subagent_routing"]["should_delegate"] is True
+
+
+@pytest.mark.asyncio
+async def test_late_ptr_handoff_reuses_subagent_handler_with_parent_state() -> None:
+    """A missed classifier handoff reaches the same subagent handler after PTR."""
+    facade = LangGraphChatFacade(
+        intent_classifier=_stub_direct_classifier_without_handoff(),
+    )
+    capture: Dict[str, Any] = {}
+
+    async def _simple_handle(
+        config: LangGraphRuntimeConfig,
+    ) -> LangGraphChatResult:
+        config.metadata["turn_id"] = "task-8004-turn-1"
+        metadata = dict(config.metadata)
+        metadata["router_outcome"] = {
+            "action": "delegate_subagent",
+            "candidate_id": "ptr-delegate-1",
+            "agent_handoff": {
+                "agent_handoff": "required",
+                "subagent": "pathfinder",
+                "objective": "Scan ports on 10.0.0.10.",
+            },
+        }
+        state = InteractiveState(
+            facts=FactsState(
+                task_id=config.chat_inputs.task_id,
+                message=config.chat_inputs.message,
+                capability="simple_tool_execution",
+                metadata=metadata,
+            ),
+            trace=TraceState(reasoning=["PTR selected Pathfinder."]),
+        )
+        capture["simple_state"] = state
+        return LangGraphChatResult(
+            final_text=None,
+            conversation_id=config.chat_inputs.conversation_id,
+            interactive_state=state,
+        )
+
+    async def _subagent_handle(
+        config: LangGraphRuntimeConfig,
+        *,
+        continuation_state: InteractiveState | None = None,
+    ) -> LangGraphChatResult:
+        capture["subagent_config"] = config
+        capture["continuation_state"] = continuation_state
+        return LangGraphChatResult(
+            final_text="Pathfinder completed.",
+            conversation_id=config.chat_inputs.conversation_id,
+        )
+
+    facade._handlers[ChatBranch.SIMPLE_TOOL] = SimpleNamespace(handle=_simple_handle)
+    facade._handlers[ChatBranch.SUBAGENT] = SimpleNamespace(handle=_subagent_handle)
+
+    result = await facade.handle_turn(
+        ChatInputs(
+            task_id=8004,
+            user_id=1,
+            message="Scan ports on 10.0.0.10",
+            conversation_id="conv-8004",
+            history=[
+                {"role": "user", "content": "Scan ports on 10.0.0.10"}
+            ],
+            api_key="test-key",
+            agent_mode=AgentMode.FULL_ACCESS,
+        )
+    )
+
+    assert result.final_text == "Pathfinder completed."
+    assert capture["continuation_state"] is capture["simple_state"]
+    routing = capture["subagent_config"].metadata["subagent_routing"]
+    assert routing["should_delegate"] is True
+    assert routing["agent_id"] == "pathfinder"
+    assert routing["delegation_source"] == "ptr"
 
 
 @pytest.mark.asyncio

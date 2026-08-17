@@ -8,7 +8,8 @@ Phase 1 unit tests exercise the routing primitives in
 
 - ``_route_after_router`` — verifies dispatch from
   ``metadata.router_outcome.action`` for each router action label
-  (``call_tool``, ``think_more``, ``reflect``, ``synthesis``, ``finalize``)
+  (``call_tool``, ``think_more``, ``reflect``, ``synthesis``, ``finalize``,
+  ``delegate_subagent``)
   plus deterministic missing-action fallback behavior.
 - A graph-compile assertion confirms the three new nodes are registered.
 
@@ -25,6 +26,7 @@ from typing import Any, Dict, List
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from langgraph.graph import END
 
 from agent.graph.builders.simple_tool_builder import (
     _ROUTER_ACTION_MAP,
@@ -64,6 +66,7 @@ def test_router_action_map_contains_router_action_labels() -> None:
         "reflect": "reflect",
         "synthesis": "synthesis",
         "finalize": "format_results",
+        "delegate_subagent": "delegate_subagent",
     }
 
 
@@ -90,6 +93,11 @@ def test_router_finalize_dispatches_to_format_results() -> None:
 def test_router_call_tool_dispatches_to_select_tool_categories() -> None:
     interactive = _make_interactive(router_action="call_tool")
     assert _route_after_router(interactive) == "select_tool_categories"
+
+
+def test_router_preserves_delegate_subagent_control() -> None:
+    interactive = _make_interactive(router_action="delegate_subagent")
+    assert _route_after_router(interactive) == "delegate_subagent"
 
 
 def test_router_unknown_label_dispatches_to_format_results() -> None:
@@ -129,6 +137,15 @@ def test_simple_tool_post_tool_boundary_reenters_decision_router() -> None:
     graph = build_simple_tool_graph(build_only=True)
     edges = getattr(graph, "edges", set())
     assert ("post_tool_reasoning", "decision_router") in edges
+
+
+def test_simple_tool_delegate_control_ends_at_backend_boundary() -> None:
+    """PTR delegation must not fall through to the response finalizer."""
+    graph = build_simple_tool_graph(build_only=True)
+    branches = getattr(graph, "branches", {}) or {}
+    router_branch = branches["decision_router"]["_route_after_router"]
+
+    assert router_branch.ends["delegate_subagent"] == END
 
 
 def test_simple_tool_think_more_returns_to_ptr_before_router() -> None:

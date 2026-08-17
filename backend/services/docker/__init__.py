@@ -272,9 +272,33 @@ class UnifiedDockerService:
         self._sync_exec_delegates()
         return self._exec.get_container_name_by_id(task_id)
 
-    async def start_persistent_pty(self, task_id, shell="/bin/bash", cols=80, rows=24):
+    async def start_persistent_pty(
+        self,
+        task_id,
+        shell="/bin/bash",
+        cols=80,
+        rows=24,
+        *,
+        command=None,
+        cwd="/workspace",
+        env=None,
+        interactive=True,
+    ):
         self._sync_exec_delegates()
-        return await self._exec.start_persistent_pty(task_id, shell, cols, rows)
+        return await self._exec.start_persistent_pty(
+            task_id,
+            shell,
+            cols,
+            rows,
+            command=command,
+            cwd=cwd,
+            env=env,
+            interactive=interactive,
+        )
+
+    def inspect_exec(self, exec_id):
+        self._sync_exec_delegates()
+        return self._exec.inspect_exec(exec_id)
 
     async def get_container_metrics(self, task_id):
         self._sync_metrics_delegates()

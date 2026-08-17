@@ -191,6 +191,7 @@ class GraphRuntimeContext(BaseModel):
     turn_id: Optional[str] = None
     turn_sequence: Optional[int] = None
     reserved_message_id: Optional[int] = None
+    execution_owner_id: Optional[str] = None
 
     def normalized_runtime_placement_mode(self) -> Optional[str]:
         """Return normalized runtime placement mode when present."""

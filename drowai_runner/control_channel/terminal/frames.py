@@ -29,6 +29,19 @@ from drowai_runner.control_channel.terminal.models import (
 )
 
 
+def _take_utf8_chunk(value: str, max_bytes: int) -> tuple[str, str, int]:
+    """Take the largest complete-codepoint prefix within the byte limit."""
+    used_bytes = 0
+    used_chars = 0
+    for character in value:
+        character_bytes = len(character.encode("utf-8", errors="replace"))
+        if used_bytes + character_bytes > max_bytes:
+            break
+        used_bytes += character_bytes
+        used_chars += 1
+    return value[:used_chars], value[used_chars:], used_bytes
+
+
 class TerminalFrameLifecycle:
     """Terminal frame/session lifecycle for runner cloud control channel."""
 
@@ -121,26 +134,44 @@ class TerminalFrameLifecycle:
                 break
             raw_data = metadata.get("output")
             data = str(raw_data) if isinstance(raw_data, str) else ""
+            eof = bool(metadata.get("eof", False))
+            process_status = metadata.get("process_status")
+            exit_code = metadata.get("exit_code")
             if not data:
+                if eof:
+                    terminal_frame: dict[str, object] = {
+                        "session_id": session_id,
+                        "sequence": self.next_frame_sequence(session_id),
+                        "stream": "stdout",
+                        "data": "",
+                        "eof": True,
+                    }
+                    if isinstance(process_status, str) and process_status:
+                        terminal_frame["process_status"] = process_status
+                    if isinstance(exit_code, int):
+                        terminal_frame["exit_code"] = exit_code
+                    frames.append(terminal_frame)
+                    should_drop_session = True
                 break
-            encoded = data.encode("utf-8", errors="replace")
-            start = 0
+            remaining_data = data
             while (
-                start < len(encoded)
+                remaining_data
                 and len(frames) < _TERMINAL_FRAME_MAX_FRAMES_PER_OPERATION
                 and bytes_remaining > 0
             ):
-                chunk = encoded[start : start + min(_TERMINAL_FRAME_MAX_BYTES, bytes_remaining)]
-                start += len(chunk)
-                bytes_remaining -= len(chunk)
+                chunk, remaining_data, chunk_bytes = _take_utf8_chunk(
+                    remaining_data,
+                    min(_TERMINAL_FRAME_MAX_BYTES, bytes_remaining),
+                )
                 if not chunk:
-                    continue
+                    break
+                bytes_remaining -= chunk_bytes
                 frames.append(
                     {
                         "session_id": session_id,
                         "sequence": self.next_frame_sequence(session_id),
                         "stream": "stdout",
-                        "data": chunk.decode("utf-8", errors="replace"),
+                        "data": chunk,
                     }
                 )
         return frames, should_drop_session
@@ -190,11 +221,11 @@ class TerminalFrameLifecycle:
                 if active_session is None:
                     break
                 frame_payloads, should_drop = self.read_terminal_frames(session_id=session_id)
-                if should_drop:
-                    self._active_terminal_sessions.pop(session_id, None)
-                    self._terminal_frame_sequences.pop(session_id, None)
-                    break
                 if not frame_payloads:
+                    if should_drop:
+                        self._active_terminal_sessions.pop(session_id, None)
+                        self._terminal_frame_sequences.pop(session_id, None)
+                        break
                     time.sleep(0.005)
                     continue
                 for frame_payload in frame_payloads:
@@ -213,6 +244,10 @@ class TerminalFrameLifecycle:
                     except Exception:
                         stop_event.set()
                         break
+                if should_drop:
+                    self._active_terminal_sessions.pop(session_id, None)
+                    self._terminal_frame_sequences.pop(session_id, None)
+                    break
             self._terminal_frame_publishers.pop(session_id, None)
 
         thread = threading.Thread(

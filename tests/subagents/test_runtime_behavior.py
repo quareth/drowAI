@@ -25,8 +25,10 @@ from agent.graph.subgraphs.tool_execution_runtime.batch_runner import (
 )
 from agent.graph.state import InteractiveState, ToolExecutionRecord
 from agent.graph.utils import iteration_memory
+from agent.providers.llm.core.base import LLMResponse
 from agent.providers.llm.core.base import ToolCall as ProviderToolCall
 from agent.providers.llm.core.base import ToolCallResult
+from agent.providers.llm.core.capabilities import LLMCapability
 from agent.subagents.contracts import (
     AgentAssignment,
     AgentResultProjection,
@@ -63,13 +65,17 @@ from agent.tool_runtime.batch.types import (
     ToolCallStatus,
 )
 from agent.tools.tool_call_specs import make_function_name_for_tool
+from core.prompts.builders.post_tool.evidence import register_runtime_compact_evidence
 from core.prompts.builders.subagent_runtime import SubagentRuntimePromptBuilder
+from runtime_shared.shell_capabilities import (
+    SHELL_ASSESSMENT_TOOL_ID,
+    SHELL_UTILITY_TOOL_ID,
+    SHELL_WRITE_STDIN_TOOL_ID,
+)
 
 
 FPING_TOOL_ID = "information_gathering.network_discovery.fping"
 NMAP_TOOL_ID = "information_gathering.network_discovery.nmap"
-
-
 class _FakeUsage:
     """Minimal usage value accepted by the shared graph usage converter."""
 
@@ -90,10 +96,20 @@ class _FakeBuilderLLM:
         calls: list[ProviderToolCall] | None = None,
         *,
         content: str | None = None,
+        parallel_tools: bool = True,
     ) -> None:
         self.calls = calls
         self.content = content
+        self.parallel_tools = parallel_tools
         self.requests: list[dict[str, Any]] = []
+
+    def supports_capability(self, capability: LLMCapability | str) -> bool:
+        """Return the configured provider-neutral parallel-tool capability."""
+
+        return (
+            capability == LLMCapability.PARALLEL_TOOLS
+            and self.parallel_tools
+        )
 
     async def chat_with_tools_with_usage(
         self,
@@ -114,6 +130,21 @@ class _FakeBuilderLLM:
             raw=None,
             usage=_FakeUsage(),
         )
+
+    async def chat_with_usage(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        self.requests.append(
+            {
+                "system_prompt": system_prompt,
+                "user_prompt": user_prompt,
+                "kwargs": kwargs,
+            }
+        )
+        return LLMResponse(content=self.content or "", usage=_FakeUsage())
 
 
 def _pathfinder_definition() -> SubagentDefinition:
@@ -189,12 +220,53 @@ def _profile() -> SubagentToolProfile:
     )
 
 
+def _profile_with_universal_shell_tools() -> SubagentToolProfile:
+    return SubagentToolProfile(
+        tools=(
+            *(
+                spec
+                for spec in _profile().tools
+                if spec.tool_id
+                not in {
+                    SHELL_UTILITY_TOOL_ID,
+                    SHELL_ASSESSMENT_TOOL_ID,
+                    SHELL_WRITE_STDIN_TOOL_ID,
+                }
+            ),
+            SubagentToolSpec(
+                tool_id=SHELL_UTILITY_TOOL_ID,
+                display_name="shell.utility",
+                capabilities=(),
+            ),
+            SubagentToolSpec(
+                tool_id=SHELL_ASSESSMENT_TOOL_ID,
+                display_name="shell.assessment",
+                capabilities=(),
+            ),
+            SubagentToolSpec(
+                tool_id=SHELL_WRITE_STDIN_TOOL_ID,
+                display_name="shell.write_stdin",
+                capabilities=(),
+            ),
+        )
+    )
+
+
 def _generic_state() -> dict[str, Any]:
     return build_subagent_initial_state(
         definition=_pathfinder_definition(),
         assignment=_assignment(),
         graph_thread_id="child-thread-1",
         tool_profile=_profile(),
+    )
+
+
+def _generic_state_with_universal_shell_tools() -> dict[str, Any]:
+    return build_subagent_initial_state(
+        definition=_pathfinder_definition(),
+        assignment=_assignment(),
+        graph_thread_id="child-thread-shell-utilities",
+        tool_profile=_profile_with_universal_shell_tools(),
     )
 
 
@@ -231,6 +303,60 @@ def test_subagent_initial_state_rejects_missing_parent_approval_policy() -> None
             _assignment(agent_mode=None),
             graph_thread_id="child-thread-missing-agent-mode",
         )
+
+
+def test_subagent_initial_state_seeds_parent_tool_outcome_into_phase_memory() -> None:
+    base = _assignment().model_dump(mode="json")
+    base["relevant_context"]["prior_tool_outcomes"] = [
+        {
+            "status": "failed",
+            "success": False,
+            "calls": [
+                {
+                    "tool": SHELL_ASSESSMENT_TOOL_ID,
+                    "invocation": {
+                        "command": "missing-program --check",
+                        "cwd": "/workspace",
+                        "interactive": False,
+                    },
+                    "status": "failed",
+                    "success": False,
+                    "failure_category": "missing_dependency",
+                    "summary": "Command failed with exit code 127.",
+                    "exit_code": 127,
+                }
+            ],
+        }
+    ]
+    state = _generic_state_for_assignment(
+        AgentAssignment.model_validate(base),
+        graph_thread_id="child-thread-parent-outcome",
+    )
+    interactive = InteractiveState.from_mapping(state)
+
+    assert runtime_model._build_prior_tool_outcomes(interactive) == [
+        {
+            "phase": 0,
+            "status": "failed",
+            "success": False,
+            "calls": [
+                {
+                    "tool": SHELL_ASSESSMENT_TOOL_ID,
+                    "invocation": {
+                        "command": "missing-program --check",
+                        "cwd": "/workspace",
+                        "interactive": False,
+                    },
+                    "status": "failed",
+                    "success": False,
+                    "failure_category": "missing_dependency",
+                    "summary": "Command failed with exit code 127.",
+                    "exit_code": 127,
+                }
+            ],
+        }
+    ]
+    assert interactive.facts.iterations == 0
 
 
 def _tool_iteration(
@@ -435,7 +561,7 @@ def _extract_prompt_json(user_prompt: str, label: str) -> dict[str, Any]:
     return json.loads(match.group(1))
 
 
-def _extract_prompt_section_json(user_prompt: str, label: str) -> dict[str, Any]:
+def _extract_prompt_section_json(user_prompt: str, label: str) -> Any:
     match = re.search(
         rf"^{re.escape(label)}:\n(.+?)(?:\n\n|$)",
         user_prompt,
@@ -484,12 +610,20 @@ def test_runtime_profile_resolves_definition_owned_tools() -> None:
 
     profile = resolve_subagent_tool_profile(definition, definition.tool_ids)
 
-    assert profile.tool_ids == definition.tool_ids
+    assert profile.tool_ids == (
+        *definition.tool_ids,
+        SHELL_UTILITY_TOOL_ID,
+        SHELL_ASSESSMENT_TOOL_ID,
+        SHELL_WRITE_STDIN_TOOL_ID,
+    )
     assert profile.capabilities_for_tool(FPING_TOOL_ID) == ("host_discovery",)
     assert profile.capabilities_for_tool(NMAP_TOOL_ID) == (
         "port_scanning",
         "service_enumeration",
     )
+    assert profile.capabilities_for_tool(SHELL_UTILITY_TOOL_ID) == ()
+    assert profile.capabilities_for_tool(SHELL_ASSESSMENT_TOOL_ID) == ()
+    assert profile.capabilities_for_tool(SHELL_WRITE_STDIN_TOOL_ID) == ()
 
 
 def test_runtime_initial_state_uses_generic_metadata_key() -> None:
@@ -511,7 +645,13 @@ def test_runtime_initial_state_uses_generic_metadata_key() -> None:
         definition=_pathfinder_definition(),
     )
     assert subagent_state.as_metadata() == metadata["subagent"]
-    assert subagent_state.tool_profile.tool_ids == (FPING_TOOL_ID, NMAP_TOOL_ID)
+    assert subagent_state.tool_profile.tool_ids == (
+        FPING_TOOL_ID,
+        NMAP_TOOL_ID,
+        SHELL_UTILITY_TOOL_ID,
+        SHELL_ASSESSMENT_TOOL_ID,
+        SHELL_WRITE_STDIN_TOOL_ID,
+    )
     assert metadata["graph_thread_id"] == "child-thread-1"
     assert metadata["parent_graph_thread_id"] == "parent-thread-1"
     assert bundle["conversation_id"] == "conversation-1"
@@ -676,6 +816,9 @@ async def test_runtime_model_records_generic_route_metadata_and_call_topology() 
     assert request["tool_ids"] == [
         FPING_TOOL_ID,
         NMAP_TOOL_ID,
+        SHELL_UTILITY_TOOL_ID,
+        SHELL_ASSESSMENT_TOOL_ID,
+        SHELL_WRITE_STDIN_TOOL_ID,
     ]
     assert request["kwargs"] == {
         "tool_choice": "auto",
@@ -684,12 +827,172 @@ async def test_runtime_model_records_generic_route_metadata_and_call_topology() 
         "max_tokens": 5000,
     }
     assert "Remaining Limits:" in request["user_prompt"]
-    assert '"remaining_iterations": 3' in request["user_prompt"]
+    assert '"remaining_iterations": 9' in request["user_prompt"]
     assert '"remaining_tool_calls_this_iteration": 3' in request["user_prompt"]
     assert all(
         SUBAGENT_EXECUTION_STRATEGY_KEY in required
         for required in request["required"]
     )
+
+
+@pytest.mark.asyncio
+async def test_runtime_model_omits_parallel_option_when_capability_is_unsupported() -> None:
+    """A sequential-only model receives a valid tool request without parallel control."""
+
+    llm = _FakeBuilderLLM(
+        [
+            _native_call(
+                FPING_TOOL_ID,
+                parameters={"target": "10.0.0.10"},
+                strategy="sequential",
+                intent="Check whether the approved host responds.",
+            )
+        ],
+        parallel_tools=False,
+    )
+
+    await run_subagent_model_turn(
+        _pathfinder_definition(),
+        _generic_state(),
+        llm_resolver=lambda *_args, **_kwargs: llm,
+    )
+
+    request = _request_projection(llm.requests[0])
+    assert request["kwargs"] == {
+        "tool_choice": "auto",
+        "temperature": 0.1,
+        "max_tokens": 5000,
+    }
+
+
+@pytest.mark.asyncio
+async def test_runtime_model_exposes_and_commits_universal_shell_utilities() -> None:
+    calls = [
+        _native_call(
+            SHELL_UTILITY_TOOL_ID,
+            parameters={"command": "printf ready"},
+            strategy="sequential",
+            intent="Start a bounded shell session for a quick runtime check.",
+        )
+    ]
+    llm = _FakeBuilderLLM(calls)
+
+    update = await run_subagent_model_turn(
+        _pathfinder_definition(),
+        _generic_state_with_universal_shell_tools(),
+        llm_resolver=lambda *_args, **_kwargs: llm,
+    )
+
+    request = _request_projection(llm.requests[0])
+    assert request["tool_ids"] == [
+        FPING_TOOL_ID,
+        NMAP_TOOL_ID,
+        SHELL_UTILITY_TOOL_ID,
+        SHELL_ASSESSMENT_TOOL_ID,
+        SHELL_WRITE_STDIN_TOOL_ID,
+    ]
+    assert SHELL_UTILITY_TOOL_ID in request["schemas_by_tool_id"]
+    assert SHELL_ASSESSMENT_TOOL_ID in request["schemas_by_tool_id"]
+    assert SHELL_WRITE_STDIN_TOOL_ID in request["schemas_by_tool_id"]
+    assert "Use shell.utility for ordinary operating-system" in request["system_prompt"]
+    assert "Use shell.assessment for commands whose purpose" in request["system_prompt"]
+    assert "shell interaction coordinator owns waiting for autonomous output" in request["system_prompt"]
+    assert "Do not use shell.write_stdin with empty chars to poll" in request["system_prompt"]
+    assert "run shells" not in request["system_prompt"]
+    assert "run shells" not in request["user_prompt"]
+    assert "Use shell.utility for ordinary operating-system" not in request["user_prompt"]
+    assert "Use shell.assessment for commands whose purpose" not in request["user_prompt"]
+    assert set(request["schemas_by_tool_id"][SHELL_UTILITY_TOOL_ID]["properties"]) >= {
+        "command",
+        "cwd",
+        "env",
+        "yield_time_ms",
+        "max_output_chars",
+        "max_runtime_sec",
+    }
+    assert set(
+        request["schemas_by_tool_id"][SHELL_WRITE_STDIN_TOOL_ID]["properties"]
+    ) >= {
+        "session_id",
+        "chars",
+        "yield_time_ms",
+        "max_output_chars",
+    }
+    metadata = update["facts"]["metadata"]
+    action = metadata[SUBAGENT_ACTION_METADATA_KEY]
+    assert action["route"] == "tool"
+    assert action["tool_ids"] == [SHELL_UTILITY_TOOL_ID]
+    assert update["facts"]["tool_candidates"] == request["tool_ids"]
+    assert metadata["planner_plan"]["tool_batch"]["tool_calls"][0]["tool_id"] == (
+        SHELL_UTILITY_TOOL_ID
+    )
+    assert metadata["planner_plan"]["tool_batch"]["tool_calls"][0]["parameters"] == {
+        "command": "printf ready",
+        "cwd": None,
+        "env": None,
+        "interactive": False,
+        "yield_time_ms": 10_000,
+        "max_output_chars": 32000,
+        "max_runtime_sec": 120,
+    }
+
+
+@pytest.mark.asyncio
+async def test_runtime_model_blocks_empty_write_poll_after_bounded_repair() -> None:
+    public_session_id = "shs_subagent_continuation_123"
+    state = _generic_state_with_universal_shell_tools()
+    metadata = state["facts"]["metadata"]
+    metadata["last_tool_result"] = {
+        "tool": SHELL_UTILITY_TOOL_ID,
+        "success": True,
+        "status": "success",
+        "process_status": "running",
+        "session_id": public_session_id,
+        "stdout": "started",
+        "stderr": "",
+        "exit_code": None,
+        "stdin_available": True,
+        "truncated": False,
+        "summary": f"Command is still running; poll session {public_session_id}.",
+        "parameters": {"command": "sleep 1; printf done"},
+    }
+    metadata["last_tool_result_compact"] = {
+        "tool": SHELL_UTILITY_TOOL_ID,
+        "success": True,
+        "status": "success",
+        "process_status": "running",
+        "session_id": public_session_id,
+        "summary": f"Command is still running; poll session {public_session_id}.",
+    }
+    calls = [
+        _native_call(
+            SHELL_WRITE_STDIN_TOOL_ID,
+            parameters={
+                "session_id": public_session_id,
+                "chars": "",
+                "yield_time_ms": 1000,
+                "max_output_chars": 32000,
+            },
+            strategy="sequential",
+            intent="Attempt an invalid empty wait on the running shell session.",
+        )
+    ]
+    llm = _FakeBuilderLLM(calls)
+
+    update = await run_subagent_model_turn(
+        _pathfinder_definition(),
+        state,
+        llm_resolver=lambda *_args, **_kwargs: llm,
+    )
+
+    request = _request_projection(llm.requests[0])
+    metadata = update["facts"]["metadata"]
+    assert len(llm.requests) == 2
+    assert SHELL_WRITE_STDIN_TOOL_ID in request["tool_ids"]
+    assert public_session_id in request["user_prompt"]
+    assert "Prior Tool Outcomes:\n[]" in request["user_prompt"]
+    assert metadata[SUBAGENT_ACTION_METADATA_KEY]["route"] == "handoff"
+    assert metadata[SUBAGENT_RESULT_METADATA_KEY]["outcome"] == "blocked"
 
 
 @pytest.mark.asyncio
@@ -711,7 +1014,13 @@ async def test_runtime_model_reconstructs_full_profile_after_committed_batch() -
     )
 
     assert after_fping["facts"]["tool_ids"] == [FPING_TOOL_ID]
-    assert after_fping["facts"]["tool_candidates"] == [FPING_TOOL_ID, NMAP_TOOL_ID]
+    assert after_fping["facts"]["tool_candidates"] == [
+        FPING_TOOL_ID,
+        NMAP_TOOL_ID,
+        SHELL_UTILITY_TOOL_ID,
+        SHELL_ASSESSMENT_TOOL_ID,
+        SHELL_WRITE_STDIN_TOOL_ID,
+    ]
 
     next_llm = _FakeBuilderLLM(
         [
@@ -730,7 +1039,13 @@ async def test_runtime_model_reconstructs_full_profile_after_committed_batch() -
     )
 
     next_request = _request_projection(next_llm.requests[0])
-    assert next_request["tool_ids"] == [FPING_TOOL_ID, NMAP_TOOL_ID]
+    assert next_request["tool_ids"] == [
+        FPING_TOOL_ID,
+        NMAP_TOOL_ID,
+        SHELL_UTILITY_TOOL_ID,
+        SHELL_ASSESSMENT_TOOL_ID,
+        SHELL_WRITE_STDIN_TOOL_ID,
+    ]
     assert next_update["facts"]["metadata"][SUBAGENT_ACTION_METADATA_KEY][
         "tool_ids"
     ] == [NMAP_TOOL_ID]
@@ -867,10 +1182,11 @@ async def test_runtime_model_forces_text_handoff_when_iteration_budget_exhausted
     request = _request_projection(llm.requests[0])
     assert request["tool_ids"] == []
     assert request["kwargs"] == {
-        "tool_choice": "none",
         "temperature": 0.1,
         "max_tokens": 5000,
     }
+    assert "Use shell.utility for ordinary operating-system" not in request["system_prompt"]
+    assert "Use shell.assessment for commands whose purpose" not in request["system_prompt"]
     metadata = update["facts"]["metadata"]
     assert metadata[SUBAGENT_ACTION_METADATA_KEY]["route"] == "handoff"
     assert "subagent_observation_transcript" not in metadata
@@ -917,6 +1233,26 @@ def test_runtime_syncs_completed_execution_budget_from_tool_phase_memory() -> No
     assert third["facts"]["iterations"] == 2
     assert "subagent_completed_iteration_markers" not in third["facts"]["metadata"]
     assert "subagent_observation_transcript" not in third["facts"]["metadata"]
+
+
+def test_runtime_counts_each_transient_execution_session_once() -> None:
+    state = _generic_state_with_universal_shell_tools()
+    state["facts"]["metadata"]["tool_batch_id"] = "batch-utility-terminal-1"
+
+    first = record_subagent_observation_and_budget(_pathfinder_definition(), state)
+    duplicate = record_subagent_observation_and_budget(
+        _pathfinder_definition(),
+        first,
+    )
+    duplicate["facts"]["metadata"]["tool_batch_id"] = "batch-utility-terminal-2"
+    second = record_subagent_observation_and_budget(
+        _pathfinder_definition(),
+        duplicate,
+    )
+
+    assert first["facts"]["iterations"] == 1
+    assert duplicate["facts"]["iterations"] == 1
+    assert second["facts"]["iterations"] == 2
 
 
 @pytest.mark.asyncio
@@ -1078,7 +1414,7 @@ async def test_runtime_counts_real_multi_call_batch_application_as_one_iteration
     assert len(tool_phase_records) == 1
     assert synced["facts"]["iterations"] == 1
     assert remaining_limits["completed_iterations"] == 1
-    assert remaining_limits["remaining_iterations"] == 2
+    assert remaining_limits["remaining_iterations"] == 8
     assert "subagent_completed_iteration_markers" not in synced["facts"]["metadata"]
     assert "subagent_observation_transcript" not in synced["facts"]["metadata"]
 
@@ -1120,6 +1456,38 @@ def test_subagent_tool_projection_uses_canonical_phase_memory_without_transcript
                 },
                 {"heading": "Key Findings", "body": "- 10.0.0.10 is alive."},
                 {"heading": "Compression Lossiness", "body": "lossiness_risk: low"},
+                {
+                    "heading": "Subagent Tool Outcome",
+                    "body": json.dumps(
+                        {
+                            "calls": [
+                                {
+                                    "artifact_refs": [
+                                        {
+                                            "label": "exec-fping-1",
+                                            "path": (
+                                                "/workspace/artifacts/"
+                                                "exec-fping-1.json"
+                                            ),
+                                        }
+                                    ],
+                                    "exit_code": 0,
+                                    "intent": f"Run {FPING_TOOL_ID}",
+                                    "key_findings": ["10.0.0.10 is alive."],
+                                    "status": "success",
+                                    "success": True,
+                                    "summary": "fping found 10.0.0.10 alive.",
+                                    "tool": FPING_TOOL_ID,
+                                }
+                            ],
+                            "status": "completed",
+                            "success": True,
+                        },
+                        ensure_ascii=True,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                },
             ],
         }
     ]
@@ -1178,6 +1546,10 @@ async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> Non
         provider="baseline",
         model="subagent-characterization",
     )
+    prior_tool_outcomes = _extract_prompt_section_json(
+        multi_iteration_user_prompt,
+        "Prior Tool Outcomes",
+    )
     previous_tool_summary = _extract_prompt_json(
         multi_iteration_user_prompt,
         "Previous tool executed",
@@ -1186,9 +1558,8 @@ async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> Non
         multi_iteration_user_prompt,
         "Working memory snapshot",
     )
-    phase_memory = iteration_memory.render_phase_memory_section(
-        multi_iteration_state["facts"]["metadata"],
-        turn_sequence=1,
+    expected_tool_outcomes = runtime_model._build_prior_tool_outcomes(
+        InteractiveState.from_mapping(multi_iteration_state)
     )
     completed_for_parent_handoff = complete_subagent_result(
         _pathfinder_definition(),
@@ -1201,10 +1572,15 @@ async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> Non
         {"completed_agent_results": [parent_handoff_projection]}
     )
 
-    assert previous_tool_summary == {
-        "last_tool_result": multi_iteration_state["facts"]["last_tool_result_compact"],
-        "current_turn_phase_memory": phase_memory,
-    }
+    assert prior_tool_outcomes == expected_tool_outcomes
+    assert [outcome["phase"] for outcome in prior_tool_outcomes] == [0, 1]
+    assert previous_tool_summary["last_tool_result"] == multi_iteration_state[
+        "facts"
+    ]["last_tool_result_compact"]
+    phase_memory = previous_tool_summary["current_turn_phase_memory"]
+    assert "## Prior Current-Turn Phase Memory" in phase_memory
+    assert "Tool Output Summary" in phase_memory
+    assert "Subagent Tool Outcome" not in phase_memory
     assert "current_turn_phases" not in working_memory_summary
     assert "current_turn_phase_counter" not in working_memory_summary
     assert "current_turn_phase_turn" not in working_memory_summary
@@ -1215,6 +1591,8 @@ async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> Non
     assert "subagent_observation_transcript" not in multi_iteration_user_prompt
     assert "subagent_observations" not in multi_iteration_user_prompt
     assert "current_turn_phase_memory" in multi_iteration_user_prompt
+    assert "last_tool_result" in multi_iteration_user_prompt
+    assert "Working memory snapshot" in multi_iteration_user_prompt
 
     baseline = {
         "one_tool_model_calls": len(one_tool_llm.requests),
@@ -1251,10 +1629,10 @@ async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> Non
     assert baseline == {
         "one_tool_model_calls": 1,
         "multi_iteration_model_calls": 1,
-        "one_tool_serialized_state_chars": 9660,
-        "multi_iteration_serialized_state_chars": 10882,
-        "multi_iteration_prompt_chars": 11133,
-        "multi_iteration_prompt_tokens": 3977,
+        "one_tool_serialized_state_chars": 10334,
+        "multi_iteration_serialized_state_chars": 12037,
+        "multi_iteration_prompt_chars": 15322,
+        "multi_iteration_prompt_tokens": 5473,
         "bounded_parent_handoff_projection_chars": 501,
         "bounded_parent_handoff_render_chars": 281,
         "parent_handoff_projection_model_calls": 0,
@@ -1560,6 +1938,362 @@ def test_runtime_completion_marks_nested_partial_batch_row_as_partial() -> None:
     ]
 
 
+def test_subagent_context_preserves_terminal_aggregate_and_appends_outcome() -> None:
+    batch_id = "batch-subagent-long-terminal-session"
+    origin_row = {
+        "tool_call_id": "tc-origin",
+        "tool_id": SHELL_UTILITY_TOOL_ID,
+        "intent": "Start one interactive calculator process.",
+        "status": "success",
+        "success": True,
+        "compact_tool_result": {
+            "tool": SHELL_UTILITY_TOOL_ID,
+            "summary": "Calculator is running and waiting for input.",
+            "stdout": "RAW_START_OUTPUT",
+            "process_status": "running",
+            "session_status": "active",
+            "session_id": "shs-subagent-long",
+            "stdin_available": True,
+        },
+    }
+    running_rows = [
+        {
+            "tool_call_id": f"tc-running-{index}",
+            "tool_id": SHELL_WRITE_STDIN_TOOL_ID,
+            "status": "success",
+            "success": True,
+            "compact_tool_result": {
+                "tool": SHELL_WRITE_STDIN_TOOL_ID,
+                "summary": f"running step {index}",
+                "stdout": f"progress-{index}\n",
+                "process_status": "running",
+                "session_status": "active",
+                "session_id": "shs-subagent-long",
+            },
+        }
+        for index in range(12)
+    ]
+    terminal_row = {
+        "tool_call_id": "tc-terminal",
+        "tool_id": SHELL_WRITE_STDIN_TOOL_ID,
+        "status": "success",
+        "success": True,
+        "compact_tool_result": {
+            "tool": SHELL_WRITE_STDIN_TOOL_ID,
+            "summary": "Calculator returned all requested values.",
+            "key_findings": ["Displayed totals: 7, 42, and 50."],
+            "errors": [],
+            "stdout": "7\n42\n50\n50\n",
+            "input": "quit\n",
+            "process_status": "completed",
+            "session_status": "closed",
+            "session_id": None,
+            "exit_code": 0,
+        },
+    }
+    register_runtime_compact_evidence(
+        {
+            "tool_batch_id": batch_id,
+            "execution_session_aggregate": True,
+            "status": "completed",
+            "success": True,
+            "results": [origin_row, *running_rows, terminal_row],
+            "deferred_followups": [],
+        },
+        single_compact=terminal_row["compact_tool_result"],
+    )
+    interactive = InteractiveState.from_mapping(
+        _generic_state_with_universal_shell_tools()
+    )
+    interactive.facts.metadata["tool_batch_id"] = batch_id
+    interactive.facts.metadata["turn_sequence"] = 1
+    interactive.facts.metadata["working_memory"]["current_turn_phase_turn"] = 1
+
+    updated = record_subagent_observation_and_budget(
+        _pathfinder_definition(),
+        interactive,
+    )
+    outcomes = runtime_model._build_prior_tool_outcomes(
+        InteractiveState.from_mapping(updated)
+    )
+
+    assert outcomes == [
+        {
+            "phase": 0,
+            "status": "completed",
+            "success": True,
+            "calls": [
+                {
+                    "tool": SHELL_UTILITY_TOOL_ID,
+                    "intent": "Start one interactive calculator process.",
+                    "status": "success",
+                    "success": True,
+                    "summary": "Calculator returned all requested values.",
+                    "exit_code": 0,
+                    "key_findings": ["Displayed totals: 7, 42, and 50."],
+                    "process_status": "completed",
+                    "session_status": "closed",
+                }
+            ],
+        }
+    ]
+    outcome_json = json.dumps(outcomes)
+    assert "tc-running" not in outcome_json
+    assert "progress-" not in outcome_json
+    assert "RAW_START_OUTPUT" not in outcome_json
+    assert "session_id" not in outcome_json
+
+    prompt = SubagentRuntimePromptBuilder().build_user_prompt(
+        display_name="Pathfinder",
+        assignment={"objective": "Complete one interactive calculator session."},
+        tool_ids=[SHELL_WRITE_STDIN_TOOL_ID],
+        previous_tool_summary=runtime_model._build_previous_tool_context(
+            InteractiveState.from_mapping(updated)
+        ),
+        prior_tool_outcomes=outcomes,
+    )
+
+    assert '"tool": "shell.utility"' in prompt
+    assert '"process_status": "completed"' in prompt
+    assert '"session_status": "closed"' in prompt
+    assert '"session_id": "shs-subagent-long"' in prompt
+    assert '"stdout": "7\\n42\\n50\\n50\\n"' in prompt
+    assert '"input": "quit\\n"' in prompt
+    assert "tc-running-11" in prompt
+    assert "Prior Tool Outcomes:" in prompt
+
+
+def test_subagent_tool_outcomes_preserve_mixed_multi_call_batch() -> None:
+    batch_id = "batch-subagent-mixed"
+    register_runtime_compact_evidence(
+        {
+            "tool_batch_id": batch_id,
+            "status": "completed_with_errors",
+            "success": False,
+            "results": [
+                {
+                    "tool_call_id": "tc-success",
+                    "tool_id": FPING_TOOL_ID,
+                    "intent": "Check whether the target responds.",
+                    "status": "success",
+                    "success": True,
+                    "compact_tool_result": {
+                        "summary": "10.0.0.10 responded.",
+                        "key_findings": ["10.0.0.10 is alive."],
+                        "errors": [],
+                    },
+                },
+                {
+                    "tool_call_id": "tc-failed",
+                    "tool_id": NMAP_TOOL_ID,
+                    "intent": "Enumerate exposed services.",
+                    "status": "failed",
+                    "success": False,
+                    "failure_category": "timeout",
+                    "compact_tool_result": {
+                        "summary": "Service enumeration timed out.",
+                        "key_findings": [],
+                        "errors": ["Deadline exceeded."],
+                    },
+                },
+            ],
+            "deferred_followups": ["Retry service enumeration with a longer deadline."],
+        }
+    )
+    interactive = InteractiveState.from_mapping(_generic_state())
+    interactive.facts.metadata["tool_batch_id"] = batch_id
+    interactive.facts.metadata["turn_sequence"] = 1
+    interactive.facts.metadata["working_memory"]["current_turn_phase_turn"] = 1
+
+    updated = record_subagent_observation_and_budget(
+        _pathfinder_definition(),
+        interactive,
+    )
+    outcomes = runtime_model._build_prior_tool_outcomes(
+        InteractiveState.from_mapping(updated)
+    )
+
+    assert outcomes == [
+        {
+            "phase": 0,
+            "status": "completed_with_errors",
+            "success": False,
+            "calls": [
+                {
+                    "tool": FPING_TOOL_ID,
+                    "intent": "Check whether the target responds.",
+                    "status": "success",
+                    "success": True,
+                    "summary": "10.0.0.10 responded.",
+                    "key_findings": ["10.0.0.10 is alive."],
+                },
+                {
+                    "tool": NMAP_TOOL_ID,
+                    "intent": "Enumerate exposed services.",
+                    "status": "failed",
+                    "success": False,
+                    "failure_category": "timeout",
+                    "summary": "Service enumeration timed out.",
+                    "errors": ["Deadline exceeded."],
+                },
+            ],
+            "deferred_followups": [
+                "Retry service enumeration with a longer deadline."
+            ],
+        }
+    ]
+
+
+def test_subagent_tool_outcomes_retain_failed_then_successful_recovery_once() -> None:
+    interactive = InteractiveState.from_mapping(_generic_state())
+    interactive.facts.metadata["turn_sequence"] = 1
+    interactive.facts.metadata["working_memory"]["current_turn_phase_turn"] = 1
+
+    failed_batch_id = "batch-subagent-recovery-failed"
+    register_runtime_compact_evidence(
+        {
+            "tool_batch_id": failed_batch_id,
+            "status": "failed",
+            "success": False,
+            "results": [
+                {
+                    "tool_call_id": "tc-missing-tool",
+                    "tool_id": SHELL_UTILITY_TOOL_ID,
+                    "intent": "Start the required interactive program.",
+                    "status": "failed",
+                    "success": False,
+                    "failure_category": "missing_dependency",
+                    "compact_tool_result": {
+                        "summary": "Command failed with exit code 127.",
+                        "exit_code": 127,
+                        "errors": ["Command exited with code 127."],
+                    },
+                }
+            ],
+        }
+    )
+    interactive.facts.metadata["tool_batch_id"] = failed_batch_id
+    failed_state = record_subagent_observation_and_budget(
+        _pathfinder_definition(),
+        interactive,
+    )
+
+    completed_batch_id = "batch-subagent-recovery-completed"
+    register_runtime_compact_evidence(
+        {
+            "tool_batch_id": completed_batch_id,
+            "status": "completed",
+            "success": True,
+            "results": [
+                {
+                    "tool_call_id": "tc-recovery",
+                    "tool_id": SHELL_UTILITY_TOOL_ID,
+                    "intent": "Resolve the confirmed missing dependency.",
+                    "status": "success",
+                    "success": True,
+                    "compact_tool_result": {
+                        "summary": "Dependency installation completed successfully.",
+                        "exit_code": 0,
+                        "key_findings": ["Installed the required dependency."],
+                        "errors": [],
+                    },
+                }
+            ],
+        }
+    )
+    completed = InteractiveState.from_mapping(failed_state)
+    completed.facts.metadata["tool_batch_id"] = completed_batch_id
+    completed_state = record_subagent_observation_and_budget(
+        _pathfinder_definition(),
+        completed,
+    )
+    replayed_state = record_subagent_observation_and_budget(
+        _pathfinder_definition(),
+        completed_state,
+    )
+    final = InteractiveState.from_mapping(replayed_state)
+    outcomes = runtime_model._build_prior_tool_outcomes(final)
+
+    assert final.facts.iterations == 2
+    assert [outcome["phase"] for outcome in outcomes] == [0, 1]
+    assert outcomes[0]["status"] == "failed"
+    assert outcomes[0]["calls"][0]["failure_category"] == "missing_dependency"
+    assert outcomes[0]["calls"][0]["exit_code"] == 127
+    assert outcomes[1]["status"] == "completed"
+    assert outcomes[1]["calls"][0]["success"] is True
+    assert outcomes[1]["calls"][0]["exit_code"] == 0
+    assert len(iteration_memory.get_ledger(final.facts.metadata)) == 2
+
+
+@pytest.mark.parametrize(
+    "shell_tool_id",
+    [SHELL_UTILITY_TOOL_ID, SHELL_ASSESSMENT_TOOL_ID],
+)
+def test_subagent_tool_outcome_includes_shell_invocation_from_planner_batch(
+    shell_tool_id: str,
+) -> None:
+    batch_id = f"batch-shell-invocation-{shell_tool_id}"
+    register_runtime_compact_evidence(
+        {
+            "tool_batch_id": batch_id,
+            "status": "failed",
+            "success": False,
+            "results": [
+                {
+                    "tool_call_id": "tc-shell-invocation",
+                    "tool_id": shell_tool_id,
+                    "intent": "Start the required program.",
+                    "status": "failed",
+                    "success": False,
+                    "failure_category": "missing_dependency",
+                    "compact_tool_result": {
+                        "summary": "Command failed with exit code 127.",
+                        "exit_code": 127,
+                    },
+                }
+            ],
+        }
+    )
+    interactive = InteractiveState.from_mapping(
+        _generic_state_with_universal_shell_tools()
+    )
+    interactive.facts.metadata["tool_batch_id"] = batch_id
+    interactive.facts.metadata["turn_sequence"] = 1
+    interactive.facts.metadata["working_memory"]["current_turn_phase_turn"] = 1
+    interactive.facts.metadata["planner_plan"] = {
+        "tool_batch": {
+            "tool_calls": [
+                {
+                    "tool_call_id": "tc-shell-invocation",
+                    "tool_id": shell_tool_id,
+                    "parameters": {
+                        "command": "bc",
+                        "cwd": "/workspace",
+                        "interactive": True,
+                        "yield_time_ms": 1000,
+                        "max_runtime_sec": 120,
+                    },
+                    "intent": "Start the required program.",
+                }
+            ]
+        }
+    }
+
+    updated = record_subagent_observation_and_budget(
+        _pathfinder_definition(),
+        interactive,
+    )
+    outcomes = runtime_model._build_prior_tool_outcomes(
+        InteractiveState.from_mapping(updated)
+    )
+
+    assert outcomes[0]["calls"][0]["invocation"] == {
+        "command": "bc",
+        "cwd": "/workspace",
+        "interactive": True,
+    }
+
+
 def test_subagent_parent_handoff_baseline_is_bounded_result_projection() -> None:
     state = _state_after_tool_iterations(
         [
@@ -1707,11 +2441,15 @@ def test_runtime_modules_do_not_import_backend_services() -> None:
 
 def _request_projection(request: dict[str, Any]) -> dict[str, Any]:
     kwargs = dict(request["kwargs"])
-    tools = kwargs.pop("tools")
+    tools = kwargs.pop("tools", [])
     return {
         "system_prompt": request["system_prompt"],
         "user_prompt": request["user_prompt"],
         "kwargs": kwargs,
         "tool_ids": [tool.tool_id for tool in tools],
         "required": [tool.parameters_schema["required"] for tool in tools],
+        "schemas_by_tool_id": {
+            tool.tool_id: tool.parameters_schema
+            for tool in tools
+        },
     }

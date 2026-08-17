@@ -18,7 +18,12 @@
 import { useMemo } from "react";
 
 import { ExecutingToolCard } from "./ExecutingToolCard";
+import {
+  deriveToolLifecycleStatus,
+  type ToolLifecycleStatus,
+} from "./toolLifecycleStatus";
 import type { ChatMessage } from "./types";
+import type { CompactToolResult } from "@/types/compact-tool-result";
 
 interface ToolBatchCardProps {
   /** All messages grouped under one ``tool_batch_id``. */
@@ -31,15 +36,27 @@ interface ToolBatchCardProps {
 interface BatchRowState {
   toolCallId: string;
   toolName: string;
-  status: "executing" | "completed" | "failed" | "cancelled";
+  commandDisplay?: string;
+  status: ToolLifecycleStatus;
+  sessionStatus?: string;
+  processStatus?: string;
+  interactionBoundary?: string;
   retryAttempt?: number;
   retryMaxAttempts?: number;
+  compactToolResult?: CompactToolResult;
+  shellOutputChunks?: ShellOutputChunk[];
+  preferDurableRawOutput?: boolean;
   /** First-seen index in the message stream — used as a stable order key when
    * the batch_start manifest is absent. */
   firstSeenIndex: number;
   /** Manifest order index from the originating ``tool_batch_start`` event,
    * when present. Takes precedence over ``firstSeenIndex``. */
   manifestIndex?: number;
+}
+
+interface ShellOutputChunk {
+  content: string;
+  endsWithNewline: boolean;
 }
 
 interface BatchAggregate {
@@ -68,20 +85,26 @@ function readNumber(metadata: Record<string, unknown> | undefined, key: string):
   return undefined;
 }
 
-function deriveStatus(rawStatus: string | undefined): BatchRowState["status"] {
-  const lowered = (rawStatus ?? "").toLowerCase();
-  if (lowered === "success" || lowered === "ok" || lowered === "completed") {
-    return "completed";
+function reconstructShellOutput(chunks: ShellOutputChunk[] | undefined): string | undefined {
+  if (!chunks?.length) return undefined;
+
+  let output = "";
+  let previousEndedWithNewline = false;
+  for (const chunk of chunks) {
+    if (
+      output &&
+      previousEndedWithNewline &&
+      !output.endsWith("\n") &&
+      !output.endsWith("\r") &&
+      !chunk.content.startsWith("\n") &&
+      !chunk.content.startsWith("\r")
+    ) {
+      output += "\n";
+    }
+    output += chunk.content;
+    previousEndedWithNewline = chunk.endsWithNewline;
   }
-  if (
-    lowered === "cancelled" ||
-    lowered === "canceled" ||
-    lowered === "cancel_requested" ||
-    lowered === "stopped"
-  ) {
-    return "cancelled";
-  }
-  return "failed";
+  return output;
 }
 
 function buildManifestIndex(messages: ChatMessage[]): Map<string, number> {
@@ -160,7 +183,24 @@ function buildRows(messages: ChatMessage[], manifest: Map<string, number>): Batc
             };
             rows.set(callId, row);
           }
-          row.status = deriveStatus(typeof item.status === "string" ? item.status : undefined);
+          const rawStatus = typeof item.status === "string" ? item.status : undefined;
+          const processStatus =
+            typeof item.process_status === "string" ? item.process_status : undefined;
+          const effectiveProcessStatus = processStatus ?? row.processStatus;
+          if (processStatus) {
+            row.processStatus = processStatus;
+          }
+          const sessionStatus =
+            typeof item.session_status === "string" ? item.session_status : undefined;
+          if (sessionStatus) {
+            row.sessionStatus = sessionStatus;
+          }
+          const interactionBoundary =
+            typeof item.interaction_boundary === "string" ? item.interaction_boundary : undefined;
+          if (interactionBoundary) {
+            row.interactionBoundary = interactionBoundary;
+          }
+          row.status = deriveToolLifecycleStatus(rawStatus, effectiveProcessStatus);
         });
       }
       return;
@@ -188,6 +228,10 @@ function buildRows(messages: ChatMessage[], manifest: Map<string, number>): Batc
     if (toolName) {
       row.toolName = toolName;
     }
+    const commandDisplay = readString(metadata, "command_display");
+    if (commandDisplay) {
+      row.commandDisplay = commandDisplay;
+    }
 
     const retryAttempt = readNumber(metadata, "retry_attempt");
     if (retryAttempt !== undefined) {
@@ -195,8 +239,51 @@ function buildRows(messages: ChatMessage[], manifest: Map<string, number>): Batc
       row.retryMaxAttempts = readNumber(metadata, "retry_max_attempts");
     }
 
-    if (stepType === "tool_end") {
-      row.status = deriveStatus(readString(metadata, "status"));
+    if (stepType === "tool_delta" || stepType === "tool_end") {
+      const processStatus = readString(metadata, "process_status");
+      row.status = deriveToolLifecycleStatus(readString(metadata, "status"), processStatus);
+      row.processStatus = processStatus ?? row.processStatus;
+      row.sessionStatus = readString(metadata, "session_status") ?? row.sessionStatus;
+      row.interactionBoundary =
+        readString(metadata, "interaction_boundary") ?? row.interactionBoundary;
+      const isShellLifecycle = metadata?.shell_lifecycle_event === true;
+      const isShellOutputChunk =
+        (stepType === "tool_delta" &&
+          readString(metadata, "interaction_boundary") === "output_available") ||
+        (stepType === "tool_end" && metadata?.shell_output_chunk === true);
+      const isDurableShellTerminal =
+        isShellLifecycle &&
+        stepType === "tool_end" &&
+        metadata?.output_persistence === "durable";
+      if (isDurableShellTerminal) {
+        row.preferDurableRawOutput = true;
+        row.shellOutputChunks = undefined;
+        row.compactToolResult = undefined;
+      }
+      if (
+        metadata?.output_persistence === "transient" &&
+        !row.preferDurableRawOutput
+      ) {
+        if (
+          isShellLifecycle &&
+          isShellOutputChunk &&
+          typeof msg.content === "string" &&
+          msg.content.length > 0
+        ) {
+          (row.shellOutputChunks ??= []).push({
+            content: msg.content,
+            endsWithNewline: metadata.stdout_ends_with_newline === true,
+          });
+        }
+        const compact = metadata.compact_tool_result;
+        if (
+          compact &&
+          typeof compact === "object" &&
+          (!isShellLifecycle || (stepType === "tool_end" && !row.shellOutputChunks?.length))
+        ) {
+          row.compactToolResult = compact as CompactToolResult;
+        }
+      }
     }
   });
 
@@ -242,8 +329,8 @@ function deriveBatchAggregate(messages: ChatMessage[], rows: BatchRowState[]): B
   if (rows.length === 0) return { status: "executing", strategy };
   const allTerminal = rows.every((r) => r.status !== "executing");
   if (!allTerminal) return { status: "executing", strategy };
-  const anyFailed = rows.some((r) => r.status === "failed");
-  const anyCancelled = rows.some((r) => r.status === "cancelled");
+  const anyFailed = rows.some((r) => r.status === "failed" || r.status === "timed_out");
+  const anyCancelled = rows.some((r) => r.status === "cancelled" || r.status === "terminated");
   const anyCompleted = rows.some((r) => r.status === "completed");
   if (anyCancelled && !anyCompleted && !anyFailed) {
     return { status: "cancelled", strategy };
@@ -284,12 +371,18 @@ export function ToolBatchCard({ messages, groupKey, taskId }: ToolBatchCardProps
       <ExecutingToolCard
         toolName={only.toolName}
         status={only.status}
+        sessionStatus={only.sessionStatus}
+        processStatus={only.processStatus}
+        interactionBoundary={only.interactionBoundary}
         taskId={typeof taskId === "number" || typeof taskId === "string" ? taskId : undefined}
         toolCallId={only.toolCallId}
         stateKey={`${groupKey}-${only.toolCallId}`}
         testId={`tool-batch-card-${groupKey}-row-${only.toolCallId}`}
         retryAttempt={only.retryAttempt}
         retryMaxAttempts={only.retryMaxAttempts}
+        compactToolResult={only.compactToolResult}
+        commandDisplay={only.commandDisplay}
+        transientOutput={reconstructShellOutput(only.shellOutputChunks)}
       />
     );
   }
@@ -319,12 +412,18 @@ export function ToolBatchCard({ messages, groupKey, taskId }: ToolBatchCardProps
             key={row.toolCallId}
             toolName={row.toolName}
             status={row.status}
+            sessionStatus={row.sessionStatus}
+            processStatus={row.processStatus}
+            interactionBoundary={row.interactionBoundary}
             taskId={typeof taskId === "number" || typeof taskId === "string" ? taskId : undefined}
             toolCallId={row.toolCallId}
             stateKey={`${groupKey}-${row.toolCallId}`}
             testId={`tool-batch-card-${groupKey}-row-${row.toolCallId}`}
             retryAttempt={row.retryAttempt}
             retryMaxAttempts={row.retryMaxAttempts}
+            compactToolResult={row.compactToolResult}
+            commandDisplay={row.commandDisplay}
+            transientOutput={reconstructShellOutput(row.shellOutputChunks)}
             layout="batch-row"
           />
         ))}

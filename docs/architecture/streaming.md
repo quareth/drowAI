@@ -121,11 +121,23 @@ rendering; this is event chunking, not model-token streaming. Intent
 classification similarly emits a deterministic reasoning placeholder around
 the classifier call.
 
-`tool_delta` remains part of the shared event contract, but active runtime
-execution does not incrementally forward command stdout through it. Graph
-execution emits start/end and batch lifecycle events; adapter code can also
-construct a synchronous start/delta/end display sequence after a tool has
-already completed.
+Ordinary structured tool execution still suppresses raw `tool_delta` command
+chunks and emits start/end plus batch lifecycle. Provider-backed interactive
+shell sessions are the deliberate exception: bounded output windows with
+`interaction_boundary=output_available` are forwarded as correlated
+`tool_delta` events, and terminal output that arrives with completion can be
+carried by a `tool_end` marked `shell_output_chunk`. The adapter also propagates
+`process_status`, `session_status`, `interaction_boundary`, public session id,
+newline fidelity, and `output_persistence` so the client can update one tool
+card without inferring lifecycle from text.
+
+Utility-shell output is transient assessment context: it can appear in the live
+card and persisted stream/turn replay, but it is not retained as reusable graph,
+artifact, provenance, or Knowledge evidence. A completed assessment-shell card
+prefers its provider-confirmed durable raw transcript and discards accumulated
+partial display chunks. Cleanup, cancellation, timeout, or shutdown can project
+an idempotent terminal `tool_end` through `ShellSessionLifecycleProjector` so
+refresh/replay does not leave an active command stranded.
 
 The normalized schema also accepts the compatibility event names
 `assistant_delta`, `assistant_message`, and `assistant_final`. Current graph
@@ -177,10 +189,16 @@ but do not use the agent event-card protocol:
 | `metrics` | Runtime metrics and status snapshots |
 | `vpn_status` | Task VPN status notifications |
 
+The model-facing shell reuses terminal-provider I/O internally, but its card
+lifecycle and bounded output are projected onto the `agent-multi` tool-event
+stream rather than the user-facing `terminal` channel.
+
 Managed-runner terminal streaming additionally uses the
 `terminal_stream_v1` capability. Validated terminal frames are routed by
 tenant, task, runtime job, and session identity; a bounded compatibility path
-is used when live stream mode is unavailable.
+is used for ordinary terminal reads when live stream mode is unavailable.
+Provider-backed agent shell sessions require the live stream binding and fail
+closed rather than changing transport authority.
 
 ## Ordering and Safety Rules
 
@@ -203,6 +221,8 @@ is used when live stream mode is unavailable.
 - `agent/graph/nodes/post_tool_reasoning/streaming/base.py`
 - `agent/subagents/runtime/model.py`
 - `backend/services/langgraph_chat/execution/graph_executor.py`
+- `backend/services/langgraph_chat/streaming/event_processors/tool_event_processor.py`
+- `backend/services/chat/shell_session_lifecycle_projector.py`
 - `backend/services/streaming/in_memory_hub.py`
 - `backend/services/streaming/event_store.py`
 - `backend/services/websocket/reasoning_subscription.py`

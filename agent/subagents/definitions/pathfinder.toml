@@ -23,7 +23,7 @@ tool_ids = [
 ]
 enabled = true
 max_active_runs_per_task = 1
-max_iterations = 3
+max_iterations = 9
 max_tool_calls_per_iteration = 3
 requires_resolved_target = true
 icon = "pathfinder"
@@ -39,7 +39,7 @@ Use native tool calls when more evidence is needed; otherwise return a concise p
 """
 runtime_boundary_rules = [
   "Use only the targets, objective, scope, and constraints in the assignment context.",
-  "Do not exploit, authenticate, mutate files, run shells, manage agents, or request credentials.",
+  "Do not exploit, authenticate, mutate files unless explicitly allowed by assignment and tool scope, manage agents, or request credentials.",
 ]
 
 [capability_aliases]

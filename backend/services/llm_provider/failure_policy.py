@@ -14,6 +14,7 @@ from agent.providers.llm.core.exceptions import (
     LLMRefusalError,
     LLMResponseError,
 )
+from core.llm.api_retry import is_retryable_api_error
 from core.llm.timeout_runtime import LLMTimeoutError
 
 from .types import (
@@ -48,13 +49,10 @@ def classify_llm_runtime_failure(exc: Exception) -> LLMRuntimeFailureDisposition
     if isinstance(exc, LLMTimeoutError):
         return LLMRuntimeFailureDisposition(kind="timeout", retryable=True)
     if isinstance(exc, LLMAPIError):
-        status_code = exc.status_code
-        retryable = (
-            status_code is None
-            or status_code in {408, 409, 425, 429}
-            or (isinstance(status_code, int) and status_code >= 500)
+        return LLMRuntimeFailureDisposition(
+            kind="provider_api",
+            retryable=is_retryable_api_error(exc),
         )
-        return LLMRuntimeFailureDisposition(kind="provider_api", retryable=retryable)
     if isinstance(exc, LLMRefusalError):
         return LLMRuntimeFailureDisposition(kind="refusal", retryable=False)
     if isinstance(exc, LLMResponseError):

@@ -8,15 +8,85 @@ The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Main agents and subagents can now run one-shot commands or maintain
+  interactive shell sessions inside their task's Kali runtime, with exact stdin
+  handling, runtime-managed waiting, bounded output, and lifecycle cleanup.
+
+### Changed
+
+- Shell utility output is transient while shell assessment output remains
+  eligible for durable artifacts, provenance, and Knowledge retention.
+- Interactive shell policy now reserves hard blocks for obvious environment
+  destruction, shutdown, resource exhaustion, and container escape while
+  permitting pentesting workflows in the default permissive mode.
+- The inert `SHELL_EXEC_MAX_COMMAND_CHARS` agent setting has been retired;
+  command length alone remains accepted and no replacement limit was added.
+- Tool-output compression now allows up to 4,096 output tokens while preserving
+  downstream context limits.
+- Pathfinder now has nine tool-capable iterations and uses a plain final
+  handoff, improving compatibility after its tool budget is exhausted.
+- Agent and UI terminals now start in the task runtime's `/workspace`
+  directory, and fallback planning retains the complete visible tool catalog.
+
+### Fixed
+
+- Messages sent while a subagent handoff is still running now remain queued
+  behind the active parent turn, including across repeated approval pauses.
+- Distributed runner packages now install the process-inspection dependency
+  required by the managed runner at startup.
+- The distributed frontend health probe now uses the IPv4 loopback address,
+  avoiding false unhealthy status when `localhost` resolves to IPv6.
+- Shell commands now preserve authoritative completion, exit codes, and
+  interaction state across local and managed runtimes, preventing duplicate
+  execution and premature finalization.
+- Interrupted, cancelled, timed-out, and transport-failed shell sessions now
+  remain accurately controllable and visible until the runtime reports their
+  terminal outcome, including during cleanup and backend shutdown.
+- Interactive shell output now preserves final chunks, line breaks, meaningful
+  whitespace, multibyte UTF-8 characters, and legitimate exit-token text across
+  live streaming, completion, refresh, and replay.
+- Shell activity cards now remain correlated with their originating command and
+  show consistent running and terminal states, including `Processing result…`
+  while final reasoning is still underway.
+- Completed shell assessments now expose one provider-verified durable
+  transcript and artifact set, while utility commands remain transient and
+  cleanup preserves eligible evidence.
+- Interactive sessions now respect bounded waits, output limits, global
+  deadlines, runtime identity, and same-session serialization without blocking
+  independent sessions or expiring active work.
+- Main agents and subagents now sequence dependent shell stages, avoid false
+  free-form parameter retries, and reject ambiguous batches that attempt to
+  start multiple live shell sessions.
+- Direct execution now honors valid Pathfinder delegation selected by
+  post-tool reasoning instead of prematurely finalizing the response.
+- Sequential subagent handoffs now retain parent goal, todo, and reasoning state
+  while returning bounded child summaries, and refreshed conversations preserve
+  parent, subagent, and observation ordering.
+- Subagents now retain bounded prior tool outcomes, adapt parallel tool calls to
+  the selected model, recover from invalid actions, and distinguish interrupted
+  infrastructure from failed agent work.
+- Temporary LLM API failures now receive bounded provider-neutral retries while
+  preserving the selected provider and offering checkpoint retry after
+  exhaustion.
+- Local development runners now follow verified launcher ownership, preserve
+  shutdown recovery across legacy PID files, and avoid terminating unrelated or
+  standalone processes.
+- Managed-runner reconnect handshakes now complete before stale terminal cleanup,
+  preventing multi-session cleanup from exhausting the runner's open timeout.
+- ANSI-formatted ffuf results no longer create invalid Knowledge identities or
+  block task deletion after evidence is safely archived.
+
 ### Security
 
 - Updated cryptography, Undici, and PostCSS to patched releases that address
   dependency security advisories.
-
-### Fixed
-
-- ANSI-formatted ffuf results no longer create invalid Knowledge identities or
-  block task deletion after evidence is safely archived.
+- Managed-runner terminal streams now reject data for unknown or closed sessions
+  and keep buffered output bounded.
+- Shell environment inputs require valid variable names, durable history masks
+  stdin values, and destructive commands remain blocked through supported
+  wrappers and continued lines.
 
 ## [0.3.0] - 2026-08-04
 

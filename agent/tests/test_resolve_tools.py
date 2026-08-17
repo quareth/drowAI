@@ -6,18 +6,26 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from agent.graph.infrastructure.state_models import CapabilityType
+from agent.tools.enhanced_metadata_registry import get_enhanced_tool_metadata
 from agent.tools.resolve_tools import resolve_tools_for_capability
 
 
 class DummyConfig:
-    max_tools_exposed = 2
+    max_tools_per_action = 2
 
 
 def test_resolve_tools_for_scan_ports():
+    assert (
+        get_enhanced_tool_metadata(
+            "information_gathering.network_discovery.nmap"
+        )
+        is not None
+    )
     context = {"current_phase": "enumeration"}
     out = resolve_tools_for_capability(CapabilityType.PORT_SCAN, context, DummyConfig())
     assert isinstance(out, list)
     assert 0 < len(out) <= 2
+    assert out[0] == "information_gathering.network_discovery.nmap"
 
 
 def test_resolve_tools_alias_handling():
@@ -98,7 +106,7 @@ def test_resolve_tools_http_aliases(monkeypatch):
 def test_resolve_tools_network_utility_aliases(monkeypatch):
     monkeypatch.setattr(
         "agent.tools.resolve_tools.available_tools",
-        lambda: ["networking_utilities.network"],
+        lambda: ["shell.utility", "networking_utilities.network"],
     )
 
     for alias in [
@@ -112,6 +120,4 @@ def test_resolve_tools_network_utility_aliases(monkeypatch):
         "interfaces",
         "routes",
     ]:
-        assert resolve_tools_for_capability(alias, {}, DummyConfig()) == [
-            "networking_utilities.network"
-        ]
+        assert resolve_tools_for_capability(alias, {}, DummyConfig()) == ["shell.utility"]

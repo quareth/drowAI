@@ -1,0 +1,16 @@
+Current Turn Input:
+
+{intent_brief_block}
+
+Candidate Tools: {selected_tools}
+
+{selector_decision_block}
+{next_tool_hint}
+{previous_tool_context}
+{plan_context}
+
+Task Context:
+- Phase: {phase}
+- Constraints: {constraints}
+{relevant_findings_section}{referenced_prior_turns_block}{working_memory_snapshot_block}
+{artifact_parameter_policy}{tool_runbooks}{artifact_file_metadata}

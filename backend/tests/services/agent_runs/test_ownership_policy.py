@@ -17,6 +17,7 @@ from backend.services.langgraph_chat.contracts import (
     ExecutionMode,
     LangGraphRuntimeConfig,
 )
+from core.prompts.builders.post_tool.evidence import register_runtime_compact_evidence
 
 
 def _metadata(
@@ -53,6 +54,7 @@ def _runtime_config_for_assignment(
     agent_mode: AgentMode = AgentMode.FULL_ACCESS,
     plan_mode: bool = False,
     reserved_message_id: int | None = None,
+    extra_metadata: dict[str, object] | None = None,
 ) -> LangGraphRuntimeConfig:
     chat_inputs = ChatInputs(
         task_id=42,
@@ -89,6 +91,7 @@ def _runtime_config_for_assignment(
             },
             "subagent_routing": subagent_routing,
             "feature_flags": {"simple_tool_enabled": True},
+            **(extra_metadata or {}),
         },
     )
 
@@ -208,6 +211,86 @@ def test_assignment_construction_preserves_parent_approval_policy() -> None:
 
     assert assignment.relevant_context["agent_mode"] == "agent"
     assert assignment.relevant_context["reserved_message_id"] == 815
+
+
+def test_assignment_carries_latest_compact_tool_outcome_with_invocation() -> None:
+    decision = resolve_subagent_handoff(
+        _metadata(raw_capabilities=["network_scan"])
+    )
+    assert decision.should_delegate is True
+    register_runtime_compact_evidence(
+        {
+            "tool_batch_id": "tb-parent-shell",
+            "status": "failed",
+            "success": False,
+            "results": [
+                {
+                    "tool_call_id": "tc-parent-shell",
+                    "tool_id": "shell.utility",
+                    "intent": "Start the required calculator.",
+                    "status": "failed",
+                    "success": False,
+                    "failure_category": "missing_dependency",
+                    "compact_tool_result": {
+                        "summary": "Command failed with exit code 127.",
+                        "exit_code": 127,
+                        "errors": ["bc: command not found"],
+                    },
+                }
+            ],
+        }
+    )
+
+    assignment = build_assignment(
+        _runtime_config_for_assignment(
+            subagent_routing=_routing_metadata(decision),
+            extra_metadata={
+                "planner_plan": {
+                    "tool_batch": {
+                        "tool_calls": [
+                            {
+                                "tool_call_id": "tc-parent-shell",
+                                "tool_id": "shell.utility",
+                                "parameters": {
+                                    "command": "bc",
+                                    "cwd": "/workspace",
+                                    "interactive": True,
+                                    "yield_time_ms": 1000,
+                                },
+                                "intent": "Start the required calculator.",
+                            }
+                        ]
+                    }
+                },
+                "tool_batch_id": "tb-parent-shell",
+            },
+        ),
+        parent_turn_id="task-42-turn-5",
+    )
+
+    assert assignment.relevant_context["prior_tool_outcomes"] == (
+        {
+            "status": "failed",
+            "success": False,
+            "calls": (
+                {
+                    "tool": "shell.utility",
+                    "intent": "Start the required calculator.",
+                    "invocation": {
+                        "command": "bc",
+                        "cwd": "/workspace",
+                        "interactive": True,
+                    },
+                    "status": "failed",
+                    "success": False,
+                    "failure_category": "missing_dependency",
+                    "summary": "Command failed with exit code 127.",
+                    "exit_code": 127,
+                    "errors": ("bc: command not found",),
+                },
+            ),
+        },
+    )
 
 
 def test_followup_handoff_uses_shared_policy_and_assignment_builder() -> None:

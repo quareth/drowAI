@@ -16,7 +16,6 @@ from backend.services.langgraph_chat.contracts import LangGraphRuntimeConfig
 from backend.services.llm_provider.runtime_services import attach_runtime_services
 
 from .assignment_builder import parent_run_id_from_metadata
-from .completion import AgentRunCompletion
 from .contracts import AgentAssignment
 from .dispatch_contracts import (
     AgentRunDispatchStop,
@@ -116,7 +115,7 @@ class DispatchBatchExecutor:
                     await self._settlement.settle_launched_batch_on_failure(launched)
                 )
                 if queued is not None:
-                    failed = await self._registry.mark_failed(
+                    interrupted = await self._registry.mark_interrupted(
                         tenant_id=assignment.tenant_id,
                         task_id=assignment.task_id,
                         agent_run_id=assignment.agent_run_id,
@@ -125,23 +124,18 @@ class DispatchBatchExecutor:
                             agent_display_name=item.display_name,
                         ),
                     )
-                    await self._publish_entry_lifecycle(failed, runtime_config)
-                    if failed.result is not None:
-                        settled_completions = (
-                            *settled_completions,
-                            AgentRunCompletion(
-                                result=failed.result,
-                                usage_records=(),
-                                graph_thread_id=item.graph_thread_id,
-                            ),
-                        )
+                    await self._publish_entry_lifecycle(interrupted, runtime_config)
                     return DispatchBatchLaunchFailure(
-                        child_completions=settled_completions
+                        child_completions=settled_completions,
+                        stop=AgentRunDispatchStop(
+                            invocation=item,
+                            status="interrupted",
+                        ),
                     )
                 return DispatchBatchLaunchFailure(
                     stop=AgentRunDispatchStop(
                         invocation=item,
-                        status="failed",
+                        status="interrupted",
                     )
                 )
             launched.append((item, child_task))
@@ -176,7 +170,7 @@ class DispatchBatchExecutor:
 
 def _safe_launch_error(exc: Exception, *, agent_display_name: str) -> str:
     _ = exc
-    return f"{agent_display_name} launch failed"
+    return f"{agent_display_name} launch interrupted"
 
 
 __all__ = [

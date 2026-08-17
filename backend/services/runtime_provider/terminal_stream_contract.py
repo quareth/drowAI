@@ -39,7 +39,7 @@ def terminal_stream_from_payload(payload: Mapping[str, Any]) -> TerminalStreamCl
 
 
 def is_push_terminal_stream(stream_client: object | None) -> bool:
-    """Return true when output arrives through a channel push sink."""
+    """Return true when an external channel feeds the client's read buffer."""
     return bool(getattr(stream_client, "push_frames", False))
 
 

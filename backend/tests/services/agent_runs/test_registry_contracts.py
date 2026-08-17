@@ -125,7 +125,7 @@ def test_registry_contract_constants_aliases_and_exports_are_canonical() -> None
         {"queued", "running", "waiting_for_approval"}
     )
     assert registry_contracts.TERMINAL_AGENT_RUN_STATUSES == frozenset(
-        {"completed", "failed", "cancelled"}
+        {"completed", "interrupted", "cancelled"}
     )
     assert registry_contracts.DEFAULT_FINISHED_RETENTION == timedelta(minutes=15)
 

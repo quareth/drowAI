@@ -10,8 +10,10 @@ from backend.services.runtime_provider.contracts import RuntimeActorType
 from backend.services.runtime_provider.runtime_artifact_access import (
     build_runtime_artifact_read_payload,
     decode_runtime_artifact_binary_delegate,
+    execute_runtime_artifact_query,
     execute_runtime_artifact_read_sync,
     normalize_runtime_artifact_relative_path,
+    runtime_artifact_query_contains,
     runtime_artifact_wait_metadata,
 )
 from backend.services.runtime_provider.sync_bridge import run_provider_operation_sync
@@ -29,6 +31,66 @@ def test_build_runtime_artifact_read_payload_includes_wait_fields_in_metadata_se
     metadata = runtime_artifact_wait_metadata()
     assert metadata["wait_for_result"] is True
     assert metadata["wait_timeout_seconds"] == 30.0
+
+
+def test_execute_runtime_artifact_query_uses_provider_boundary(monkeypatch) -> None:
+    calls: list[dict] = []
+
+    class _FakeRuntimeOperationService:
+        def __init__(self, _db) -> None:
+            pass
+
+        def context_for_internal_task(self, **kwargs):
+            calls.append({"context": kwargs})
+            return object()
+
+        async def run_for_context(self, **kwargs):
+            calls.append({"operation": kwargs})
+            return SimpleNamespace(ok=True, metadata={"delegate_result": {"items": []}})
+
+    monkeypatch.setattr(
+        "backend.services.runtime_provider.runtime_artifact_access.RuntimeOperationService",
+        _FakeRuntimeOperationService,
+    )
+
+    result = asyncio.run(
+        execute_runtime_artifact_query(
+            object(),
+            task_id=49,
+            prefix="/workspace/artifacts/shell.txt",
+            actor_type=RuntimeActorType.AGENT,
+            actor_id="shell_session:main:turn-1",
+        )
+    )
+
+    assert result.ok is True
+    operation = calls[1]["operation"]
+    assert operation["operation"] == "query_runtime_artifacts"
+    assert operation["payload"] == {"prefix": "artifacts/shell.txt"}
+    assert operation["metadata"]["wait_for_result"] is True
+
+
+def test_runtime_artifact_query_contains_requires_exact_verified_path() -> None:
+    result = SimpleNamespace(
+        ok=True,
+        metadata={
+            "delegate_result": {
+                "items": [
+                    {"path": "/workspace/artifacts/shell.txt.bak"},
+                    {"relative_path": "artifacts/shell.txt"},
+                ]
+            }
+        },
+    )
+
+    assert runtime_artifact_query_contains(
+        result,
+        path="artifacts/shell.txt",
+    )
+    assert not runtime_artifact_query_contains(
+        result,
+        path="artifacts/missing.txt",
+    )
 
 
 def test_run_provider_operation_sync_keeps_session_open_until_coro_finishes() -> None:

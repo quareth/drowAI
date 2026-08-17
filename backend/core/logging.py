@@ -7,8 +7,9 @@ It keeps configuration centralized while leaving subsystem modules on standard
 
 from __future__ import annotations
 
-import logging
+import hashlib
 import json
+import logging
 import os
 import time
 from logging.handlers import RotatingFileHandler
@@ -151,8 +152,17 @@ def safe_log_message(value: Any, *, max_chars: int | None = None) -> str:
     return sanitize_log_message(str(value), max_chars=max_chars or _resolve_redaction_max_chars())
 
 
+def safe_identifier_fingerprint(value: str) -> str:
+    """Return a deterministic non-reversible fingerprint for log identifiers."""
+
+    if not value:
+        return "none"
+    return hashlib.blake2s(value.encode("utf-8"), digest_size=8).hexdigest()
+
+
 __all__ = [
     "RedactingFormatter",
     "configure_backend_logging",
+    "safe_identifier_fingerprint",
     "safe_log_message",
 ]

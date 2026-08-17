@@ -295,7 +295,7 @@ class ProcessLocalAgentRunRegistry:
         await self._signal.notify_after_commit()
         return _registry_contracts.AgentRunTransition(entry=updated, changed=True)
 
-    async def mark_failed(
+    async def mark_interrupted(
         self,
         *,
         tenant_id: int,
@@ -303,9 +303,9 @@ class ProcessLocalAgentRunRegistry:
         agent_run_id: str,
         safe_error: str,
     ) -> _registry_contracts.LocalAgentRun:
-        """Store a safe terminal error for a failed local run."""
+        """Store a safe infrastructure interruption for a local run."""
         return (
-            await self.record_failed(
+            await self.record_interrupted(
                 tenant_id=tenant_id,
                 task_id=task_id,
                 agent_run_id=agent_run_id,
@@ -313,7 +313,7 @@ class ProcessLocalAgentRunRegistry:
             )
         ).entry
 
-    async def record_failed(
+    async def record_interrupted(
         self,
         *,
         tenant_id: int,
@@ -321,20 +321,23 @@ class ProcessLocalAgentRunRegistry:
         agent_run_id: str,
         safe_error: str,
     ) -> _registry_contracts.AgentRunTransition:
-        """Store a safe terminal error and report whether state changed."""
+        """Store an infrastructure interruption and report whether state changed."""
         safe_error = _require_non_empty(safe_error, "safe_error")
         async with self._lock:
             entry = self._require_entry(
                 tenant_id=tenant_id, task_id=task_id, agent_run_id=agent_run_id
             )
             if _registry_lifecycle.is_terminal(entry):
-                _record_duplicate_terminal_suppressed(entry, requested_status="failed")
+                _record_duplicate_terminal_suppressed(
+                    entry,
+                    requested_status="interrupted",
+                )
                 return _registry_contracts.AgentRunTransition(
                     entry=entry,
                     changed=False,
                 )
             updated = self._store(
-                _registry_lifecycle.build_failed_entry(
+                _registry_lifecycle.build_interrupted_entry(
                     entry,
                     safe_error=safe_error,
                     completed_at=self._clock(),

@@ -12,6 +12,10 @@ from collections.abc import Mapping
 from typing import Any
 from uuid import uuid4
 
+from agent.subagents.runtime.tool_outcomes import (
+    SUBAGENT_PRIOR_TOOL_OUTCOMES_CONTEXT_KEY,
+    latest_tool_outcome_from_metadata,
+)
 from backend.services.agent_runs.contracts import (
     AgentAssignment,
     AgentCapability,
@@ -77,6 +81,11 @@ def build_agent_assignment(
         bool,
     ):
         relevant_context["reserved_message_id"] = reserved_message_id
+    prior_tool_outcome = latest_tool_outcome_from_metadata(metadata)
+    if prior_tool_outcome.get("calls"):
+        relevant_context[SUBAGENT_PRIOR_TOOL_OUTCOMES_CONTEXT_KEY] = [
+            prior_tool_outcome
+        ]
 
     return AgentAssignment(
         assignment_id=_optional_string(ownership.get("assignment_id"))

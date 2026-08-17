@@ -7,11 +7,12 @@ inactive or unassigned runtime jobs.
 
 from __future__ import annotations
 
+import codecs
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Mapping, Protocol
 
 from drowai_runner.job_store import ACTIVE_JOB_STATUSES, RunnerJobStore
-from runtime_shared.terminal_contracts import build_named_agent_session_id
+from runtime_shared.terminal_contracts import TerminalReadResult, build_named_agent_session_id
 
 ERROR_TERMINAL_SESSION_NOT_FOUND = "RUNNER_TERMINAL_SESSION_NOT_FOUND"
 ERROR_TERMINAL_JOB_NOT_FOUND = "RUNNER_TERMINAL_JOB_NOT_FOUND"
@@ -40,11 +41,22 @@ class PtyAdapter(Protocol):
         session_id: str,
         cols: int,
         rows: int,
+        command: str | None = None,
+        cwd: str = "/workspace",
+        env: Mapping[str, str] | None = None,
+        interactive: bool = True,
     ) -> None: ...
 
     def send_input(self, *, session_id: str, data: str) -> None: ...
 
     def read_output(self, *, session_id: str, max_bytes: int) -> bytes: ...
+
+    def read_output_result(
+        self,
+        *,
+        session_id: str,
+        max_bytes: int,
+    ) -> TerminalReadResult: ...
 
     def resize_session(self, *, session_id: str, cols: int, rows: int) -> None: ...
 
@@ -58,6 +70,8 @@ class TerminalSessionBinding:
     runtime_job_id: str
     task_id: str
     container_id: str
+    interactive: bool
+    dedicated_command: bool
 
 
 class RunnerTerminalProxy:
@@ -67,6 +81,7 @@ class RunnerTerminalProxy:
         self._job_store = job_store
         self._pty_adapter = pty_adapter
         self._sessions: dict[str, TerminalSessionBinding] = {}
+        self._output_decoders: dict[str, codecs.IncrementalDecoder] = {}
 
     def open_terminal_session(
         self,
@@ -75,6 +90,10 @@ class RunnerTerminalProxy:
         session_name: str = "terminal",
         cols: int = 120,
         rows: int = 30,
+        command: str | None = None,
+        cwd: str = "/workspace",
+        env: Mapping[str, str] | None = None,
+        interactive: bool = True,
     ) -> TerminalProxyResponse:
         """Create a terminal session bound to one active runner runtime job."""
         job_check = self._validate_active_job(runtime_job_id)
@@ -86,16 +105,31 @@ class RunnerTerminalProxy:
             suffix = len(self._sessions) + 1
             session_id = build_named_agent_session_id(int(job.task_id), f"{session_name}_{suffix}")
         assert job.container_id is not None
-        self._pty_adapter.open_session(
-            container_id=job.container_id,
-            session_id=session_id,
-            cols=max(cols, 20),
-            rows=max(rows, 10),
-        )
+        open_kwargs = {
+            "container_id": job.container_id,
+            "session_id": session_id,
+            "cols": max(cols, 20),
+            "rows": max(rows, 10),
+        }
+        if command is None:
+            self._pty_adapter.open_session(**open_kwargs)
+        else:
+            self._pty_adapter.open_session(
+                **open_kwargs,
+                command=command,
+                cwd=cwd,
+                env=dict(env or {}),
+                interactive=interactive,
+            )
         self._sessions[session_id] = TerminalSessionBinding(
             runtime_job_id=runtime_job_id,
             task_id=job.task_id,
             container_id=job.container_id,
+            interactive=bool(interactive),
+            dedicated_command=command is not None,
+        )
+        self._output_decoders[session_id] = codecs.getincrementaldecoder("utf-8")(
+            errors="replace"
         )
         return TerminalProxyResponse(
             accepted=True,
@@ -113,6 +147,13 @@ class RunnerTerminalProxy:
         if session_check is not None:
             return session_check
         binding = self._sessions[session_id]
+        if binding.dedicated_command and not binding.interactive and data != "\u0003":
+            return TerminalProxyResponse(
+                accepted=False,
+                status="rejected",
+                error_code="RUNNER_TERMINAL_STDIN_UNAVAILABLE",
+                error_message="This shell command was started in non-interactive mode.",
+            )
         job_check = self._validate_active_job(binding.runtime_job_id)
         if job_check is not None:
             return job_check
@@ -133,11 +174,39 @@ class RunnerTerminalProxy:
         job_check = self._validate_active_job(binding.runtime_job_id)
         if job_check is not None:
             return job_check
-        payload = self._pty_adapter.read_output(session_id=session_id, max_bytes=max(1, max_bytes))
+        read_result_fn = getattr(self._pty_adapter, "read_output_result", None)
+        if callable(read_result_fn):
+            read_result = read_result_fn(
+                session_id=session_id,
+                max_bytes=max(1, max_bytes),
+            )
+        else:
+            read_result = TerminalReadResult(
+                ok=True,
+                data=self._pty_adapter.read_output(
+                    session_id=session_id,
+                    max_bytes=max(1, max_bytes),
+                ),
+                process_status="running",
+            )
+        decoder = self._output_decoders.get(session_id)
+        if decoder is None:
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            self._output_decoders[session_id] = decoder
+        output = decoder.decode(read_result.data, final=read_result.eof)
+        if read_result.eof:
+            self._output_decoders.pop(session_id, None)
         return TerminalProxyResponse(
-            accepted=True,
-            status="succeeded",
-            metadata={"session_id": session_id, "output": payload.decode("utf-8", errors="replace")},
+            accepted=read_result.ok,
+            status="succeeded" if read_result.ok else "failed",
+            error_code=read_result.error_code,
+            metadata={
+                "session_id": session_id,
+                "output": output,
+                "eof": read_result.eof,
+                "process_status": read_result.process_status,
+                "exit_code": read_result.exit_code,
+            },
         )
 
     def resize_terminal_session(
@@ -165,6 +234,7 @@ class RunnerTerminalProxy:
             return session_check
         self._pty_adapter.close_session(session_id=session_id)
         self._sessions.pop(session_id, None)
+        self._output_decoders.pop(session_id, None)
         return TerminalProxyResponse(accepted=True, status="succeeded")
 
     def _validate_session(self, session_id: str) -> TerminalProxyResponse | None:

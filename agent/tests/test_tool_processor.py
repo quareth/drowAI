@@ -13,6 +13,8 @@ import pytest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
+from core.prompts.constants import TOOL_OUTPUT_COMPRESSOR_MAX_TOKENS
+
 try:
     from agent.context.tool_processor import UniversalToolProcessor, ProcessedOutput
     from agent.providers.llm.core.exceptions import LLMRefusalError, LLMRefusalOutcome
@@ -55,9 +57,11 @@ class PromptCaptureLLM:
     def __init__(self, structured_output: dict) -> None:
         self.structured_output = structured_output
         self.last_prompt: str | None = None
+        self.last_kwargs: dict | None = None
 
     async def chat_with_usage(self, system_prompt: str, user_prompt: str, **kwargs):
         self.last_prompt = user_prompt
+        self.last_kwargs = dict(kwargs)
         return SimpleNamespace(
             content="",
             structured_output=self.structured_output,
@@ -165,6 +169,26 @@ def _assert_non_semantic_prompt_baseline_case(case: dict) -> None:
 def test_non_semantic_prompt_invariant_holds():
     for case in NON_SEMANTIC_BASELINE_CASES:
         _assert_non_semantic_prompt_baseline_case(case.values[0])
+
+
+def test_llm_compressor_uses_bounded_4096_token_ceiling():
+    llm = PromptCaptureLLM(
+        structured_output={
+            "summary": "bounded response",
+            "key_findings": [],
+            "structured_signals": [],
+            "decision_evidence": [],
+            "lossiness_risk": "low",
+        }
+    )
+    processor = UniversalToolProcessor(llm_client=llm)
+    long_output = "\n".join(f"response-line-{index}" for index in range(60))
+
+    asyncio.run(processor.process_output("shell.assessment", long_output))
+
+    assert TOOL_OUTPUT_COMPRESSOR_MAX_TOKENS == 4096
+    assert llm.last_kwargs is not None
+    assert llm.last_kwargs["max_tokens"] == TOOL_OUTPUT_COMPRESSOR_MAX_TOKENS
 
 
 def test_empty_semantic_inputs_prompt_matches_baseline():

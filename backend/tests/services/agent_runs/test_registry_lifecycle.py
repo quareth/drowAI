@@ -153,7 +153,7 @@ async def test_build_completed_entry_matches_record_completed_inline_path() -> N
 
 
 @pytest.mark.asyncio
-async def test_build_failed_entry_matches_record_failed_inline_path() -> None:
+async def test_build_interrupted_entry_has_no_agent_failure_result() -> None:
     created_at = datetime(2026, 8, 2, 12, 0, tzinfo=UTC)
     completed_at = datetime(2026, 8, 2, 12, 1, tzinfo=UTC)
     assignment = build_agent_assignment()
@@ -161,26 +161,21 @@ async def test_build_failed_entry_matches_record_failed_inline_path() -> None:
     run_registry = ProcessLocalAgentRunRegistry(clock=lambda: next(registry_clock))
     queued = await run_registry.register(assignment, graph_thread_id="child-thread-1")
 
-    actual = await run_registry.mark_failed(
+    actual = await run_registry.mark_interrupted(
         tenant_id=7,
         task_id=42,
         agent_run_id="run-1",
-        safe_error="Subagent worker failed",
+        safe_error="Subagent worker interrupted",
     )
-    expected = registry_lifecycle.build_failed_entry(
+    expected = registry_lifecycle.build_interrupted_entry(
         queued,
-        safe_error="Subagent worker failed",
+        safe_error="Subagent worker interrupted",
         completed_at=completed_at,
     )
 
     _assert_entries_equal(actual, expected)
-    assert actual.result is not None
-    assert actual.result.outcome == "failed"
-    assert actual.result.summary == "Subagent run failed: Subagent worker failed"
-    assert actual.result.limitations == ("Subagent worker failed",)
-    assert actual.result.recommended_next_steps == (
-        "Review the failure and decide whether a new bounded assignment is needed.",
-    )
+    assert actual.status == "interrupted"
+    assert actual.result is None
 
 
 @pytest.mark.asyncio
@@ -256,20 +251,19 @@ def test_terminal_helpers_match_current_fallback_semantics() -> None:
     )
 
     assert registry_lifecycle.is_terminal(queued) is False
-    failed = registry_lifecycle.build_failed_entry(
+    interrupted = registry_lifecycle.build_interrupted_entry(
         queued,
-        safe_error="custom failure",
+        safe_error="runtime interrupted",
         completed_at=completed_at,
     )
-    assert registry_lifecycle.is_terminal(failed) is True
-    assert (
+    assert registry_lifecycle.is_terminal(interrupted) is True
+    assert interrupted.result is None
+    with pytest.raises(ValueError, match="cancelled status"):
         registry_lifecycle.fallback_terminal_result(
             queued,
-            status="failed",
+            status="interrupted",
             safe_error=None,
-        ).summary
-        == "Subagent run failed: Subagent worker failed"
-    )
+        )
     with pytest.raises(ValueError, match="fallback result is only supported"):
         registry_lifecycle.fallback_terminal_result(
             queued,
@@ -310,7 +304,7 @@ def test_registry_lifecycle_is_pure_and_facade_delegates_to_policy() -> None:
         "build_cancelled_entry",
         "build_cancellation_requested_entry",
         "build_completed_entry",
-        "build_failed_entry",
+        "build_interrupted_entry",
         "build_queued_entry",
         "build_running_entry",
         "build_terminal_entry",

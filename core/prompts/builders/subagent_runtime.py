@@ -13,6 +13,9 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from core.prompts.builders.tool_planning import ToolPlanningPromptBuilder
+from core.prompts.builders.shell_capability_profiles import (
+    build_shell_capability_profiles,
+)
 from core.prompts.registry import PromptRegistry
 from core.runbooks.models import RunbookStage
 from core.runbooks.service import RunbookService
@@ -51,6 +54,7 @@ class SubagentRuntimePromptBuilder:
         ownership_boundary: str,
         boundary_rules: Sequence[str],
         max_committed_tools_per_batch: int,
+        callable_tool_ids: Sequence[str] = (),
     ) -> str:
         """Return the versioned system prompt for the subagent runtime."""
 
@@ -73,6 +77,12 @@ class SubagentRuntimePromptBuilder:
             boundary_rules=_to_prompt_bullets(boundary_rules),
             native_tool_guidance=shared_guidance,
         )
+        profile_section = build_shell_capability_profiles(
+            callable_tool_ids,
+            prompt_registry=self._prompt_registry,
+        )
+        if profile_section:
+            rendered = f"{rendered.rstrip()}\n\n{profile_section}\n"
         return _ensure_trailing_newline(rendered)
 
     def build_user_prompt(
@@ -83,9 +93,10 @@ class SubagentRuntimePromptBuilder:
         tool_ids: Sequence[str],
         working_memory: Mapping[str, Any] | None = None,
         previous_tool_summary: Mapping[str, Any] | None = None,
+        prior_tool_outcomes: Sequence[Mapping[str, Any]] = (),
         remaining_limits: Mapping[str, Any] | None = None,
     ) -> str:
-        """Return bounded assignment, tool, observation, and limit context."""
+        """Return existing bounded context plus compact cross-phase outcomes."""
 
         objective = str(assignment.get("objective") or "").strip()
         targets = list(assignment.get("targets") or [])
@@ -113,6 +124,7 @@ class SubagentRuntimePromptBuilder:
             previous_tool_summary_json=_to_prompt_json(previous_tool_summary or {}),
             working_memory_json=_to_prompt_json(working_memory or {}),
             assignment_json=_to_prompt_json(assignment),
+            prior_tool_outcomes_json=_to_prompt_json(list(prior_tool_outcomes)),
         )
         return _ensure_trailing_newline(rendered)
 
@@ -130,19 +142,28 @@ def _build_tool_runbooks_section(
     return f"\nTool Runbooks:\n{tool_runbooks}\n" if tool_runbooks else ""
 
 
-def _bounded_jsonable(value: Any) -> Any:
+def _bounded_jsonable(value: Any, *, preserve_sequence: bool = False) -> Any:
     """Return prompt-safe JSON data with bounded prior-observation size."""
 
     if isinstance(value, Mapping):
         items = list(value.items())[:_MAX_PROMPT_MAPPING_ITEMS]
+        preserve_session_results = value.get("execution_session_aggregate") is True
         return {
-            str(item_key): _bounded_jsonable(item_value)
+            str(item_key): _bounded_jsonable(
+                item_value,
+                preserve_sequence=(
+                    preserve_session_results and str(item_key) == "results"
+                ),
+            )
             for item_key, item_value in items
         }
     if isinstance(value, tuple | list):
+        items = list(value)
+        if not preserve_sequence:
+            items = items[:_MAX_PROMPT_SEQUENCE_ITEMS]
         return [
             _bounded_jsonable(item)
-            for item in list(value)[:_MAX_PROMPT_SEQUENCE_ITEMS]
+            for item in items
         ]
     if isinstance(value, frozenset | set):
         return [

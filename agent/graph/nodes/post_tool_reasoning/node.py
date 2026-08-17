@@ -14,6 +14,10 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 from ...infrastructure.state_models import GraphRuntimeContext
 from ...context.runtime_state import sync_target_hint_from_plan_todo
 from core.prompts.builders.post_tool import PostToolReasoningPromptBuilder
+from core.prompts.builders.post_tool.evidence import (
+    compact_tool_result_for_reasoning,
+    select_compact_evidence_for_reasoning,
+)
 from ...state import InteractiveState
 from ...utils.llm_resolver import (
     ROLE_POST_TOOL_OBSERVATION,
@@ -770,6 +774,27 @@ async def post_tool_reasoning(
 
     # Get synthesized tool output
     synthesized = metadata.get("synthesized_output") or {}
+    reasoning_evidence, reasoning_evidence_is_durable = (
+        select_compact_evidence_for_reasoning(metadata)
+    )
+    runtime_only_evidence = (
+        outcome_source == DIRECT_TOOL_OUTCOME_SOURCE
+        and reasoning_evidence is not None
+        and not reasoning_evidence_is_durable
+    )
+    if (
+        outcome_source == DIRECT_TOOL_OUTCOME_SOURCE
+        and not synthesized
+        and reasoning_evidence is not None
+        and reasoning_evidence.rows
+    ):
+        compact = compact_tool_result_for_reasoning(reasoning_evidence)
+        if compact:
+            synthesized = dict(compact)
+            synthesized["vulnerabilities"] = list(compact.get("errors") or [])
+            synthesized["next_actions"] = list(
+                compact.get("report_recommendations") or []
+            )
     _validate_outcome_source_metadata(
         metadata,
         outcome_source=outcome_source,
@@ -880,6 +905,13 @@ async def post_tool_reasoning(
         current_ptr_phase_sequence,
         latest_recorded_phase_sequence,
     ) = _resolve_iteration_memory_prompt_context(metadata)
+    if current_ptr_phase_sequence is None:
+        metadata.pop("current_ptr_phase_sequence", None)
+    else:
+        # Publish the runtime-derived phase used by this PTR invocation so the
+        # adjacent decision router can validate the structured candidate even
+        # when transient tool evidence intentionally skips the phase ledger.
+        metadata["current_ptr_phase_sequence"] = current_ptr_phase_sequence
     try:
         decision_user_prompt = prompt_builder.build_user_prompt(
             interactive=interactive,
@@ -892,6 +924,11 @@ async def post_tool_reasoning(
             turn_sequence=turn_sequence,
             current_ptr_phase_sequence=current_ptr_phase_sequence,
             latest_recorded_phase_sequence=latest_recorded_phase_sequence,
+            evidence=(
+                reasoning_evidence
+                if outcome_source == DIRECT_TOOL_OUTCOME_SOURCE
+                else None
+            ),
         )
         decision_tools = [
             build_post_tool_commit_tool(get_subagent_registry().ids())
@@ -1032,7 +1069,6 @@ async def post_tool_reasoning(
         decision_output,
         observation=observation,
     )
-
     # Handle retry suggestions (budgeted for both streaming and non-streaming)
     retry_suggested = (
         outcome_source == DIRECT_TOOL_OUTCOME_SOURCE
@@ -1101,7 +1137,11 @@ async def post_tool_reasoning(
     # Apply progress updates from LLM output and capture changed-only deltas.
     todo_updates = _apply_progress_updates(interactive, output)
     _apply_request_contract_policy(interactive, output)
-    if apply_active_todo_stall_guard(interactive, output, todo_updates=todo_updates):
+    if apply_active_todo_stall_guard(
+        interactive,
+        output,
+        todo_updates=todo_updates,
+    ):
         stall_tracking = metadata.get(TODO_STALL_METADATA_KEY)
         forced_action = (
             stall_tracking.get("forced_action")
@@ -1116,7 +1156,11 @@ async def post_tool_reasoning(
     _record_observation(
         interactive,
         output,
-        write_synthesized_output=outcome_source == DIRECT_TOOL_OUTCOME_SOURCE,
+        write_synthesized_output=(
+            outcome_source == DIRECT_TOOL_OUTCOME_SOURCE
+            and not runtime_only_evidence
+        ),
+        persist_output=not runtime_only_evidence,
     )
 
     # Record decision (updates decision_history, decision_log, reasoning)

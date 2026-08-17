@@ -379,9 +379,27 @@ async def _runner_channel_inbound_loop(
             loop_state.close_code = int(exc.code or loop_state.close_code)
             return
 
+        if not manager.is_session_current(session):
+            loop_state.close_reason = "Runner channel superseded by a newer connection."
+            return
+
         stream_envelope = _try_parse_runner_envelope(inbound)
         if stream_envelope is not None:
             if stream_registry.handle_stream_ack(stream_envelope):
+                payload = stream_envelope.payload
+                ack_waiters.resolve(
+                    RunnerAckObservation(
+                        acked_message_id=str(
+                            getattr(payload, "acked_message_id", "") or ""
+                        ).strip(),
+                        status=str(
+                            getattr(payload, "status", "accepted") or "accepted"
+                        ).strip().lower(),
+                        error_code=(
+                            str(getattr(payload, "error_code", "")).strip() or None
+                        ),
+                    )
+                )
                 continue
             if await _handle_terminal_stream_frame(
                 session=session,
@@ -545,6 +563,15 @@ async def _handle_terminal_stream_frame(
         task_id=int(envelope.task_id),
         session_id=session_id,
         data=data,
+        eof=bool(getattr(payload, "eof", False)),
+        process_status=(
+            str(getattr(payload, "process_status", "") or "").strip() or None
+        ),
+        exit_code=(
+            int(getattr(payload, "exit_code"))
+            if isinstance(getattr(payload, "exit_code", None), int)
+            else None
+        ),
     )
 
 
@@ -1206,8 +1233,11 @@ async def runner_channel(
     stream_registry = get_runner_terminal_stream_registry()
 
     async def _send_stream_envelope(envelope: RunnerEnvelope) -> None:
-        async with send_lock:
-            await websocket.send_json(envelope.to_dict())
+        result = await transport.send(envelope, timeout_seconds=5.0)
+        if not result.acked:
+            raise RuntimeError(
+                result.error_message or "Runner did not apply terminal stream input."
+            )
 
     try:
         session = manager.open_session(
@@ -1215,10 +1245,14 @@ async def runner_channel(
             remote_ip_address=websocket.client.host if websocket.client else None,
         )
         db.commit()
+        # Finish the upgrade before bounded multi-session cleanup can consume the
+        # runner client's WebSocket open timeout. Registration remains cleanup-gated.
         await websocket.accept()
+        await manager.reset_terminal_state(session)
         stream_registry.register_channel(
             tenant_id=identity.tenant_id,
             runner_id=identity.runner_id,
+            connection_id=session.connection_id,
             sender=_send_stream_envelope,
         )
         inbound_task = asyncio.create_task(
@@ -1233,6 +1267,13 @@ async def runner_channel(
             )
         )
         while True:
+            if not stream_registry.is_current_channel(
+                tenant_id=identity.tenant_id,
+                runner_id=identity.runner_id,
+                connection_id=session.connection_id,
+            ) or not manager.is_session_current(session):
+                loop_state.close_reason = "Runner channel superseded by a newer connection."
+                break
             if inbound_task.done():
                 inbound_task.result()
                 break
@@ -1261,6 +1302,7 @@ async def runner_channel(
         stream_registry.unregister_channel(
             tenant_id=identity.tenant_id,
             runner_id=identity.runner_id,
+            connection_id=session.connection_id if session is not None else None,
         )
         ack_waiters.fail_all(error_message=loop_state.close_reason)
         if inbound_task is not None and not inbound_task.done():

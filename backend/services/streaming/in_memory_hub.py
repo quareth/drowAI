@@ -234,8 +234,8 @@ class InMemoryStreamHub:
             except Exception:
                 pass
 
-    async def publish(self, task_id: int, event: Dict[str, Any]) -> None:
-        """Publish an event to all subscribers of the given task.
+    async def publish(self, task_id: int, event: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Publish an event and return the normalized packet with its assigned sequence.
 
         On queue overflow, disconnect the subscriber so it can reconnect and
         replay missing packets from persisted history.
@@ -243,7 +243,7 @@ class InMemoryStreamHub:
         normalized = normalize_stream_packet(event, task_id=task_id)
         if normalized is None:
             logger.warning("Dropping invalid stream event for task %s", task_id)
-            return
+            return None
         event = normalized
         await self._ensure_sequence_seeded(task_id)
         queues: Set[asyncio.Queue]
@@ -263,7 +263,7 @@ class InMemoryStreamHub:
                 task_id,
                 event.get("sequence"),
             )
-            return
+            return event
         subscriber_count = len(queues)
         overflowed_queues: list[asyncio.Queue] = []
         for q in queues:
@@ -303,6 +303,7 @@ class InMemoryStreamHub:
                             task_id,
                             event.get("sequence"),
                         )
+        return event
 
     async def subscribe(self, task_id: int) -> AsyncGenerator[Dict[str, Any], None]:
         """Subscribe to events for a task. Yields events as they arrive.

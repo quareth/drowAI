@@ -197,6 +197,7 @@ def record_observation(
     output: "PostToolReasoningOutput",
     *,
     write_synthesized_output: bool = True,
+    persist_output: bool = True,
 ) -> None:
     """Record the observation to state for context continuity.
 
@@ -215,30 +216,29 @@ def record_observation(
     Args:
         interactive: The InteractiveState to update (mutated in place).
         output: The PostToolReasoningOutput containing the observation.
+        write_synthesized_output: Mirror the observation into synthesized state.
+        persist_output: Store observation text in graph state and phase memory.
+            Disable for same-turn transient tool output.
     """
     observation = output.observation
 
-    # Record to trace.observations
-    if interactive.trace.observations is None:
-        interactive.trace.observations = []
-    interactive.trace.observations.append(observation)
-
-    # Update synthesized_output with observation_text (for observation_adapter)
     metadata = interactive.facts.ensure_metadata()
+    if persist_output:
+        # Record to trace.observations
+        if interactive.trace.observations is None:
+            interactive.trace.observations = []
+        interactive.trace.observations.append(observation)
 
-    if write_synthesized_output:
-        synthesized = metadata.get("synthesized_output")
-        if not isinstance(synthesized, dict):
-            synthesized = {}
-        synthesized["observation_text"] = observation
-        metadata["synthesized_output"] = synthesized
+        # Update synthesized_output with observation_text (for observation_adapter)
+        if write_synthesized_output:
+            synthesized = metadata.get("synthesized_output")
+            if not isinstance(synthesized, dict):
+                synthesized = {}
+            synthesized["observation_text"] = observation
+            metadata["synthesized_output"] = synthesized
 
-    # Dual-write: append one structured PTR phase record to the shared
-    # current-turn phase ledger so later PTR iterations can see this step
-    # as ordered structured memory rather than re-parsing prose history.
-    # The append is delegated to the shared helper so schema, ordering,
-    # and identity stamping are not hand-shaped here.
-    _append_ptr_phase_record(metadata, output)
+        # Append the structured PTR phase only for durable tool output.
+        _append_ptr_phase_record(metadata, output)
 
     # Log observation preview
     preview = observation[:160]

@@ -556,6 +556,10 @@ class CheckpointContinuationService:
                 llm_runtime_selection=llm_runtime_selection,
                 event_attribution=subagent_event_attribution,
                 subagent_context=subagent_continuation_context,
+                retained_parent_continuation=(
+                    parent_session is not None
+                    or subagent_continuation_context is not None
+                ),
             )
 
         assert interactive_state is not None
@@ -669,6 +673,7 @@ class CheckpointContinuationService:
         llm_runtime_selection: Optional[Mapping[str, Any]],
         event_attribution: dict[str, Any] | None,
         subagent_context: SubagentContinuationContext | None,
+        retained_parent_continuation: bool,
     ) -> LangGraphChatResult:
         """Persist and return a continuation that paused on another interrupt."""
         interrupted_usage = None
@@ -725,6 +730,8 @@ class CheckpointContinuationService:
         )
         if safe_runtime_selection:
             metadata["llm_runtime_selection"] = safe_runtime_selection
+        if retained_parent_continuation:
+            metadata[SUBAGENT_PARENT_CONTINUATION_PENDING] = True
         return LangGraphChatResult(
             final_text=None,
             conversation_id=None,

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from agent.execution_strategy import ExecutionStrategy
 from agent.tool_runtime.batch.compatibility import (
     CompatibilityOutcome,
@@ -204,6 +206,49 @@ def test_validator_allows_repeated_tool_ids_when_call_ids_are_unique(monkeypatch
     assert result.admitted is True
     assert [call.tool_id for call in result.batch.tool_calls] == ["tool.a", "tool.a"]
     assert [call.tool_call_id for call in result.batch.tool_calls] == ["tc_0", "tc_1"]
+
+
+@pytest.mark.parametrize(
+    "strategy",
+    [ExecutionStrategy.SEQUENTIAL, ExecutionStrategy.PARALLEL],
+)
+def test_validator_rejects_multiple_shell_session_starts(strategy):
+    tool_ids = ["shell.assessment", "shell.utility"]
+
+    result = BatchValidator().validate(
+        _batch(tool_ids, strategy=strategy),
+        ctx=_validating_ctx(tool_ids),
+    )
+
+    assert result.admitted is False
+    assert result.rejected_reason == "multiple_shell_session_starts"
+
+
+def test_post_approval_validation_rejects_multiple_shell_session_starts():
+    batch = _batch(["shell.assessment", "shell.utility"])
+
+    result = BatchValidator().validate_after_approval(
+        batch,
+        approved_call_ids=[call.tool_call_id for call in batch.tool_calls],
+    )
+
+    assert result.admitted is False
+    assert result.rejected_reason == "multiple_shell_session_starts"
+
+
+def test_validator_allows_one_shell_session_start_with_an_ordinary_tool(monkeypatch):
+    tool_ids = ["tool.a", "shell.utility"]
+    _patch_metadata(
+        monkeypatch,
+        {"tool.a": _meta(), "shell.utility": _meta()},
+    )
+
+    result = BatchValidator().validate(
+        _batch(tool_ids),
+        ctx=_validating_ctx(tool_ids),
+    )
+
+    assert result.admitted is True
 
 
 def test_validator_downgrades_same_target_concurrency_above_limit(monkeypatch):

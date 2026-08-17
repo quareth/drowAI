@@ -100,12 +100,19 @@ class CloudRunnerTerminalStreamAttacher:
                 message="Terminal stream is required but terminal open did not return a runtime job id.",
             )
 
-        stream_registry.register_stream(
+        if not stream_registry.register_stream(
             tenant_id=tenant_id,
             runner_id=runner_id,
             task_id=request.task_id,
             session_id=session_id,
-        )
+        ):
+            return self._terminal_stream_unavailable_result(
+                request=request,
+                message=(
+                    "Terminal stream is required but the validated terminal open "
+                    "is no longer authorized."
+                ),
+            )
         stream_client = CloudTerminalStreamClient(
             registry=stream_registry,
             tenant_id=tenant_id,

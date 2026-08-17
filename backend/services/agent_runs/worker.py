@@ -34,7 +34,7 @@ from backend.services.agent_runs.event_projection import build_agent_run_lifecyc
 from backend.services.agent_runs.launcher import (
     LifecyclePublisher,
     SubagentRunCancelled,
-    SubagentRunFailed,
+    SubagentRunInterrupted,
     SubagentRunPaused,
 )
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
@@ -46,6 +46,7 @@ from backend.services.langgraph_chat.checkpoint.checkpointer_service import (
 from backend.services.langgraph_chat.execution.graph_executor import LangGraphExecutor
 from backend.services.langgraph_chat.hitl_constants import GRAPH_RECURSION_LIMIT
 from backend.services.langgraph_chat.streaming.adapter import LangGraphStreamingAdapter
+from runtime_shared.shell_session_contracts import format_shell_execution_owner_id
 
 from .cancellation import AsyncCancellationProbe
 
@@ -120,7 +121,7 @@ class ProcessLocalAgentRunWorker:
         if execution_result.interrupted:
             raise SubagentRunPaused(execution_result)
         if not execution_result.final_state:
-            raise SubagentRunFailed(
+            raise SubagentRunInterrupted(
                 "Subagent graph completed without final state",
                 execution_result,
             )
@@ -130,7 +131,7 @@ class ProcessLocalAgentRunWorker:
                 assignment=assignment,
             )
         except Exception as exc:
-            raise SubagentRunFailed(
+            raise SubagentRunInterrupted(
                 "Subagent graph completed without a valid terminal result",
                 execution_result,
             ) from exc
@@ -272,7 +273,7 @@ def prepare_subagent_child_config(
         assignment=assignment,
         graph_thread_id=graph_thread_id,
     )
-    configurable.setdefault("graph_runtime_context", graph_runtime_context)
+    configurable["graph_runtime_context"] = graph_runtime_context
     configurable.setdefault("canonical_conversation_id", assignment.conversation_id)
     configurable.setdefault("canonical_turn_id", assignment.parent_turn_id)
     turn_sequence = assignment.relevant_context.get("turn_sequence")
@@ -295,6 +296,9 @@ def _graph_runtime_context_from_projection(
     context["graph_thread_id"] = graph_thread_id
     context["tenant_id"] = assignment.tenant_id
     context["turn_id"] = assignment.parent_turn_id
+    context["execution_owner_id"] = format_shell_execution_owner_id(
+        "subagent", assignment.agent_run_id
+    )
     turn_sequence = assignment.relevant_context.get("turn_sequence")
     if isinstance(turn_sequence, int) and not isinstance(turn_sequence, bool):
         context["turn_sequence"] = turn_sequence

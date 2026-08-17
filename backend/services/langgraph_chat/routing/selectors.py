@@ -6,8 +6,14 @@ from collections.abc import Mapping
 from enum import Enum
 import logging
 
+from agent.graph import InteractiveState
 from agent.subagents.registry import SubagentRegistry
+from backend.services.agent_runs.dispatch_plan import (
+    routing_metadata_from_decision,
+    runtime_config_with_subagent_routing,
+)
 from backend.services.agent_runs.ownership_policy import resolve_subagent_handoff
+from backend.services.agent_runs.parent_control import parse_parent_control_outcome
 from backend.services.langgraph_chat.contracts import (
     ExecutionMode,
     LangGraphRuntimeConfig,
@@ -82,28 +88,9 @@ def resolve_branch(
             registry=subagent_registry,
             active_runs_by_agent_id=active_counts,
         )
-        runtime_config.metadata["subagent_routing"] = {
-            "should_delegate": decision.should_delegate,
-            "reason": decision.reason,
-            "agent_id": decision.agent_id,
-            "agent_kind": decision.agent_kind,
-            "dispatch_branch": decision.dispatch_branch,
-            "capabilities": list(decision.capabilities),
-            "targets": list(decision.targets),
-            "objective": decision.objective,
-            "handoffs": [
-                {
-                    "agent_id": handoff.agent_id,
-                    "agent_kind": handoff.agent_kind,
-                    "dispatch_branch": handoff.dispatch_branch,
-                    "reason": decision.reason,
-                    "capabilities": list(handoff.capabilities),
-                    "targets": list(handoff.targets),
-                    "objective": handoff.objective,
-                }
-                for handoff in decision.handoffs
-            ],
-        }
+        runtime_config.metadata["subagent_routing"] = (
+            routing_metadata_from_decision(decision)
+        )
         if decision.should_delegate:
             try:
                 branch = ChatBranch(str(decision.dispatch_branch))
@@ -115,4 +102,54 @@ def resolve_branch(
     return branch
 
 
-__all__ = ["ChatBranch", "resolve_branch", "select_branch"]
+def resolve_late_subagent_handoff(
+    runtime_config: LangGraphRuntimeConfig,
+    continuation_state: InteractiveState,
+    *,
+    active_subagent_run_counts: Mapping[str, int] | None = None,
+    subagent_registry: SubagentRegistry | None = None,
+) -> LangGraphRuntimeConfig | None:
+    """Convert a valid PTR delegation into the canonical subagent route."""
+    metadata = continuation_state.facts.safe_metadata
+    turn_id = str(runtime_config.metadata.get("turn_id") or "").strip()
+    control = parse_parent_control_outcome(
+        metadata,
+        parent_turn_id=turn_id,
+        claimed_agent_run_ids=(),
+    )
+    if control.action != "delegate_subagent":
+        return None
+    if not turn_id:
+        raise RuntimeError("Late subagent handoff requires a parent turn id")
+
+    decision = resolve_subagent_handoff(
+        metadata,
+        registry=subagent_registry,
+        active_runs_by_agent_id=dict(active_subagent_run_counts or {}),
+        handoff_entries=control.agent_handoff,
+    )
+    if not decision.should_delegate:
+        raise RuntimeError(
+            f"Late subagent handoff rejected: {decision.reason}"
+        )
+
+    routed = runtime_config_with_subagent_routing(
+        runtime_config,
+        routing_metadata_from_decision(
+            decision,
+            delegation_source="ptr",
+            delegation_decision_id=control.decision_id,
+        ),
+    )
+    runtime_budgets = metadata.get("runtime_budgets")
+    if isinstance(runtime_budgets, Mapping):
+        routed.metadata["runtime_budgets"] = dict(runtime_budgets)
+    return routed
+
+
+__all__ = [
+    "ChatBranch",
+    "resolve_branch",
+    "resolve_late_subagent_handoff",
+    "select_branch",
+]

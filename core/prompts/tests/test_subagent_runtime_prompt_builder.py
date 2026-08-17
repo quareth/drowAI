@@ -28,9 +28,14 @@ def test_subagent_runtime_system_prompt_uses_versioned_canonical_guidance() -> N
         ),
         boundary_rules=(
             "Use only the targets, objective, scope, and constraints in the assignment context.",
-            "Do not exploit, authenticate, mutate files, run shells, manage agents, or request credentials.",
+            "Do not exploit, authenticate, mutate files unless explicitly allowed by assignment and tool scope, manage agents, or request credentials.",
         ),
         max_committed_tools_per_batch=3,
+        callable_tool_ids=(
+            "shell.utility",
+            "shell.assessment",
+            "shell.write_stdin",
+        ),
     )
 
     assert_golden("subagent_runtime__system.txt", prompt)
@@ -42,10 +47,16 @@ def test_subagent_runtime_system_prompt_uses_versioned_canonical_guidance() -> N
     assert "Remaining tool budget is permission, not a requirement" in prompt
     assert "Never repeat an equivalent successful tool call" in prompt
     assert "When more evidence is required, call between 1 and 3" in prompt
+    assert "Execute dependent commands as separate tool calls" in prompt
+    assert "Never append an interactive or persistent program" in prompt
     assert "Selector Decision" not in prompt
+    assert prompt.count("Use shell.utility for ordinary") == 1
+    assert prompt.count("Use shell.assessment for commands") == 1
+    assert prompt.count("Leave interactive=false for ordinary commands") == 1
+    assert prompt.count("never resend the originating") == 1
 
 
-def test_subagent_runtime_user_prompt_injects_assignment_tools_observations_and_limits() -> None:
+def test_subagent_runtime_user_prompt_preserves_context_and_appends_outcomes() -> None:
     builder = SubagentRuntimePromptBuilder()
     long_observation = "observed-service " * 200
 
@@ -80,6 +91,31 @@ def test_subagent_runtime_user_prompt_injects_assignment_tools_observations_and_
             "findings": ["prior ping sweep found one host"],
             "todos": ["confirm exposed services"],
         },
+        prior_tool_outcomes=[
+            {
+                "phase": 0,
+                "status": "completed_with_errors",
+                "success": False,
+                "calls": [
+                    {
+                        "tool": "information_gathering.network_discovery.fping",
+                        "intent": "Check whether the target responds.",
+                        "status": "success",
+                        "success": True,
+                        "summary": "10.0.0.10 responded",
+                    },
+                    {
+                        "tool": "information_gathering.network_discovery.nmap",
+                        "intent": "Enumerate exposed services.",
+                        "status": "failed",
+                        "success": False,
+                        "failure_category": "timeout",
+                        "summary": "Service enumeration timed out.",
+                        "errors": ["Deadline exceeded."],
+                    },
+                ],
+            }
+        ],
         remaining_limits={
             "completed_iterations": 1,
             "max_iterations": 3,
@@ -96,4 +132,9 @@ def test_subagent_runtime_user_prompt_injects_assignment_tools_observations_and_
     ) in prompt
     assert "Remaining Limits:" in prompt
     assert "Bounded Prior Observations:" in prompt
+    assert "Working memory snapshot" in prompt
+    assert "Assignment:" in prompt
+    assert "Prior Tool Outcomes:" in prompt
+    assert "completed_with_errors" in prompt
     assert "...[truncated]" in prompt
+    assert "runtime_identity" not in prompt

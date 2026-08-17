@@ -1,10 +1,18 @@
-"""Shell execution tools with workspace safeguards."""
+"""Shell execution tools and shell metadata registration authority."""
 
 from __future__ import annotations
+
+from runtime_shared.shell_capabilities import (
+    SHELL_ASSESSMENT_TOOL_ID,
+    SHELL_EXEC_TOOL_ID,
+    SHELL_UTILITY_TOOL_ID,
+    SHELL_WRITE_STDIN_TOOL_ID,
+)
 
 from .exec import ShellExecTool
 from .policy import CommandPolicy, PolicyEnforcement, PolicyResult
 from .script import ShellScriptTool
+from .write_stdin import ShellWriteStdinTool
 from ..enhanced_metadata_registry import (
     EnhancedToolMetadata,
     PentestPhase,
@@ -17,15 +25,94 @@ from ..enhanced_metadata_registry import (
 __all__ = [
     "ShellExecTool",
     "ShellScriptTool",
+    "ShellWriteStdinTool",
     "CommandPolicy",
     "PolicyEnforcement",
     "PolicyResult",
 ]
 
-# Enhanced metadata with PTY details
-_shell_exec_metadata = EnhancedToolMetadata(
-    tool_id="shell.exec",
+
+def _build_shell_start_metadata(
+    *,
+    tool_id: str,
+    display_name: str,
+    capability_name: str,
+    description: str,
+) -> EnhancedToolMetadata:
+    """Build shared PTY-session metadata for one shell start identifier."""
+
+    metadata = EnhancedToolMetadata(
+        tool_id=tool_id,
+        display_name=display_name,
+        category=ToolCategory.SHELL,
+        catalog_role=ToolCatalogRole.UTILITY,
+        applicable_phases=[
+            PentestPhase.RECONNAISSANCE,
+            PentestPhase.ENUMERATION,
+            PentestPhase.POST_EXPLOITATION,
+        ],
+        capabilities=[
+            ToolCapability(
+                name=capability_name,
+                description=description,
+                output_indicators=[
+                    "stdout",
+                    "stderr",
+                    "process_status",
+                    "session_id",
+                ],
+            )
+        ],
+        required_services=[],
+        target_protocols=["local"],
+        execution_priority=4,
+        parallel_compatible=True,
+        stealth_level=3,
+        estimated_runtime_minutes=2,
+        supported_transports=["pty"],
+    )
+    metadata.__dict__["pty_support"] = True
+    metadata.__dict__["pty_session_only"] = True
+    metadata.__dict__["pty_benefits"] = [
+        "yielded_sessions",
+        "bounded_output",
+        "user_interaction",
+    ]
+    return metadata
+
+
+_shell_exec_metadata = _build_shell_start_metadata(
+    tool_id=SHELL_EXEC_TOOL_ID,
     display_name="Shell Command Executor",
+    capability_name="shell_command",
+    description=(
+        "Start one guarded provider-backed PTY shell session inside the active "
+        "task runtime; returns bounded output, process status, and an opaque "
+        "continuation handle when the process is still running."
+    ),
+)
+_shell_utility_metadata = _build_shell_start_metadata(
+    tool_id=SHELL_UTILITY_TOOL_ID,
+    display_name="Utility Shell",
+    capability_name="shell_utility",
+    description=(
+        "Run ordinary operating-system, workspace filesystem, text-processing, "
+        "environment-inspection, or non-assessment diagnostic work in the active runtime."
+    ),
+)
+_shell_assessment_metadata = _build_shell_start_metadata(
+    tool_id=SHELL_ASSESSMENT_TOOL_ID,
+    display_name="Assessment Shell",
+    capability_name="shell_assessment",
+    description=(
+        "Run commands whose purpose is security assessment in the active runtime; "
+        "output is eligible for the existing assessment evidence path."
+    ),
+)
+
+_shell_write_stdin_metadata = EnhancedToolMetadata(
+    tool_id=SHELL_WRITE_STDIN_TOOL_ID,
+    display_name="Shell Session Input",
     category=ToolCategory.SHELL,
     catalog_role=ToolCatalogRole.UTILITY,
     applicable_phases=[
@@ -35,9 +122,18 @@ _shell_exec_metadata = EnhancedToolMetadata(
     ],
     capabilities=[
         ToolCapability(
-            name="shell_command",
-            description="Execute one guarded shell command inside the active Kali runtime; returns stdout, stderr, exit code, and artifacts.",
-            output_indicators=["stdout", "stderr"],
+            name="shell_stdin",
+            description=(
+                "Send exact non-empty input to, or interrupt, an owned "
+                "provider-backed PTY shell session; returns bounded output "
+                "and process status."
+            ),
+            output_indicators=[
+                "stdout",
+                "stderr",
+                "process_status",
+                "session_id",
+            ],
         )
     ],
     required_services=[],
@@ -45,11 +141,15 @@ _shell_exec_metadata = EnhancedToolMetadata(
     execution_priority=4,
     parallel_compatible=True,
     stealth_level=3,
-    estimated_runtime_minutes=2,
-    supported_transports=["file-comm", "pty"],
+    estimated_runtime_minutes=1,
+    supported_transports=["pty"],
 )
-_shell_exec_metadata.__dict__["pty_support"] = True
-_shell_exec_metadata.__dict__["pty_benefits"] = ["visibility", "debugging", "user_interaction"]
+_shell_write_stdin_metadata.__dict__["pty_support"] = True
+_shell_write_stdin_metadata.__dict__["pty_session_only"] = True
+_shell_write_stdin_metadata.__dict__["pty_benefits"] = [
+    "exact_stdin",
+    "interrupts",
+]
 
 _shell_script_metadata = EnhancedToolMetadata(
     tool_id="shell.script",
@@ -80,4 +180,7 @@ _shell_script_metadata.__dict__["pty_support"] = True
 _shell_script_metadata.__dict__["pty_benefits"] = ["script_debugging", "output_visibility", "error_tracking"]
 
 register_enhanced_tool_metadata(_shell_exec_metadata)
+register_enhanced_tool_metadata(_shell_utility_metadata)
+register_enhanced_tool_metadata(_shell_assessment_metadata)
+register_enhanced_tool_metadata(_shell_write_stdin_metadata)
 register_enhanced_tool_metadata(_shell_script_metadata)

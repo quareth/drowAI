@@ -103,7 +103,7 @@ class _TracingRegistry(ProcessLocalAgentRunRegistry):
             agent_run_id=agent_run_id,
         )
 
-    async def mark_failed(
+    async def mark_interrupted(
         self,
         *,
         tenant_id: int,
@@ -111,8 +111,8 @@ class _TracingRegistry(ProcessLocalAgentRunRegistry):
         agent_run_id: str,
         safe_error: str,
     ) -> LocalAgentRun:
-        self._trace.append(("registry.mark_failed", agent_run_id))
-        return await super().mark_failed(
+        self._trace.append(("registry.mark_interrupted", agent_run_id))
+        return await super().mark_interrupted(
             tenant_id=tenant_id,
             task_id=task_id,
             agent_run_id=agent_run_id,
@@ -245,7 +245,7 @@ async def test_successful_multi_launch_preserves_side_effect_order_and_runtime_a
 
 
 @pytest.mark.asyncio
-async def test_definition_lookup_failure_fails_before_registration() -> None:
+async def test_definition_lookup_interruption_stops_before_registration() -> None:
     executor, _registry, launcher, trace = _executor()
     missing = PlannedAgentInvocation(
         index=0,
@@ -258,7 +258,7 @@ async def test_definition_lookup_failure_fails_before_registration() -> None:
 
     assert isinstance(result, DispatchBatchLaunchFailure)
     assert result.stop is not None
-    assert result.stop.status == "failed"
+    assert result.stop.status == "interrupted"
     assert result.stop.invocation == missing
     assert ("definition.require", "missing") in trace
     assert not any(event[0] == "registry.register" for event in trace)
@@ -266,7 +266,7 @@ async def test_definition_lookup_failure_fails_before_registration() -> None:
 
 
 @pytest.mark.asyncio
-async def test_register_failure_fails_before_lifecycle_publication() -> None:
+async def test_register_interruption_stops_before_lifecycle_publication() -> None:
     trace: Trace = []
     registry = _TracingRegistry(trace)
     active = _assignment("pathfinder", "active-run")
@@ -283,7 +283,7 @@ async def test_register_failure_fails_before_lifecycle_publication() -> None:
 
     assert isinstance(result, DispatchBatchLaunchFailure)
     assert result.stop is not None
-    assert result.stop.status == "failed"
+    assert result.stop.status == "interrupted"
     assert ("registry.register", "run-1") in trace
     assert not any(event[0] == "publish" for event in trace)
     assert launcher.calls == []
@@ -306,7 +306,7 @@ async def test_register_failure_fails_before_lifecycle_publication() -> None:
         ("launcher", None, False, False, "launch_error"),
     ],
 )
-async def test_registered_failure_points_mark_and_publish_failed_run(
+async def test_registered_failure_points_mark_and_publish_interrupted_run(
     scenario: str,
     publisher_failure: tuple[str, str] | None,
     invalid_graph_thread: bool,
@@ -339,27 +339,25 @@ async def test_registered_failure_points_mark_and_publish_failed_run(
     result = await executor.launch_batch((item,), _runtime_config())
 
     assert isinstance(result, DispatchBatchLaunchFailure)
-    assert result.stop is None
-    assert [completion.result.agent_run_id for completion in result.child_completions] == [
-        "run-1"
-    ]
-    assert result.child_completions[0].result.outcome == "failed"
-    assert result.child_completions[0].graph_thread_id == item.graph_thread_id
-    assert ("registry.mark_failed", "run-1") in trace
-    assert ("publish", "run-1:failed") in trace
+    assert result.stop is not None
+    assert result.stop.status == "interrupted"
+    assert result.stop.invocation == item
+    assert result.child_completions == ()
+    assert ("registry.mark_interrupted", "run-1") in trace
+    assert ("publish", "run-1:interrupted") in trace
     if scenario == "launcher":
         assert _event_index(trace, ("publish", "run-1:running")) < _event_index(
             trace, ("launch", "run-1")
         )
         assert _event_index(trace, ("launch", "run-1")) < _event_index(
-            trace, ("registry.mark_failed", "run-1")
+            trace, ("registry.mark_interrupted", "run-1")
         )
     else:
         assert ("launch", "run-1") not in trace
 
 
 @pytest.mark.asyncio
-async def test_later_launch_failure_settles_earlier_sibling_before_failed_publish() -> None:
+async def test_later_launch_interruption_settles_sibling_before_interrupted_publish() -> None:
     trace: Trace = []
     registry = _TracingRegistry(trace)
     launcher = _ScriptedLauncher(
@@ -379,17 +377,16 @@ async def test_later_launch_failure_settles_earlier_sibling_before_failed_publis
     )
 
     assert isinstance(result, DispatchBatchLaunchFailure)
-    assert [completion.result.agent_run_id for completion in result.child_completions] == [
-        "run-1",
-        "run-2",
-    ]
+    assert result.stop is not None
+    assert result.stop.status == "interrupted"
+    assert result.stop.invocation.assignment.agent_run_id == "run-2"
+    assert [completion.result.agent_run_id for completion in result.child_completions] == ["run-1"]
     assert result.child_completions[0].result.outcome == "cancelled"
-    assert result.child_completions[1].result.outcome == "failed"
     assert _event_index(trace, ("task_cancelled", "run-1")) < _event_index(
-        trace, ("registry.mark_failed", "run-2")
+        trace, ("registry.mark_interrupted", "run-2")
     )
-    assert _event_index(trace, ("registry.mark_failed", "run-2")) < _event_index(
-        trace, ("publish", "run-2:failed")
+    assert _event_index(trace, ("registry.mark_interrupted", "run-2")) < _event_index(
+        trace, ("publish", "run-2:interrupted")
     )
 
 
@@ -433,7 +430,7 @@ async def test_replay_guard_lookup_failure_settles_siblings_before_stop() -> Non
     assert isinstance(result, DispatchBatchLaunchFailure)
     assert result.child_completions == ()
     assert result.stop is not None
-    assert result.stop.status == "failed"
+    assert result.stop.status == "interrupted"
     assert result.stop.invocation == failing_followup
     assert _event_index(trace, ("definition.require", "pathfinder")) < _event_index(
         trace, ("registry.register", "run-1")
@@ -457,7 +454,7 @@ async def test_replay_guard_lookup_failure_settles_siblings_before_stop() -> Non
         trace, ("task_cancelled", "run-1")
     )
     assert ("registry.register", followup_run_id) not in trace
-    assert ("registry.mark_failed", followup_run_id) not in trace
+    assert ("registry.mark_interrupted", followup_run_id) not in trace
     assert not any(
         event[0] == "publish" and event[1].startswith(f"{followup_run_id}:")
         for event in trace

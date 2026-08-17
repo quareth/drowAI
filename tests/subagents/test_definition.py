@@ -64,8 +64,8 @@ def test_loads_builtin_pathfinder_definition_from_package_data() -> None:
     assert pathfinder.runtime_boundary_rules == (
         "Use only the targets, objective, scope, and constraints in the assignment "
         "context.",
-        "Do not exploit, authenticate, mutate files, run shells, manage agents, or "
-        "request credentials.",
+        "Do not exploit, authenticate, mutate files unless explicitly allowed by "
+        "assignment and tool scope, manage agents, or request credentials.",
     )
     assert pathfinder.tool_ids == (
         "information_gathering.network_discovery.fping",

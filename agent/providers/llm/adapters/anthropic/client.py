@@ -11,6 +11,14 @@ import asyncio
 import logging
 from typing import Any, AsyncIterator, Mapping
 
+from core.llm.api_retry import (
+    DEFAULT_API_RETRY_COUNT,
+    INITIAL_API_RETRY_DELAY_SECONDS,
+    is_retryable_api_error,
+    retry_after_seconds_from_error,
+    sleep_before_retry,
+)
+
 from ...core.base import (
     ChatMessage,
     LLMClient,
@@ -80,8 +88,8 @@ def _anthropic_outcome(stop_reason: Any) -> LLMResponseOutcome:
 
 
 DEFAULT_MAX_TOKENS = 4096
-DEFAULT_RETRY_COUNT = 2
-INITIAL_RETRY_DELAY = 0.5
+DEFAULT_RETRY_COUNT = DEFAULT_API_RETRY_COUNT
+INITIAL_RETRY_DELAY = INITIAL_API_RETRY_DELAY_SECONDS
 _NO_SAMPLING_MODEL_IDS = frozenset(
     {
         "claude-fable-5",
@@ -335,14 +343,14 @@ class AnthropicMessagesClient(LLMClient):
                 raise
             except (APIError, APIConnectionError, RateLimitError, APIStatusError) as exc:
                 last_error = self._wrap_api_error(exc)
-                if attempt >= max_attempts:
+                if attempt >= max_attempts or not is_retryable_api_error(last_error):
                     logger.warning(
                         "Anthropic chat_messages_with_usage failed after %s attempts: %s",
                         attempt,
                         exc,
                     )
                     raise last_error from exc
-                await self._backoff_sleep(attempt)
+                await self._backoff_sleep(attempt, last_error)
             except Exception as exc:
                 last_error = LLMAPIError(
                     f"Unexpected error during Anthropic chat: {exc}",
@@ -732,12 +740,21 @@ class AnthropicMessagesClient(LLMClient):
             f"Anthropic API request failed: {exc}",
             provider=ANTHROPIC_PROVIDER_ID,
             status_code=getattr(exc, "status_code", None),
+            retry_after_seconds=retry_after_seconds_from_error(exc),
         )
 
     @staticmethod
-    async def _backoff_sleep(attempt: int) -> None:
+    async def _backoff_sleep(
+        attempt: int,
+        error: LLMAPIError | None = None,
+    ) -> None:
         """Sleep before retrying an Anthropic request."""
-        await asyncio.sleep(INITIAL_RETRY_DELAY * (2 ** (attempt - 1)))
+        await sleep_before_retry(
+            attempt,
+            error=error,
+            initial_retry_delay=INITIAL_RETRY_DELAY,
+            logger=logger,
+        )
 
 
 __all__ = [

@@ -1,4 +1,4 @@
-"""Metadata registrations for Kali runtime filesystem and shell utility tools.
+"""Metadata registrations for Kali runtime utility tools.
 
 These are bulk-registered since they follow a common pattern.
 """
@@ -75,44 +75,6 @@ for tool_id, display_name, capability_name, capability_desc in [
             parallel_compatible=True,
             stealth_level=5,
             estimated_runtime_minutes=1,
-        )
-    )
-
-
-# ---------------------------------------------------------------------------
-# Shell utilities (shell.* namespace)
-# ---------------------------------------------------------------------------
-for tool_id, display_name, capability_name, capability_desc in [
-    ("shell.exec", "Shell Command Executor", "shell_command",
-     "Execute one guarded shell command in the task workspace or runtime; returns stdout, stderr, exit code, and artifacts."),
-    ("shell.script", "Workspace Script Runner", "shell_script",
-     "Execute a guarded multi-line shell script in the task workspace or runtime; returns stdout, stderr, and exit code; use when one command is not enough."),
-]:
-    register_enhanced_tool_metadata(
-        EnhancedToolMetadata(
-            tool_id=tool_id,
-            display_name=display_name,
-            category=ToolCategory.SHELL,
-            catalog_role=ToolCatalogRole.UTILITY,
-            applicable_phases=[
-                PentestPhase.RECONNAISSANCE,
-                PentestPhase.ENUMERATION,
-                PentestPhase.POST_EXPLOITATION,
-            ],
-            capabilities=[
-                ToolCapability(
-                    name=capability_name,
-                    description=capability_desc,
-                    output_indicators=["stdout", "stderr"],
-                )
-            ],
-            required_services=[],
-            target_protocols=["local"],
-            execution_priority=4,
-            parallel_compatible=False,
-            stealth_level=3,
-            estimated_runtime_minutes=2,
-            supported_transports=["file-comm", "pty"],
         )
     )
 

@@ -10,6 +10,7 @@ from drowai_runner.terminal_proxy import (
     ERROR_TERMINAL_SESSION_NOT_FOUND,
     RunnerTerminalProxy,
 )
+from runtime_shared.terminal_contracts import TerminalReadResult
 
 
 class _FakePtyAdapter:
@@ -103,3 +104,101 @@ def test_terminal_proxy_rejects_inactive_job_and_unknown_session(tmp_path: Path)
     assert open_stopped.error_code == ERROR_TERMINAL_JOB_NOT_ACTIVE
     assert read_unknown.accepted is False
     assert read_unknown.error_code == ERROR_TERMINAL_SESSION_NOT_FOUND
+
+
+class _DedicatedPtyAdapter(_FakePtyAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.dedicated_open: dict[str, object] | None = None
+
+    def open_session(self, **kwargs) -> None:
+        self.dedicated_open = dict(kwargs)
+
+    def read_output_result(self, *, session_id: str, max_bytes: int) -> TerminalReadResult:
+        self.reads.append((session_id, max_bytes))
+        return TerminalReadResult(
+            ok=True,
+            eof=True,
+            process_status="completed",
+            exit_code=0,
+        )
+
+
+class _ChunkedUtf8PtyAdapter(_FakePtyAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.results = [
+            TerminalReadResult(ok=True, data=b"\xe2\x82", process_status="running"),
+            TerminalReadResult(ok=True, data=b"\xac tail", process_status="running"),
+        ]
+
+    def read_output_result(self, *, session_id: str, max_bytes: int) -> TerminalReadResult:
+        self.reads.append((session_id, max_bytes))
+        return self.results.pop(0)
+
+
+def test_terminal_proxy_decodes_utf8_across_pty_read_boundaries(tmp_path: Path) -> None:
+    store = initialize_runner_job_store(tmp_path / "runner-jobs.sqlite")
+    store.start_job(
+        runtime_job_id="job-utf8",
+        tenant_id="tenant-a",
+        task_id="23",
+        workspace_id="task-23",
+        image="runtime:test",
+        container_id="cid-23",
+    )
+    adapter = _ChunkedUtf8PtyAdapter()
+    proxy = RunnerTerminalProxy(job_store=store, pty_adapter=adapter)
+    opened = proxy.open_terminal_session(
+        runtime_job_id="job-utf8",
+        session_name="shell",
+    )
+    session_id = str((opened.metadata or {})["session_id"])
+
+    first = proxy.read_terminal_output(session_id=session_id)
+    second = proxy.read_terminal_output(session_id=session_id)
+
+    assert first.metadata is not None
+    assert first.metadata["output"] == ""
+    assert second.metadata is not None
+    assert second.metadata["output"] == "€ tail"
+
+
+def test_terminal_proxy_owns_dedicated_command_status_and_interaction_mode(
+    tmp_path: Path,
+) -> None:
+    store = initialize_runner_job_store(tmp_path / "runner-jobs.sqlite")
+    store.start_job(
+        runtime_job_id="job-command",
+        tenant_id="tenant-a",
+        task_id="22",
+        workspace_id="task-22",
+        image="runtime:test",
+        container_id="cid-22",
+    )
+    adapter = _DedicatedPtyAdapter()
+    proxy = RunnerTerminalProxy(job_store=store, pty_adapter=adapter)
+
+    opened = proxy.open_terminal_session(
+        runtime_job_id="job-command",
+        session_name="shell",
+        command="printf ' exact '\n",
+        cwd="/workspace/results",
+        env={"APP_MODE": "test"},
+        interactive=False,
+    )
+    session_id = str((opened.metadata or {})["session_id"])
+    rejected_input = proxy.send_terminal_input(session_id=session_id, data="again\n")
+    terminal = proxy.read_terminal_output(session_id=session_id)
+
+    assert adapter.dedicated_open is not None
+    assert adapter.dedicated_open["command"] == "printf ' exact '\n"
+    assert adapter.dedicated_open["cwd"] == "/workspace/results"
+    assert adapter.dedicated_open["env"] == {"APP_MODE": "test"}
+    assert adapter.dedicated_open["interactive"] is False
+    assert rejected_input.accepted is False
+    assert rejected_input.error_code == "RUNNER_TERMINAL_STDIN_UNAVAILABLE"
+    assert terminal.metadata is not None
+    assert terminal.metadata["eof"] is True
+    assert terminal.metadata["process_status"] == "completed"
+    assert terminal.metadata["exit_code"] == 0

@@ -48,8 +48,8 @@ class TerminalStreamHandler:
         identity: CloudChannelIdentity,
         inbound: RunnerEnvelope,
         context: _RemoteRuntimeRequestContext,
-    ) -> None:
-        """Execute stream-mode terminal I/O without returning terminal.result."""
+    ) -> tuple[str, str | None]:
+        """Apply stream-mode terminal I/O and return its acknowledgment outcome."""
         operation_name, operation_params = map_remote_runtime_operation(
             inbound=inbound,
             context=context,
@@ -59,14 +59,16 @@ class TerminalStreamHandler:
             params=operation_params,
         )
         status = str(response.get("status") or "").strip().lower()
+        error_code = str(response.get("error_code") or "").strip() or None
         session_id = str(operation_params.get("session_id") or "").strip()
         if inbound.message_type is RunnerMessageType.TERMINAL_CLOSE and session_id:
             self._frame_lifecycle.stop_frame_publisher(session_id)
             self._frame_lifecycle.remove_session_tracking(session_id)
-            return
+            return status, error_code
         if status == "succeeded" and session_id:
             self._frame_lifecycle.register_active_session(
                 session_id=session_id,
                 runtime_job_id=context.runtime_job_id,
                 task_id=context.task_id,
             )
+        return status, error_code

@@ -17,6 +17,8 @@ from uuid import uuid4
 import httpx
 import requests
 
+from core.llm.api_retry import retry_after_seconds_from_headers
+
 from .egress_policy import EgressPolicyError, FixedProviderEgressPolicy
 from .operation_registry import (
     ConnectionOperationRegistry,
@@ -60,9 +62,11 @@ class GuardedTransportError(RuntimeError):
         *,
         audit_id: str,
         status_code: int | None = None,
+        retry_after_seconds: float | None = None,
     ) -> None:
         self.audit_id = audit_id
         self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
         super().__init__(f"{message} (audit_id={audit_id})")
 
 
@@ -144,7 +148,11 @@ class GuardedTransport:
                 verify=True,
             )
             _require_total_duration(started_at, self._timeouts.total_seconds)
-            _validate_response_status(response.status_code, audit_id=audit_id)
+            _validate_response_status(
+                response.status_code,
+                headers=response.headers,
+                audit_id=audit_id,
+            )
             _validate_headers(response.headers, self._bounds, audit_id=audit_id)
             body = _read_bounded_body(
                 response,
@@ -224,7 +232,11 @@ class GuardedAsyncInferenceTransport:
                         headers=headers,
                         json=json_body,
                     ) as response:
-                        _validate_response_status(response.status_code, audit_id=audit_id)
+                        _validate_response_status(
+                            response.status_code,
+                            headers=response.headers,
+                            audit_id=audit_id,
+                        )
                         _validate_headers(response.headers, self._bounds, audit_id=audit_id)
                         body = await _read_bounded_async_body(
                             response,
@@ -269,7 +281,11 @@ class GuardedAsyncInferenceTransport:
                     headers=headers,
                     json=json_body,
                 ) as response:
-                    _validate_response_status(response.status_code, audit_id=audit_id)
+                    _validate_response_status(
+                        response.status_code,
+                        headers=response.headers,
+                        audit_id=audit_id,
+                    )
                     _validate_headers(response.headers, self._bounds, audit_id=audit_id)
                     async for event in _iter_bounded_sse_json(
                         response,
@@ -456,7 +472,12 @@ def _is_bearer_api_key_connection_preset(provider: str) -> bool:
     return preset.auth_mode == "bearer_api_key"
 
 
-def _validate_response_status(status_code: int, *, audit_id: str) -> None:
+def _validate_response_status(
+    status_code: int,
+    *,
+    headers: Mapping[str, Any] | None = None,
+    audit_id: str,
+) -> None:
     """Reject redirects and upstream errors without exposing response details."""
 
     if 300 <= int(status_code) < 400:
@@ -470,6 +491,7 @@ def _validate_response_status(status_code: int, *, audit_id: str) -> None:
             "Guarded upstream response rejected",
             audit_id=audit_id,
             status_code=int(status_code),
+            retry_after_seconds=retry_after_seconds_from_headers(headers),
         )
 
 

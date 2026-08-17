@@ -60,3 +60,21 @@ def test_graph_runtime_context_ignores_legacy_api_key_secret() -> None:
 
     assert "api_key" not in context.model_dump()
     assert "sk-test-secret" not in repr(context)
+
+
+def test_graph_runtime_context_serializes_execution_owner_id() -> None:
+    context = GraphRuntimeContext(
+        task_id=1,
+        user_id=1,
+        tenant_id=3,
+        runtime_placement_mode="runner",
+        workspace_id="task-1",
+        actor_type="agent",
+        actor_id="langgraph",
+        execution_owner_id="main:turn-123",
+    )
+
+    payload = context.model_dump()
+
+    assert payload["execution_owner_id"] == "main:turn-123"
+    assert context.missing_tool_runtime_identity_fields() == []

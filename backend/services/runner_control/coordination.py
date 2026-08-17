@@ -119,6 +119,18 @@ class RunnerCoordinationStore(ABC):
         """Refresh an existing lease idempotently for a heartbeat/touch event."""
 
     @abstractmethod
+    def is_connection_lease_active(
+        self,
+        *,
+        tenant_id: int,
+        runner_id: UUID,
+        pod_id: str,
+        connection_id: str,
+        at: datetime,
+    ) -> bool:
+        """Return whether one exact connection still owns the runner lease."""
+
+    @abstractmethod
     def release_connection_lease(
         self,
         *,
@@ -255,6 +267,21 @@ class InMemoryRunnerCoordinationStore(RunnerCoordinationStore):
         last_seen_at: datetime,
     ) -> RunnerConnectionLease:
         with self._lock:
+            last_seen_at_utc = _ensure_utc(last_seen_at)
+            for key, current in list(self._leases.items()):
+                if key[:2] != (tenant_id, runner_id) or key[2] == connection_id:
+                    continue
+                if current.status != "active":
+                    continue
+                self._leases[key] = RunnerConnectionLease(
+                    tenant_id=current.tenant_id,
+                    runner_id=current.runner_id,
+                    pod_id=current.pod_id,
+                    connection_id=current.connection_id,
+                    status="disconnected",
+                    lease_expires_at=current.lease_expires_at,
+                    last_seen_at=last_seen_at_utc,
+                )
             key = (tenant_id, runner_id, connection_id)
             lease = RunnerConnectionLease(
                 tenant_id=tenant_id,
@@ -263,7 +290,7 @@ class InMemoryRunnerCoordinationStore(RunnerCoordinationStore):
                 connection_id=connection_id,
                 status="active",
                 lease_expires_at=_ensure_utc(lease_expires_at),
-                last_seen_at=_ensure_utc(last_seen_at),
+                last_seen_at=last_seen_at_utc,
             )
             self._leases[key] = lease
             return lease
@@ -280,7 +307,7 @@ class InMemoryRunnerCoordinationStore(RunnerCoordinationStore):
         with self._lock:
             key = (tenant_id, runner_id, connection_id)
             current = self._leases.get(key)
-            if current is None:
+            if current is None or current.status != "active":
                 return None
             refreshed = RunnerConnectionLease(
                 tenant_id=current.tenant_id,
@@ -293,6 +320,24 @@ class InMemoryRunnerCoordinationStore(RunnerCoordinationStore):
             )
             self._leases[key] = refreshed
             return refreshed
+
+    def is_connection_lease_active(
+        self,
+        *,
+        tenant_id: int,
+        runner_id: UUID,
+        pod_id: str,
+        connection_id: str,
+        at: datetime,
+    ) -> bool:
+        with self._lock:
+            lease = self._leases.get((tenant_id, runner_id, connection_id))
+            return bool(
+                lease is not None
+                and lease.status == "active"
+                and lease.pod_id == str(pod_id).strip()
+                and lease.lease_expires_at > _ensure_utc(at)
+            )
 
     def release_connection_lease(
         self,

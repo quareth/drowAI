@@ -26,6 +26,7 @@ from core.prompts.constants import (
     COMPACT_FINDING_MAX_CHARS,
     COMPACT_RULE_FINDING_MAX_CHARS,
     COMPACT_SUMMARY_MAX_CHARS,
+    TOOL_OUTPUT_COMPRESSOR_MAX_TOKENS,
 )
 from core.prompts.registry import PromptRegistry
 from core.llm.structured_schemas import TOOL_OUTPUT_COMPRESSOR_STRUCTURED_OUTPUT
@@ -166,7 +167,7 @@ class UniversalToolProcessor:
                             was_sampled=was_sampled,
                         ),
                         temperature=0,
-                        max_tokens=800,
+                        max_tokens=TOOL_OUTPUT_COMPRESSOR_MAX_TOKENS,
                         structured_output=TOOL_OUTPUT_COMPRESSOR_STRUCTURED_OUTPUT,
                     ),
                     timeout_sec=LLM_TIMEOUT_TOOL_OUTPUT_COMPRESSOR_SEC,

@@ -54,7 +54,7 @@ from backend.services.langgraph_chat.subagent_composition import (
 )
 from backend.services.agent_runs.launcher import (
     SubagentRunCancelled,
-    SubagentRunFailed,
+    SubagentRunInterrupted,
     SubagentRunPaused,
 )
 from backend.services.langgraph_chat.routing.selectors import ChatBranch, resolve_branch
@@ -197,13 +197,13 @@ class _FailingAfterUsageLauncher:
         assignment = kwargs["assignment"]
 
         async def _fail() -> AgentRunCompletion:
-            await self.registry.mark_failed(
+            await self.registry.mark_interrupted(
                 tenant_id=assignment.tenant_id,
                 task_id=assignment.task_id,
                 agent_run_id=assignment.agent_run_id,
-                safe_error="Subagent worker failed",
+                safe_error="Subagent worker interrupted",
             )
-            raise SubagentRunFailed(
+            raise SubagentRunInterrupted(
                 "Subagent graph completed without a valid terminal result",
                 GraphExecutionResult(
                     final_state={
@@ -343,6 +343,104 @@ class _CompletingExecutor:
         agent_run_id = graph_input["facts"]["metadata"]["agent_run_id"]
         return GraphExecutionResult(
             final_state=_subagent_final_state(agent_run_id=agent_run_id)
+        )
+
+
+class _SequentialParentHandoffExecutor:
+    """Drive repeated parent handoffs while recording each starting state."""
+
+    def __init__(self, *, total_child_runs: int) -> None:
+        self.total_child_runs = total_child_runs
+        self.parent_inputs: list[dict[str, Any]] = []
+        self.parent_thread_ids: list[str] = []
+
+    async def stream_graph(
+        self,
+        compiled: Any,
+        graph_input: Any,
+        config: dict[str, Any],
+        task_id: int,
+        **kwargs: Any,
+    ) -> GraphExecutionResult:
+        _ = (compiled, task_id, kwargs)
+        if config["configurable"]["graph_name"] == GRAPH_NAME_SUBAGENT:
+            agent_run_id = graph_input["facts"]["metadata"]["agent_run_id"]
+            return GraphExecutionResult(
+                final_state=_subagent_final_state(agent_run_id=agent_run_id)
+            )
+
+        parent_input = copy.deepcopy(graph_input)
+        self.parent_inputs.append(parent_input)
+        self.parent_thread_ids.append(config["configurable"]["thread_id"])
+        parent_index = len(self.parent_inputs) - 1
+        final_state = copy.deepcopy(graph_input)
+        facts = final_state["facts"]
+        metadata = facts["metadata"]
+        completed_results = metadata[METADATA_CONTEXT_BUNDLE_KEY][
+            COMPLETED_AGENT_RESULTS_KEY
+        ]
+        if COMPLETED_AGENT_RESULTS_KEY in metadata:
+            assert metadata[COMPLETED_AGENT_RESULTS_KEY] == completed_results
+        current_run_id = completed_results[0]["agent_run_id"]
+
+        working_memory = metadata.setdefault("working_memory", {})
+        phases = working_memory.setdefault("current_turn_phases", [])
+        phases.append(
+            {
+                "turn_sequence": 5,
+                "phase_sequence": parent_index,
+                "source": "ptr",
+                "sections": [
+                    {
+                        "heading": "Observation",
+                        "body": f"Accepted child result {current_run_id}.",
+                    }
+                ],
+            }
+        )
+        working_memory["current_turn_phase_counter"] = parent_index + 1
+        working_memory["current_turn_phase_turn"] = 5
+        facts["todo_list"] = ["Complete every bounded child assignment."]
+        facts["current_goal"] = f"Process child result {parent_index + 1}."
+
+        usage_records = final_state["trace"].setdefault("usage_records", [])
+        usage_records.append(
+            {
+                "source": "post_action_reasoning",
+                "prompt_tokens": 10,
+                "completion_tokens": 5,
+                "total_tokens": 15,
+                "provider": "openai",
+                "model": "gpt-5.2-mini",
+                "api_surface": "responses",
+                "request_mode": "non_streaming",
+                "cache_reporting": "reported",
+            }
+        )
+
+        if parent_index + 1 < self.total_child_runs:
+            router_outcome = {
+                "action": "delegate_subagent",
+                "candidate_id": f"parent-followup-{parent_index + 1}",
+                "agent_handoff": {
+                    "agent_handoff": "required",
+                    "subagent": "pathfinder",
+                    "objective": f"Complete bounded child step {parent_index + 2}.",
+                },
+            }
+            final_text = f"Delegating child step {parent_index + 2}."
+        else:
+            router_outcome = {
+                "action": "finalize",
+                "candidate_id": "parent-finalize-after-all-children",
+            }
+            final_text = "Parent retained every accepted child result."
+
+        metadata["router_outcome"] = router_outcome
+        final_state["trace"]["final_text"] = final_text
+        return GraphExecutionResult(
+            final_state=final_state,
+            metadata={"router_outcome": router_outcome},
         )
 
 
@@ -582,10 +680,10 @@ async def test_subagent_handler_uses_registered_agent_identity_for_launch_failur
     assert len(entries) == 1
     assert entries[0].agent_id == "cartographer"
     assert entries[0].agent_run_id.startswith("agent-run-")
-    assert entries[0].safe_error == "Cartographer launch failed"
-    assert result.final_text == "Main agent finalized Pathfinder result."
-    assert result.metadata["handoff_agent_id"] == "cartographer"
-    assert entries[0].result_consumed is True
+    assert entries[0].safe_error == "Cartographer launch interrupted"
+    assert result.final_text == "Cartographer subagent infrastructure was interrupted."
+    assert result.metadata["status"] == "interrupted"
+    assert entries[0].result_consumed is False
     lifecycle_events = [event for event in events if "agent_run" in event]
     assert [event["agent_run"]["agent_id"] for event in lifecycle_events] == [
         "cartographer",
@@ -593,7 +691,7 @@ async def test_subagent_handler_uses_registered_agent_identity_for_launch_failur
         "cartographer",
     ]
     assert lifecycle_events[-1]["agent_run"]["safe_error"] == (
-        "Cartographer launch failed"
+        "Cartographer launch interrupted"
     )
 
 
@@ -992,7 +1090,7 @@ async def test_subagent_handler_fails_closed_for_concurrent_same_agent_parent_tu
     results = await asyncio.gather(first, second)
 
     statuses = sorted(result.metadata["status"] for result in results)
-    assert statuses == ["completed", "failed"]
+    assert statuses == ["completed", "interrupted"]
     entries = await registry.list_task_runs(tenant_id=7, task_id=42)
     assert len(entries) == 1
     assert entries[0].status == "completed"
@@ -1027,7 +1125,7 @@ async def test_subagent_handler_attaches_live_runtime_services_only_at_launch() 
 
 
 @pytest.mark.asyncio
-async def test_subagent_handler_emits_failed_lifecycle_when_launch_fails() -> None:
+async def test_subagent_handler_emits_interrupted_lifecycle_when_launch_is_lost() -> None:
     registry = ProcessLocalAgentRunRegistry()
     executor = _CompletingExecutor()
     events: list[dict[str, Any]] = []
@@ -1050,30 +1148,28 @@ async def test_subagent_handler_emits_failed_lifecycle_when_launch_fails() -> No
 
     entries = await registry.list_task_runs(tenant_id=7, task_id=42)
     assert len(entries) == 1
-    assert entries[0].status == "failed"
-    assert entries[0].safe_error == "Pathfinder launch failed"
-    assert entries[0].result_consumed is True
-    assert result.metadata["status"] == "completed"
-    assert result.metadata["handoff_agent_id"] == "pathfinder"
-    assert result.final_text == "Main agent finalized Pathfinder result."
-    assert result.usage is not None
-    assert len(result.usage) == 1
-    assert len(executor.calls) == 1
-    completed_results = runtime_config.metadata[COMPLETED_AGENT_RESULTS_KEY]
-    assert [handoff["outcome"] for handoff in completed_results] == ["failed"]
+    assert entries[0].status == "interrupted"
+    assert entries[0].safe_error == "Pathfinder launch interrupted"
+    assert entries[0].result_consumed is False
+    assert entries[0].result is None
+    assert result.metadata["status"] == "interrupted"
+    assert result.final_text == "Pathfinder subagent infrastructure was interrupted."
+    assert result.usage is None
+    assert executor.calls == []
+    assert COMPLETED_AGENT_RESULTS_KEY not in runtime_config.metadata
     lifecycle_events = [event for event in events if "agent_run" in event]
     assert [event["agent_run"]["status"] for event in lifecycle_events] == [
         "queued",
         "running",
-        "failed",
+        "interrupted",
     ]
     assert lifecycle_events[-1]["agent_run"]["safe_error"] == (
-        "Pathfinder launch failed"
+        "Pathfinder launch interrupted"
     )
 
 
 @pytest.mark.asyncio
-async def test_subagent_handler_settles_prior_batch_child_when_later_launch_fails(
+async def test_subagent_handler_interrupts_batch_when_later_launch_is_lost(
 ) -> None:
     registry = ProcessLocalAgentRunRegistry()
     launcher = _FailingSecondLaunchAfterCompletionLauncher(registry)
@@ -1117,33 +1213,18 @@ async def test_subagent_handler_settles_prior_batch_child_when_later_launch_fail
 
     result = await handler.handle(runtime_config)
 
-    assert result.metadata["status"] == "completed"
-    assert result.metadata["handoff_agent_ids"] == ["pathfinder", "cartographer"]
-    assert result.final_text == "Main agent finalized Pathfinder result."
-    assert result.usage is not None
-    assert len(result.usage) == 2
-    usage = result.usage[0]
-    assert usage.usage.total_tokens == 15
-    assert usage.metadata.execution_branch == "subagent_child"
-    assert usage.metadata.node_name == "subagent_runtime_model"
-    assert len(executor.calls) == 1
-    completed_results = runtime_config.metadata[COMPLETED_AGENT_RESULTS_KEY]
-    assert [handoff["agent_id"] for handoff in completed_results] == [
-        "pathfinder",
-        "cartographer",
-    ]
-    assert [handoff["outcome"] for handoff in completed_results] == [
-        "completed",
-        "failed",
-    ]
+    assert result.metadata["status"] == "interrupted"
+    assert result.final_text == "Cartographer subagent infrastructure was interrupted."
+    assert executor.calls == []
+    assert COMPLETED_AGENT_RESULTS_KEY not in runtime_config.metadata
     entries = sorted(
         await registry.list_task_runs(tenant_id=7, task_id=42),
         key=lambda entry: entry.agent_id,
     )
     assert [entry.agent_id for entry in entries] == ["cartographer", "pathfinder"]
-    assert [entry.status for entry in entries] == ["failed", "completed"]
-    assert entries[0].result_consumed is True
-    assert entries[1].result_consumed is True
+    assert [entry.status for entry in entries] == ["interrupted", "completed"]
+    assert entries[0].result_consumed is False
+    assert entries[1].result_consumed is False
     later_handoff = await AgentRunResultProjector(
         registry=registry,
         subagent_registry=get_definition_subagent_registry(),
@@ -1152,8 +1233,10 @@ async def test_subagent_handler_settles_prior_batch_child_when_later_launch_fail
         task_id=42,
         conversation_id="conv-42",
     )
-    assert later_handoff.results == ()
-    assert later_handoff.agent_run_ids == ()
+    assert [handoff["agent_run_id"] for handoff in later_handoff.results] == [
+        entries[1].agent_run_id
+    ]
+    assert later_handoff.agent_run_ids == (entries[1].agent_run_id,)
 
 
 @pytest.mark.asyncio
@@ -1224,7 +1307,7 @@ async def test_subagent_handler_hitl_pause_keeps_parent_open_until_child_resumes
 
 
 @pytest.mark.asyncio
-async def test_subagent_handler_child_failure_returns_partial_child_usage() -> None:
+async def test_subagent_handler_child_interruption_returns_recorded_child_usage() -> None:
     registry = ProcessLocalAgentRunRegistry()
     executor = _CompletingExecutor()
 
@@ -1243,19 +1326,83 @@ async def test_subagent_handler_child_failure_returns_partial_child_usage() -> N
 
     result = await handler.handle(_runtime_config())
 
-    assert result.metadata["status"] == "completed"
-    assert result.final_text == "Main agent finalized Pathfinder result."
+    assert result.metadata["status"] == "interrupted"
+    assert result.final_text == "Pathfinder subagent infrastructure was interrupted."
     assert result.usage is not None
-    assert len(result.usage) == 2
+    assert len(result.usage) == 1
     usage = result.usage[0]
     assert usage.usage.total_tokens == 15
     assert usage.metadata.execution_branch == "subagent_child"
     assert usage.metadata.node_name == "subagent_runtime_model"
-    assert len(executor.calls) == 1
+    assert executor.calls == []
     entries = await registry.list_task_runs(tenant_id=7, task_id=42)
     assert len(entries) == 1
-    assert entries[0].status == "failed"
-    assert entries[0].result_consumed is True
+    assert entries[0].status == "interrupted"
+    assert entries[0].result_consumed is False
+    assert entries[0].result is None
+
+
+@pytest.mark.asyncio
+async def test_parent_handoff_reuses_state_across_seven_sequential_children() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    launcher = _RecordingLauncher(registry)
+    executor = _SequentialParentHandoffExecutor(total_child_runs=7)
+
+    async def _publish(_task_id: int, _event: dict[str, Any]) -> None:
+        return None
+
+    handler = build_subagent_handler(
+        _FakeCheckpointerService(),
+        executor,
+        object(),
+        registry=registry,
+        launcher=launcher,
+        lifecycle_publisher=_publish,
+        parent_handoff_continuation_broker=ParentHandoffContinuationBroker(),
+    )
+
+    result = await asyncio.wait_for(handler.handle(_runtime_config()), timeout=2)
+
+    assert result.final_text == "Parent retained every accepted child result."
+    assert result.persistence_handled is True
+    assert len(launcher.calls) == 7
+    assert len(executor.parent_inputs) == 7
+    assert len(set(executor.parent_thread_ids)) == 1
+
+    observed_run_ids: list[str] = []
+    for parent_index, parent_input in enumerate(executor.parent_inputs):
+        facts = parent_input["facts"]
+        metadata = facts["metadata"]
+        completed_results = metadata[METADATA_CONTEXT_BUNDLE_KEY][
+            COMPLETED_AGENT_RESULTS_KEY
+        ]
+        assert len(completed_results) == 1
+        observed_run_ids.append(completed_results[0]["agent_run_id"])
+
+        phases = metadata.get("working_memory", {}).get(
+            "current_turn_phases", []
+        )
+        assert len(phases) == parent_index
+        assert [phase["phase_sequence"] for phase in phases] == list(
+            range(parent_index)
+        )
+        if parent_index:
+            assert observed_run_ids[parent_index - 1] in phases[-1]["sections"][0][
+                "body"
+            ]
+            assert facts["todo_list"] == [
+                "Complete every bounded child assignment."
+            ]
+
+    assert len(set(observed_run_ids)) == 7
+    assert result.interactive_state is not None
+    final_memory = result.interactive_state.facts.metadata["working_memory"]
+    assert len(final_memory["current_turn_phases"]) == 7
+    assert len(result.interactive_state.trace.usage_records) == 7
+
+    entries = await registry.list_task_runs(tenant_id=7, task_id=42)
+    assert len(entries) == 7
+    assert all(entry.result_consumed for entry in entries)
 
 
 @pytest.mark.asyncio

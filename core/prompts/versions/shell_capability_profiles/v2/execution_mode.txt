@@ -1,0 +1,5 @@
+Leave interactive=false for ordinary commands, including commands that emit
+early output, become quiet, or take time to finish. Set interactive=true only
+when the running program genuinely requires later stdin. Only an explicitly
+interactive execution may use shell.write_stdin; never resend the originating
+command as continuation input.

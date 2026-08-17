@@ -245,7 +245,9 @@ Lifecycle:
    from the context bundle.
 5. Tool execution follows the shared tool execution subgraph:
    `select_categories -> prepare_tool_plan -> approval_gate -> dispatch_tool ->
-   tool_synthesizer -> post_tool_reasoning`.
+   tool_synthesizer -> post_tool_reasoning` for terminal results. A running
+   shell-session result first passes through `tool_execution_session` and
+   one terminal aggregate compression before synthesis.
 6. `post_tool_reasoning` appends PTR phase memory and routes through
    `observation_adapter` back to `decision_router`.
 7. `think_more`, `reflect`, and `synthesis` consume and extend current-turn
@@ -377,11 +379,18 @@ Tool iterations then update the child-private `tool_runs`,
 through the shared tool-result reducers and phase-memory helpers.
 
 The child prompt receives the existing bounded
-`context_bundle.runtime_state` projection plus the latest compact tool result
-and rendered current-turn phase memory. The prompt intentionally omits raw
-phase-ledger internals and duplicate tool-run history; prior tool context
-appears once through the rendered phase-memory section and latest compact
-envelope.
+`context_bundle.runtime_state` projection, the latest compact tool result,
+rendered current-turn phase memory, and bounded prior tool-outcome projections.
+Each outcome is derived from canonical compact evidence plus the matching
+serialized planner call, secret-masked, and capped before it is stored as a
+phase-memory section. This keeps earlier failure/success status, invocation,
+findings, errors, artifact refs, exit codes, and shell lifecycle available
+without retaining raw shell output or duplicating the complete tool-run state.
+
+When a child handoff starts a later child cycle, the assignment may carry the
+same bounded `prior_tool_outcomes` projection. Child initialization reattaches
+those rows through the normal phase-memory ledger rather than creating a second
+subagent transcript.
 
 Parent turns do not receive child working memory, phase records, raw tool
 output, checkpoint state, or full child graph state. Completion derives a safe

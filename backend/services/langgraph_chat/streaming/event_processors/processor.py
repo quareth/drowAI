@@ -105,7 +105,10 @@ class StreamEventProcessor:
         elif event_type == "tool_batch_start":
             processed = self._tool_event_processor.process_tool_batch_start(event)
         elif event_type == "tool_delta":
-            processed = self._tool_event_processor.process_tool_delta(event)
+            processed = self._tool_event_processor.process_tool_delta(
+                event,
+                state_container,
+            )
         elif event_type == "tool_end":
             processed = self._tool_event_processor.process_tool_end(
                 event,

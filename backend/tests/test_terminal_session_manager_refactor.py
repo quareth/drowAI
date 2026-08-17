@@ -7,6 +7,8 @@ agent bootstrap behavior that must remain stable across the extraction.
 from __future__ import annotations
 
 import asyncio
+import socket
+import time
 from datetime import timedelta
 from unittest.mock import AsyncMock, MagicMock
 from types import SimpleNamespace
@@ -14,8 +16,14 @@ from types import SimpleNamespace
 from fastapi import HTTPException
 import pytest
 
+import backend.services.terminal.manager as terminal_manager_module
+from backend.database import SessionLocal
 from backend.core.time_utils import utc_now
 from backend.services import terminal_session_manager as legacy_terminal_module
+from backend.services.chat.shell_session_lifecycle_projector import (
+    ShellSessionLifecycleProjector,
+)
+from backend.services.streaming.in_memory_hub import get_in_memory_stream_hub
 from backend.services.terminal.contracts import (
     AGENT_PROMPT_ENV,
     AGENT_PROMPT_MARKER,
@@ -27,8 +35,11 @@ from backend.services.terminal.manager import (
     terminal_session_manager as extracted_terminal_session_manager,
 )
 from backend.services.terminal.models import TerminalSession as ExtractedTerminalSession
+from backend.services.terminal.shell_session_service import ShellSessionService
 from backend.services.terminal_session_manager import TerminalSessionManager, TerminalSession
 from backend.services.runtime_provider import RuntimeCallScope
+from runtime_shared.shell_session_port import get_shell_session_service
+from runtime_shared.terminal_contracts import TerminalReadResult
 
 
 def test_terminal_session_manager_facade_reexports_public_surface() -> None:
@@ -39,6 +50,17 @@ def test_terminal_session_manager_facade_reexports_public_surface() -> None:
         legacy_terminal_module.terminal_session_manager
         is extracted_terminal_session_manager
     )
+
+
+def test_terminal_session_manager_facade_binds_shell_session_service() -> None:
+    """Backend facade import should bind the process-local shell session port."""
+    assert isinstance(legacy_terminal_module.shell_session_service, ShellSessionService)
+    projector = legacy_terminal_module.shell_session_service._lifecycle_projector
+    assert isinstance(projector, ShellSessionLifecycleProjector)
+    assert projector._session_factory is SessionLocal
+    assert projector._stream_hub_provider is get_in_memory_stream_hub
+    assert projector._wall_clock is time.time
+    assert get_shell_session_service() is legacy_terminal_module.shell_session_service
 
 
 def test_terminal_contracts_preserve_prompt_and_session_id_values() -> None:
@@ -64,6 +86,233 @@ async def test_terminal_session_active_io_methods_are_disabled() -> None:
         await session.write(b"x")
     with pytest.raises(RuntimeError, match="TerminalSessionManager"):
         await session.read(1)
+
+
+@pytest.mark.asyncio
+async def test_read_output_result_returns_success_for_empty_provider_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Typed terminal reads distinguish empty successful reads from failures."""
+    manager = TerminalSessionManager()
+    session = TerminalSession(
+        session_id="session-empty",
+        task_id=1,
+        user_id=0,
+        container_name="task-1",
+        connection_type="docker_exec",
+        exec_id="provider-session-empty",
+    )
+    manager.sessions[session.session_id] = session
+
+    monkeypatch.setattr(
+        manager,
+        "_run_session_provider_operation",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                ok=True,
+                metadata={"delegate_result": {"data": b"", "next_cursor": 7}},
+            )
+        ),
+    )
+
+    result = await manager.read_output_result(session.session_id)
+
+    assert result.ok is True
+    assert result.data == b""
+    assert result.error_code is None
+    assert session.output_cursor == 7
+
+
+@pytest.mark.asyncio
+async def test_read_output_result_preserves_provider_truncation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = TerminalSessionManager()
+    session = TerminalSession(
+        session_id="session-truncated",
+        task_id=1,
+        user_id=0,
+        container_name="task-1",
+        connection_type="docker_exec",
+        exec_id="provider-session-truncated",
+    )
+    manager.sessions[session.session_id] = session
+    monkeypatch.setattr(
+        manager,
+        "_run_session_provider_operation",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                ok=True,
+                metadata={
+                    "delegate_result": {
+                        "data": b"remaining",
+                        "truncated": True,
+                    }
+                },
+            )
+        ),
+    )
+
+    result = await manager.read_output_result(session.session_id)
+
+    assert result.data == b"remaining"
+    assert result.truncated is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("timeout", [0.0, 0.01])
+async def test_read_output_result_preserves_idle_local_read_success(
+    monkeypatch: pytest.MonkeyPatch,
+    timeout: float,
+) -> None:
+    """Idle local socket reads should remain successful typed empty reads."""
+    manager = TerminalSessionManager()
+    reader, writer = socket.socketpair()
+    session = TerminalSession(
+        session_id="session-idle",
+        task_id=1,
+        user_id=0,
+        container_name="task-1",
+        connection_type="docker_exec",
+        socket=reader,
+    )
+    manager.sessions[session.session_id] = session
+    payloads: list[dict[str, object] | None] = []
+
+    async def _fake_run_session_provider_operation(
+        *,
+        session: TerminalSession,
+        operation: str,
+        call,
+        payload: dict[str, object] | None = None,
+        metadata: dict[str, object] | None = None,
+    ) -> SimpleNamespace:
+        del session, operation, call, metadata
+        payloads.append(payload)
+        return SimpleNamespace(
+            ok=True,
+            metadata={"delegate_result": {"data": b""}},
+        )
+
+    monkeypatch.setattr(
+        manager,
+        "_run_session_provider_operation",
+        _fake_run_session_provider_operation,
+    )
+    try:
+        result = await manager.read_output_result(session.session_id, timeout=timeout)
+    finally:
+        reader.close()
+        writer.close()
+
+    assert result.ok is True
+    assert result.data == b""
+    assert result.error_code is None
+    assert result.eof is False
+    assert payloads == [{"size": 4096, "timeout": timeout, "socket": reader}]
+
+
+@pytest.mark.asyncio
+async def test_read_output_result_preserves_provider_eof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = TerminalSessionManager()
+    session = TerminalSession(
+        session_id="session-eof",
+        task_id=1,
+        user_id=0,
+        container_name="task-1",
+        connection_type="docker_exec",
+        exec_id="provider-session-eof",
+    )
+    manager.sessions[session.session_id] = session
+
+    monkeypatch.setattr(
+        manager,
+        "_run_session_provider_operation",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                ok=True,
+                metadata={"delegate_result": {"data": b"", "eof": True}},
+            )
+        ),
+    )
+
+    result = await manager.read_output_result(session.session_id)
+
+    assert result.ok is True
+    assert result.data == b""
+    assert result.eof is True
+
+
+@pytest.mark.asyncio
+async def test_read_output_result_reports_provider_failure_without_cursor_advance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Failed provider reads should not look like idle sessions or move cursors."""
+    manager = TerminalSessionManager()
+    session = TerminalSession(
+        session_id="session-failure",
+        task_id=1,
+        user_id=0,
+        container_name="task-1",
+        connection_type="docker_exec",
+        exec_id="provider-session-failure",
+        output_cursor=4,
+    )
+    manager.sessions[session.session_id] = session
+
+    monkeypatch.setattr(
+        manager,
+        "_run_session_provider_operation",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                ok=False,
+                error_code=None,
+                metadata={"delegate_result": {"data": b"lost", "next_cursor": 99}},
+            )
+        ),
+    )
+
+    result = await manager.read_output_result(session.session_id)
+
+    assert result.ok is False
+    assert result.data == b""
+    assert result.error_code == "runtime_transport_failed"
+    assert session.output_cursor == 4
+
+
+@pytest.mark.asyncio
+async def test_read_output_remains_byte_compatible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The legacy read_output facade must keep returning only bytes."""
+    manager = TerminalSessionManager()
+    session = TerminalSession(
+        session_id="session-bytes",
+        task_id=1,
+        user_id=0,
+        container_name="task-1",
+        connection_type="docker_exec",
+        exec_id="provider-session-bytes",
+    )
+    manager.sessions[session.session_id] = session
+
+    monkeypatch.setattr(
+        manager,
+        "_run_session_provider_operation",
+        AsyncMock(
+            return_value=SimpleNamespace(
+                ok=True,
+                metadata={"delegate_result": {"data": "hello", "cursor": 3}},
+            )
+        ),
+    )
+
+    data = await manager.read_output(session.session_id)
+
+    assert data == b"hello"
+    assert session.output_cursor == 3
 
 
 @pytest.mark.asyncio
@@ -182,6 +431,46 @@ async def test_prepare_agent_session_preserves_prompt_workspace_and_history_setu
         b"cd /workspace 2>/dev/null || true\n",
         b"unset HISTFILE\n",
     ]
+
+
+@pytest.mark.asyncio
+async def test_prepare_agent_session_cancellation_retires_partial_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = TerminalSessionManager()
+    session = TerminalSession(
+        session_id="agent_task_99_shell_partial",
+        task_id=99,
+        user_id=7,
+        container_name="task-99",
+        connection_type="docker_exec",
+        exec_id="provider-partial",
+        session_type="agent",
+    )
+    manager.sessions[session.session_id] = session
+    provider_operation = AsyncMock(return_value=SimpleNamespace(ok=True, metadata={}))
+    monkeypatch.setattr(
+        manager,
+        "get_or_create_agent_session",
+        AsyncMock(return_value=session),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_initialize_agent_session",
+        AsyncMock(side_effect=asyncio.CancelledError),
+    )
+    monkeypatch.setattr(
+        manager,
+        "_run_session_provider_operation",
+        provider_operation,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await manager.prepare_agent_session(task_id=99)
+
+    assert session.is_active is False
+    assert session.session_id not in manager.sessions
+    assert provider_operation.await_count == 1
 
 
 @pytest.mark.asyncio
@@ -362,11 +651,13 @@ async def test_runner_terminal_read_advances_cursor_between_polls(
 
 
 @pytest.mark.asyncio
-async def test_provider_stream_frame_fans_out_without_polling() -> None:
-    """Pushed cloud terminal frames should use the manager replay/listener path directly."""
+async def test_managed_stream_reader_delivers_each_frame_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Buffered managed frames should use the normal manager reader exactly once."""
     manager = TerminalSessionManager()
     session = TerminalSession(
-        session_id="term-push",
+        session_id="term-managed-reader",
         task_id=42,
         user_id=7,
         container_name="runner-task-42",
@@ -374,37 +665,44 @@ async def test_provider_stream_frame_fans_out_without_polling() -> None:
         exec_id="runner-session-42",
         stream_mode=True,
     )
+    manager.sessions[session.session_id] = session
     sent: list[bytes] = []
+    timeouts: list[float | None] = []
 
     class _WebSocket:
         async def send_bytes(self, payload: bytes) -> None:
             sent.append(payload)
 
     session.listeners.add(_WebSocket())
-    manager.sessions[session.session_id] = session
 
-    accepted = await manager.ingest_provider_stream_frame(
-        tenant_id=1,
-        runner_id="runner-1",
-        task_id=42,
-        provider_session_id="runner-session-42",
-        data=b"hello\n",
-    )
+    async def _fake_read_output(
+        _session_id: str,
+        _size: int,
+        *,
+        timeout: float | None = None,
+    ) -> TerminalReadResult:
+        timeouts.append(timeout)
+        session.is_active = False
+        return TerminalReadResult(ok=True, data=b"prompt> ")
 
-    assert accepted is True
-    assert sent == [b"hello\n"]
-    assert list(session.output_buffer) == [b"hello\n"]
-    assert session.buffer_bytes == len(b"hello\n")
+    monkeypatch.setattr(manager, "read_output_result", _fake_read_output)
+
+    await manager._pty_reader(session)
+
+    assert timeouts == [0.5]
+    assert sent == [b"prompt> "]
+    assert list(session.output_buffer) == [b"prompt> "]
+    assert session.buffer_bytes == len(b"prompt> ")
 
 
 @pytest.mark.asyncio
-async def test_initial_stream_drain_waits_for_first_prompt_frame(
+async def test_managed_stream_reader_stops_after_transport_loss(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Initial stream drain should tolerate runner prompt frames arriving just after open."""
+    """A lost stream is terminal state, not an empty read to poll forever."""
     manager = TerminalSessionManager()
     session = TerminalSession(
-        session_id="term-initial-drain",
+        session_id="term-managed-disconnected",
         task_id=42,
         user_id=7,
         container_name="runner-task-42",
@@ -413,20 +711,25 @@ async def test_initial_stream_drain_waits_for_first_prompt_frame(
         stream_mode=True,
     )
     manager.sessions[session.session_id] = session
-    timeouts: list[float | None] = []
-    chunks = [b"prompt> ", b""]
+    reads = 0
 
-    async def _fake_read_output(_session_id: str, _size: int, *, timeout: float | None = None) -> bytes:
-        timeouts.append(timeout)
-        return chunks.pop(0)
+    async def _failed_read(
+        _session_id: str,
+        _size: int,
+        *,
+        timeout: float | None = None,
+    ) -> TerminalReadResult:
+        nonlocal reads
+        del timeout
+        reads += 1
+        return TerminalReadResult(ok=False, error_code="terminal_stream_unavailable")
 
-    monkeypatch.setattr(manager, "read_output", _fake_read_output)
+    monkeypatch.setattr(manager, "read_output_result", _failed_read)
 
-    await manager._drain_initial_stream_buffer(session)
+    await manager._pty_reader(session)
 
-    assert timeouts == [1.0, 0.0]
-    assert list(session.output_buffer) == [b"prompt> "]
-    assert session.buffer_bytes == len(b"prompt> ")
+    assert reads == 1
+    assert session.is_active is False
 
 
 @pytest.mark.asyncio
@@ -437,19 +740,10 @@ async def test_create_user_session_with_authorized_task_uses_tenant_scoped_runti
     manager = TerminalSessionManager()
     authorized_task = SimpleNamespace(id=88, tenant_id=701)
     calls: list[str] = []
+    readers: list[str] = []
 
-    async def _fake_validate_container_access(
-        task_id: int,
-        user_id: int,
-        *,
-        authorized_task,
-        runtime_call_scope,
-    ) -> bool:
-        assert runtime_call_scope is RuntimeCallScope.PRODUCT_TASK
-        assert task_id == 88
-        assert user_id == 9
-        assert getattr(authorized_task, "id", None) == 88
-        return True
+    class _PushStream:
+        push_frames = True
 
     class _FakeRuntimeOperations:
         def __init__(self, _db):
@@ -457,12 +751,17 @@ async def test_create_user_session_with_authorized_task_uses_tenant_scoped_runti
 
         async def run_authorized_task_operation(self, **kwargs):
             calls.append(str(kwargs.get("operation")))
+            assert kwargs.get("runtime_call_scope") is RuntimeCallScope.PRODUCT_TASK
+            assert kwargs.get("user_id") == 9
+            assert getattr(kwargs.get("task"), "id", None) == 88
+            if kwargs.get("operation") == "get_runtime_status":
+                return SimpleNamespace(ok=True, metadata={"delegate_result": "running"})
             return SimpleNamespace(
                 ok=True,
                 metadata={
                     "delegate_result": {
                         "exec_id": "exec-88",
-                        "socket": object(),
+                        "socket": _PushStream(),
                         "container_name": "task-88",
                     }
                 },
@@ -473,10 +772,10 @@ async def test_create_user_session_with_authorized_task_uses_tenant_scoped_runti
             raise AssertionError("run_user_task_operation should not be used with authorized_task")
 
     async def _noop_reader(_session):
+        readers.append("buffered_reader")
         return None
 
     monkeypatch.setattr(manager, "_validate_task_ownership", lambda *_args: (_ for _ in ()).throw(AssertionError))
-    monkeypatch.setattr(manager, "_validate_container_access", _fake_validate_container_access)
     monkeypatch.setattr(manager, "_pty_reader", _noop_reader)
     monkeypatch.setattr("backend.services.terminal.manager.RuntimeOperationService", _FakeRuntimeOperations)
     monkeypatch.setattr("backend.services.terminal.manager.SessionLocal", lambda: SimpleNamespace(close=lambda: None))
@@ -485,7 +784,9 @@ async def test_create_user_session_with_authorized_task_uses_tenant_scoped_runti
 
     assert session is not None
     assert session.task_id == 88
-    assert "open_terminal_session" in calls
+    assert calls == ["get_runtime_status", "open_terminal_session"]
+    await asyncio.sleep(0)
+    assert readers == ["buffered_reader"]
     await manager.close_session(session.session_id)
 
 
@@ -577,6 +878,123 @@ async def test_create_user_session_local_behavior_requires_explicit_test_scope(
 
 
 @pytest.mark.asyncio
+async def test_create_user_session_waits_for_transient_runtime_before_one_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Transient runtime startup states should be rechecked before one terminal open."""
+    manager = TerminalSessionManager()
+    calls: list[str] = []
+    statuses: list[object] = ["unknown", {"status": "starting"}, "running"]
+
+    class _FakeRuntimeOperations:
+        def __init__(self, _db):
+            pass
+
+        async def run_user_task_operation(self, **kwargs):
+            operation = str(kwargs.get("operation"))
+            calls.append(operation)
+            if operation == "get_runtime_status":
+                return SimpleNamespace(
+                    ok=True,
+                    metadata={"delegate_result": statuses.pop(0)},
+                )
+            if operation == "open_terminal_session":
+                return SimpleNamespace(
+                    ok=True,
+                    metadata={
+                        "delegate_result": {
+                            "exec_id": "transient-exec",
+                            "socket": object(),
+                            "container_name": "task-93",
+                        }
+                    },
+                    error_message=None,
+                )
+            raise AssertionError(operation)
+
+    async def _noop_reader(_session):
+        return None
+
+    monkeypatch.setattr(manager, "_validate_task_ownership", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(manager, "_pty_reader", _noop_reader)
+    monkeypatch.setattr("backend.services.terminal.manager.RuntimeOperationService", _FakeRuntimeOperations)
+    monkeypatch.setattr("backend.services.terminal.manager.SessionLocal", lambda: SimpleNamespace(close=lambda: None))
+
+    session = await manager.create_session(task_id=93, user_id=12, tenant_id=701)
+
+    assert session is not None
+    assert session.exec_id == "transient-exec"
+    assert calls == [
+        "get_runtime_status",
+        "get_runtime_status",
+        "get_runtime_status",
+        "open_terminal_session",
+    ]
+    assert list(manager.sessions) == [session.session_id]
+
+
+@pytest.mark.asyncio
+async def test_create_user_session_rejects_stopped_runtime_without_terminal_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Definitive unavailable runtime states should fail before provider terminal open."""
+    manager = TerminalSessionManager()
+    calls: list[str] = []
+
+    class _FakeRuntimeOperations:
+        def __init__(self, _db):
+            pass
+
+        async def run_user_task_operation(self, **kwargs):
+            operation = str(kwargs.get("operation"))
+            calls.append(operation)
+            if operation == "get_runtime_status":
+                return SimpleNamespace(ok=True, metadata={"delegate_result": "exited"})
+            raise AssertionError("terminal open must not run for stopped runtime")
+
+    monkeypatch.setattr(manager, "_validate_task_ownership", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr("backend.services.terminal.manager.RuntimeOperationService", _FakeRuntimeOperations)
+    monkeypatch.setattr("backend.services.terminal.manager.SessionLocal", lambda: SimpleNamespace(close=lambda: None))
+
+    session = await manager.create_session(task_id=94, user_id=12, tenant_id=701)
+
+    assert session is None
+    assert calls == ["get_runtime_status"]
+    assert manager.sessions == {}
+
+
+@pytest.mark.asyncio
+async def test_create_user_session_readiness_deadline_leaves_no_session_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Readiness deadline expiry should not create provider terminals or session records."""
+    manager = TerminalSessionManager()
+    calls: list[str] = []
+
+    class _FakeRuntimeOperations:
+        def __init__(self, _db):
+            pass
+
+        async def run_user_task_operation(self, **kwargs):
+            operation = str(kwargs.get("operation"))
+            calls.append(operation)
+            if operation == "get_runtime_status":
+                return SimpleNamespace(ok=True, metadata={"delegate_result": "pending"})
+            raise AssertionError("terminal open must not run before runtime readiness")
+
+    monkeypatch.setattr(terminal_manager_module, "_TERMINAL_OPEN_DEADLINE_SEC", 0.01)
+    monkeypatch.setattr(manager, "_validate_task_ownership", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr("backend.services.terminal.manager.RuntimeOperationService", _FakeRuntimeOperations)
+    monkeypatch.setattr("backend.services.terminal.manager.SessionLocal", lambda: SimpleNamespace(close=lambda: None))
+
+    session = await manager.create_session(task_id=95, user_id=12, tenant_id=701)
+
+    assert session is None
+    assert calls == ["get_runtime_status"]
+    assert manager.sessions == {}
+
+
+@pytest.mark.asyncio
 async def test_create_agent_session_uses_internal_runtime_context_for_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -649,6 +1067,64 @@ async def test_create_agent_session_uses_internal_runtime_context_for_identity(
     assert resolver_calls["actor_type"].value == "agent"
     assert resolver_calls["actor_id"] == "agent_session:named-session"
     assert session.user_id == 17
+
+
+@pytest.mark.asyncio
+async def test_create_agent_session_rejects_unavailable_runtime_before_terminal_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Agent PTY creation must not open a provider terminal for stopped runtimes."""
+    manager = TerminalSessionManager()
+    calls: list[str] = []
+
+    class _FakeResolver:
+        def __init__(self, _db):
+            pass
+
+        def resolve_internal_task_context(self, **kwargs):
+            return SimpleNamespace(
+                tenant_id=9,
+                task_id=45,
+                workspace_id="task-45",
+                runtime_placement_mode="local",
+                actor_type=kwargs["actor_type"],
+                actor_id=kwargs["actor_id"],
+                user_id=17,
+                runner_id=None,
+                execution_site_id=None,
+            )
+
+    class _FakeRuntimeOperations:
+        def __init__(self, _db):
+            pass
+
+        async def run_for_context(self, *, operation, **_kwargs):
+            calls.append(str(operation))
+            if operation == "get_runtime_status":
+                return SimpleNamespace(
+                    ok=True,
+                    metadata={"delegate_result": {"container_status": "exited"}},
+                )
+            raise AssertionError("terminal open must not run for stopped runtime")
+
+    monkeypatch.setattr(
+        "backend.services.terminal.manager.RuntimeProviderContextResolver",
+        _FakeResolver,
+    )
+    monkeypatch.setattr(
+        "backend.services.terminal.manager.RuntimeOperationService",
+        _FakeRuntimeOperations,
+    )
+    monkeypatch.setattr(
+        "backend.services.terminal.manager.SessionLocal",
+        lambda: SimpleNamespace(close=lambda: None),
+    )
+
+    with pytest.raises(RuntimeError, match="not available for terminal open"):
+        await manager._create_agent_session(task_id=45, cols=120, rows=30)
+
+    assert calls == ["get_runtime_status"]
+    assert manager.sessions == {}
 
 
 @pytest.mark.asyncio

@@ -51,7 +51,11 @@ from ._formatting import (
     get_field,
     truncate,
 )
-from .evidence import read_compact_evidence
+from .evidence import (
+    EvidenceView,
+    preferred_compact_evidence_row,
+    read_compact_evidence,
+)
 
 LAST_TOOL_SECTION_HEADINGS: Mapping[str, str] = {
     "tool_executed": "Tool Executed",
@@ -81,6 +85,22 @@ def _combine_lane_sections(llm_body: str, deterministic_body: str) -> str:
         f"LLM lane:\n{llm_text}\n"
         f"Deterministic lane:\n{deterministic_text}"
     )
+
+
+def _format_terminal_session_output(compact: Mapping[str, Any]) -> str:
+    """Render one completed session's bounded stdout and stderr for PTR."""
+
+    parts: list[str] = []
+    summary = str(compact.get("summary") or "").strip()
+    stdout = str(compact.get("stdout") or "").strip()
+    stderr = str(compact.get("stderr") or "").strip()
+    if summary:
+        parts.append(summary)
+    if stdout:
+        parts.append(f"stdout:\n{stdout}")
+    if stderr:
+        parts.append(f"stderr:\n{stderr}")
+    return "\n\n".join(parts)
 
 
 def _resolve_tool_name(facts: Any, synthesized: Mapping[str, Any]) -> str:
@@ -150,6 +170,7 @@ def extract_last_tool_sections(
     synthesized: Optional[Mapping[str, Any]] = None,
     *,
     prefer_runtime_evidence: bool = False,
+    evidence_override: Optional[EvidenceView] = None,
 ) -> dict[str, str]:
     """Project last-tool runtime state into formatted prompt section bodies.
 
@@ -165,6 +186,9 @@ def extract_last_tool_sections(
         prefer_runtime_evidence: Prefer same-process raw compact evidence
             registered for the active PTR turn. Leave disabled for durable
             phase snapshots and stored prompt projections.
+        evidence_override: Preselected evidence whose row membership and
+            persistence eligibility were resolved by the caller. When set,
+            the helper does not independently reread runtime evidence.
 
     Returns:
         Dict with exactly the ten keys documented in the module
@@ -192,18 +216,23 @@ def extract_last_tool_sections(
     # ``single``-source view when no batch metadata exists, so this is
     # the sole reader — no direct ``metadata.get('last_tool_result_compact')``
     # fallback is needed.
-    evidence = read_compact_evidence(
-        metadata_view,
-        prefer_runtime=prefer_runtime_evidence,
-    )
+    evidence = evidence_override
+    if evidence is None:
+        evidence = read_compact_evidence(
+            metadata_view,
+            prefer_runtime=prefer_runtime_evidence,
+        )
     compact_result: Mapping[str, Any] = {}
     deterministic_compact_result: Mapping[str, Any] = {}
     if evidence is not None and evidence.rows:
-        primary = evidence.rows[0].get("compact_tool_result")
+        selected_row = preferred_compact_evidence_row(evidence)
+        primary = selected_row.get("compact_tool_result") if selected_row else None
         if isinstance(primary, Mapping):
             compact_result = as_mapping(primary)
-        deterministic_primary = evidence.rows[0].get(
-            "deterministic_compact_tool_result"
+        deterministic_primary = (
+            selected_row.get("deterministic_compact_tool_result")
+            if selected_row
+            else None
         )
         if isinstance(deterministic_primary, Mapping):
             deterministic_compact_result = as_mapping(deterministic_primary)
@@ -249,10 +278,14 @@ def extract_last_tool_sections(
             lines.append("; ".join(parts))
         batch_tool_results = "\n".join(lines)
 
-    raw_summary = (
-        compact_result.get("summary")
-        or synthesized_view.get("summary")
-        or ""
+    terminal_session_output = (
+        _format_terminal_session_output(compact_result)
+        if evidence is not None
+        and evidence.raw.get("execution_session_aggregate") is True
+        else ""
+    )
+    raw_summary = terminal_session_output or (
+        compact_result.get("summary") or synthesized_view.get("summary") or ""
     )
     tool_output_summary = _combine_lane_sections(
         truncate(str(raw_summary), MAX_SUMMARY_CHARS),
@@ -332,8 +365,8 @@ def extract_last_tool_sections(
             output_info = (
                 f"Output condensed ({chars_truncated:,} chars omitted). "
                 "If key evidence is still missing and the saved path is available, "
-                "use a visible filesystem read/search tool with bounded scope. "
-                "Do not default to full reads."
+                "retrieve only the bounded portion needed to close that gap. "
+                "Do not default to reading the entire saved output."
                 f"\nSaved output path: `{artifact_path}`"
             )
         else:

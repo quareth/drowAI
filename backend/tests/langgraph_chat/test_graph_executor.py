@@ -42,6 +42,72 @@ def _seed_task(session, *, task_id: int) -> Task:
 
 class TestGraphExecutorStreaming:
     """Test streaming execution."""
+
+    @pytest.mark.asyncio
+    async def test_graph_executor_forwards_nested_subgraph_custom_events(self):
+        """Nested execution nodes must remain visible to stream consumers."""
+        from langgraph.graph import END, StateGraph
+
+        async def emit_tool_lifecycle(state, *, writer=None):
+            writer({"type": "tool_start", "tool_call_id": "tc_nested"})
+            writer({"type": "tool_end", "tool_call_id": "tc_nested"})
+            return {"child_completed": True}
+
+        child = StateGraph(dict)
+        child.add_node("dispatch", emit_tool_lifecycle)
+        child.set_entry_point("dispatch")
+        child.add_edge("dispatch", END)
+
+        parent = StateGraph(dict)
+        parent.add_node("execution_session", child.compile())
+        parent.set_entry_point("execution_session")
+        parent.add_edge("execution_session", END)
+
+        adapter = MagicMock()
+        adapter.process_streaming_event.side_effect = (
+            lambda event, *, state_container=None: event
+        )
+        executor = LangGraphExecutor(streaming_adapter=adapter)
+        executor._forward_streaming_event = AsyncMock()
+
+        result = await executor.stream_graph(
+            compiled_graph=parent.compile(),
+            graph_input={},
+            config={"configurable": {"thread_id": "nested-events"}},
+            task_id=1,
+        )
+
+        forwarded = [
+            call.args[1]["type"]
+            for call in executor._forward_streaming_event.await_args_list
+        ]
+        assert forwarded == ["tool_start", "tool_end"]
+        assert result.final_state == {"child_completed": True}
+
+    @pytest.mark.asyncio
+    async def test_graph_executor_ignores_nested_values_as_final_state(self):
+        """Only root values may become the authoritative graph result."""
+        executor = LangGraphExecutor()
+        mock_graph = AsyncMock()
+
+        async def mock_astream(input_state, config, stream_mode, subgraphs=False):
+            assert subgraphs is True
+            yield (("execution_session:child",), "values", {"child_only": True})
+            yield ((), "values", {"facts": {}, "trace": {"final_text": "done"}})
+
+        mock_graph.astream = mock_astream
+
+        result = await executor.stream_graph(
+            compiled_graph=mock_graph,
+            graph_input={},
+            config={"configurable": {"thread_id": "nested-values"}},
+            task_id=1,
+        )
+
+        assert result.final_state == {
+            "facts": {},
+            "trace": {"final_text": "done"},
+        }
     
     @pytest.mark.asyncio
     async def test_graph_executor_streaming_success(self):
@@ -52,7 +118,7 @@ class TestGraphExecutorStreaming:
         mock_graph = AsyncMock()
         
         # Mock astream to yield events
-        async def mock_astream(input_state, config, stream_mode):
+        async def mock_astream(input_state, config, stream_mode, subgraphs=False):
             # Yield custom event
             yield ("custom", {"type": "message_delta", "content": "test"})
             # Yield final state
@@ -80,7 +146,7 @@ class TestGraphExecutorStreaming:
         latest_state = {"facts": {"message": "latest"}, "trace": {}}
         cancel_checks = 0
 
-        async def mock_astream(input_state, config, stream_mode):
+        async def mock_astream(input_state, config, stream_mode, subgraphs=False):
             yield ("values", partial_state)
             yield ("values", latest_state)
 
@@ -101,7 +167,7 @@ class TestGraphExecutorStreaming:
             )
 
         assert raised.value.execution_result.final_state == latest_state
-    
+
     @pytest.mark.asyncio
     async def test_graph_executor_streaming_captures_final_state(self):
         """Test that streaming captures final state from values mode."""
@@ -111,7 +177,7 @@ class TestGraphExecutorStreaming:
         
         final_state_dict = {"facts": {"message": "test"}, "trace": {"final_text": "result"}}
         
-        async def mock_astream(input_state, config, stream_mode):
+        async def mock_astream(input_state, config, stream_mode, subgraphs=False):
             # Yield values mode with final state
             yield ("values", final_state_dict)
         
@@ -135,7 +201,7 @@ class TestGraphExecutorStreaming:
         mock_graph = AsyncMock()
         
         # Mock astream to emit only custom events
-        async def mock_astream(input_state, config, stream_mode):
+        async def mock_astream(input_state, config, stream_mode, subgraphs=False):
             yield ("custom", {"type": "message_delta", "content": "test"})
         
         mock_graph.astream = mock_astream
@@ -158,7 +224,7 @@ class TestGraphExecutorStreaming:
         executor = LangGraphExecutor()
         mock_graph = AsyncMock()
 
-        async def mock_astream(input_state, config, stream_mode):
+        async def mock_astream(input_state, config, stream_mode, subgraphs=False):
             yield ("custom", {"type": "message_delta", "content": "resume-done"})
 
         seen_configs = []
@@ -203,7 +269,7 @@ class TestGraphExecutorStreaming:
 
         mock_graph = AsyncMock()
 
-        async def mock_astream(input_state, config, stream_mode):
+        async def mock_astream(input_state, config, stream_mode, subgraphs=False):
             yield ("custom", {"type": "message_delta", "content": "test"})
 
         mock_graph.astream = mock_astream
@@ -229,7 +295,7 @@ class TestGraphExecutorStreaming:
         
         mock_graph = AsyncMock()
         
-        async def mock_astream(input_state, config, stream_mode):
+        async def mock_astream(input_state, config, stream_mode, subgraphs=False):
             yield ("custom", {"type": "message_delta", "content": "test"})
             yield ("values", {})
         
@@ -263,7 +329,7 @@ class TestGraphExecutorStreaming:
         executor = LangGraphExecutor(streaming_adapter=mock_adapter)
         mock_graph = AsyncMock()
 
-        async def mock_astream(input_state, config, stream_mode):
+        async def mock_astream(input_state, config, stream_mode, subgraphs=False):
             yield (
                 "custom",
                 {
@@ -326,7 +392,7 @@ class TestGraphExecutorStreaming:
             def __init__(self, value):
                 self.value = value
 
-        async def mock_astream(input_state, config, stream_mode):
+        async def mock_astream(input_state, config, stream_mode, subgraphs=False):
             yield ("values", {"__interrupt__": [DummyInterrupt(interrupt_payload)]})
 
         mock_graph.astream = mock_astream
@@ -363,7 +429,7 @@ class TestGraphExecutorStreaming:
             def __init__(self, value):
                 self.value = value
 
-        async def mock_astream(input_state, config, stream_mode):
+        async def mock_astream(input_state, config, stream_mode, subgraphs=False):
             yield ("values", {"__interrupt__": [DummyInterrupt(interrupt_payload)]})
 
         mock_graph.astream = mock_astream
@@ -413,7 +479,7 @@ class TestGraphExecutorStreaming:
             def __init__(self, value):
                 self.value = value
 
-        async def mock_astream(input_state, config, stream_mode):
+        async def mock_astream(input_state, config, stream_mode, subgraphs=False):
             yield ("values", {"__interrupt__": [DummyInterrupt(interrupt_payload)]})
 
         mock_graph.astream = mock_astream
@@ -483,7 +549,7 @@ class TestGraphExecutorStreaming:
             def __init__(self, value):
                 self.value = value
 
-        async def mock_astream(input_state, config, stream_mode):
+        async def mock_astream(input_state, config, stream_mode, subgraphs=False):
             yield ("values", {"__interrupt__": [DummyInterrupt(interrupt_payload)]})
 
         mock_graph.astream = mock_astream
@@ -544,7 +610,7 @@ class TestGraphExecutorStreaming:
             def __init__(self, value):
                 self.value = value
 
-        async def mock_astream(input_state, config, stream_mode):
+        async def mock_astream(input_state, config, stream_mode, subgraphs=False):
             yield ("values", {"__interrupt__": [DummyInterrupt(interrupt_payload)]})
 
         mock_graph.astream = mock_astream
@@ -635,7 +701,7 @@ class TestGraphExecutorStreaming:
             def __init__(self, value):
                 self.value = value
 
-        async def mock_astream(input_state, config, stream_mode):
+        async def mock_astream(input_state, config, stream_mode, subgraphs=False):
             yield ("values", {"__interrupt__": [DummyInterrupt(interrupt_payload)]})
 
         mock_graph.astream = mock_astream
@@ -677,7 +743,7 @@ class TestGraphExecutorStreaming:
         
         mock_graph = AsyncMock()
         
-        async def mock_astream(input_state, config, stream_mode):
+        async def mock_astream(input_state, config, stream_mode, subgraphs=False):
             yield ("values", {})
         
         mock_graph.astream = mock_astream
@@ -702,7 +768,7 @@ class TestGraphExecutorStreaming:
         
         mock_graph = AsyncMock()
         
-        async def mock_astream(input_state, config, stream_mode):
+        async def mock_astream(input_state, config, stream_mode, subgraphs=False):
             raise RuntimeError("Streaming error")
             yield  # pragma: no cover
         
@@ -731,7 +797,7 @@ class TestGraphExecutorStreaming:
             "section_end",
         ]
 
-        async def mock_astream(input_state, config, stream_mode):
+        async def mock_astream(input_state, config, stream_mode, subgraphs=False):
             for event_type in expected_types:
                 yield (
                     "custom",
@@ -780,7 +846,7 @@ class TestGraphExecutorStreaming:
             "section_end",
         ]
 
-        async def mock_astream(input_state, config, stream_mode):
+        async def mock_astream(input_state, config, stream_mode, subgraphs=False):
             for event_type in expected_types:
                 yield (
                     "custom",
@@ -822,7 +888,7 @@ class TestGraphExecutorStreaming:
         pre_interrupt_types = ["reasoning_start", "reasoning_delta"]
         resume_types = ["tool_start", "tool_end", "message_start", "message_delta", "section_end"]
 
-        async def first_astream(input_state, config, stream_mode):
+        async def first_astream(input_state, config, stream_mode, subgraphs=False):
             for event_type in pre_interrupt_types:
                 yield (
                     "custom",
@@ -842,7 +908,7 @@ class TestGraphExecutorStreaming:
                 },
             )
 
-        async def second_astream(input_state, config, stream_mode):
+        async def second_astream(input_state, config, stream_mode, subgraphs=False):
             for event_type in resume_types:
                 yield (
                     "custom",
@@ -900,7 +966,7 @@ class TestGraphExecutorStreaming:
             "trace": {},
         }
 
-        async def mock_astream(input_state, config, stream_mode):
+        async def mock_astream(input_state, config, stream_mode, subgraphs=False):
             yield ("values", values_chunk)
 
         mock_graph.astream = mock_astream
@@ -967,7 +1033,7 @@ class TestGraphExecutorStreaming:
             "trace": {"final_text": "done"},
         }
 
-        async def mock_astream(input_state, config, stream_mode):
+        async def mock_astream(input_state, config, stream_mode, subgraphs=False):
             yield ("values", values_chunk)
 
         mock_graph.astream = mock_astream
@@ -1037,7 +1103,7 @@ class TestGraphExecutorStreaming:
             "trace": {"final_text": "done"},
         }
 
-        async def mock_astream(input_state, config, stream_mode):
+        async def mock_astream(input_state, config, stream_mode, subgraphs=False):
             yield ("values", first_values_chunk)
             yield ("custom", {"type": "message_delta", "content": "still streaming"})
             yield ("values", final_values_chunk)
@@ -1232,6 +1298,28 @@ class TestGraphExecutorEventForwarding:
                 task_id=1,
                 event={"type": "test", "content": "data"},
             )
+
+    @pytest.mark.asyncio
+    async def test_forward_streaming_event_records_assigned_stream_sequence(self):
+        """The turn accumulator receives the packet sequenced by the stream hub."""
+        executor = LangGraphExecutor()
+        state_container = MagicMock()
+        event = {
+            "type": "observation_start",
+            "content": "",
+            "metadata": {"step_type": "observation_start"},
+        }
+        published = {"sequence": 32, "obj": event}
+
+        with patch.object(executor, "_stream_hub") as mock_hub:
+            mock_hub.publish = AsyncMock(return_value=published)
+            await executor._forward_streaming_event(
+                task_id=1,
+                event=event,
+                state_container=state_container,
+            )
+
+        state_container.record_stream_event.assert_called_once_with(published)
     
     @pytest.mark.asyncio
     async def test_forward_streaming_event_failure_logs_but_continues(self):

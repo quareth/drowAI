@@ -25,6 +25,9 @@ class TerminalFrame:
     stream: str
     data: str
     byte_count: int
+    eof: bool = False
+    process_status: str | None = None
+    exit_code: int | None = None
 
 
 @dataclass(slots=True)
@@ -32,6 +35,7 @@ class _SessionBuffer:
     frames: deque[TerminalFrame]
     total_bytes: int = 0
     last_sequence: int = -1
+    dropped_through_sequence: int = -1
     updated_at_monotonic: float = 0.0
 
 
@@ -134,6 +138,9 @@ class RunnerTerminalFrameBuffer:
         sequence: int,
         stream: str,
         data: str,
+        eof: bool = False,
+        process_status: str | None = None,
+        exit_code: int | None = None,
     ) -> bool:
         """Append one frame when it is in-order and within configured limits."""
         if sequence < 0:
@@ -167,6 +174,9 @@ class RunnerTerminalFrameBuffer:
                 stream=str(stream or "stdout"),
                 data=frame_data,
                 byte_count=frame_bytes,
+                eof=eof,
+                process_status=process_status,
+                exit_code=exit_code,
             )
             buffer.frames.append(frame)
             buffer.total_bytes += frame_bytes
@@ -196,6 +206,7 @@ class RunnerTerminalFrameBuffer:
                 "frames": [],
                 "data": "",
                 "next_sequence": after_sequence if isinstance(after_sequence, int) else -1,
+                "truncated": False,
             }
         safe_after = int(after_sequence) if isinstance(after_sequence, int) else -1
         safe_max_bytes = max(1, int(max_bytes))
@@ -215,6 +226,7 @@ class RunnerTerminalFrameBuffer:
                     "frames": [],
                     "data": "",
                     "next_sequence": safe_after,
+                    "truncated": False,
                 }
 
             buffer = self._buffers.get(key)
@@ -225,6 +237,7 @@ class RunnerTerminalFrameBuffer:
                     "frames": [],
                     "data": "",
                     "next_sequence": safe_after,
+                    "truncated": False,
                 }
 
             collected: list[TerminalFrame] = []
@@ -254,6 +267,14 @@ class RunnerTerminalFrameBuffer:
                 ],
                 "data": "".join(frame.data for frame in collected),
                 "next_sequence": next_sequence,
+                "truncated": safe_after < buffer.dropped_through_sequence,
+                "eof": bool(collected and collected[-1].eof),
+                "process_status": (
+                    collected[-1].process_status if collected and collected[-1].eof else None
+                ),
+                "exit_code": (
+                    collected[-1].exit_code if collected and collected[-1].eof else None
+                ),
             }
 
     def clear_session(
@@ -373,9 +394,17 @@ class RunnerTerminalFrameBuffer:
         while len(buffer.frames) > self._max_frames_per_session and buffer.frames:
             dropped = buffer.frames.popleft()
             buffer.total_bytes = max(0, buffer.total_bytes - dropped.byte_count)
+            buffer.dropped_through_sequence = max(
+                buffer.dropped_through_sequence,
+                dropped.sequence,
+            )
         while buffer.total_bytes > self._max_bytes_per_session and buffer.frames:
             dropped = buffer.frames.popleft()
             buffer.total_bytes = max(0, buffer.total_bytes - dropped.byte_count)
+            buffer.dropped_through_sequence = max(
+                buffer.dropped_through_sequence,
+                dropped.sequence,
+            )
 
     def _trim_sessions_for_new_key(self) -> None:
         if len(self._buffers) < self._max_sessions:

@@ -134,6 +134,38 @@ class ParentHandoffCoordinator:
         )
         self._publish_parent_progress = parent_progress_publisher
 
+    async def project_ready_handoffs(
+        self,
+        *,
+        tenant_id: int,
+        task_id: int,
+        conversation_id: str,
+        parent_turn_id: str,
+        metadata: dict[str, Any],
+    ) -> None:
+        """Project current results and active siblings without running the parent."""
+        async with self._guard_pool.acquire(
+            tenant_id=tenant_id,
+            task_id=task_id,
+        ):
+            claim = await self._registry.claim_ready_handoffs(
+                tenant_id=tenant_id,
+                task_id=task_id,
+                conversation_id=conversation_id,
+            )
+            if claim is None:
+                return
+            try:
+                await self._prepare_claim_context(
+                    metadata=metadata,
+                    conversation_id=conversation_id,
+                    parent_turn_id=parent_turn_id,
+                    task_id=task_id,
+                    claim=claim,
+                )
+            finally:
+                await self._registry.release_handoffs(claim.claim_id)
+
     async def process_ready_handoffs(
         self,
         *,

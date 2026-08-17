@@ -1,48 +1,46 @@
 # LLM-Visible Toolset
 
-This document lists the current tool catalog exposed to model planning and self-selection.
-These are the tools currently completed for LLM use: their argument contracts,
-output parsing, compact result projection, artifact/provenance behavior, and
-canonical Knowledge/evidence paths are wired well enough for the agent to
-reason over their results. The reusable full-wiring contract, including the
-producer-owned semantic envelope and shared Knowledge/compact consumers, is
-defined in `docs/architecture/tools.md` under "Current Tool Completion
-Reference." The list is generated from
-`agent.tools.catalog_visibility.visible_available_tools()` and should be treated
-as the prompt-facing subset, not the complete implemented tool registry.
-Inclusion indicates functional agent wiring; it does not by itself represent
-broad runtime or release certification.
+This document lists the current tool catalog exposed to model planning and
+self-selection. It combines two model-facing surfaces:
 
-Current count: 30 tools.
+- structured tools with dedicated argument contracts, result parsing, compact
+  projection, artifact/provenance behavior, and canonical Knowledge/evidence
+  integration; and
+- universal shell controls for one-shot commands and interactive sessions
+  inside the task's Kali runtime.
+
+The shell controls follow capability-specific persistence rules.
+`shell.utility` and utility-origin `shell.write_stdin` output remain transient;
+`shell.assessment` output is eligible for verified artifacts and provenance.
+Running a CLI through the shell does not automatically provide that CLI's
+tool-specific parsing or normalized Knowledge projection.
+
+The reusable structured-tool wiring contract, including the producer-owned
+semantic envelope and shared Knowledge/compact consumers, is defined in
+`docs/architecture/tools.md` under "Current Tool Completion Reference." The
+list is generated from
+`agent.tools.catalog_visibility.visible_available_tools()` and is the
+prompt-facing subset, not the complete implemented tool registry. Inclusion
+indicates functional agent wiring; it does not by itself represent broad
+runtime or release certification.
+
+Current count: 17 tools.
 
 - `exploitation_tools.metasploit.inspect_module`
 - `exploitation_tools.metasploit.run_exploit`
 - `exploitation_tools.metasploit.search_modules`
-- `filesystem.append_file`
-- `filesystem.copy_path`
-- `filesystem.delete_path`
-- `filesystem.edit_lines`
-- `filesystem.find_paths`
-- `filesystem.grep`
-- `filesystem.list_dir`
-- `filesystem.make_dir`
-- `filesystem.move_path`
-- `filesystem.read_file`
-- `filesystem.read_head`
-- `filesystem.read_tail`
-- `filesystem.search_text`
-- `filesystem.stat_path`
-- `filesystem.write_file`
 - `information_gathering.dns.amass`
 - `information_gathering.network_discovery.fping`
 - `information_gathering.network_discovery.nmap`
 - `information_gathering.web_enumeration.http_download`
 - `information_gathering.web_enumeration.http_request`
-- `networking_utilities.network`
 - `service_access.ftp_download`
 - `service_access.ftp_list`
 - `service_access.ftp_login`
 - `service_access.ssh_login`
+- `shell.assessment`
+- `shell.utility`
+- `shell.write_stdin`
 - `sniffing_spoofing.network_sniffers.tshark`
 - `web_applications.web_crawlers.ffuf`
 

@@ -9,11 +9,36 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable, Dict, Mapping, Optional
 
+from agent.tool_runtime.output_persistence_policy import (
+    OutputPersistenceDecision,
+    resolve_output_persistence,
+)
+
 from agent.execution_strategy import ExecutionStrategy
 from agent.tool_runtime.batch.types import ToolBatch, ToolCall, ToolCallResult, ToolCallStatus
+from runtime_shared.shell_capabilities import SHELL_WRITE_STDIN_TOOL_ID
 
 from .approval_and_idempotency import _read_dispatch_cache_entry
 from .lane_dispatch import resolve_tool_lane_dispatch
+from ...runtime_controls import read_execution_session_control
+from ..tool_execution_session_state import (
+    SHELL_STDIN_REDACTED_MARKER,
+    read_shell_input,
+)
+
+
+def _should_defer_provenance_finalization(
+    *,
+    result: Mapping[str, Any],
+    persistence_decision: OutputPersistenceDecision,
+) -> bool:
+    """Keep assessment provenance open while its shell process is running."""
+
+    return bool(
+        persistence_decision.is_shell_call
+        and persistence_decision.assessment_evidence_eligible
+        and str(result.get("process_status") or "").strip().lower() == "running"
+    )
 
 
 def _project_tool_call_status(*, success: bool, status: Any) -> ToolCallStatus:
@@ -24,6 +49,27 @@ def _project_tool_call_status(*, success: bool, status: Any) -> ToolCallStatus:
     if status_text in {"cancelled", "canceled"}:
         return ToolCallStatus.CANCELLED
     return ToolCallStatus.FAILED
+
+
+def _failure_category_from_projection(
+    *,
+    success: bool,
+    projection: Mapping[str, Any],
+    result: Mapping[str, Any],
+) -> Optional[str]:
+    """Return the deterministic failure category produced during projection."""
+
+    if success:
+        return None
+    phase_outcome = projection.get("tool_phase_outcome")
+    if isinstance(phase_outcome, Mapping):
+        category = str(phase_outcome.get("failure_category") or "").strip()
+        if category:
+            return category
+    status = str(result.get("status") or "").strip().lower()
+    if status and status not in {"error", "failed", "failure"}:
+        return status
+    return "tool_error"
 
 
 def _single_call_planner_plan(
@@ -118,6 +164,36 @@ def _clone_request_for_call(request: Any, metadata: Dict[str, Any]) -> Any:
             else None
         ),
         reasoning_effort=getattr(request, "reasoning_effort", None),
+    )
+
+
+def _materialize_process_local_shell_input(
+    call: ToolCall,
+    *,
+    metadata: Mapping[str, Any],
+) -> ToolCall | None:
+    """Restore checkpoint-redacted stdin only for the immediate dispatch call."""
+
+    if call.tool_id != SHELL_WRITE_STDIN_TOOL_ID:
+        return call
+    parameters = dict(call.parameters)
+    if parameters.get("chars") != SHELL_STDIN_REDACTED_MARKER:
+        return call
+    execution_session = read_execution_session_control(metadata)
+    sequence_id = (
+        str(execution_session.get("sequence_id") or "").strip()
+        if execution_session is not None
+        else ""
+    )
+    chars = read_shell_input(sequence_id=sequence_id, call_id=call.tool_call_id)
+    if chars is None:
+        return None
+    parameters["chars"] = chars
+    return ToolCall(
+        tool_call_id=call.tool_call_id,
+        tool_id=call.tool_id,
+        parameters=parameters,
+        intent=call.intent,
     )
 
 
@@ -296,6 +372,22 @@ def build_run_one_call_callback(
                 ),
             )
 
+        dispatch_call = _materialize_process_local_shell_input(
+            call,
+            metadata=call_metadata,
+        )
+        if dispatch_call is None:
+            return ToolCallResult(
+                tool_call_id=tool_call_id,
+                tool_id=tool_name,
+                status=ToolCallStatus.FAILED,
+                failure_category="shell_input_unavailable",
+                error_message=(
+                    "Shell input is unavailable because its process-local state "
+                    "was lost before dispatch."
+                ),
+            )
+
         if has_writer and emitter is not None:
             emitter.emit_tool_start(
                 tool_name,
@@ -326,7 +418,14 @@ def build_run_one_call_callback(
                 step_sub_turn_index,
             )
 
-        call_request = _clone_request_for_call(request, call_metadata)
+        dispatch_metadata = dict(call_metadata)
+        dispatch_metadata["planner_plan"] = _single_call_planner_plan(
+            original_plan,
+            dispatch_call,
+            effective_strategy=effective_strategy,
+        )
+        call_request = _clone_request_for_call(request, dispatch_metadata)
+        persistence_decision = resolve_output_persistence(tool_name)
         execution_id = deps["record_provenance_execution_start_service"](
             get_provenance_service_fn=deps["_get_provenance_service"],
             request=call_request,
@@ -341,6 +440,7 @@ def build_run_one_call_callback(
             workspace_path=workspace_path,
             logger=deps["logger"],
             safe_inc_fn=deps["safe_inc"],
+            persistence_decision=persistence_decision,
         )
         persisted_artifact_refs = []
 
@@ -359,8 +459,18 @@ def build_run_one_call_callback(
                     should_persist_artifact_outputs_fn=deps["_should_persist_artifact_outputs"],
                     logger=deps["logger"],
                     safe_inc_fn=deps["safe_inc"],
+                    persistence_decision=persistence_decision,
                 )
             raise
+
+        persistence_decision = resolve_output_persistence(
+            str(outcome.tool_id or tool_name),
+            outcome.result if isinstance(outcome.result, Mapping) else None,
+        )
+        defer_provenance_finalization = _should_defer_provenance_finalization(
+            result=outcome.result,
+            persistence_decision=persistence_decision,
+        )
 
         dr_tool_for_display: Optional[str] = None
         dr_command_display: Optional[str] = None
@@ -383,6 +493,7 @@ def build_run_one_call_callback(
             save_tool_output_artifact_fn=deps["save_tool_output_artifact"],
             safe_inc_fn=deps["safe_inc"],
             logger=deps["logger"],
+            persistence_decision=persistence_decision,
         )
         artifact_workspace_path = deps["resolve_execution_artifact_workspace_service"](
             workspace_path=workspace_path,
@@ -394,7 +505,7 @@ def build_run_one_call_callback(
             selected_tool=tool_name,
         )
 
-        if execution_id is not None:
+        if execution_id is not None and not defer_provenance_finalization:
             persisted_artifact_refs = deps["finalize_provenance_execution_service"](
                 get_provenance_service_fn=deps["_get_provenance_service"],
                 execution_id=execution_id,
@@ -413,6 +524,7 @@ def build_run_one_call_callback(
                 collect_provenance_artifact_refs_fn=deps["_collect_provenance_artifact_refs"],
                 logger=deps["logger"],
                 safe_inc_fn=deps["safe_inc"],
+                persistence_decision=persistence_decision,
             )
 
         projection = await deps["project_result_state_service"](
@@ -445,6 +557,7 @@ def build_run_one_call_callback(
             safe_gauge_fn=deps["safe_gauge"],
             config=config,
             apply_to_state=False,
+            persistence_decision=persistence_decision,
         )
         compact_result_dict = dict(projection["compact_result_dict"])
         deterministic_compact_result = projection.get("deterministic_compact_result_dict")
@@ -460,7 +573,10 @@ def build_run_one_call_callback(
         outcome_by_call_id[tool_call_id] = outcome
         execution_id_by_call_id[tool_call_id] = execution_id
 
-        if (call_facts.capability or "").lower() == "deep_reasoning":
+        if (
+            (call_facts.capability or "").lower() == "deep_reasoning"
+            and persistence_decision.retain_durable_output
+        ):
             dr_execution_by_call_id[tool_call_id] = {
                 "iteration": call_dr_iteration or 1,
                 "tool": str(
@@ -515,6 +631,7 @@ def build_run_one_call_callback(
                 if isinstance(deterministic_compact_result, Mapping)
                 else None
             ),
+            persistence_decision=persistence_decision,
         )
 
         observation_by_call_id[tool_call_id] = observation_text
@@ -538,13 +655,15 @@ def build_run_one_call_callback(
             success=success_value,
             status=outcome.result.get("status"),
         )
-        failure_category = None
-        if not success_value:
-            failure_category = (
-                str(outcome.result.get("status") or "tool_error")
-                if isinstance(outcome.result, dict)
-                else "tool_error"
-            )
+        failure_category = _failure_category_from_projection(
+            success=success_value,
+            projection=projection,
+            result=(
+                outcome.result
+                if isinstance(outcome.result, Mapping)
+                else {}
+            ),
+        )
         return ToolCallResult(
             tool_call_id=tool_call_id,
             tool_id=str(outcome.tool_id or tool_name),

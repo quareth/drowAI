@@ -132,6 +132,26 @@ sequenceDiagram
     Ops-->>Caller: normalized result
 ```
 
+### Interactive shell adaptation
+
+The model-facing shell does not introduce a provider-specific graph transport.
+`ShellSessionService` is the application-side coordinator over the
+runtime-shared `ShellSessionServicePort`. It validates backend-projected tenant,
+task, execution-owner, workspace, and placement identity; allocates a public
+`shs_` handle; and asks `TerminalSessionManager` to create one dedicated agent
+command session. The manager resolves the task context again for physical
+terminal I/O and calls the selected provider's existing open, read, input, and
+close operations.
+
+The logical shell handle and the physical provider terminal id are deliberately
+different capabilities. Continuation requires the original tenant, task,
+execution owner, and current runtime binding; model-supplied task or runtime ids
+cannot rebind a handle. Same-session operations are serialized, while capacity,
+idle expiry, hard deadlines, and owner/task cleanup are enforced by the
+process-local shell registry. If backend composition has not bound the service,
+the runtime-shared port returns a structured unavailable result rather than
+falling back to host execution.
+
 ## Explicit Local Docker Provider
 
 `LocalDockerRuntimeProvider` adapts provider operations to existing local
@@ -202,6 +222,14 @@ I/O:
   successful close result clears buffered frame state and unbinds the terminal
   session from its runtime route.
 
+Interactive agent shell starts use this terminal contract with a command,
+runtime `cwd`, bounded environment, and explicit `interactive` flag. The runner
+opens `/bin/bash -lc <command>` as a dedicated exec and reports
+`process_status`, EOF, and `exit_code` independently of visible output. Shell
+session admission requires the live `terminal_stream_v1` binding; it does not
+downgrade to runner `tool.command`, local file-comm, or backend subprocess
+execution.
+
 ## Runner Control Channel Contract
 
 Runner registration and the durable command channel are exposed through the
@@ -211,8 +239,19 @@ runner-control router:
 - `WS   /api/runner-control/channel`
 
 Managed runner processes start the control-plane client with `drowai_runner run`.
-The channel carries `task.start`, runtime lifecycle events, terminal operations,
-tool commands, and artifact messages. Terminal message types are:
+One runner identity owns one active channel lease. A new channel atomically
+supersedes the prior lease and clears prior terminal state before acceptance;
+an old channel cannot resume its lease or remove the replacement stream route.
+The runner also rejects a second local process that uses the same runner root
+and publishes its PID, process-start identity, instance id, and launcher type
+under that kernel-held root lock. Standalone and distributed runners remain
+owned by their external supervisor. Runners launched by `scripts/local_dev.py`
+add a parent watchdog, allowing them to exit if the local launcher disappears;
+`local_dev.py down` stops only process identities verified as belonging to that
+local deployment.
+The channel carries `task.start`, `runtime.started`, `tool.command`,
+`artifact.manifest`, `artifact.upload.request`, `artifact.upload.complete`,
+terminal operations, and artifact messages. Terminal message types are:
 
 - `terminal.open`
 - `terminal.input`
@@ -227,6 +266,12 @@ Durable terminal operation jobs use `terminal.open`, `terminal.input`,
 requested session id. Successful open results bind the terminal session to the
 task/runtime-job route before frames are accepted. Successful close results
 clear the session buffers and remove the binding.
+
+Runner delivery progress and validated operation results are independent,
+monotonic observations. A result may terminalize an assigned runtime job before
+delivery or ACK bookkeeping completes; later transport updates are idempotent
+and cannot regress the terminal result. Runtime-job transitions lock and refresh
+the durable row before applying either observation.
 
 Live stream-mode terminal input and resize messages reuse the runner websocket
 channel but do not create a new durable runtime job. Their ACKs are consumed by
@@ -261,6 +306,9 @@ environment variables are not the primary product deployment contract.
 - Runner operations require runner/workspace/runtime-job binding checks before
   accepting tool and artifact results.
 - Workspace reads and writes must stay inside the task workspace.
+- Public shell continuation handles are process-local, owner-bound capabilities;
+  provider terminal ids and backend-local paths are not exposed as model
+  authority.
 - Provider results should not expose backend-local paths or secret material to
   frontend callers.
 

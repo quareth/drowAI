@@ -346,6 +346,11 @@ class ToolExecutionCoordinator:
                 if isinstance(request.metadata, dict)
                 else None
             ),
+            "execution_owner_id": (
+                request.metadata.get("execution_owner_id")
+                if isinstance(request.metadata, dict)
+                else None
+            ),
             "actor_type": request.metadata.get("actor_type") if isinstance(request.metadata, dict) else None,
             "actor_id": request.metadata.get("actor_id") if isinstance(request.metadata, dict) else None,
             "user_id": request.user_id,

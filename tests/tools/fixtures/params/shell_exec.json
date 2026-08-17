@@ -14,10 +14,9 @@
         "command": "ls -la",
         "cwd": "artifacts",
         "env": {"MY_VAR": "value"},
-        "timeout_sec": 60,
-        "transport": "direct",
-        "idempotent": true,
-        "redact_output": false
+        "yield_time_ms": 1000,
+        "max_output_chars": 4096,
+        "max_runtime_sec": 60
       },
       "expected_valid": true
     },
@@ -37,10 +36,10 @@
         "expected_valid": true
       },
       {
-        "description": "PTY transport for debugging",
+        "description": "Bounded yield for delayed output",
         "params": {
           "command": "cat /proc/version",
-          "transport": "pty"
+          "yield_time_ms": 500
         },
         "expected_valid": true
       },
@@ -53,15 +52,51 @@
         "expected_valid": true
       },
       {
-        "description": "Long timeout for slow operations",
+        "description": "Long runtime bound for slow operations",
         "params": {
           "command": "sleep 1 && echo done",
-          "timeout_sec": 300
+          "max_runtime_sec": 300
         },
         "expected_valid": true
       }
     ],
     "invalid": [
+      {
+        "description": "Legacy transport field rejected by Phase 3 contract",
+        "params": {
+          "command": "whoami",
+          "transport": "pty"
+        },
+        "expected_valid": false,
+        "expected_error": "extra_forbidden"
+      },
+      {
+        "description": "Legacy timeout field rejected by Phase 3 contract",
+        "params": {
+          "command": "sleep 1",
+          "timeout_sec": 300
+        },
+        "expected_valid": false,
+        "expected_error": "extra_forbidden"
+      },
+      {
+        "description": "Legacy idempotency field rejected by Phase 3 contract",
+        "params": {
+          "command": "whoami",
+          "idempotent": true
+        },
+        "expected_valid": false,
+        "expected_error": "extra_forbidden"
+      },
+      {
+        "description": "Legacy redaction field rejected by Phase 3 contract",
+        "params": {
+          "command": "whoami",
+          "redact_output": false
+        },
+        "expected_valid": false,
+        "expected_error": "extra_forbidden"
+      },
       {
         "description": "Destructive rm -rf / blocked by denylist",
         "params": {

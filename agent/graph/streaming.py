@@ -195,7 +195,28 @@ def build_tool_event_sequence(
         List of three tool events (start, delta, end) in order.
     """
 
-    status = summary.get("status", "success")
+    status = str(summary.get("status", "success"))
+    process_status = summary.get("process_status")
+    if not isinstance(process_status, str):
+        runtime_session = summary.get("metadata", {}).get("runtime_session", {})
+        process_status = (
+            runtime_session.get("process_status")
+            if isinstance(runtime_session, dict)
+            else None
+        )
+    if isinstance(process_status, str):
+        process_status = process_status.strip().lower() or None
+
+    lifecycle_metadata: Dict[str, Any] = {}
+    for lifecycle_key in ("session_status", "interaction_boundary", "session_id"):
+        value = summary.get(lifecycle_key)
+        if not isinstance(value, str):
+            runtime_session = summary.get("metadata", {}).get("runtime_session", {})
+            value = runtime_session.get(lifecycle_key) if isinstance(runtime_session, dict) else None
+        if isinstance(value, str):
+            value = value.strip() or None
+        if value is not None:
+            lifecycle_metadata[lifecycle_key] = value
 
     # Prefer synthesized output so users see formatted, LLM-processed results.
     if synthesized_output and synthesized_output.get("summary"):
@@ -211,6 +232,8 @@ def build_tool_event_sequence(
         "tool": tool_id,
         "id": turn_identifier,
         "ind": TOOL_PHASE_INDEX,
+        "process_status": process_status,
+        **lifecycle_metadata,
     }
 
     start_event = {

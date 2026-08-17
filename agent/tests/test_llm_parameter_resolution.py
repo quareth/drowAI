@@ -49,7 +49,6 @@ class DummyConfig:
     enforce_llm_tool_selection = False
     llm_tool_selection_timeout = 5
     use_llm_tool_calls = True
-    max_tools_exposed = 2
     tool_call_timeout = 5
     require_all_selected_tools = False
     retry_missing_tool_calls = 1

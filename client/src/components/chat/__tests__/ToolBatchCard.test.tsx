@@ -1,9 +1,14 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ToolBatchCard } from "@/components/chat/ToolBatchCard";
 import type { ChatMessage } from "@/components/chat/types";
+import type { CompactToolResult } from "@/types/compact-tool-result";
+import {
+  normalizeTranscriptItemsToSteps,
+  type ChatTranscriptItem,
+} from "@/hooks/chat-history-bootstrap";
 
 const mocked = vi.hoisted(() => ({
   useToolRawOutputMock: vi.fn(() => ({
@@ -262,6 +267,95 @@ describe("ToolBatchCard", () => {
     expect(screen.getByText(/Cancelled/)).toBeTruthy();
   });
 
+  it("keeps mixed chat-stop batch aggregate equal for live and replayed rows", () => {
+    const liveMessages: ChatMessage[] = [
+      makeMsg({
+        id: "live-start",
+        metadata: {
+          step_type: "tool_batch_start",
+          tool_batch_id: "tb_mixed_stop",
+          tool_calls: [
+            { tool_call_id: "tc_done", tool_id: "shell.exec" },
+            { tool_call_id: "tc_stop", tool_id: "shell.exec" },
+          ],
+        },
+      }),
+      makeMsg({
+        id: "live-done",
+        metadata: {
+          step_type: "tool_end",
+          tool_batch_id: "tb_mixed_stop",
+          tool_call_id: "tc_done",
+          tool_name: "shell.exec",
+          status: "completed",
+        },
+      }),
+      makeMsg({
+        id: "live-stop",
+        metadata: {
+          step_type: "tool_end",
+          tool_batch_id: "tb_mixed_stop",
+          tool_call_id: "tc_stop",
+          tool_name: "shell.exec",
+          status: "cancelled",
+        },
+      }),
+      makeMsg({
+        id: "live-batch-end",
+        metadata: {
+          step_type: "tool_batch_end",
+          tool_batch_id: "tb_mixed_stop",
+          status: "completed_with_errors",
+          results: [
+            { tool_call_id: "tc_done", tool: "shell.exec", status: "completed" },
+            { tool_call_id: "tc_stop", tool: "shell.exec", status: "cancelled" },
+          ],
+        },
+      }),
+    ];
+
+    const replayItems: ChatTranscriptItem[] = [
+      {
+        id: "replay-done",
+        kind: "tool",
+        turn_number: 3,
+        content: "{}",
+        metadata: {
+          tool_batch_id: "tb_mixed_stop",
+          tool_call_id: "tc_done",
+          tool_name: "shell.exec",
+          status: "completed",
+        },
+      },
+      {
+        id: "replay-stop",
+        kind: "tool",
+        turn_number: 3,
+        content: "Tool stopped",
+        metadata: {
+          tool_batch_id: "tb_mixed_stop",
+          tool_call_id: "tc_stop",
+          tool_name: "shell.exec",
+          status: "cancelled",
+        },
+      },
+    ];
+    const replayMessages = normalizeTranscriptItemsToSteps(42, replayItems).map((step, index) =>
+      makeMsg({
+        id: `replay-${index}`,
+        content: typeof step.content === "string" ? step.content : "",
+        metadata: step.metadata as Record<string, unknown>,
+      }),
+    );
+
+    const live = render(<ToolBatchCard messages={liveMessages} groupKey="live-mixed-stop" />);
+    expect(screen.getByText("Completed with errors")).toBeTruthy();
+    live.unmount();
+
+    render(<ToolBatchCard messages={replayMessages} groupKey="replay-mixed-stop" />);
+    expect(screen.getByText("Completed with errors")).toBeTruthy();
+  });
+
   it("renders cancelled tool rows as stopped instead of running", () => {
     const messages: ChatMessage[] = [
       makeMsg({
@@ -287,6 +381,418 @@ describe("ToolBatchCard", () => {
 
     expect(screen.getByText("Stopped")).toBeTruthy();
     expect(screen.queryByText("Running")).toBeNull();
+  });
+
+  it("presents shell process states independently from generic tool success", () => {
+    const messages: ChatMessage[] = [
+      makeMsg({
+        id: "batch-start",
+        metadata: {
+          step_type: "tool_batch_start",
+          tool_batch_id: "tb_shell_states",
+          tool_calls: [
+            { tool_call_id: "tc_running", tool_id: "shell.exec" },
+            { tool_call_id: "tc_completed", tool_id: "shell.write_stdin" },
+            { tool_call_id: "tc_timeout", tool_id: "shell.exec" },
+            { tool_call_id: "tc_terminated", tool_id: "shell.write_stdin" },
+          ],
+        },
+      }),
+      ...[
+        ["tc_running", "success", "running"],
+        ["tc_completed", "success", "completed"],
+        ["tc_timeout", "error", "timed_out"],
+        ["tc_terminated", "success", "terminated"],
+      ].map(([toolCallId, status, processStatus]) =>
+        makeMsg({
+          id: `end-${toolCallId}`,
+          metadata: {
+            step_type: "tool_end",
+            tool_call_id: toolCallId,
+            tool_name: "shell.exec",
+            status,
+            process_status: processStatus,
+          },
+        }),
+      ),
+      makeMsg({
+        id: "batch-end",
+        metadata: {
+          step_type: "tool_batch_end",
+          tool_batch_id: "tb_shell_states",
+          status: "completed_with_errors",
+          results: [
+            { tool_call_id: "tc_running", tool: "shell.exec", status: "success" },
+            { tool_call_id: "tc_completed", tool: "shell.write_stdin", status: "success" },
+            {
+              tool_call_id: "tc_timeout",
+              tool: "shell.exec",
+              status: "failed",
+              process_status: "timed_out",
+              session_status: "closed",
+              interaction_boundary: "terminal",
+            },
+            {
+              tool_call_id: "tc_terminated",
+              tool: "shell.write_stdin",
+              status: "success",
+              process_status: "terminated",
+              session_status: "closed",
+              interaction_boundary: "terminal",
+            },
+          ],
+        },
+      }),
+    ];
+
+    render(<ToolBatchCard messages={messages} groupKey="shell-states" />);
+
+    expect(screen.getByText("Session active")).toBeTruthy();
+    expect(screen.getAllByText("Completed").length).toBeGreaterThan(0);
+    expect(screen.getByText("Process timed out")).toBeTruthy();
+    expect(screen.getByText("Process terminated")).toBeTruthy();
+  });
+
+  it("uses process status from batch-end-only shell rows", () => {
+    const messages: ChatMessage[] = [
+      makeMsg({
+        id: "batch-end",
+        metadata: {
+          step_type: "tool_batch_end",
+          tool_batch_id: "tb_shell_only",
+          status: "completed",
+          results: [
+            {
+              tool_call_id: "tc_running",
+              tool: "shell.exec",
+              status: "success",
+              process_status: "running",
+            },
+          ],
+        },
+      }),
+    ];
+
+    render(<ToolBatchCard messages={messages} groupKey="shell-batch-only" />);
+
+    expect(screen.getByText("Running")).toBeTruthy();
+    expect(screen.getByText("Session active")).toBeTruthy();
+  });
+
+  it("treats running shell lifecycle delta process state as authoritative", () => {
+    const messages: ChatMessage[] = [
+      makeMsg({
+        id: "shell-start",
+        metadata: {
+          step_type: "tool_start",
+          tool_batch_id: "tb_shell_progress",
+          tool_call_id: "tc_shell_progress",
+          tool_name: "shell.utility",
+        },
+      }),
+      makeMsg({
+        id: "shell-progress",
+        content: "progress line",
+        metadata: {
+          step_type: "tool_delta",
+          tool_batch_id: "tb_shell_progress",
+          tool_call_id: "tc_shell_progress",
+          tool_name: "shell.utility",
+          status: "success",
+          process_status: "running",
+          session_status: "active",
+          interaction_boundary: "output_available",
+          output_persistence: "transient",
+          shell_lifecycle_event: true,
+          compact_tool_result: {
+            schema_version: "2.0",
+            tool: "shell.utility",
+            status: "success",
+            success: true,
+            summary: "progress line",
+            key_findings: [],
+            errors: [],
+            report_recommendations: [],
+            structured_signals: [],
+            decision_evidence: [],
+            lossiness_risk: "high",
+          },
+        },
+      }),
+    ];
+
+    render(<ToolBatchCard messages={messages} groupKey="shell-progress" taskId={42} />);
+
+    expect(screen.getByText("Running")).toBeTruthy();
+    expect(screen.getByText("Session active")).toBeTruthy();
+    expect(screen.getByText("Agent reviewing output")).toBeTruthy();
+    expect(screen.getByTestId("tool-batch-card-shell-progress-row-tc_shell_progress-terminal").textContent).toBe(
+      "progress line",
+    );
+  });
+
+  it("keeps the accumulated utility stream when the terminal lifecycle event arrives", () => {
+    const messages: ChatMessage[] = [
+      makeMsg({
+        id: "shell-start",
+        metadata: {
+          step_type: "tool_start",
+          tool_batch_id: "tb_shell_transcript",
+          tool_call_id: "tc_shell_transcript",
+          tool_name: "shell.utility",
+          command_display: "nmap -p 5432 127.0.0.1; bc",
+        },
+      }),
+      makeMsg({
+        id: "shell-output-1",
+        content: "Starting Nmap\n5432/tcp closed",
+        metadata: {
+          step_type: "tool_delta",
+          tool_batch_id: "tb_shell_transcript",
+          tool_call_id: "tc_shell_transcript",
+          tool_name: "shell.utility",
+          status: "success",
+          process_status: "running",
+          session_status: "active",
+          interaction_boundary: "output_available",
+          output_persistence: "transient",
+          shell_lifecycle_event: true,
+          stdout_ends_with_newline: true,
+        },
+      }),
+      makeMsg({
+        id: "shell-quiet",
+        content: "Shell session is still running; no new output was received.",
+        metadata: {
+          step_type: "tool_delta",
+          tool_batch_id: "tb_shell_transcript",
+          tool_call_id: "tc_shell_transcript",
+          tool_name: "shell.utility",
+          status: "success",
+          process_status: "running",
+          session_status: "active",
+          interaction_boundary: "quiet_boundary",
+          output_persistence: "transient",
+          shell_lifecycle_event: true,
+        },
+      }),
+      makeMsg({
+        id: "shell-output-2",
+        content: "x\n7",
+        metadata: {
+          step_type: "tool_delta",
+          tool_batch_id: "tb_shell_transcript",
+          tool_call_id: "tc_shell_transcript",
+          tool_name: "shell.utility",
+          status: "success",
+          process_status: "running",
+          session_status: "active",
+          interaction_boundary: "output_available",
+          output_persistence: "transient",
+          shell_lifecycle_event: true,
+          stdout_ends_with_newline: true,
+        },
+      }),
+      makeMsg({
+        id: "shell-final-output",
+        content: "done",
+        metadata: {
+          step_type: "tool_end",
+          tool_batch_id: "tb_shell_transcript",
+          tool_call_id: "tc_shell_transcript",
+          tool_name: "shell.utility",
+          status: "success",
+          process_status: "completed",
+          session_status: "closed",
+          interaction_boundary: "terminal",
+          output_persistence: "transient",
+          shell_lifecycle_event: true,
+          shell_output_chunk: true,
+        },
+      }),
+      makeMsg({
+        id: "shell-cleanup-end",
+        content: "Shell session closed.",
+        metadata: {
+          step_type: "tool_end",
+          tool_batch_id: "tb_shell_transcript",
+          tool_call_id: "tc_shell_transcript",
+          tool_name: "shell.utility",
+          status: "success",
+          process_status: "completed",
+          session_status: "closed",
+          interaction_boundary: "terminal",
+          output_persistence: "transient",
+          shell_lifecycle_event: true,
+          compact_tool_result: {
+            schema_version: "2.0",
+            tool: "shell.utility",
+            status: "success",
+            success: true,
+            summary: "Shell session closed.",
+            key_findings: [],
+            errors: [],
+            report_recommendations: [],
+            structured_signals: [],
+            decision_evidence: [],
+            lossiness_risk: "high",
+          },
+        },
+      }),
+    ];
+
+    render(<ToolBatchCard messages={messages} groupKey="shell-transcript" taskId={42} />);
+    fireEvent.click(screen.getByRole("button", { name: "Toggle tool output" }));
+
+    expect(
+      screen.getByTestId("tool-batch-card-shell-transcript-row-tc_shell_transcript-terminal")
+        .textContent,
+    ).toBe(
+      "$ nmap -p 5432 127.0.0.1; bc\nStarting Nmap\n5432/tcp closed\nx\n7\ndone",
+    );
+  });
+
+  it("loads the durable assessment transcript after terminal completion", () => {
+    mocked.useToolRawOutputMock.mockClear();
+    const messages: ChatMessage[] = [
+      makeMsg({
+        id: "assessment-start",
+        metadata: {
+          step_type: "tool_start",
+          tool_batch_id: "tb_durable_assessment",
+          tool_call_id: "tc_durable_assessment",
+          tool_name: "shell.assessment",
+          command_display: "nmap -sV 127.0.0.1",
+        },
+      }),
+      makeMsg({
+        id: "assessment-live-output",
+        content: "partial output\n",
+        metadata: {
+          step_type: "tool_delta",
+          tool_batch_id: "tb_durable_assessment",
+          tool_call_id: "tc_durable_assessment",
+          tool_name: "shell.assessment",
+          status: "success",
+          process_status: "running",
+          session_status: "active",
+          interaction_boundary: "output_available",
+          output_persistence: "transient",
+          shell_lifecycle_event: true,
+          stdout_ends_with_newline: true,
+        },
+      }),
+      makeMsg({
+        id: "assessment-terminal-output",
+        content: "partial output\nverified tail\n",
+        metadata: {
+          step_type: "tool_end",
+          tool_batch_id: "tb_durable_assessment",
+          tool_call_id: "tc_durable_assessment",
+          tool_name: "shell.assessment",
+          status: "success",
+          process_status: "completed",
+          session_status: "closed",
+          interaction_boundary: "terminal",
+          output_persistence: "durable",
+          shell_lifecycle_event: true,
+          shell_output_chunk: true,
+          stdout_ends_with_newline: true,
+        },
+      }),
+    ];
+
+    render(
+      <ToolBatchCard messages={messages} groupKey="durable-assessment" taskId={42} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Toggle tool output" }));
+
+    expect(screen.getByText("Loading raw output...")).toBeTruthy();
+    expect(
+      screen.queryByTestId(
+        "tool-batch-card-durable-assessment-row-tc_durable_assessment-terminal",
+      ),
+    ).toBeNull();
+    expect(mocked.useToolRawOutputMock).toHaveBeenLastCalledWith({
+      taskId: 42,
+      toolCallId: "tc_durable_assessment",
+      enabled: true,
+    });
+  });
+
+  it("reconstructs partial shell lines without trimming meaningful whitespace", () => {
+    const messages: ChatMessage[] = [
+      makeMsg({
+        id: "shell-start",
+        metadata: {
+          step_type: "tool_start",
+          tool_batch_id: "tb_partial_shell",
+          tool_call_id: "tc_partial_shell",
+          tool_name: "shell.utility",
+          command_display: "printf split",
+        },
+      }),
+      makeMsg({
+        id: "shell-partial-1",
+        content: "foo",
+        metadata: {
+          step_type: "tool_delta",
+          tool_batch_id: "tb_partial_shell",
+          tool_call_id: "tc_partial_shell",
+          tool_name: "shell.utility",
+          status: "success",
+          process_status: "running",
+          session_status: "active",
+          interaction_boundary: "output_available",
+          output_persistence: "transient",
+          shell_lifecycle_event: true,
+          stdout_ends_with_newline: false,
+        },
+      }),
+      makeMsg({
+        id: "shell-partial-2",
+        content: "bar\n  indented",
+        metadata: {
+          step_type: "tool_delta",
+          tool_batch_id: "tb_partial_shell",
+          tool_call_id: "tc_partial_shell",
+          tool_name: "shell.utility",
+          status: "success",
+          process_status: "running",
+          session_status: "active",
+          interaction_boundary: "output_available",
+          output_persistence: "transient",
+          shell_lifecycle_event: true,
+          stdout_ends_with_newline: false,
+        },
+      }),
+      makeMsg({
+        id: "shell-partial-final",
+        content: " value\n",
+        metadata: {
+          step_type: "tool_end",
+          tool_batch_id: "tb_partial_shell",
+          tool_call_id: "tc_partial_shell",
+          tool_name: "shell.utility",
+          status: "success",
+          process_status: "completed",
+          session_status: "closed",
+          interaction_boundary: "terminal",
+          output_persistence: "transient",
+          shell_lifecycle_event: true,
+          shell_output_chunk: true,
+          stdout_ends_with_newline: true,
+        },
+      }),
+    ];
+
+    render(<ToolBatchCard messages={messages} groupKey="partial-shell" taskId={42} />);
+    fireEvent.click(screen.getByRole("button", { name: "Toggle tool output" }));
+
+    expect(
+      screen.getByTestId("tool-batch-card-partial-shell-row-tc_partial_shell-terminal")
+        .textContent,
+    ).toBe("$ printf split\nfoobar\n  indented value\n");
   });
 
   it("renders terminal batch rows when no per-tool events were emitted", () => {
@@ -317,5 +823,93 @@ describe("ToolBatchCard", () => {
     render(<ToolBatchCard messages={messages} groupKey="grp4" />);
 
     expect(screen.getByTestId("tool-batch-card-grp4-row-tc_rejected")).not.toBeNull();
+  });
+
+  it("renders transient compact output from the tool-end event", () => {
+    mocked.useToolRawOutputMock.mockReturnValue({
+      state: { status: "not_available", reason: "missing_output_artifacts" },
+      status: "not_available",
+      isLoading: false,
+      isReady: false,
+      isNotAvailable: true,
+      isError: false,
+    });
+    const messages = [
+      makeMsg({
+        id: "utility-start",
+        metadata: {
+          step_type: "tool_start",
+          tool_batch_id: "tb-utility",
+          tool_call_id: "tc-utility",
+          tool_name: "shell.utility",
+          command_display: "touch /workspace/boris.txt",
+        },
+      }),
+      makeMsg({
+        id: "utility-end",
+        metadata: {
+          step_type: "tool_end",
+          tool_batch_id: "tb-utility",
+          tool_call_id: "tc-utility",
+          tool_name: "shell.utility",
+          status: "success",
+          output_persistence: "transient",
+          compact_tool_result: {
+            schema_version: "2.0",
+            tool: "shell.utility",
+            status: "success",
+            success: true,
+            summary: "Created /workspace/boris.txt.",
+            key_findings: [],
+            errors: [],
+            report_recommendations: [],
+            structured_signals: [],
+            decision_evidence: [],
+            lossiness_risk: "low",
+          },
+        },
+      }),
+    ];
+
+    render(<ToolBatchCard messages={messages} groupKey="utility" taskId={40} />);
+    fireEvent.click(screen.getByRole("button", { name: "Toggle tool output" }));
+
+    expect(screen.getByTestId("tool-batch-card-utility-row-tc-utility-terminal").textContent).toBe(
+      "$ touch /workspace/boris.txt\nCreated /workspace/boris.txt.",
+    );
+    expect(screen.queryByText(/Raw output unavailable/)).toBeNull();
+  });
+
+  it("does not crash on incomplete historical transient compact output", () => {
+    const messages = [
+      makeMsg({
+        id: "cancelled-shell",
+        metadata: {
+          step_type: "tool_end",
+          tool_batch_id: "tb-cancelled-shell",
+          tool_call_id: "tc-cancelled-shell",
+          tool_name: "shell.utility",
+          status: "cancelled",
+          process_status: "terminated",
+          session_status: "closed",
+          interaction_boundary: "terminal",
+          output_persistence: "transient",
+          shell_lifecycle_event: true,
+          compact_tool_result: {
+            schema_version: "2.0",
+            tool: "shell.utility",
+            status: "cancelled",
+            success: false,
+            summary: {},
+          } as unknown as CompactToolResult,
+        },
+      }),
+    ];
+
+    expect(() =>
+      render(<ToolBatchCard messages={messages} groupKey="cancelled-shell" taskId={42} />),
+    ).not.toThrow();
+    expect(screen.getByText("Stopped")).toBeTruthy();
+    expect(screen.queryByText("[object Object]")).toBeNull();
   });
 });

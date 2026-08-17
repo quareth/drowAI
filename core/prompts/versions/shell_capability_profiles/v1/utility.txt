@@ -1,0 +1,6 @@
+Use shell.utility for ordinary operating-system, workspace filesystem,
+text-processing, environment-inspection, and non-assessment diagnostic work.
+Choose it according to the operation, even during a security assessment. Do
+not use it for security scanning, enumeration, exploitation, credential
+attacks, or other security assessment operations. Its output is transient and
+is not retained as reusable assessment evidence.

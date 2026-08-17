@@ -17,6 +17,13 @@ function buildMessage(
   };
 }
 
+function permutations<T>(items: T[]): T[][] {
+  if (items.length <= 1) return [items];
+  return items.flatMap((item, index) =>
+    permutations([...items.slice(0, index), ...items.slice(index + 1)]).map(rest => [item, ...rest]),
+  );
+}
+
 describe('groupMessages', () => {
   it('namespaces valid Pathfinder step keys by agent run id', () => {
     const baseStep: Step = {
@@ -441,6 +448,65 @@ describe('groupMessages', () => {
       'tool-2-start',
       'obs-2',
     ]);
+  });
+
+  it('preserves refreshed parent and subagent order for every input permutation', () => {
+    const messages: ChatMessage[] = [
+      buildMessage({
+        id: 'reasoning',
+        metadata: {
+          id: 'turn-1',
+          turn_sequence: 1,
+          step_type: 'reasoning_delta',
+          reasoning_section_id: 'turn-1:reasoning:0',
+          ind: 0,
+          sequence: 8,
+          sequence_authority: 'task_stream',
+          phase_sequence: 0,
+        },
+      }),
+      ...[
+        ['agent-1', 13],
+        ['agent-2', 35],
+      ].map(([id, sequence]) =>
+        buildMessage({
+          id: String(id),
+          metadata: {
+            id: 'turn-1',
+            turn_sequence: 1,
+            step_type: 'tool_start',
+            ind: 1,
+            sequence,
+            sequence_authority: 'task_stream',
+            transcript_activity_kind: 'agent-run',
+            transcript_activity_id: id,
+          },
+        }),
+      ),
+      ...[
+        ['observation-1', 32, 1],
+        ['observation-2', 66, 2],
+      ].map(([id, sequence, phaseSequence]) =>
+        buildMessage({
+          id: String(id),
+          metadata: {
+            id: 'turn-1',
+            turn_sequence: 1,
+            step_type: 'observation_delta',
+            ind: 1,
+            sequence,
+            sequence_authority: 'task_stream',
+            phase_sequence: phaseSequence,
+            sub_turn_index: Number(phaseSequence) - 1,
+          },
+        }),
+      ),
+    ];
+
+    const expected = ['reasoning', 'agent-1', 'observation-1', 'agent-2', 'observation-2'];
+    for (const input of permutations(messages)) {
+      expect(groupMessages(input).map(group => group.messages[0].id)).toEqual(expected);
+    }
   });
 
   it('keeps intent-phase reasoning separate from later reasoning in the same turn', () => {

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
-from langgraph.graph import StateGraph
+from langgraph.graph import END, StateGraph
 
 from backend.services.metrics.utils import safe_inc
 from agent.reasoning.tool_selection_sentinel import metadata_has_unavailable_capability
@@ -68,10 +68,13 @@ GRAPH_NAME = GRAPH_NAME_SIMPLE_TOOL
 logger = logging.getLogger(__name__)
 
 
-_ROUTER_ACTION_MAP = build_router_action_map(
-    call_tool_target="select_tool_categories",
-    finalize_target="format_results",
-)
+_ROUTER_ACTION_MAP = {
+    **build_router_action_map(
+        call_tool_target="select_tool_categories",
+        finalize_target="format_results",
+    ),
+    "delegate_subagent": "delegate_subagent",
+}
 
 
 def _route_after_router(interactive: InteractiveState) -> str:
@@ -126,26 +129,29 @@ def build_simple_tool_graph(*, checkpointer=None, build_only: bool = False) -> A
        4. select_tool_categories  -> LLM selects relevant tool categories
        5. prepare_tool_plan       -> precompute tool + params before HITL interrupt
        6. articulation            -> explain intent before tool execution (first attempt only)
-       7. approval_gate           -> interrupt only, no planning (shared contract with DR)
-       8. dispatch_tool           -> execution only, no interrupt (shared contract with DR)
-       9. tool_synthesizer        -> extract structured findings from tool output (LLM-powered)
-      10. post_tool_reasoning     -> analyze results and emit candidate decision
-      11. decision_router         -> deterministic route authority, writes router_outcome
-      12. [CONDITIONAL dispatch on router_outcome.action]
+       7. approval_gate           -> interrupt only, no execution
+       8. dispatch_tool           -> execute once through the established tool path
+       9. tool_execution_session  -> continue only an actually running execution
+      10. terminal_session_compressor -> compress only a completed live-session aggregate
+      11. tool_synthesizer        -> map compact terminal evidence for reasoning
+      12. post_tool_reasoning     -> analyze terminal results and emit candidate decision
+      13. decision_router         -> deterministic route authority, writes router_outcome
+      14. [CONDITIONAL dispatch on router_outcome.action]
             call_tool   -> select_tool_categories (loop)
             think_more  -> think_more -> post_tool_reasoning
             reflect     -> reflect -> decision_router (one-hop hint recovery)
             synthesis   -> synthesis    (terminal-bound)
             finalize    -> format_results
-      13. format_results          -> stream structured data for frontend rendering
-      14. finalize                -> produce final assistant response
+            delegate_subagent -> END (backend dispatch control)
+      15. format_results          -> stream structured data for frontend rendering
+      16. finalize                -> produce final assistant response
 
     This architecture separates concerns:
     - select_tool_categories: Category-based tool filtering (focused selection)
     - articulation: Natural language explanation of action (streaming, first attempt only)
-    - approval_gate + dispatch_tool: Shared HITL contract (interrupt then execute)
-    - tool_synthesizer: Pure LLM processing (reusable by deep reasoning)
-    - post_tool_reasoning: Unified failure detection and candidate decision emission
+    - approval_gate + dispatch_tool: Existing ordinary tool execution boundary
+    - tool_execution_session: Continuation boundary entered only for running work
+    - post_tool_reasoning: Terminal-outcome failure detection and candidate decision emission
     - decision_router: deterministic route authority for normal-loop actions
     - think_more / reflect / synthesis: Reasoning destinations shared with DR; each
       returns through deterministic router authority for final dispatch
@@ -158,6 +164,8 @@ def build_simple_tool_graph(*, checkpointer=None, build_only: bool = False) -> A
     - think_more / reflect / synthesis: enter reasoning node, then re-enter router
       authority for deterministic dispatch
     - finalize: proceeds to format_results and finalize
+    - delegate_subagent: stops at the graph boundary so the backend can reuse
+      the canonical subagent dispatch and parent-handoff pipeline
     """
     
     # Log graph build start
@@ -224,13 +232,16 @@ def build_simple_tool_graph(*, checkpointer=None, build_only: bool = False) -> A
     # Working memory is context-only and must not block execution.
     graph.add_edge("update_working_memory", "memory_retrieval")
     graph.add_edge("memory_retrieval", "select_tool_categories")
-    #             [articulation or approval_gate] -> dispatch_tool -> synthesizer -> post_tool_reasoning
+    #             [articulation or approval] -> dispatch -> [ordinary or live session]
+    #               -> post_tool_reasoning
     #               -> decision_router -> [call_tool / think_more / reflect / synthesis / finalize]
     # - select_tool_categories: LLM selects relevant tool categories
     # - articulation: Natural language explanation (ONLY on first attempt, skip on retry)
-    # - approval_gate + dispatch_tool: Shared HITL contract (interrupt then execute)
-    # - tool_synthesizer: Extracts structured findings (reusable LLM logic)
-    # - post_tool_reasoning: Analyzes results and emits candidate_decision
+    # - approval_gate + dispatch_tool: Preserve ordinary execution unchanged
+    # - tool_execution_session: Owns raw continuation only for running execution
+    # - terminal_session_compressor: Compresses only completed live-session aggregates
+    # - tool_synthesizer: Maps compact terminal evidence for downstream reasoning
+    # - post_tool_reasoning: Analyzes terminal results and emits candidate_decision
     # - decision_router: deterministic route authority (writes router_outcome)
     # - think_more / reflect / synthesis: Reasoning destinations (same node modules as DR)
     # - format_results: Streams structured data for frontend rendering
@@ -242,7 +253,7 @@ def build_simple_tool_graph(*, checkpointer=None, build_only: bool = False) -> A
     wire_direct_tool_action_path(
         graph,
         route_after_prepare_tool_plan=_route_after_prepare_tool_plan,
-        tool_synthesizer_target="post_tool_reasoning",
+        terminal_target="post_tool_reasoning",
         conditional=conditional,
     )
 
@@ -256,6 +267,7 @@ def build_simple_tool_graph(*, checkpointer=None, build_only: bool = False) -> A
             "reflect": "reflect",
             "synthesis": "synthesis",
             "format_results": "format_results",
+            "delegate_subagent": END,
         },
         conditional=conditional,
     )

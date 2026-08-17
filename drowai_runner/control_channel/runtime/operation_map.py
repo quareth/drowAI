@@ -180,6 +180,10 @@ def map_remote_runtime_operation(
                 "session_name": session_name,
                 "cols": cols,
                 "rows": rows,
+                "command": getattr(payload, "command", None),
+                "cwd": getattr(payload, "cwd", None) or "/workspace",
+                "env": dict(getattr(payload, "env", {}) or {}),
+                "interactive": bool(getattr(payload, "interactive", True)),
             },
         )
     if inbound.message_type is RunnerMessageType.TERMINAL_INPUT:

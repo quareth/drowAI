@@ -122,7 +122,6 @@ class _FactsWithCandidates:
 
 class _Config:
     max_committed_tools_per_batch = 3
-    shell_exec_max_command_chars = 320
 
 
 def test_validate_batch_candidate_count_uses_selector_list_when_explicit_arg_omitted(

@@ -16,6 +16,14 @@ from core.prompts.builders.post_tool.last_tool import (
 )
 
 from ...memory.findings import extract_observed_findings
+from ...nodes.post_tool_reasoning.core.failure_detection import (
+    classify_failure_category,
+)
+from ...runtime_controls import (
+    ensure_current_turn_runtime_controls,
+    read_active_execution_control,
+    set_active_execution_control,
+)
 from ...memory.target_resolution import (
     RUNTIME_TOOL_TARGET_FIELD_SPECS,
     coerce_target_value,
@@ -25,8 +33,29 @@ from ...utils import iteration_memory as _iteration_memory
 from ...utils.llm_resolver import ROLE_TOOL_OUTPUT_COMPRESSOR
 from ...utils.tool_optimization import ToolExecution, get_scan_phase, record_tool_execution
 from runtime_shared.durable_secret_masking import mask_durable_secrets
+from runtime_shared.shell_capabilities import (
+    SHELL_SESSION_TOOL_IDS,
+    SHELL_WRITE_STDIN_TOOL_ID,
+)
+from agent.tool_runtime.output_persistence_policy import OutputPersistenceDecision
 
-_CURRENT_TURN_RUNTIME_CONTROLS_KEY = "current_turn_runtime_controls"
+SHELL_SESSION_COMPACT_RESULT_KEYS = (
+    "process_status",
+    "session_status",
+    "interaction_boundary",
+    "session_id",
+    "exit_code",
+    "stdin_available",
+    "stdout",
+    "stdout_ends_with_newline",
+    "stderr",
+    "truncated",
+    "summary",
+    "error_code",
+)
+SHELL_SESSION_STATE_RESULT_KEYS = tuple(
+    key for key in SHELL_SESSION_COMPACT_RESULT_KEYS if key not in {"stdout", "stderr"}
+)
 
 
 def _append_compression_usage_record(
@@ -74,6 +103,93 @@ def sanitize_tool_result_for_metadata(
     return sanitized
 
 
+def preserve_shell_session_result_fields(
+    compact_result: Mapping[str, Any],
+    *,
+    raw_result: Mapping[str, Any],
+    tool_name: str,
+) -> Dict[str, Any]:
+    """Carry bounded shell-session continuation fields into compact projections."""
+    projected = dict(compact_result)
+    resolved_tool = str(raw_result.get("tool") or raw_result.get("tool_id") or tool_name)
+    if resolved_tool not in SHELL_SESSION_TOOL_IDS:
+        return projected
+    if not any(
+        key in raw_result
+        for key in (
+            "process_status",
+            "session_status",
+            "interaction_boundary",
+            "stdin_available",
+            "session_id",
+        )
+    ):
+        return projected
+
+    for key in SHELL_SESSION_COMPACT_RESULT_KEYS:
+        if key in raw_result:
+            projected[key] = raw_result[key]
+
+    if bool(raw_result.get("truncated")):
+        summary = str(projected.get("summary") or "").strip()
+        if "omitted" not in summary.lower() and "truncated" not in summary.lower():
+            summary = (
+                f"{summary} Output was truncated; omitted middle content is not preserved."
+                if summary
+                else "Output was truncated; omitted middle content is not preserved."
+            )
+            projected["summary"] = summary
+    return projected
+
+
+def is_live_shell_session_result(
+    raw_result: Mapping[str, Any],
+    *,
+    tool_name: str,
+) -> bool:
+    """Return true when a shell tool yielded a process for direct coordination."""
+
+    resolved_tool = str(raw_result.get("tool") or raw_result.get("tool_id") or tool_name)
+    return (
+        resolved_tool in SHELL_SESSION_TOOL_IDS
+        and str(raw_result.get("process_status") or "").strip().lower() == "running"
+    )
+
+
+def project_live_shell_session_result(
+    raw_result: Mapping[str, Any],
+    *,
+    tool_name: str,
+    fallback_summary: str = "",
+) -> Dict[str, Any]:
+    """Build the raw bounded compact shape used only during live coordination."""
+
+    success = bool(raw_result.get("success", True))
+    status = str(raw_result.get("status") or ("success" if success else "error"))
+    summary = str(raw_result.get("summary") or fallback_summary or "").strip()
+    compact = {
+        "schema_version": "2.0",
+        "tool": tool_name,
+        "status": status,
+        "success": success,
+        "exit_code": raw_result.get("exit_code"),
+        "summary": summary,
+        "key_findings": [],
+        "errors": [] if success else ([summary] if summary else []),
+        "report_recommendations": [],
+        "structured_signals": [],
+        "decision_evidence": [],
+        "lossiness_risk": "high",
+        "artifact_refs": [],
+        "compression": None,
+    }
+    return preserve_shell_session_result_fields(
+        compact,
+        raw_result=raw_result,
+        tool_name=tool_name,
+    )
+
+
 def compact_observation_text(
     compact_result: Mapping[str, Any],
     fallback: Optional[str] = None,
@@ -96,6 +212,7 @@ def _append_tool_execution_record(
     workspace_id: Optional[str],
     artifact_refs_for_memory: Sequence[Mapping[str, Any]],
     artifact_projection_metadata: Optional[Mapping[str, Any]] = None,
+    persistence_decision: OutputPersistenceDecision | None = None,
 ) -> None:
     """Persist a compact per-call execution record for provenance/telemetry joins."""
     result_map = dict(outcome.result or {})
@@ -143,13 +260,24 @@ def _append_tool_execution_record(
         if not isinstance(artifact_visibility, str) or not artifact_visibility.strip():
             artifact_visibility = "runner_workspace_only"
 
-    stdout_excerpt = mask_durable_secrets(
-        str(result_map.get("stdout_excerpt") or ""),
-        source="tool_execution_record_stdout_excerpt",
+    retain_output = (
+        persistence_decision is None or persistence_decision.retain_durable_output
     )
-    stderr_excerpt = mask_durable_secrets(
-        str(result_map.get("stderr_excerpt") or ""),
-        source="tool_execution_record_stderr_excerpt",
+    stdout_excerpt = (
+        mask_durable_secrets(
+            str(result_map.get("stdout_excerpt") or ""),
+            source="tool_execution_record_stdout_excerpt",
+        )
+        if retain_output
+        else ""
+    )
+    stderr_excerpt = (
+        mask_durable_secrets(
+            str(result_map.get("stderr_excerpt") or ""),
+            source="tool_execution_record_stderr_excerpt",
+        )
+        if retain_output
+        else ""
     )
 
     record: Dict[str, Any] = {
@@ -160,6 +288,14 @@ def _append_tool_execution_record(
         "success": bool(result_map.get("success")),
         "duration_ms": int(duration_seconds * 1000),
         "exit_code": result_map.get("exit_code"),
+        "process_status": result_map.get("process_status"),
+        "truncated": bool(result_map.get("truncated", False)),
+        "capability": (
+            persistence_decision.originating_capability.value
+            if persistence_decision is not None
+            and persistence_decision.originating_capability is not None
+            else None
+        ),
         "stdout_excerpt": stdout_excerpt if isinstance(stdout_excerpt, str) else "",
         "stderr_excerpt": stderr_excerpt if isinstance(stderr_excerpt, str) else "",
         "lane": lane,
@@ -173,9 +309,15 @@ def _append_tool_execution_record(
         "artifact_scope": artifact_scope,
         "artifact_promotion_status": artifact_promotion_status,
         "artifact_visibility": artifact_visibility,
-        "artifact_refs": [
-            dict(item) for item in artifact_refs_for_memory if isinstance(item, Mapping)
-        ],
+        "artifact_refs": (
+            [
+                dict(item)
+                for item in artifact_refs_for_memory
+                if isinstance(item, Mapping)
+            ]
+            if retain_output
+            else []
+        ),
     }
 
     history = facts.metadata.setdefault("tool_execution_records", [])
@@ -256,6 +398,56 @@ def _sanitize_artifact_refs_for_memory(
         sanitized.append(ref)
 
     return sanitized
+
+
+def project_artifact_refs_for_memory(
+    *,
+    compact_result: Mapping[str, Any],
+    raw_artifacts: Any,
+    artifact_path: Optional[str],
+    persisted_artifact_refs: Sequence[Mapping[str, Any]],
+    retain_durable_output: bool,
+    tool_name: str,
+    tool_call_id: Optional[str],
+    execution_id: Optional[Any],
+    turn_sequence: Optional[int],
+    enrich_artifact_refs_with_provenance_fn: Callable[..., list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Project raw and persisted artifacts into the shared stable-ref shape."""
+
+    refs: list[dict[str, Any]] = []
+    compact_refs = compact_result.get("artifact_refs")
+    if isinstance(compact_refs, list):
+        refs = [dict(item) for item in compact_refs if isinstance(item, Mapping)]
+    if not refs and artifact_path:
+        refs = [{"path": artifact_path, "count": 1}]
+    elif not refs and isinstance(raw_artifacts, list):
+        refs = [
+            {"path": str(path), "count": 1}
+            for path in raw_artifacts
+            if isinstance(path, str) and path
+        ]
+    if not refs and persisted_artifact_refs:
+        refs = [
+            {
+                "path": str(item["path"]),
+                "artifact_id": item.get("artifact_id"),
+                "count": 1,
+            }
+            for item in persisted_artifact_refs
+            if isinstance(item.get("path"), str) and str(item.get("path")).strip()
+        ]
+    if persisted_artifact_refs and retain_durable_output:
+        refs = enrich_artifact_refs_with_provenance_fn(
+            refs=refs,
+            provenance_refs=persisted_artifact_refs,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            execution_id=str(execution_id) if execution_id is not None else None,
+            turn_sequence=turn_sequence,
+        )
+    refs = _sanitize_artifact_refs_for_memory(refs)
+    return refs if retain_durable_output else []
 
 
 def _resolve_artifact_projection_metadata(
@@ -371,25 +563,6 @@ def _tool_failed(
     return False
 
 
-def _classify_failure_category(error_text: str, exit_code: Optional[int]) -> str:
-    """Classify failure category from deterministic runtime signals."""
-    lowered = str(error_text or "").lower()
-
-    if "connection refused" in lowered or "network unreachable" in lowered:
-        return "network_error"
-    if "permission denied" in lowered or "operation not permitted" in lowered:
-        return "permission_denied"
-    if exit_code == 124 or "timeout" in lowered:
-        return "timeout"
-    if "not found" in lowered or "command not found" in lowered:
-        return "tool_unavailable"
-    if "invalid" in lowered or "error" in lowered or "failed" in lowered:
-        return "invalid_params"
-    if not lowered.strip():
-        return "empty_output"
-    return "unknown"
-
-
 def _evaluate_tool_phase_outcome(
     *,
     tool_result: Mapping[str, Any],
@@ -416,7 +589,14 @@ def _evaluate_tool_phase_outcome(
         )
         if part
     )
-    failure_category = _classify_failure_category(failure_text, exit_code) if failed else None
+    if not failed:
+        failure_category = None
+    elif status in {"cancelled", "canceled"}:
+        failure_category = "cancelled"
+    elif status == "denied":
+        failure_category = "denied"
+    else:
+        failure_category = classify_failure_category(failure_text, exit_code)
     result = "negative"
     if failed:
         result = "timeout" if failure_category == "timeout" else "error"
@@ -439,31 +619,94 @@ def _record_current_turn_unavailable_tool(
     if failure_category != "tool_unavailable" or not isinstance(turn_sequence, int):
         return
 
-    controls = metadata.get(_CURRENT_TURN_RUNTIME_CONTROLS_KEY)
-    if (
-        not isinstance(controls, Mapping)
-        or controls.get("turn_sequence") != turn_sequence
-    ):
-        controls_map: Dict[str, Any] = {
-            "turn_sequence": turn_sequence,
-            "unavailable_tools": [],
-        }
-    else:
-        raw_tools = controls.get("unavailable_tools")
-        tools = []
-        if isinstance(raw_tools, list):
-            tools = [str(item).strip() for item in raw_tools if str(item).strip()]
-        controls_map = {
-            "turn_sequence": turn_sequence,
-            "unavailable_tools": tools,
-        }
-
+    controls_map = ensure_current_turn_runtime_controls(
+        metadata,
+        turn_sequence=turn_sequence,
+    )
     unavailable_tools = list(controls_map["unavailable_tools"])
     normalized_tool_id = str(tool_id or "").strip()
     if normalized_tool_id and normalized_tool_id not in unavailable_tools:
         unavailable_tools.append(normalized_tool_id)
     controls_map["unavailable_tools"] = unavailable_tools
-    metadata[_CURRENT_TURN_RUNTIME_CONTROLS_KEY] = controls_map
+
+
+def _update_active_execution_control(
+    metadata: Dict[str, Any],
+    *,
+    turn_sequence: Optional[int],
+    tool_id: str,
+    tool_result: Mapping[str, Any],
+    compact_result: Mapping[str, Any],
+    execution_id: Optional[Any],
+) -> None:
+    """Project shell lifecycle state without retaining shell output."""
+
+    if not isinstance(turn_sequence, int) or tool_id not in SHELL_SESSION_TOOL_IDS:
+        return
+    process_status = str(
+        tool_result.get("process_status")
+        or compact_result.get("process_status")
+        or ""
+    ).strip().lower()
+    session_id = str(
+        tool_result.get("session_id") or compact_result.get("session_id") or ""
+    ).strip()
+    existing = read_active_execution_control(metadata)
+    if process_status != "running" or not session_id:
+        if existing is not None:
+            set_active_execution_control(
+                metadata,
+                turn_sequence=turn_sequence,
+                active_execution=None,
+            )
+        return
+
+    originating_tool_id = tool_id
+    originating_tool_call_id = ""
+    originating_tool_batch_id = ""
+    runtime_session = tool_result.get("metadata")
+    runtime_session = (
+        runtime_session.get("runtime_session")
+        if isinstance(runtime_session, Mapping)
+        else None
+    )
+    if isinstance(runtime_session, Mapping):
+        originating_tool_call_id = str(
+            runtime_session.get("tool_call_id") or ""
+        ).strip()
+        originating_tool_batch_id = str(
+            runtime_session.get("tool_batch_id") or ""
+        ).strip()
+    if tool_id == SHELL_WRITE_STDIN_TOOL_ID and existing is not None:
+        originating_tool_id = str(
+            existing.get("originating_tool_id") or tool_id
+        ).strip()
+        originating_tool_call_id = str(
+            existing.get("originating_tool_call_id") or originating_tool_call_id
+        ).strip()
+        originating_tool_batch_id = str(
+            existing.get("originating_tool_batch_id") or originating_tool_batch_id
+        ).strip()
+    set_active_execution_control(
+        metadata,
+        turn_sequence=turn_sequence,
+        active_execution={
+            "originating_tool_id": originating_tool_id,
+            "originating_tool_call_id": originating_tool_call_id,
+            "originating_tool_batch_id": originating_tool_batch_id,
+            "continuation_tool_id": SHELL_WRITE_STDIN_TOOL_ID,
+            "process_status": "running",
+            "session_id": session_id,
+            "stdin_available": bool(
+                tool_result.get("stdin_available")
+                if "stdin_available" in tool_result
+                else compact_result.get("stdin_available")
+            ),
+            "provenance_execution_id": (
+                str(execution_id) if execution_id is not None else ""
+            ),
+        },
+    )
 
 
 def append_tool_phase_snapshot_from_metadata(
@@ -541,69 +784,87 @@ async def project_result_state(
     tool_batch_id: Optional[str] = None,
     tool_intent: str = "",
     apply_to_state: bool = True,
+    persistence_decision: OutputPersistenceDecision | None = None,
 ) -> Dict[str, Any]:
     """Project compact result and metadata updates into interactive state."""
     resolved_tool_id = str(outcome.tool_id or tool_name)
     graph_metadata: Dict[str, Any] = outcome.to_graph_metadata()
-    llm_client = None
-    try:
-        llm_client = resolve_llm_client_fn(
-            metadata,
-            runtime_context,
-            config=config,
-            role=ROLE_TOOL_OUTPUT_COMPRESSOR,
+    compression_result = None
+    if is_live_shell_session_result(outcome.result, tool_name=resolved_tool_id):
+        compact_result_dict = project_live_shell_session_result(
+            outcome.result,
+            tool_name=resolved_tool_id,
+            fallback_summary=str(outcome.summary or ""),
         )
-    except Exception as exc:
-        logger.warning(
-            "[TOOL_EXECUTION] Compact compression LLM unavailable; using deterministic fallback: %s",
-            exc,
-        )
+        deterministic_compact_result_dict = None
+    else:
+        llm_client = None
+        try:
+            llm_client = resolve_llm_client_fn(
+                metadata,
+                runtime_context,
+                config=config,
+                role=ROLE_TOOL_OUTPUT_COMPRESSOR,
+            )
+        except Exception as exc:
+            logger.warning(
+                "[TOOL_EXECUTION] Compact compression LLM unavailable; using deterministic fallback: %s",
+                exc,
+            )
 
-    compression_started = time.perf_counter()
-    compression_raw_result = dict(outcome.result)
-    compression_raw_result["parameters"] = dict(outcome.parameters or {})
-    compression_raw_result["tool_call_id"] = tool_call_id
-    if tool_batch_id:
-        compression_raw_result["tool_batch_id"] = tool_batch_id
-    if tool_intent:
-        compression_raw_result["tool_intent"] = tool_intent
-    compression_result = await compress_tool_output_fn(
-        tool_name=resolved_tool_id,
-        raw_result=compression_raw_result,
-        artifact_path=artifact_path,
-        execution_id=str(execution_id) if execution_id is not None else None,
-        llm_client=llm_client,
-    )
-    compact_result = compression_result.compact_output
-    deterministic_compact_result = getattr(
-        compression_result,
-        "deterministic_compact_output",
-        None,
-    )
-    compression_duration_seconds = time.perf_counter() - compression_started
-    compact_size = compact_output_size_bytes_fn(compact_result)
-    record_compression_observability_metrics_fn(
-        source=compact_result.compression.source,
-        fallback_reason=compact_result.compression.fallback_reason,
-        duration_seconds=compression_duration_seconds,
-        compact_size_bytes=compact_size,
-        gauge_fn=safe_gauge_fn,
-        inc_fn=safe_inc_fn,
-    )
-    if compact_result.compression.source == "deterministic":
-        logger.warning(
-            "[TOOL_EXECUTION] Deterministic compact compression fallback triggered "
-            "(tool=%s reason=%s)",
-            resolved_tool_id,
-            compact_result.compression.fallback_reason or "unknown",
+        compression_started = time.perf_counter()
+        compression_raw_result = dict(outcome.result)
+        compression_raw_result["parameters"] = dict(outcome.parameters or {})
+        compression_raw_result["tool_call_id"] = tool_call_id
+        if tool_batch_id:
+            compression_raw_result["tool_batch_id"] = tool_batch_id
+        if tool_intent:
+            compression_raw_result["tool_intent"] = tool_intent
+        compression_result = await compress_tool_output_fn(
+            tool_name=resolved_tool_id,
+            raw_result=compression_raw_result,
+            artifact_path=artifact_path,
+            execution_id=str(execution_id) if execution_id is not None else None,
+            llm_client=llm_client,
         )
+        compact_result = compression_result.compact_output
+        deterministic_compact_result = getattr(
+            compression_result,
+            "deterministic_compact_output",
+            None,
+        )
+        compression_duration_seconds = time.perf_counter() - compression_started
+        compact_size = compact_output_size_bytes_fn(compact_result)
+        record_compression_observability_metrics_fn(
+            source=compact_result.compression.source,
+            fallback_reason=compact_result.compression.fallback_reason,
+            duration_seconds=compression_duration_seconds,
+            compact_size_bytes=compact_size,
+            gauge_fn=safe_gauge_fn,
+            inc_fn=safe_inc_fn,
+        )
+        if compact_result.compression.source == "deterministic":
+            logger.warning(
+                "[TOOL_EXECUTION] Deterministic compact compression fallback triggered "
+                "(tool=%s reason=%s)",
+                resolved_tool_id,
+                compact_result.compression.fallback_reason or "unknown",
+            )
 
-    compact_result_dict = compact_result.to_dict()
-    deterministic_compact_result_dict = (
-        deterministic_compact_result.to_dict()
-        if deterministic_compact_result is not None
-        else None
-    )
+        compact_result_dict = preserve_shell_session_result_fields(
+            compact_result.to_dict(),
+            raw_result=outcome.result,
+            tool_name=resolved_tool_id,
+        )
+        deterministic_compact_result_dict = (
+            preserve_shell_session_result_fields(
+                deterministic_compact_result.to_dict(),
+                raw_result=outcome.result,
+                tool_name=resolved_tool_id,
+            )
+            if deterministic_compact_result is not None
+            else None
+        )
     # Phase 9 Task 9.2: ``last_tool_result_compact`` is now authored as a
     # derived view of the per-call entry inside the batch-shaped metadata
     # (see ``batch_runner.write_compact_batch_metadata``). The projection
@@ -624,42 +885,28 @@ async def project_result_state(
             tool_name=resolved_tool_id,
         )
 
-    artifact_refs_for_memory: list[dict[str, Any]] = []
-    compact_artifact_refs = compact_result_dict.get("artifact_refs")
-    if isinstance(compact_artifact_refs, list):
-        artifact_refs_for_memory = [
-            dict(item) for item in compact_artifact_refs if isinstance(item, Mapping)
-        ]
-    if not artifact_refs_for_memory and artifact_path:
-        artifact_refs_for_memory = [{"path": artifact_path, "count": 1}]
-    elif not artifact_refs_for_memory:
-        tool_artifacts = outcome.result.get("artifacts")
-        if isinstance(tool_artifacts, list):
-            artifact_refs_for_memory = [
-                {"path": str(path), "count": 1}
-                for path in tool_artifacts
-                if isinstance(path, str) and path
-            ]
-    if not artifact_refs_for_memory and persisted_artifact_refs:
-        artifact_refs_for_memory = [
-            {
-                "path": str(item["path"]),
-                "artifact_id": item.get("artifact_id"),
-                "count": 1,
-            }
-            for item in persisted_artifact_refs
-            if isinstance(item.get("path"), str) and str(item.get("path")).strip()
-        ]
-    if persisted_artifact_refs:
-        artifact_refs_for_memory = enrich_artifact_refs_with_provenance_fn(
-            refs=artifact_refs_for_memory,
-            provenance_refs=persisted_artifact_refs,
-            tool_name=resolved_tool_id,
-            tool_call_id=tool_call_id,
-            execution_id=str(execution_id) if execution_id is not None else None,
-            turn_sequence=turn_sequence,
-        )
-    artifact_refs_for_memory = _sanitize_artifact_refs_for_memory(artifact_refs_for_memory)
+    retain_durable_output = (
+        persistence_decision is None or persistence_decision.retain_durable_output
+    )
+    artifact_refs_for_memory = project_artifact_refs_for_memory(
+        compact_result=compact_result_dict,
+        raw_artifacts=outcome.result.get("artifacts"),
+        artifact_path=artifact_path,
+        persisted_artifact_refs=persisted_artifact_refs,
+        retain_durable_output=retain_durable_output,
+        tool_name=resolved_tool_id,
+        tool_call_id=tool_call_id,
+        execution_id=(
+            execution_id
+            if persistence_decision is None
+            or persistence_decision.assessment_evidence_eligible
+            else None
+        ),
+        turn_sequence=turn_sequence,
+        enrich_artifact_refs_with_provenance_fn=(
+            enrich_artifact_refs_with_provenance_fn
+        ),
+    )
     if artifact_refs_for_memory:
         compact_result_dict["artifact_refs"] = artifact_refs_for_memory
         if deterministic_compact_result_dict is not None:
@@ -696,16 +943,25 @@ async def project_result_state(
     if isinstance(turn_sequence, int):
         action_record["turn_sequence"] = turn_sequence
 
+    tool_phase_outcome = _evaluate_tool_phase_outcome(
+        tool_result=dict(outcome.result),
+        compact_result=compact_result_dict,
+        summary=str(compact_result_dict.get("summary") or outcome.summary or ""),
+    )
     projection = {
         "compact_result_dict": compact_result_dict,
         "deterministic_compact_result_dict": deterministic_compact_result_dict,
+        "tool_phase_outcome": tool_phase_outcome,
         "result_for_metadata": result_for_metadata,
         "graph_metadata": graph_metadata,
         "action_record": action_record,
         "artifact_refs_for_memory": artifact_refs_for_memory,
         "artifact_projection_metadata": artifact_projection_metadata,
         "resolved_tool_id": resolved_tool_id,
-        "compression_usage_record": compression_result.usage_record,
+        "compression_usage_record": (
+            compression_result.usage_record if compression_result is not None else None
+        ),
+        "persistence_decision": persistence_decision,
     }
     if apply_to_state:
         apply_result_state_projection(
@@ -753,6 +1009,9 @@ def apply_result_state_projection(
     ]
     compression_usage_record = projection.get("compression_usage_record")
     artifact_projection_metadata = projection.get("artifact_projection_metadata")
+    persistence_decision = projection.get("persistence_decision")
+    if not isinstance(persistence_decision, OutputPersistenceDecision):
+        persistence_decision = None
     workspace_id_value = None
     workspace_id_raw = facts.metadata.get("workspace_id")
     if isinstance(workspace_id_raw, str) and workspace_id_raw.strip():
@@ -781,8 +1040,6 @@ def apply_result_state_projection(
     if not isinstance(durable_artifact_refs, list):
         durable_artifact_refs = []
 
-    facts.metadata.setdefault("tool_history", []).append(durable_graph_metadata)
-    facts.metadata["last_tool_result"] = durable_result_for_metadata
     _append_tool_execution_record(
         facts=facts,
         outcome=outcome,
@@ -796,12 +1053,38 @@ def apply_result_state_projection(
         artifact_projection_metadata=(
             artifact_projection_metadata if isinstance(artifact_projection_metadata, Mapping) else None
         ),
+        persistence_decision=persistence_decision,
     )
     _append_compression_usage_record(
         interactive,
         compression_usage_record if isinstance(compression_usage_record, Mapping) else None,
         logger=logger,
     )
+    _update_active_execution_control(
+        facts.metadata,
+        turn_sequence=turn_sequence,
+        tool_id=resolved_tool_id,
+        tool_result=dict(outcome.result),
+        compact_result=compact_result_dict,
+        execution_id=(
+            execution_id
+            if persistence_decision is None
+            or persistence_decision.assessment_evidence_eligible
+            else None
+        ),
+    )
+    if persistence_decision is not None and not persistence_decision.retain_durable_output:
+        for key in (
+            "last_tool_result",
+            "last_tool_result_compact",
+            "last_tool_result_compact_batch",
+            "last_artifact_path",
+        ):
+            facts.metadata.pop(key, None)
+        return
+
+    facts.metadata.setdefault("tool_history", []).append(durable_graph_metadata)
+    facts.metadata["last_tool_result"] = durable_result_for_metadata
 
     existing_working_memory = facts.metadata.get("working_memory")
     raw_result_metadata = outcome.result.get("metadata") if isinstance(outcome.result, Mapping) else {}
@@ -851,10 +1134,15 @@ def apply_result_state_projection(
     if len(result_summary) > 200:
         result_summary = result_summary[:197] + "..."
 
-    tool_phase_outcome = _evaluate_tool_phase_outcome(
-        tool_result=dict(outcome.result),
-        compact_result=compact_result_dict,
-        summary=result_summary,
+    projected_phase_outcome = projection.get("tool_phase_outcome")
+    tool_phase_outcome = (
+        dict(projected_phase_outcome)
+        if isinstance(projected_phase_outcome, Mapping)
+        else _evaluate_tool_phase_outcome(
+            tool_result=dict(outcome.result),
+            compact_result=compact_result_dict,
+            summary=result_summary,
+        )
     )
     _record_current_turn_unavailable_tool(
         facts.metadata,
@@ -934,11 +1222,16 @@ def project_trace_history_and_outbound_events(
     diag_info_fn: Callable[..., None],
     logger: Any,
     deterministic_compact_result_dict: Optional[Mapping[str, Any]] = None,
+    persistence_decision: OutputPersistenceDecision | None = None,
 ) -> str:
     """Project trace/history side effects, tool_end event, and dispatch cache payload."""
-    interactive.trace.reasoning.extend(outcome.reasoning)
+    retain_durable_output = (
+        persistence_decision is None or persistence_decision.retain_durable_output
+    )
+    if retain_durable_output:
+        interactive.trace.reasoning.extend(outcome.reasoning)
     observation_text = compact_observation_text_fn(compact_result_dict, fallback=outcome.summary)
-    if observation_text:
+    if observation_text and retain_durable_output:
         interactive.trace.observations.append(observation_text)
 
     execution_reasoning = str(
@@ -951,23 +1244,115 @@ def project_trace_history_and_outbound_events(
         outcome.result["approval_reason"] = approval_result.get("action")
         outcome.result["approval_metadata"] = dict(approval_result)
 
-    interactive.trace.executed_tools.append(
-        tool_execution_record_cls(
-            tool_id=str(outcome.tool_id),
-            args=dict(outcome.parameters),
-            status="success" if outcome.result.get("success") else "error",
-            observation=observation_text,
-            reasoning=execution_reasoning,
-            approval_granted=outcome.result.get("approval_granted"),
-            approval_reason=outcome.result.get("approval_reason"),
-            approval_metadata=dict(outcome.result.get("approval_metadata") or {}),
+    if retain_durable_output:
+        durable_execution_args = _mask_durable_mapping(
+            dict(outcome.parameters),
+            source="tool_execution_trace_args",
         )
-    )
+        interactive.trace.executed_tools.append(
+            tool_execution_record_cls(
+                tool_id=str(outcome.tool_id),
+                args=durable_execution_args,
+                status="success" if outcome.result.get("success") else "error",
+                observation=observation_text,
+                reasoning=execution_reasoning,
+                approval_granted=outcome.result.get("approval_granted"),
+                approval_reason=outcome.result.get("approval_reason"),
+                approval_metadata=dict(outcome.result.get("approval_metadata") or {}),
+            )
+        )
 
     if has_writer and writer is not None:
+        process_status = str(
+            outcome.result.get("process_status")
+            or compact_result_dict.get("process_status")
+            or ""
+        ).strip().lower()
         execution_status = "success" if outcome.result.get("success") else "error"
+        if process_status == "running":
+            execution_status = "running"
+        elif process_status == "timed_out":
+            execution_status = "timed_out"
+        elif process_status == "terminated":
+            execution_status = "terminated"
         execution_duration = outcome.result.get("duration", 0)
         exit_code = outcome.result.get("exit_code")
+
+        resolved_tool_id = str(outcome.tool_id or tool_name)
+        if (
+            process_status == "running"
+            and resolved_tool_id in SHELL_SESSION_TOOL_IDS
+            and resolved_tool_id != SHELL_WRITE_STDIN_TOOL_ID
+        ):
+            initial_stdout = str(result_for_metadata.get("stdout") or "")
+            initial_stderr = str(result_for_metadata.get("stderr") or "")
+            initial_output = initial_stdout
+            if initial_stderr:
+                if initial_output and not initial_output.endswith(("\n", "\r")):
+                    initial_output += "\n"
+                initial_output += initial_stderr
+            initial_output = initial_output[:4000]
+            output_ends_with_newline = (
+                initial_stderr.endswith(("\n", "\r"))
+                if initial_stderr
+                else bool(result_for_metadata.get("stdout_ends_with_newline"))
+            )
+            if initial_output:
+                display_compact = {
+                    "schema_version": "2.0",
+                    "tool": resolved_tool_id,
+                    "status": "success" if outcome.result.get("success") else "failed",
+                    "success": bool(outcome.result.get("success")),
+                    "exit_code": exit_code,
+                    "summary": initial_output,
+                    "key_findings": [],
+                    "errors": [],
+                    "report_recommendations": [],
+                    "structured_signals": [],
+                    "decision_evidence": [],
+                    "lossiness_risk": "high",
+                    "artifact_refs": [],
+                    "compression": None,
+                    "process_status": "running",
+                    "session_status": compact_result_dict.get("session_status"),
+                    "interaction_boundary": "output_available",
+                    "session_id": compact_result_dict.get("session_id"),
+                    "stdout_ends_with_newline": output_ends_with_newline,
+                }
+                masked_display_compact = _mask_durable_mapping(
+                    display_compact,
+                    source="initial_shell_output_delta",
+                )
+                masked_output = str(masked_display_compact.get("summary") or "")
+                writer(
+                    {
+                        "type": "tool_delta",
+                        "tool": resolved_tool_id,
+                        "tool_call_id": tool_call_id,
+                        "tool_batch_id": tool_batch_id,
+                        "conversation_id": conversation_id,
+                        "turn_id": turn_id,
+                        "status": (
+                            "success" if outcome.result.get("success") else "error"
+                        ),
+                        "process_status": "running",
+                        "session_status": compact_result_dict.get("session_status"),
+                        "interaction_boundary": "output_available",
+                        "session_id": compact_result_dict.get("session_id"),
+                        "exit_code": exit_code,
+                        "content": masked_output,
+                        "summary": {"summary": masked_output},
+                        "compact_tool_result": masked_display_compact,
+                        "output_persistence": "transient",
+                        "shell_lifecycle_event": True,
+                        "shell_output_chunk": True,
+                        "stdout_ends_with_newline": output_ends_with_newline,
+                        "ind": 1,
+                        "step_type": "tool_delta",
+                        "turn_sequence": turn_sequence,
+                        "sub_turn_index": sub_turn_index,
+                    }
+                )
 
         writer(
             {
@@ -978,6 +1363,10 @@ def project_trace_history_and_outbound_events(
                 "conversation_id": conversation_id,
                 "turn_id": turn_id,
                 "status": execution_status,
+                "process_status": process_status or None,
+                "session_status": compact_result_dict.get("session_status"),
+                "interaction_boundary": compact_result_dict.get("interaction_boundary"),
+                "session_id": compact_result_dict.get("session_id"),
                 "duration": execution_duration,
                 "exit_code": exit_code,
                 "summary": {
@@ -987,6 +1376,9 @@ def project_trace_history_and_outbound_events(
                     "report_recommendations": compact_result_dict.get("report_recommendations", []),
                 },
                 "compact_tool_result": compact_result_dict,
+                "output_persistence": (
+                    "durable" if retain_durable_output else "transient"
+                ),
                 "error": None,
                 "ind": 1,
                 "step_type": "tool_end",
@@ -1019,22 +1411,69 @@ def project_trace_history_and_outbound_events(
             sub_turn_index,
         )
 
+    cache_compact_result = dict(compact_result_dict)
+    cache_deterministic_result = deterministic_compact_result_dict
+    cache_result_for_metadata = dict(result_for_metadata)
+    cache_graph_metadata = dict(graph_metadata)
+    cache_action_record = dict(action_record)
+    cache_observation = observation_text
+    cache_reasoning = list(outcome.reasoning or [])
+    if not retain_durable_output:
+        operational_keys = {
+            "tool",
+            "status",
+            "success",
+            "process_status",
+            "session_status",
+            "interaction_boundary",
+            "session_id",
+            "exit_code",
+            "stdin_available",
+            "truncated",
+            "error_code",
+        }
+        cache_compact_result = {
+            key: value
+            for key, value in cache_compact_result.items()
+            if key in operational_keys
+        }
+        cache_deterministic_result = None
+        cache_result_for_metadata = {
+            key: value
+            for key, value in cache_result_for_metadata.items()
+            if key in operational_keys
+        }
+        raw_metadata = result_for_metadata.get("metadata")
+        if isinstance(raw_metadata, Mapping):
+            operational_metadata = {
+                key: raw_metadata[key]
+                for key in ("route_policy", "runtime_session", "error_code")
+                if key in raw_metadata
+            }
+            if operational_metadata:
+                cache_result_for_metadata["metadata"] = operational_metadata
+        cache_graph_metadata = {}
+        cache_action_record = {"tool_id": str(outcome.tool_id)}
+        cache_observation = ""
+        cache_reasoning = []
+        execution_reasoning = ""
+
     store_dispatch_cache_result_fn(
         facts=facts,
         tool_dispatch_cache_key=tool_dispatch_cache_key,
         tool_call_id=tool_call_id,
-        compact_result_dict=dict(compact_result_dict),
+        compact_result_dict=cache_compact_result,
         deterministic_compact_result_dict=(
-            dict(deterministic_compact_result_dict)
-            if isinstance(deterministic_compact_result_dict, Mapping)
+            dict(cache_deterministic_result)
+            if isinstance(cache_deterministic_result, Mapping)
             else None
         ),
-        result_for_metadata=dict(result_for_metadata),
-        graph_metadata=dict(graph_metadata),
-        action_record=dict(action_record),
-        observation_text=observation_text,
-        reasoning_additions=list(outcome.reasoning or []),
-        outcome_parameters=outcome.parameters,
+        result_for_metadata=cache_result_for_metadata,
+        graph_metadata=cache_graph_metadata,
+        action_record=cache_action_record,
+        observation_text=cache_observation,
+        reasoning_additions=cache_reasoning,
+        outcome_parameters=(outcome.parameters if retain_durable_output else {}),
         outcome_success=bool(outcome.result.get("success")),
         outcome_summary=execution_reasoning,
         approval_granted=outcome.result.get("approval_granted"),

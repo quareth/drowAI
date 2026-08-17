@@ -128,3 +128,82 @@ def test_mask_durable_secrets_still_masks_non_terminal_session_ids() -> None:
 
     assert masked["session_id"] == "<DURABLE_SECRET_MASK:secret>"
     assert masked["result"]["session_id"] == "<DURABLE_SECRET_MASK:secret>"
+
+
+def test_mask_durable_secrets_preserves_public_shell_result_session_ids_only() -> None:
+    public_session_id = "shs_public_shell_123"
+    private_session_id = "terminal-private-shell-123"
+    payload = {
+        "tool": "shell.exec",
+        "process_status": "running",
+        "session_id": public_session_id,
+        "provider_session_id": private_session_id,
+        "metadata": {
+            "runtime_session": {
+                "session_id": public_session_id,
+                "provider_session_id": private_session_id,
+            }
+        },
+    }
+
+    for source in ("last_tool_result", "last_tool_result_compact"):
+        masked = mask_durable_secrets(payload, source=source)
+
+        assert masked["session_id"] == public_session_id
+        assert masked["provider_session_id"] == "<DURABLE_SECRET_MASK:secret>"
+        assert masked["metadata"]["runtime_session"]["session_id"] == public_session_id
+        assert (
+            masked["metadata"]["runtime_session"]["provider_session_id"]
+            == "<DURABLE_SECRET_MASK:secret>"
+        )
+
+
+def test_mask_durable_secrets_preserves_shell_result_session_ids_in_compact_batch() -> None:
+    public_session_id = "shs_public_shell_batch_123"
+    payload = {
+        "results": [
+            {
+                "tool_id": "shell.write_stdin",
+                "compact_tool_result": {
+                    "tool": "shell.write_stdin",
+                    "process_status": "running",
+                    "session_id": public_session_id,
+                },
+            }
+        ]
+    }
+
+    masked = mask_durable_secrets(payload, source="last_tool_result_compact_batch")
+
+    assert (
+        masked["results"][0]["compact_tool_result"]["session_id"]
+        == public_session_id
+    )
+
+
+def test_mask_durable_secrets_masks_shell_session_ids_outside_result_sources() -> None:
+    payload = {
+        "tool": "shell.exec",
+        "process_status": "running",
+        "session_id": "shs_argument_shell_123",
+    }
+
+    masked = mask_durable_secrets(payload, source="action_history_record")
+
+    assert masked["session_id"] == "<DURABLE_SECRET_MASK:secret>"
+
+
+def test_mask_durable_secrets_masks_env_values_and_non_empty_chars() -> None:
+    payload = {
+        "params": {
+            "env": {"VISIBLE": "env-value-123"},
+            "chars": "password\n",
+            "empty_chars": "",
+        }
+    }
+
+    masked = mask_durable_secrets(payload, source="action_history_record")
+
+    assert masked["params"]["env"]["VISIBLE"] == "<DURABLE_SECRET_MASK:secret>"
+    assert masked["params"]["chars"] == "<DURABLE_SECRET_MASK:secret>"
+    assert masked["params"]["empty_chars"] == ""

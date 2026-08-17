@@ -69,7 +69,6 @@ class DummyConfig:
     enforce_llm_tool_selection = False
     llm_tool_selection_timeout = 3
     use_llm_tool_calls = True
-    max_tools_exposed = 2
     tool_call_timeout = 3
     tool_timeout_default_seconds = 600
     tool_timeout_max_seconds = 600
@@ -184,11 +183,19 @@ def test_executor_contract_signatures_are_stable():
         "log_mode",
         "include_metrics",
         "timeout_plan",
+        "interrupt_id",
+        "tool_call_id",
+        "tool_batch_id",
+        "artifact_stamp",
     ]
     assert via_comm_sig.parameters["timeout_seconds"].kind is inspect.Parameter.KEYWORD_ONLY
     assert via_comm_sig.parameters["log_mode"].default == "enhanced"
     assert via_comm_sig.parameters["include_metrics"].default is True
     assert via_comm_sig.parameters["timeout_plan"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert via_comm_sig.parameters["interrupt_id"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert via_comm_sig.parameters["tool_call_id"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert via_comm_sig.parameters["tool_batch_id"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert via_comm_sig.parameters["artifact_stamp"].kind is inspect.Parameter.KEYWORD_ONLY
 
     resolve_workspace_sig = inspect.signature(EnhancedCommandExecutor._resolve_workspace_path)
     assert list(resolve_workspace_sig.parameters.keys()) == ["self", "path"]
@@ -284,7 +291,7 @@ async def test_execute_single_tool_forwards_interrupt_and_tool_call_ids():
     assert result is expected
     executor._execute_single_tool_internal.assert_awaited_once()
     args, kwargs = executor._execute_single_tool_internal.await_args
-    assert args == ("shell.exec", {"command": "echo hi", "timeout_sec": 600})
+    assert args == ("shell.exec", {"command": "echo hi"})
     assert kwargs == {
         "interrupt_id": "interrupt-1",
         "tool_call_id": "tool-call-1",
@@ -295,7 +302,10 @@ async def test_execute_single_tool_forwards_interrupt_and_tool_call_ids():
         "artifact_stamp": None,
         "timeout_plan": ANY,
     }
-    assert kwargs["timeout_plan"].deadline_seconds == 600
+    assert kwargs["timeout_plan"].deadline_seconds == (
+        kwargs["timeout_plan"].default_timeout_seconds
+    )
+    assert kwargs["timeout_plan"].source == "default:max_runtime_sec"
 
 
 @pytest.mark.asyncio

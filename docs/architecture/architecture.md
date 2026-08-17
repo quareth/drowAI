@@ -22,7 +22,8 @@ The important architectural split is:
   artifacts, usage, and task workspace files.
 - **Execution plane:** provider-dispatched task runtime and tool side effects
   through Runner placement, plus explicit dev/test/diagnostic local-provider
-  paths.
+  paths. This includes dedicated interactive shell command sessions as well as
+  structured tool-command execution.
 
 ## Plane Detail Docs
 
@@ -254,7 +255,9 @@ Explicit local runtime path:
 - `backend/services/unified_docker_service.py` is now a compatibility shim, not
   the only implementation source.
 - The local runtime uses task workspaces and the Kali executor daemon/file-comm
-  path over `/workspace/commands.jsonl` and `/workspace/results.jsonl`.
+  path over `/workspace/commands.jsonl` and `/workspace/results.jsonl` for
+  structured container-tool commands. Interactive shell starts use dedicated
+  provider terminal execs instead.
 
 Product Runner path:
 
@@ -264,6 +267,14 @@ Product Runner path:
   inbound/outbound control messages.
 - `build_runner_runtime_provider()` requires
   `ENABLE_CLOUD_RUNNER_CONTROL=true`; runner placement is intentionally gated.
+
+Interactive shell commands cross the same plane boundary without becoming
+runner-control or Docker calls in graph code. The backend-owned
+`ShellSessionService` validates task/runtime/owner identity, owns public `shs_`
+continuation handles and cleanup, and delegates physical PTY operations through
+`TerminalSessionManager` to the selected runtime provider. Each shell start is
+one dedicated Kali exec. The runtime provider or managed runner, rather than
+terminal banner parsing in the graph, reports process completion and exit code.
 
 ## Cross-Plane Runtime Flow
 
@@ -407,6 +418,10 @@ sequenceDiagram
   writable task data at `/workspace` and host-owned control material mounted
   read-only at `/run/drowai/control`. VPN and runtime-input files remain in the
   control root rather than the artifact-visible workspace.
+- A task's `scope.md` and graph intent constraints guide model behavior; they do
+  not enforce command targets or runtime network reachability. Container
+  isolation is not an egress boundary, so deployments that require technical
+  target enforcement must apply network policy outside the prompt/tool layer.
 - Runner-control raw command material has an intentionally limited durability
   boundary; durable control rows are masked and cross-process raw-secret command
   replay is not supported by design.

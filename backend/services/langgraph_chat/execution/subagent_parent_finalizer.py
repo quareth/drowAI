@@ -8,11 +8,14 @@ child runs, claim registry handoffs, or decide follow-up delegation.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from copy import deepcopy
 from typing import Any
 
 from agent.graph import InteractiveState
 from agent.graph.builders.common_edges import ensure_metadata_runtime_budgets
 from agent.graph.builders.parent_handoff_builder import build_parent_handoff_graph
+from agent.graph.context.builder import METADATA_CONTEXT_BUNDLE_KEY
+from agent.graph.context.runtime_state import refresh_bundle_from_working_memory
 from agent.graph.graph_names import GRAPH_NAME_PARENT_HANDOFF
 from agent.graph.streaming import build_agent_turn_metadata
 from agent.graph.utils.event_identity import POST_ACTION_STREAM_SEQUENCE_METADATA_KEY
@@ -22,6 +25,10 @@ from backend.services.agent_runs.completion import (
 )
 from backend.services.agent_runs.parent_handoff_continuation import (
     ParentHandoffContinuationBroker,
+)
+from backend.services.agent_runs.result_projection import (
+    ACTIVE_AGENT_RUNS_KEY,
+    COMPLETED_AGENT_RESULTS_KEY,
 )
 from backend.services.chat.event_builders import attach_conversation_ids
 from backend.services.langgraph_chat.checkpoint.checkpointer_service import (
@@ -55,6 +62,41 @@ from backend.services.langgraph_chat.handlers.turn_runtime import (
 
 
 CancellationCheckerFactory = Callable[[int, str], Callable[[], bool]]
+_HANDOFF_CONTEXT_KEYS = (COMPLETED_AGENT_RESULTS_KEY, ACTIVE_AGENT_RUNS_KEY)
+
+
+def _reuse_parent_continuation_state(
+    previous: InteractiveState,
+    current: InteractiveState,
+) -> InteractiveState:
+    """Preserve parent progress while replacing the latest handoff snapshot."""
+    starting_state = InteractiveState.from_mapping(previous.as_graph_state())
+    starting_metadata = starting_state.facts.ensure_metadata()
+    current_metadata = current.facts.safe_metadata
+
+    for key in _HANDOFF_CONTEXT_KEYS:
+        if key in current_metadata:
+            starting_metadata[key] = deepcopy(current_metadata[key])
+        else:
+            starting_metadata.pop(key, None)
+
+    current_bundle = current_metadata.get(METADATA_CONTEXT_BUNDLE_KEY)
+    starting_bundle = starting_metadata.get(METADATA_CONTEXT_BUNDLE_KEY)
+    if not isinstance(starting_bundle, dict):
+        starting_bundle = (
+            deepcopy(current_bundle) if isinstance(current_bundle, Mapping) else {}
+        )
+        starting_metadata[METADATA_CONTEXT_BUNDLE_KEY] = starting_bundle
+    if isinstance(current_bundle, Mapping):
+        for key in _HANDOFF_CONTEXT_KEYS:
+            starting_bundle[key] = deepcopy(current_bundle.get(key, []))
+
+    starting_metadata.pop("router_outcome", None)
+    starting_state.facts.set_candidate_decision(None)
+    starting_state.trace.final_text = None
+    starting_state.trace.final_error = None
+    refresh_bundle_from_working_memory(starting_metadata)
+    return starting_state
 
 
 class SubagentParentFinalizer:
@@ -79,6 +121,7 @@ class SubagentParentFinalizer:
         *,
         turn: TurnIdentity,
         child_completions: tuple[AgentRunCompletion, ...],
+        continuation_state: InteractiveState | None = None,
     ) -> LangGraphChatResult:
         """Execute the parent handoff graph and build its persisted chat result."""
         chat_inputs = runtime_config.chat_inputs
@@ -86,7 +129,15 @@ class SubagentParentFinalizer:
         initial_state, _injected_tokens = build_initial_interactive_state(
             runtime_config
         )
-        starting_state = InteractiveState.from_mapping(initial_state)
+        current_state = InteractiveState.from_mapping(initial_state)
+        starting_state = (
+            current_state
+            if continuation_state is None
+            else _reuse_parent_continuation_state(
+                continuation_state,
+                current_state,
+            )
+        )
         starting_metadata = starting_state.facts.ensure_metadata()
         persisted_runtime_budgets = runtime_config.metadata.get("runtime_budgets")
         if isinstance(persisted_runtime_budgets, Mapping):

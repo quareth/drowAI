@@ -10,6 +10,7 @@ from agent.graph.nodes.post_tool_reasoning.models import RetryablePostToolReason
 from agent.reasoning.structured_contract_recovery import (
     StructuredContractViolationError,
 )
+from agent.providers.llm.core.exceptions import LLMAPIError
 from core.llm import LLMTimeoutError
 from backend.services.langgraph_chat.compression.context_models import (
     CompressionRequiredError,
@@ -72,6 +73,40 @@ def test_extract_retryable_post_tool_failure_from_nested_exception_chain() -> No
         details["internal_error_message"]
         == "Provider returned invalid structured output"
     )
+
+
+def test_extract_retryable_rate_limit_uses_sanitized_failure_details() -> None:
+    service = TurnExecutionErrorService()
+    provider_error = LLMAPIError(
+        "raw upstream payload must not be persisted",
+        provider="mistral",
+        status_code=429,
+        retry_after_seconds=4.0,
+    )
+
+    details = service.extract_retryable_post_tool_failure(provider_error)
+
+    assert details == {
+        "error_code": "llm_rate_limited",
+        "retry_mode": "checkpoint",
+        "graph_name": None,
+        "diagnostics": {
+            "provider": "mistral",
+            "status_code": 429,
+            "retry_after_seconds": 4.0,
+        },
+        "internal_error_message": "llm_rate_limited",
+    }
+
+
+def test_permanent_provider_api_failure_is_not_checkpoint_retryable() -> None:
+    service = TurnExecutionErrorService()
+
+    details = service.extract_retryable_post_tool_failure(
+        LLMAPIError("unauthorized", provider="openai", status_code=401)
+    )
+
+    assert details is None
 
 
 def test_extract_retryable_structured_contract_failure_from_nested_exception_chain() -> (

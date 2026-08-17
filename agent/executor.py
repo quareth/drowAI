@@ -570,9 +570,6 @@ class EnhancedCommandExecutor(CommandExecutor):
         return validate_tool_parameters(
             tool_id,
             parameters,
-            max_shell_command_chars=int(
-                getattr(self.config, "shell_exec_max_command_chars", 320) or 320
-            ),
             metric_hook=safe_inc_metric,
             logger=self.logger,
         )

@@ -55,4 +55,25 @@ describe("filterChatMessages observation parity", () => {
     const filtered = filterChatMessages(input);
     expect(filtered.map((item) => item.id)).toEqual(["reasoning", "tool"]);
   });
+
+  it("keeps only shell lifecycle tool deltas", () => {
+    featureFlags.enableBasicChat = true;
+    const input = [
+      baseMessage({
+        id: "ordinary-delta",
+        metadata: { step_type: "tool_delta", tool: "nmap" },
+      }),
+      baseMessage({
+        id: "shell-progress",
+        metadata: {
+          step_type: "tool_delta",
+          tool: "shell.utility",
+          shell_lifecycle_event: true,
+        },
+      }),
+    ];
+
+    const filtered = filterChatMessages(input);
+    expect(filtered.map((item) => item.id)).toEqual(["shell-progress"]);
+  });
 });

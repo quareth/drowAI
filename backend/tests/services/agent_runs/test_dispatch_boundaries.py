@@ -57,7 +57,7 @@ def _completion() -> AgentRunCompletion:
 
 
 def _stop() -> AgentRunDispatchStop:
-    return AgentRunDispatchStop(invocation=_invocation(), status="failed")
+    return AgentRunDispatchStop(invocation=_invocation(), status="interrupted")
 
 
 def _imports_for(path: Path) -> list[str]:
@@ -77,7 +77,7 @@ def test_existing_dispatch_contract_shapes_are_preserved() -> None:
         "status",
         "usage",
     ]
-    assert AgentRunDispatchStop(_invocation(), "failed").usage == ()
+    assert AgentRunDispatchStop(_invocation(), "interrupted").usage == ()
 
     assert [field.name for field in fields(AgentRunDispatchResult)] == [
         "child_completions",

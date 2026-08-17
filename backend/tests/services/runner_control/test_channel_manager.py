@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 import json
 import uuid
 
+import pytest
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -31,10 +33,15 @@ from backend.services.data_plane.local_object_store import LocalObjectStore
 from backend.services.runner_control.terminal_frame_buffer import get_runner_terminal_frame_buffer
 import backend.services.runner_control.metrics as runner_metrics
 from backend.services.runner_control.channel.auth import RunnerChannelAuthContext
+from backend.services.runner_control.channel.terminal_cleanup import (
+    _cleanup_runner_terminal_state,
+)
+import backend.services.runner_control.channel.lifecycle as channel_lifecycle
 from backend.services.runner_control.channel_manager import RunnerChannelManager
 from backend.services.runner_control.credentials import RunnerCredentialService
 from backend.services.terminal.manager import terminal_session_manager
 from backend.services.terminal.models import TerminalSession
+from runtime_shared import shell_session_port
 from runtime_shared.runner_protocol import RunnerErrorPayload
 
 
@@ -183,6 +190,14 @@ def _envelope_json(
             "payload": payload,
         }
     )
+
+
+class _RecordingShellSessionService:
+    def __init__(self) -> None:
+        self.closed_tasks: list[tuple[int, int]] = []
+
+    async def close_task_sessions(self, *, tenant_id: int, task_id: int) -> None:
+        self.closed_tasks.append((tenant_id, task_id))
 
 
 def _artifact_manifest_envelope_json(
@@ -678,6 +693,53 @@ def test_runner_channel_manager_close_session_marks_runner_offline_when_last_lea
     assert "runner.offline" in event_types
 
 
+@pytest.mark.asyncio
+async def test_replacement_channel_invalidates_old_terminal_state_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A replacement starts clean; closing the old socket cannot clean the new one."""
+    db = _build_session()
+    tenant, runner = _seed_runner(db)
+    manager = RunnerChannelManager(db, lease_ttl_seconds=30)
+    credential_id = _issue_credential_id(db, tenant_id=tenant.id, runner_id=runner.id)
+    auth = RunnerChannelAuthContext(
+        tenant_id=tenant.id,
+        runner_id=runner.id,
+        credential_id=credential_id,
+        allowed_protocol_versions=("runner_control.v1",),
+    )
+    reset_calls: list[uuid.UUID] = []
+    close_cleanup_calls: list[uuid.UUID] = []
+
+    async def _record_reset(*, db, tenant_id, runner_id) -> None:
+        reset_calls.append(runner_id)
+
+    monkeypatch.setattr(
+        channel_lifecycle,
+        "_reset_runner_terminal_state",
+        _record_reset,
+    )
+    monkeypatch.setattr(
+        channel_lifecycle,
+        "_cleanup_runner_terminal_state",
+        lambda *, db, tenant_id, runner_id: close_cleanup_calls.append(runner_id),
+    )
+
+    old_session = manager.open_session(auth)
+    await manager.reset_terminal_state(old_session)
+    new_session = manager.open_session(auth)
+    await manager.reset_terminal_state(new_session)
+    assert reset_calls == [runner.id, runner.id]
+    assert not manager.is_session_current(old_session)
+    assert manager.is_session_current(new_session)
+
+    manager.close_session(old_session)
+    assert close_cleanup_calls == []
+
+    manager.close_session(new_session)
+    assert close_cleanup_calls == [runner.id]
+
+
 def test_runner_channel_manager_close_session_tolerates_deleted_runner() -> None:
     db = _build_session()
     tenant, runner = _seed_runner(db)
@@ -736,10 +798,13 @@ def test_runner_channel_manager_close_session_tolerates_deleted_runner() -> None
     frame_buffer.reset()
 
 
-def test_runner_channel_manager_close_session_cleans_runner_terminal_sessions_and_buffers() -> None:
+def test_runner_channel_manager_close_session_cleans_runner_terminal_sessions_and_buffers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     db = _build_session()
     tenant, runner = _seed_runner(db)
     task = _seed_runner_assigned_task(db, tenant=tenant, runner=runner)
+    task_without_terminal = _seed_runner_assigned_task(db, tenant=tenant, runner=runner)
     manager = RunnerChannelManager(db, lease_ttl_seconds=30)
     credential_id = _issue_credential_id(db, tenant_id=tenant.id, runner_id=runner.id)
     session = manager.open_session(
@@ -749,6 +814,12 @@ def test_runner_channel_manager_close_session_cleans_runner_terminal_sessions_an
             credential_id=credential_id,
             allowed_protocol_versions=("runner_control.v1",),
         )
+    )
+    shell_session_service = _RecordingShellSessionService()
+    monkeypatch.setattr(
+        shell_session_port,
+        "get_shell_session_service",
+        lambda: shell_session_service,
     )
 
     frame_buffer = get_runner_terminal_frame_buffer()
@@ -777,6 +848,10 @@ def test_runner_channel_manager_close_session_cleans_runner_terminal_sessions_an
     manager.close_session(session)
     db.commit()
 
+    assert sorted(shell_session_service.closed_tasks) == [
+        (tenant.id, task.id),
+        (tenant.id, task_without_terminal.id),
+    ]
     assert terminal_session_manager.get_session("runner-terminal-session") is None
     frames = frame_buffer.read_frames(
         tenant_id=tenant.id,
@@ -788,6 +863,30 @@ def test_runner_channel_manager_close_session_cleans_runner_terminal_sessions_an
     assert frames["frames"] == []
 
     frame_buffer.reset()
+
+
+@pytest.mark.asyncio
+async def test_runner_terminal_cleanup_schedules_from_running_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    db = _build_session()
+    tenant, runner = _seed_runner(db)
+    task = _seed_runner_assigned_task(db, tenant=tenant, runner=runner)
+    shell_session_service = _RecordingShellSessionService()
+    monkeypatch.setattr(
+        shell_session_port,
+        "get_shell_session_service",
+        lambda: shell_session_service,
+    )
+
+    _cleanup_runner_terminal_state(
+        db=db,
+        tenant_id=tenant.id,
+        runner_id=runner.id,
+    )
+    await asyncio.sleep(0)
+
+    assert shell_session_service.closed_tasks == [(tenant.id, task.id)]
 
 
 def test_runner_channel_manager_open_session_reconciles_expired_runtime_job(monkeypatch) -> None:
@@ -1468,6 +1567,71 @@ def test_runner_channel_manager_accepts_result_shaped_remote_runtime_dual_event_
     assert refreshed_runtime_vpn_status_job.status == "succeeded"
 
 
+def test_runner_channel_manager_accepts_result_before_delivery_bookkeeping_completes() -> None:
+    db = _build_session()
+    tenant, runner = _seed_runner(db)
+    task = _seed_runner_assigned_task(db, tenant=tenant, runner=runner)
+    runtime_status_job = _seed_runtime_job(
+        db,
+        tenant=tenant,
+        runner=runner,
+        task=task,
+        job_type="runtime.status",
+    )
+    runtime_status_job.status = "dispatching"
+    db.flush()
+
+    manager = RunnerChannelManager(db)
+    credential_id = _issue_credential_id(db, tenant_id=tenant.id, runner_id=runner.id)
+    session = manager.open_session(
+        RunnerChannelAuthContext(
+            tenant_id=tenant.id,
+            runner_id=runner.id,
+            credential_id=credential_id,
+            allowed_protocol_versions=("runner_control.v1", "remote_runtime.v1"),
+        )
+    )
+    manager.handle_inbound_json(
+        session,
+        _envelope_json(
+            tenant_id=tenant.id,
+            runner_id=runner.id,
+            message_type="runner.hello",
+            payload={"version": "1.9.0", "capabilities": ["docker"], "labels": {"site": "hq"}},
+        ),
+    )
+
+    result = manager.handle_inbound_json(
+        session,
+        _envelope_json(
+            tenant_id=tenant.id,
+            runner_id=runner.id,
+            message_type="runtime.status",
+            schema_version="remote_runtime.v1",
+            runtime_job_id=str(runtime_status_job.id),
+            task_id=task.id,
+            payload={
+                "operation_id": "runtime-status-fast-result",
+                "status": "succeeded",
+                "error_code": None,
+                "error_message": None,
+                "result": {"job_status": "running", "container_status": "running"},
+            },
+        ),
+    )
+    db.commit()
+
+    assert result.response_envelopes == ()
+    refreshed = db.execute(
+        select(RuntimeJob).where(RuntimeJob.id == runtime_status_job.id)
+    ).scalar_one()
+    assert refreshed.status == "succeeded"
+    assert refreshed.result_json["result"] == {
+        "job_status": "running",
+        "container_status": "running",
+    }
+
+
 def test_runner_channel_manager_rejects_remote_runtime_event_with_operation_family_mismatch() -> None:
     db = _build_session()
     tenant, runner = _seed_runner(db)
@@ -1909,10 +2073,10 @@ def test_runner_channel_manager_runtime_retired_triggers_retirement_cleanup(
         ),
     )
 
-    cleaned_task_ids: list[int] = []
+    cleaned_tasks: list[tuple[int, int]] = []
 
-    async def _fake_cleanup_runtime_stream_state(*, task_id: int) -> None:
-        cleaned_task_ids.append(task_id)
+    async def _fake_cleanup_runtime_stream_state(*, tenant_id: int, task_id: int) -> None:
+        cleaned_tasks.append((tenant_id, task_id))
 
     monkeypatch.setattr(
         "backend.services.task.retirement_service.TaskRetirementService.cleanup_runtime_stream_state",
@@ -1944,7 +2108,7 @@ def test_runner_channel_manager_runtime_retired_triggers_retirement_cleanup(
     refreshed_task = db.execute(select(Task).where(Task.id == task.id)).scalar_one()
     assert refreshed_runtime_job.status == "succeeded"
     assert refreshed_task.status == "stopped"
-    assert cleaned_task_ids == [task.id]
+    assert cleaned_tasks == [(tenant.id, task.id)]
 
 
 def test_runner_channel_manager_rejects_remote_runtime_event_labeled_with_runner_control_schema() -> None:

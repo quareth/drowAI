@@ -37,7 +37,7 @@ from backend.services.agent_runs.dispatch_service import (
 )
 from backend.services.agent_runs.launcher import (
     SubagentRunCancelled,
-    SubagentRunFailed,
+    SubagentRunInterrupted,
     SubagentRunPaused,
 )
 from backend.services.agent_runs.parent_handoff_coordinator import ParentHandoffOutcome
@@ -327,14 +327,14 @@ class _ScriptedLauncher:
                         final_state=_final_state(assignment.agent_run_id)
                     )
                 )
-            if mode == "failed_exception":
-                await self.registry.mark_failed(
+            if mode == "interrupted_exception":
+                await self.registry.mark_interrupted(
                     tenant_id=assignment.tenant_id,
                     task_id=assignment.task_id,
                     agent_run_id=assignment.agent_run_id,
-                    safe_error="Subagent worker failed",
+                    safe_error="Subagent worker interrupted",
                 )
-                raise SubagentRunFailed(
+                raise SubagentRunInterrupted(
                     "Subagent graph completed without a valid terminal result",
                     GraphExecutionResult(final_state=_final_state(assignment.agent_run_id)),
                 )
@@ -443,7 +443,7 @@ async def test_empty_plan_returns_default_result_and_capacity_block_fails_closed
     )
 
     assert blocked.stop is not None
-    assert blocked.stop.status == "failed"
+    assert blocked.stop.status == "interrupted"
     assert blocked.stop.invocation == blocked_plan[0]
     assert blocked.child_completions == ()
     assert len(launcher.calls) == 0
@@ -569,7 +569,7 @@ async def test_agent_result_conversion_and_invalid_launcher_results_fail_closed(
         process_ready_handoffs=_no_parent_handoff,
     )
     assert invalid.stop is not None
-    assert invalid.stop.status == "failed"
+    assert invalid.stop.status == "interrupted"
     assert invalid.stop.usage == ()
 
     non_awaitable_task = replace(
@@ -584,7 +584,7 @@ async def test_agent_result_conversion_and_invalid_launcher_results_fail_closed(
         process_ready_handoffs=_no_parent_handoff,
     )
     assert non_awaitable.stop is not None
-    assert non_awaitable.stop.status == "failed"
+    assert non_awaitable.stop.status == "interrupted"
     assert non_awaitable.stop.usage == ()
 
 
@@ -666,16 +666,27 @@ async def test_pause_parent_barrier_receives_settled_sibling_completion() -> Non
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("mode", "expected_outcome"),
-    [
-        ("cancelled_exception", "cancelled"),
-        ("failed_exception", "failed"),
-    ],
-)
-async def test_terminal_launcher_exceptions_recover_registry_completion_and_usage(
+async def test_cancelled_launcher_exception_recovers_registry_completion_and_usage() -> None:
+    registry = ProcessLocalAgentRunRegistry()
+    launcher = _ScriptedLauncher(registry, scripts={"run-1": "cancelled_exception"})
+    service, _registry, _launcher = _service(registry=registry, launcher=launcher)
+
+    result = await service.dispatch(
+        _plan("pathfinder"),
+        _runtime_config(),
+        parent_turn_sequence=5,
+        process_ready_handoffs=_no_parent_handoff,
+    )
+
+    assert result.stop is None
+    assert result.child_completions[0].result.outcome == "cancelled"
+    assert result.child_completions[0].usage_records[0]["agent_run_id"] == "run-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["interrupted_exception", "unexpected_exception"])
+async def test_child_infrastructure_exception_returns_interrupted_stop(
     mode: str,
-    expected_outcome: str,
 ) -> None:
     registry = ProcessLocalAgentRunRegistry()
     launcher = _ScriptedLauncher(registry, scripts={"run-1": mode})
@@ -688,32 +699,17 @@ async def test_terminal_launcher_exceptions_recover_registry_completion_and_usag
         process_ready_handoffs=_no_parent_handoff,
     )
 
-    assert result.stop is None
-    assert result.child_completions[0].result.outcome == expected_outcome
-    assert result.child_completions[0].usage_records[0]["agent_run_id"] == "run-1"
-
-
-@pytest.mark.asyncio
-async def test_unexpected_child_exception_returns_failed_stop_without_usage() -> None:
-    registry = ProcessLocalAgentRunRegistry()
-    launcher = _ScriptedLauncher(registry, scripts={"run-1": "unexpected_exception"})
-    service, _registry, _launcher = _service(registry=registry, launcher=launcher)
-
-    result = await service.dispatch(
-        _plan("pathfinder"),
-        _runtime_config(),
-        parent_turn_sequence=5,
-        process_ready_handoffs=_no_parent_handoff,
-    )
-
     assert result.stop is not None
-    assert result.stop.status == "failed"
-    assert result.stop.usage == ()
+    assert result.stop.status == "interrupted"
+    if mode == "interrupted_exception":
+        assert result.stop.usage[0].metadata.agent_run_id == "run-1"
+    else:
+        assert result.stop.usage == ()
     assert result.child_completions == ()
 
 
 @pytest.mark.asyncio
-async def test_later_launch_failure_settles_earlier_siblings_before_failed_publish() -> None:
+async def test_later_launch_interruption_settles_siblings_before_interrupted_publish() -> None:
     trace: list[tuple[str, str]] = []
     lifecycle_events: list[tuple[int, str, str]] = []
     registry = ProcessLocalAgentRunRegistry()
@@ -735,22 +731,19 @@ async def test_later_launch_failure_settles_earlier_siblings_before_failed_publi
         process_ready_handoffs=_no_parent_handoff,
     )
 
-    assert result.stop is None
-    assert [completion.result.agent_run_id for completion in result.child_completions] == [
-        "run-1",
-        "run-2",
-    ]
-    assert result.child_completions[0].result.outcome == "cancelled"
-    assert result.child_completions[1].result.outcome == "failed"
+    assert result.stop is not None
+    assert result.stop.status == "interrupted"
+    assert result.stop.invocation.assignment.agent_run_id == "run-2"
+    assert result.child_completions == ()
     assert trace.index(("task_cancelled", "run-1")) < lifecycle_events.index(
-        (TASK_ID, "run-2", "failed")
+        (TASK_ID, "run-2", "interrupted")
     )
     assert [event[1:] for event in lifecycle_events] == [
         ("run-1", "queued"),
         ("run-1", "running"),
         ("run-2", "queued"),
         ("run-2", "running"),
-        ("run-2", "failed"),
+        ("run-2", "interrupted"),
     ]
 
 
@@ -985,12 +978,10 @@ async def test_followup_stable_success_order_and_batch_launch_failure() -> None:
     )
     failure_launcher.scripts[failing_run_id] = "launch_error"
 
-    failed = await failure_service.dispatch_followup(
-        _runtime_config(),
-        parent_turn_id=PARENT_TURN_ID,
-        agent_handoff=_handoff("pathfinder", "Bounded launch failure."),
-        decision_id="decision-failure",
-    )
-
-    assert failed.agent_run_ids == (failing_run_id,)
-    assert failed.launched_agent_run_ids == ()
+    with pytest.raises(RuntimeError, match="interrupted"):
+        await failure_service.dispatch_followup(
+            _runtime_config(),
+            parent_turn_id=PARENT_TURN_ID,
+            agent_handoff=_handoff("pathfinder", "Bounded launch failure."),
+            decision_id="decision-failure",
+        )

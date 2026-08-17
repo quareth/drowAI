@@ -12,6 +12,7 @@ import inspect
 import json
 import signal
 import base64
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +24,8 @@ from backend.services.docker.runtime_config import contains_llm_secret_fields
 from backend.services.unified_docker_service import unified_docker_service
 from backend.services.runtime_provider.local_file_comm_cancel import append_file_comm_cancellations
 from backend.services.workspace.manager import WorkspaceManager
+from runtime_shared.docker_contracts import CONTAINER_WORKSPACE_PATH
+from runtime_shared.terminal_contracts import DedicatedExecDrainState
 from runtime_shared.workspace_write_mode import (
     WORKSPACE_WRITE_MODE_APPEND,
     WORKSPACE_WRITE_MODE_WRITE,
@@ -43,6 +46,7 @@ from .contracts import (
 from .provider import TaskExecutionRuntimeProvider
 
 _Adapter = Callable[[RuntimeOperationRequest], Any]
+_EXEC_EXIT_DRAIN_GRACE_SECONDS = 0.05
 
 
 class LocalDockerRuntimeProvider(TaskExecutionRuntimeProvider):
@@ -58,6 +62,7 @@ class LocalDockerRuntimeProvider(TaskExecutionRuntimeProvider):
         self._docker_service = docker_service
         self._workspace_manager = workspace_manager or WorkspaceManager()
         self._operation_adapters = dict(operation_adapters or {})
+        self._terminal_exit_drain_states: dict[str, DedicatedExecDrainState] = {}
 
     @property
     def provider_name(self) -> str:
@@ -841,6 +846,10 @@ class LocalDockerRuntimeProvider(TaskExecutionRuntimeProvider):
             shell=request.payload.get("shell", "/bin/bash"),
             cols=int(request.payload.get("cols", 80)),
             rows=int(request.payload.get("rows", 24)),
+            command=request.payload.get("command"),
+            cwd=str(request.payload.get("cwd") or CONTAINER_WORKSPACE_PATH),
+            env=dict(request.payload.get("env") or {}),
+            interactive=bool(request.payload.get("interactive", True)),
         )
         return {
             "success": True,
@@ -869,6 +878,7 @@ class LocalDockerRuntimeProvider(TaskExecutionRuntimeProvider):
 
     async def _read_terminal_output(self, request: RuntimeOperationRequest) -> dict[str, Any]:
         socket_obj = request.payload.get("socket")
+        exec_id = request.payload.get("exec_id")
         if not socket_obj:
             return {"success": False, "error": "missing_socket"}
         import asyncio
@@ -881,12 +891,80 @@ class LocalDockerRuntimeProvider(TaskExecutionRuntimeProvider):
             pass
         size = int(request.payload.get("size", 4096))
         timeout = request.payload.get("timeout")
-        read_coro = loop.sock_recv(raw_sock, size)
-        if timeout is not None:
-            data = await asyncio.wait_for(read_coro, timeout=float(timeout))
+        timeout_seconds = float(timeout) if timeout is not None else None
+        eof = False
+        if timeout_seconds is not None and timeout_seconds <= 0:
+            try:
+                data = raw_sock.recv(size)
+            except (BlockingIOError, InterruptedError):
+                data = b""
+            else:
+                eof = data == b""
+        elif timeout_seconds is not None:
+            try:
+                data = await asyncio.wait_for(
+                    loop.sock_recv(raw_sock, size),
+                    timeout=timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                return self._local_terminal_process_result(exec_id, data=b"")
+            eof = data == b""
         else:
-            data = await read_coro
-        return {"success": True, "data": data}
+            data = await loop.sock_recv(raw_sock, size)
+            eof = data == b""
+        if data:
+            return {"success": True, "data": data, "eof": False, "process_status": "running"}
+        return self._local_terminal_process_result(exec_id, data=b"", socket_eof=eof)
+
+    def _local_terminal_process_result(
+        self,
+        exec_id: object,
+        *,
+        data: bytes,
+        socket_eof: bool = False,
+    ) -> dict[str, Any]:
+        """Resolve a local Docker exec terminal state without parsing output."""
+        if not isinstance(exec_id, str) or not exec_id:
+            return {
+                "success": True,
+                "data": data,
+                "eof": socket_eof,
+                "process_status": "failed" if socket_eof else "running",
+            }
+        try:
+            inspection = self._docker_service.inspect_exec(exec_id)
+        except Exception:
+            return {
+                "success": True,
+                "data": data,
+                "eof": socket_eof,
+                "process_status": "failed" if socket_eof else "running",
+            }
+        exit_code_raw = inspection.get("ExitCode")
+        try:
+            exit_code = int(exit_code_raw) if exit_code_raw is not None else None
+        except (TypeError, ValueError):
+            exit_code = None
+        drain_state = self._terminal_exit_drain_states.setdefault(
+            exec_id,
+            DedicatedExecDrainState(),
+        )
+        result = drain_state.observe(
+            running=bool(inspection.get("Running")),
+            socket_eof=socket_eof,
+            exit_code=exit_code,
+            now=time.monotonic(),
+            drain_grace_seconds=_EXEC_EXIT_DRAIN_GRACE_SECONDS,
+        )
+        if result.eof:
+            self._terminal_exit_drain_states.pop(exec_id, None)
+        return {
+            "success": True,
+            "data": data,
+            "eof": result.eof,
+            "process_status": result.process_status,
+            "exit_code": result.exit_code,
+        }
 
     def _resize_terminal_session(self, request: RuntimeOperationRequest) -> dict[str, Any]:
         exec_id = request.payload.get("exec_id")
@@ -902,6 +980,9 @@ class LocalDockerRuntimeProvider(TaskExecutionRuntimeProvider):
         return {"success": True}
 
     def _close_terminal_session(self, request: RuntimeOperationRequest) -> dict[str, Any]:
+        session_id = request.payload.get("session_id")
+        if isinstance(session_id, str):
+            self._terminal_exit_drain_states.pop(session_id, None)
         socket_obj = request.payload.get("socket")
         if socket_obj is not None:
             raw_sock = getattr(socket_obj, "_sock", socket_obj)

@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from agent.graph import InteractiveState
 from agent.subagents.registry import SubagentRegistry
 from agent.graph.context.contracts import ActiveAgentRun
 from backend.services.agent_runs.dispatch_contracts import (
@@ -76,9 +77,16 @@ class SubagentHandler(BaseLangGraphHandler):
         self._parent_finalizer = parent_finalizer
 
     async def handle(
-        self, runtime_config: LangGraphRuntimeConfig
+        self,
+        runtime_config: LangGraphRuntimeConfig,
+        *,
+        continuation_state: InteractiveState | None = None,
     ) -> LangGraphChatResult:
-        """Run requested subagents, hand bounded results to the parent, then finalize."""
+        """Run requested subagents, hand bounded results to the parent, then finalize.
+
+        ``continuation_state`` preserves already-accumulated direct-execution
+        progress when PTR delegates through the classifier handoff pipeline.
+        """
         chat_inputs = runtime_config.chat_inputs
         turn = ensure_turn_identity(runtime_config, logger_=logger)
 
@@ -89,22 +97,28 @@ class SubagentHandler(BaseLangGraphHandler):
         )
         tenant_id = int(runtime_config.metadata["tenant_id"])
         child_completion_by_run_id: dict[str, AgentRunCompletion] = {}
+        parent_continuation_state = continuation_state
 
         async def run_parent_continuation(
             handoff: Any,
             _active_runs: tuple[ActiveAgentRun, ...],
         ) -> LangGraphChatResult:
+            nonlocal parent_continuation_state
             child_completions = await self._dispatch_service.completions_for_handoff(
                 handoff,
                 tenant_id=tenant_id,
                 task_id=chat_inputs.task_id,
                 completion_by_run_id=child_completion_by_run_id,
             )
-            return await self._parent_finalizer.finalize(
+            result = await self._parent_finalizer.finalize(
                 runtime_config,
                 turn=turn,
                 child_completions=child_completions,
+                continuation_state=parent_continuation_state,
             )
+            if result.interactive_state is not None:
+                parent_continuation_state = result.interactive_state
+            return result
 
         async def process_ready_handoffs(
             child_completions: tuple[AgentRunCompletion, ...],
@@ -131,6 +145,19 @@ class SubagentHandler(BaseLangGraphHandler):
                 wait_for_initial_handoff=wait_for_initial_handoff,
             )
 
+        async def project_ready_handoffs(
+            child_completions: tuple[AgentRunCompletion, ...],
+        ) -> None:
+            for completion in child_completions:
+                child_completion_by_run_id[completion.result.agent_run_id] = completion
+            await self._parent_handoff_coordinator.project_ready_handoffs(
+                tenant_id=tenant_id,
+                task_id=chat_inputs.task_id,
+                conversation_id=chat_inputs.conversation_id or "",
+                parent_turn_id=str(turn.turn_id),
+                metadata=runtime_config.metadata,
+            )
+
         dispatch_result = await self._dispatch_service.dispatch(
             plan,
             runtime_config,
@@ -138,6 +165,7 @@ class SubagentHandler(BaseLangGraphHandler):
                 turn.turn_number if isinstance(turn.turn_number, int) else None
             ),
             process_ready_handoffs=process_ready_handoffs,
+            project_ready_handoffs=project_ready_handoffs,
         )
         if dispatch_result.stop is not None:
             return _ack_for_dispatch_stop(
@@ -192,7 +220,7 @@ def _ack_result(
     display_name = agent_display_name
     return LangGraphChatResult(
         final_text={
-            "failed": f"{display_name} could not complete the subagent run.",
+            "interrupted": f"{display_name} subagent infrastructure was interrupted.",
             "cancelled": f"{display_name} subagent run was cancelled.",
             "waiting_for_approval": f"{display_name} is waiting for tool approval.",
             "running": (

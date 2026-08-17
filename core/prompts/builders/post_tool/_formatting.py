@@ -116,12 +116,15 @@ def format_artifact_refs(refs: Sequence[Any]) -> str:
         label = str(item.get("label") or "").strip()
         tool_name = str(item.get("tool_name") or "").strip()
         artifact_kind = str(item.get("artifact_kind") or "").strip()
-        path = str(item.get("path") or "").strip()
+        path = str(item.get("path") or item.get("relative_path") or "").strip()
         descriptor = label or f"{artifact_kind or 'artifact'} from {tool_name or 'unknown_tool'}"
+        details = []
         if artifact_id:
-            lines.append(f"- {descriptor} (artifact_id={artifact_id})")
-        elif path:
-            lines.append(f"- {descriptor} (path={path})")
+            details.append(f"artifact_id={artifact_id}")
+        if path:
+            details.append(f"path={path}")
+        if details:
+            lines.append(f"- {descriptor} ({', '.join(details)})")
         else:
             lines.append(f"- {descriptor}")
     if not lines:

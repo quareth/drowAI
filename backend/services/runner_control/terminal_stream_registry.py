@@ -23,6 +23,7 @@ from runtime_shared.runner_protocol import (
     RunnerEnvelope,
     RunnerMessageType,
 )
+from runtime_shared.terminal_contracts import TerminalReadResult
 
 TERMINAL_STREAM_CAPABILITY = "terminal_stream_v1"
 _STREAM_MESSAGE_PREFIX = "terminal-stream-"
@@ -30,11 +31,11 @@ _MAX_BUFFER_BYTES = 512 * 1024
 _MAX_FRAME_BYTES = RUNNER_TERMINAL_FRAME_MAX_BYTES
 
 ChannelSender = Callable[[RunnerEnvelope], Awaitable[None]]
-FrameSink = Callable[..., Awaitable[bool]]
 
 
 @dataclass(slots=True)
 class _ChannelBinding:
+    connection_id: str
     sender: ChannelSender
 
 
@@ -44,6 +45,10 @@ class _StreamBuffer:
     byte_count: int = 0
     event: asyncio.Event = field(default_factory=asyncio.Event)
     closed: bool = False
+    output_dropped: bool = False
+    eof: bool = False
+    process_status: str | None = None
+    exit_code: int | None = None
 
 
 class CloudTerminalStreamClient:
@@ -108,7 +113,15 @@ class CloudTerminalStreamClient:
 
     async def read_output(self, size: int = 4096, timeout: float | None = None) -> bytes:
         """Read buffered stream frames up to `size` bytes."""
-        return await self._registry.read_stream_output(
+        return (await self.read_output_result(size=size, timeout=timeout)).data
+
+    async def read_output_result(
+        self,
+        size: int = 4096,
+        timeout: float | None = None,
+    ) -> TerminalReadResult:
+        """Read buffered frames with explicit transport-loss metadata."""
+        return await self._registry.read_stream_output_result(
             tenant_id=self._tenant_id,
             runner_id=self._runner_id,
             task_id=self._task_id,
@@ -178,46 +191,87 @@ class RunnerTerminalStreamRegistry:
     def __init__(self) -> None:
         self._channels: dict[tuple[int, UUID], _ChannelBinding] = {}
         self._buffers: dict[tuple[int, UUID, int, str], _StreamBuffer] = {}
-        self._frame_sink: FrameSink | None = None
+        self._authorized_streams: set[tuple[int, UUID, int, str]] = set()
         self._lock = RLock()
-
-    def register_frame_sink(self, sink: FrameSink) -> None:
-        """Register the active backend terminal-session frame sink."""
-        with self._lock:
-            self._frame_sink = sink
-
-    def unregister_frame_sink(self, sink: FrameSink) -> None:
-        """Unregister the active frame sink when it matches the provided sink."""
-        with self._lock:
-            if self._frame_sink is sink:
-                self._frame_sink = None
 
     def register_channel(
         self,
         *,
         tenant_id: int,
         runner_id: UUID,
+        connection_id: str = "legacy",
         sender: ChannelSender,
     ) -> None:
         """Register the active websocket sender for one runner channel."""
         with self._lock:
-            self._channels[(int(tenant_id), runner_id)] = _ChannelBinding(sender=sender)
+            self._channels[(int(tenant_id), runner_id)] = _ChannelBinding(
+                connection_id=str(connection_id).strip(),
+                sender=sender,
+            )
 
     def has_channel(self, *, tenant_id: int, runner_id: UUID) -> bool:
         """Return whether the runner has an active terminal stream channel."""
         with self._lock:
             return (int(tenant_id), runner_id) in self._channels
 
-    def unregister_channel(self, *, tenant_id: int, runner_id: UUID) -> None:
-        """Drop channel and close all stream buffers for the runner."""
+    def is_current_channel(
+        self,
+        *,
+        tenant_id: int,
+        runner_id: UUID,
+        connection_id: str,
+    ) -> bool:
+        """Return whether a connection still owns this process-local route."""
+        with self._lock:
+            binding = self._channels.get((int(tenant_id), runner_id))
+            return binding is not None and binding.connection_id == str(connection_id).strip()
+
+    def unregister_channel(
+        self,
+        *,
+        tenant_id: int,
+        runner_id: UUID,
+        connection_id: str | None = None,
+    ) -> None:
+        """Drop a matching channel and close its runner stream buffers."""
         key = (int(tenant_id), runner_id)
         with self._lock:
+            binding = self._channels.get(key)
+            if binding is None:
+                return
+            if connection_id is not None and binding.connection_id != str(connection_id).strip():
+                return
             self._channels.pop(key, None)
             stream_keys = [stream_key for stream_key in self._buffers if stream_key[:2] == key]
             buffers = [self._buffers.pop(stream_key) for stream_key in stream_keys]
+            self._authorized_streams.difference_update(
+                {
+                    stream_key
+                    for stream_key in self._authorized_streams
+                    if stream_key[:2] == key
+                }
+            )
         for buffer in buffers:
             buffer.closed = True
             buffer.event.set()
+
+    def authorize_stream(
+        self,
+        *,
+        tenant_id: int,
+        runner_id: UUID,
+        task_id: int,
+        session_id: str,
+    ) -> None:
+        """Authorize frames after a validated terminal-open result."""
+        key = self._stream_key(
+            tenant_id=tenant_id,
+            runner_id=runner_id,
+            task_id=task_id,
+            session_id=session_id,
+        )
+        with self._lock:
+            self._authorized_streams.add(key)
 
     def register_stream(
         self,
@@ -226,8 +280,8 @@ class RunnerTerminalStreamRegistry:
         runner_id: UUID,
         task_id: int,
         session_id: str,
-    ) -> None:
-        """Create an in-memory stream buffer for a runner terminal session."""
+    ) -> bool:
+        """Attach a consumer only to a stream authorized by terminal open."""
         key = self._stream_key(
             tenant_id=tenant_id,
             runner_id=runner_id,
@@ -235,7 +289,10 @@ class RunnerTerminalStreamRegistry:
             session_id=session_id,
         )
         with self._lock:
+            if key not in self._authorized_streams:
+                return False
             self._buffers.setdefault(key, _StreamBuffer())
+        return True
 
     def unregister_stream(
         self,
@@ -253,8 +310,31 @@ class RunnerTerminalStreamRegistry:
             session_id=session_id,
         )
         with self._lock:
+            self._authorized_streams.discard(key)
             buffer = self._buffers.pop(key, None)
         if buffer is not None:
+            buffer.closed = True
+            buffer.event.set()
+
+    def clear_task(self, *, tenant_id: int, task_id: int) -> None:
+        """Remove all authorized and buffered streams for one task."""
+        scoped_tenant_id = int(tenant_id)
+        scoped_task_id = int(task_id)
+        with self._lock:
+            stream_keys = [
+                key
+                for key in self._buffers
+                if key[0] == scoped_tenant_id and key[2] == scoped_task_id
+            ]
+            buffers = [self._buffers.pop(key) for key in stream_keys]
+            self._authorized_streams.difference_update(
+                {
+                    key
+                    for key in self._authorized_streams
+                    if key[0] == scoped_tenant_id and key[2] == scoped_task_id
+                }
+            )
+        for buffer in buffers:
             buffer.closed = True
             buffer.event.set()
 
@@ -288,6 +368,9 @@ class RunnerTerminalStreamRegistry:
         task_id: int,
         session_id: str,
         data: str,
+        eof: bool = False,
+        process_status: str | None = None,
+        exit_code: int | None = None,
     ) -> bool:
         """Append a known stream-mode frame and wake readers."""
         key = self._stream_key(
@@ -300,14 +383,25 @@ class RunnerTerminalStreamRegistry:
         if len(encoded) > _MAX_FRAME_BYTES:
             return False
         with self._lock:
-            buffer = self._buffers.get(key)
-            if buffer is None or buffer.closed:
+            if key not in self._authorized_streams:
                 return False
-            buffer.frames.append(encoded)
-            buffer.byte_count += len(encoded)
+            buffer = self._buffers.get(key)
+            if buffer is None:
+                buffer = _StreamBuffer()
+                self._buffers[key] = buffer
+            if buffer.closed:
+                return False
+            if encoded:
+                buffer.frames.append(encoded)
+                buffer.byte_count += len(encoded)
+            if eof:
+                buffer.eof = True
+                buffer.process_status = process_status
+                buffer.exit_code = exit_code
             while buffer.byte_count > _MAX_BUFFER_BYTES and buffer.frames:
                 removed = buffer.frames.popleft()
                 buffer.byte_count -= len(removed)
+                buffer.output_dropped = True
         buffer.event.set()
         return True
 
@@ -319,32 +413,21 @@ class RunnerTerminalStreamRegistry:
         task_id: int,
         session_id: str,
         data: str,
+        eof: bool = False,
+        process_status: str | None = None,
+        exit_code: int | None = None,
     ) -> bool:
-        """Append a frame and push it directly to the terminal manager when possible."""
-        encoded = str(data or "").encode("utf-8", errors="replace")
-        accepted = self.append_stream_frame(
+        """Append a known frame once for delivery through the stream reader."""
+        return self.append_stream_frame(
             tenant_id=tenant_id,
             runner_id=runner_id,
             task_id=task_id,
             session_id=session_id,
-            data=encoded.decode("utf-8", errors="replace"),
+            data=data,
+            eof=eof,
+            process_status=process_status,
+            exit_code=exit_code,
         )
-        if not accepted:
-            return False
-        with self._lock:
-            sink = self._frame_sink
-        if sink is not None:
-            try:
-                await sink(
-                    tenant_id=int(tenant_id),
-                    runner_id=runner_id,
-                    task_id=int(task_id),
-                    provider_session_id=str(session_id).strip(),
-                    data=encoded,
-                )
-            except Exception:
-                pass
-        return True
 
     async def read_stream_output(
         self,
@@ -357,6 +440,28 @@ class RunnerTerminalStreamRegistry:
         timeout: float | None,
     ) -> bytes:
         """Read buffered stream bytes with optional timeout."""
+        return (
+            await self.read_stream_output_result(
+                tenant_id=tenant_id,
+                runner_id=runner_id,
+                task_id=task_id,
+                session_id=session_id,
+                size=size,
+                timeout=timeout,
+            )
+        ).data
+
+    async def read_stream_output_result(
+        self,
+        *,
+        tenant_id: int,
+        runner_id: UUID,
+        task_id: int,
+        session_id: str,
+        size: int,
+        timeout: float | None,
+    ) -> TerminalReadResult:
+        """Read buffered bytes and report whether bounded buffering dropped output."""
         key = self._stream_key(
             tenant_id=tenant_id,
             runner_id=runner_id,
@@ -369,7 +474,10 @@ class RunnerTerminalStreamRegistry:
             with self._lock:
                 buffer = self._buffers.get(key)
                 if buffer is None or buffer.closed:
-                    return b""
+                    return TerminalReadResult(
+                        ok=False,
+                        error_code="terminal_stream_unavailable",
+                    )
                 if buffer.frames:
                     chunks: list[bytes] = []
                     remaining = safe_size
@@ -386,16 +494,33 @@ class RunnerTerminalStreamRegistry:
                         remaining = 0
                     if not buffer.frames:
                         buffer.event.clear()
-                    return b"".join(chunks)
+                    truncated = buffer.output_dropped
+                    buffer.output_dropped = False
+                    return TerminalReadResult(
+                        ok=True,
+                        data=b"".join(chunks),
+                        truncated=truncated,
+                    )
+                if buffer.output_dropped:
+                    buffer.output_dropped = False
+                    buffer.event.clear()
+                    return TerminalReadResult(ok=True, truncated=True)
+                if buffer.eof:
+                    return TerminalReadResult(
+                        ok=True,
+                        eof=True,
+                        process_status=buffer.process_status,
+                        exit_code=buffer.exit_code,
+                    )
                 event = buffer.event
 
             if deadline is not None and asyncio.get_running_loop().time() >= deadline:
-                return b""
+                return TerminalReadResult(ok=True)
             wait_timeout = None if deadline is None else max(0.0, deadline - asyncio.get_running_loop().time())
             try:
                 await asyncio.wait_for(event.wait(), timeout=wait_timeout)
             except TimeoutError:
-                return b""
+                return TerminalReadResult(ok=True)
             event.clear()
 
     @staticmethod
@@ -419,7 +544,6 @@ def get_runner_terminal_stream_registry() -> RunnerTerminalStreamRegistry:
 
 __all__ = [
     "CloudTerminalStreamClient",
-    "FrameSink",
     "RunnerTerminalStreamRegistry",
     "TERMINAL_STREAM_CAPABILITY",
     "get_runner_terminal_stream_registry",

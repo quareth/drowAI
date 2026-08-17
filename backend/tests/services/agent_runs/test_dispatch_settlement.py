@@ -13,11 +13,12 @@ from typing import Any
 
 import pytest
 
+from backend.services.agent_runs import dispatch_settlement as dispatch_settlement_module
 from backend.services.agent_runs.completion import AgentRunCompletion
 from backend.services.agent_runs.dispatch_settlement import DispatchSettlement
 from backend.services.agent_runs.launcher import (
     SubagentRunCancelled,
-    SubagentRunFailed,
+    SubagentRunInterrupted,
     SubagentRunPaused,
 )
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
@@ -55,6 +56,19 @@ class _TerminalAwaitable:
         if self._raise_result:
             raise self._result
         return self._result
+
+
+class _ShellCleanupService:
+    def __init__(self) -> None:
+        self.close_calls: list[dict[str, Any]] = []
+
+    async def close_owner_sessions(self, **kwargs: Any) -> None:
+        self.close_calls.append(dict(kwargs))
+
+
+class _FailingShellCleanupService:
+    async def close_owner_sessions(self, **_kwargs: Any) -> None:
+        raise RuntimeError("cleanup failed")
 
 
 @pytest.mark.asyncio
@@ -114,19 +128,19 @@ async def test_require_child_task_result_preserves_exception_identity() -> None:
 
 
 @pytest.mark.asyncio
-async def test_terminal_exception_recovers_failed_and_cancelled_usage() -> None:
+async def test_terminal_exception_recovers_cancelled_but_not_interrupted_handoff() -> None:
     registry = ProcessLocalAgentRunRegistry()
     settlement = DispatchSettlement(registry=registry)
-    failed_item, cancelled_item = _plan("pathfinder", "cartographer")
+    interrupted_item, cancelled_item = _plan("pathfinder", "cartographer")
     await registry.register(
-        failed_item.assignment,
-        graph_thread_id=failed_item.graph_thread_id,
+        interrupted_item.assignment,
+        graph_thread_id=interrupted_item.graph_thread_id,
     )
-    await registry.mark_failed(
+    await registry.mark_interrupted(
         tenant_id=TENANT_ID,
         task_id=TASK_ID,
-        agent_run_id=failed_item.assignment.agent_run_id,
-        safe_error="Subagent worker failed",
+        agent_run_id=interrupted_item.assignment.agent_run_id,
+        safe_error="Subagent worker interrupted",
     )
     await registry.register(
         cancelled_item.assignment,
@@ -138,14 +152,14 @@ async def test_terminal_exception_recovers_failed_and_cancelled_usage() -> None:
         agent_run_id=cancelled_item.assignment.agent_run_id,
     )
 
-    failed = await settlement.completion_for_terminal_exception(
-        SubagentRunFailed(
+    interrupted = await settlement.completion_for_terminal_exception(
+        SubagentRunInterrupted(
             "Subagent graph completed without a valid terminal result",
             GraphExecutionResult(
-                final_state=_final_state(failed_item.assignment.agent_run_id)
+                final_state=_final_state(interrupted_item.assignment.agent_run_id)
             ),
         ),
-        item=failed_item,
+        item=interrupted_item,
     )
     cancelled = await settlement.completion_for_terminal_exception(
         SubagentRunCancelled(
@@ -156,9 +170,7 @@ async def test_terminal_exception_recovers_failed_and_cancelled_usage() -> None:
         item=cancelled_item,
     )
 
-    assert failed is not None
-    assert failed.result.outcome == "failed"
-    assert failed.usage_records[0]["agent_run_id"] == "run-1"
+    assert interrupted is None
     assert cancelled is not None
     assert cancelled.result.outcome == "cancelled"
     assert cancelled.usage_records[0]["agent_run_id"] == "run-2"
@@ -167,13 +179,13 @@ async def test_terminal_exception_recovers_failed_and_cancelled_usage() -> None:
             SubagentRunPaused(
                 execution_result=GraphExecutionResult(final_state=_final_state("run-1"))
             ),
-            item=failed_item,
+            item=interrupted_item,
         )
     ) is None
     assert (
         await settlement.completion_for_terminal_exception(
             RuntimeError("not terminal"),
-            item=failed_item,
+            item=interrupted_item,
         )
     ) is None
 
@@ -182,7 +194,7 @@ async def test_terminal_exception_recovers_failed_and_cancelled_usage() -> None:
 async def test_settle_child_result_returns_typed_batch_facts() -> None:
     registry = ProcessLocalAgentRunRegistry()
     settlement = DispatchSettlement(registry=registry)
-    completed_item, paused_item, failed_item, unexpected_item = _plan(
+    completed_item, paused_item, interrupted_item, unexpected_item = _plan(
         "pathfinder",
         "cartographer",
         "scribe",
@@ -193,14 +205,14 @@ async def test_settle_child_result_returns_typed_batch_facts() -> None:
         graph_thread_id=completed_item.graph_thread_id,
     )
     await registry.register(
-        failed_item.assignment,
-        graph_thread_id=failed_item.graph_thread_id,
+        interrupted_item.assignment,
+        graph_thread_id=interrupted_item.graph_thread_id,
     )
-    await registry.mark_failed(
+    await registry.mark_interrupted(
         tenant_id=TENANT_ID,
         task_id=TASK_ID,
-        agent_run_id=failed_item.assignment.agent_run_id,
-        safe_error="Subagent worker failed",
+        agent_run_id=interrupted_item.assignment.agent_run_id,
+        safe_error="Subagent worker interrupted",
     )
 
     completed = await settlement.settle_child_result(
@@ -219,14 +231,14 @@ async def test_settle_child_result_returns_typed_batch_facts() -> None:
         task_id=TASK_ID,
         turn_index=5,
     )
-    failed = await settlement.settle_child_result(
-        SubagentRunFailed(
+    interrupted = await settlement.settle_child_result(
+        SubagentRunInterrupted(
             "Subagent graph completed without a valid terminal result",
             GraphExecutionResult(
-                final_state=_final_state(failed_item.assignment.agent_run_id)
+                final_state=_final_state(interrupted_item.assignment.agent_run_id)
             ),
         ),
-        item=failed_item,
+        item=interrupted_item,
         task_id=TASK_ID,
         turn_index=5,
     )
@@ -239,12 +251,166 @@ async def test_settle_child_result_returns_typed_batch_facts() -> None:
 
     assert completed.completion is completion
     assert paused.paused is True
-    assert failed.completion is not None
-    assert failed.completion.result.outcome == "failed"
-    assert failed.completion.usage_records[0]["agent_run_id"] == "run-3"
+    assert interrupted.stop is not None
+    assert interrupted.stop.status == "interrupted"
+    assert interrupted.stop.usage[0].metadata.agent_run_id == "run-3"
     assert unexpected.stop is not None
-    assert unexpected.stop.status == "failed"
+    assert unexpected.stop.status == "interrupted"
     assert unexpected.stop.invocation is unexpected_item
+
+
+@pytest.mark.asyncio
+async def test_settle_child_result_closes_only_terminal_subagent_owner_sessions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shell_service = _ShellCleanupService()
+    monkeypatch.setattr(
+        dispatch_settlement_module,
+        "get_shell_session_service",
+        lambda: shell_service,
+    )
+    registry = ProcessLocalAgentRunRegistry()
+    settlement = DispatchSettlement(registry=registry)
+    completed_item, paused_item, interrupted_item, cancelled_item = _plan(
+        "pathfinder",
+        "cartographer",
+        "scribe",
+        "auditor",
+    )
+    completion = _completion(
+        completed_item.assignment,
+        graph_thread_id=completed_item.graph_thread_id,
+    )
+    await registry.register(
+        interrupted_item.assignment,
+        graph_thread_id=interrupted_item.graph_thread_id,
+    )
+    await registry.mark_interrupted(
+        tenant_id=TENANT_ID,
+        task_id=TASK_ID,
+        agent_run_id=interrupted_item.assignment.agent_run_id,
+        safe_error="Subagent worker interrupted",
+    )
+
+    completed = await settlement.settle_child_result(
+        completion,
+        item=completed_item,
+        task_id=TASK_ID,
+        turn_index=5,
+    )
+    paused = await settlement.settle_child_result(
+        SubagentRunPaused(
+            execution_result=GraphExecutionResult(
+                final_state=_final_state(paused_item.assignment.agent_run_id)
+            )
+        ),
+        item=paused_item,
+        task_id=TASK_ID,
+        turn_index=5,
+    )
+    interrupted = await settlement.settle_child_result(
+        SubagentRunInterrupted(
+            "Subagent graph completed without a valid terminal result",
+            GraphExecutionResult(
+                final_state=_final_state(interrupted_item.assignment.agent_run_id)
+            ),
+        ),
+        item=interrupted_item,
+        task_id=TASK_ID,
+        turn_index=5,
+    )
+    cancelled = await settlement.settle_child_result(
+        asyncio.CancelledError(),
+        item=cancelled_item,
+        task_id=TASK_ID,
+        turn_index=5,
+    )
+
+    assert completed.completion is completion
+    assert paused.paused is True
+    assert interrupted.stop is not None
+    assert interrupted.stop.status == "interrupted"
+    assert cancelled.stop is not None
+    assert cancelled.stop.status == "cancelled"
+    assert shell_service.close_calls == [
+        {
+            "tenant_id": TENANT_ID,
+            "task_id": TASK_ID,
+            "execution_owner_id": "subagent:run-1",
+        },
+        {
+            "tenant_id": TENANT_ID,
+            "task_id": TASK_ID,
+            "execution_owner_id": "subagent:run-3",
+        },
+        {
+            "tenant_id": TENANT_ID,
+            "task_id": TASK_ID,
+            "execution_owner_id": "subagent:run-4",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_settle_child_result_logs_and_preserves_result_on_cleanup_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(
+        dispatch_settlement_module,
+        "get_shell_session_service",
+        lambda: _FailingShellCleanupService(),
+    )
+    settlement = DispatchSettlement(registry=ProcessLocalAgentRunRegistry())
+    item = _plan("pathfinder")[0]
+    completion = _completion(item.assignment, graph_thread_id=item.graph_thread_id)
+
+    settled = await settlement.settle_child_result(
+        completion,
+        item=item,
+        task_id=TASK_ID,
+        turn_index=5,
+    )
+
+    assert settled.completion is completion
+    assert "shell_session.subagent_owner_cleanup_failed" in caplog.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["partial", "blocked"])
+async def test_settle_child_result_closes_owner_for_every_terminal_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: str,
+) -> None:
+    shell_service = _ShellCleanupService()
+    monkeypatch.setattr(
+        dispatch_settlement_module,
+        "get_shell_session_service",
+        lambda: shell_service,
+    )
+    settlement = DispatchSettlement(registry=ProcessLocalAgentRunRegistry())
+    item = _plan("pathfinder")[0]
+    completion = _completion(
+        item.assignment,
+        graph_thread_id=item.graph_thread_id,
+        outcome=outcome,
+    )
+
+    settled = await settlement.settle_child_result(
+        completion,
+        item=item,
+        task_id=TASK_ID,
+        turn_index=5,
+    )
+
+    assert settled.completion is completion
+    assert shell_service.close_calls == [
+        {
+            "tenant_id": TENANT_ID,
+            "task_id": TASK_ID,
+            "execution_owner_id": "subagent:run-1",
+        }
+    ]
 
 
 def test_stop_for_child_exception_preserves_status_and_usage_mapping() -> None:
@@ -268,8 +434,8 @@ def test_stop_for_child_exception_preserves_status_and_usage_mapping() -> None:
         task_id=TASK_ID,
         turn_index=5,
     )
-    failed = settlement.stop_for_child_exception(
-        SubagentRunFailed(
+    interrupted = settlement.stop_for_child_exception(
+        SubagentRunInterrupted(
             "Subagent graph completed without a valid terminal result",
             GraphExecutionResult(final_state=final_state),
         ),
@@ -292,18 +458,26 @@ def test_stop_for_child_exception_preserves_status_and_usage_mapping() -> None:
 
     assert paused.status == "waiting_for_approval"
     assert cancelled.status == "cancelled"
-    assert failed.status == "failed"
+    assert interrupted.status == "interrupted"
     assert bare_cancel.status == "cancelled"
-    assert unexpected.status == "failed"
+    assert unexpected.status == "interrupted"
     assert paused.usage[0].metadata.agent_run_id == item.assignment.agent_run_id
     assert cancelled.usage[0].metadata.agent_run_id == item.assignment.agent_run_id
-    assert failed.usage[0].metadata.agent_run_id == item.assignment.agent_run_id
+    assert interrupted.usage[0].metadata.agent_run_id == item.assignment.agent_run_id
     assert bare_cancel.usage == ()
     assert unexpected.usage == ()
 
 
 @pytest.mark.asyncio
-async def test_settle_launched_batch_on_failure_recovers_original_order() -> None:
+async def test_settle_launched_batch_on_failure_recovers_original_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shell_service = _ShellCleanupService()
+    monkeypatch.setattr(
+        dispatch_settlement_module,
+        "get_shell_session_service",
+        lambda: shell_service,
+    )
     registry = ProcessLocalAgentRunRegistry()
     settlement = DispatchSettlement(registry=registry)
     first, second, third = _plan("pathfinder", "cartographer", "pathfinder")
@@ -312,7 +486,7 @@ async def test_settle_launched_batch_on_failure_recovers_original_order() -> Non
         graph_thread_id=first.graph_thread_id,
     )
     second_terminal = _TerminalAwaitable(
-        SubagentRunFailed(
+        SubagentRunInterrupted(
             "Subagent graph completed without a valid terminal result",
             GraphExecutionResult(
                 final_state=_final_state(second.assignment.agent_run_id)
@@ -325,11 +499,11 @@ async def test_settle_launched_batch_on_failure_recovers_original_order() -> Non
         raise_result=True,
     )
     await registry.register(second.assignment, graph_thread_id=second.graph_thread_id)
-    await registry.mark_failed(
+    await registry.mark_interrupted(
         tenant_id=TENANT_ID,
         task_id=TASK_ID,
         agent_run_id=second.assignment.agent_run_id,
-        safe_error="Subagent worker failed",
+        safe_error="Subagent worker interrupted",
     )
     await registry.register(third.assignment, graph_thread_id=third.graph_thread_id)
     await registry.mark_cancelled(
@@ -348,16 +522,57 @@ async def test_settle_launched_batch_on_failure_recovers_original_order() -> Non
 
     assert [completion.result.agent_run_id for completion in completions] == [
         "run-1",
-        "run-2",
         "run-3",
     ]
     assert completions[0] is first_completion
-    assert completions[1].result.outcome == "failed"
-    assert completions[1].usage_records[0]["agent_run_id"] == "run-2"
-    assert completions[2].result.outcome == "cancelled"
-    assert completions[2].usage_records == ()
+    assert completions[1].result.outcome == "cancelled"
+    assert completions[1].usage_records == ()
     assert second_terminal.cancelled is True
     assert third_terminal.cancelled is True
+    assert shell_service.close_calls == [
+        {
+            "tenant_id": TENANT_ID,
+            "task_id": TASK_ID,
+            "execution_owner_id": "subagent:run-1",
+        },
+        {
+            "tenant_id": TENANT_ID,
+            "task_id": TASK_ID,
+            "execution_owner_id": "subagent:run-2",
+        },
+        {
+            "tenant_id": TENANT_ID,
+            "task_id": TASK_ID,
+            "execution_owner_id": "subagent:run-3",
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_settle_launched_batch_cleans_owner_when_cancel_has_no_registry_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shell_service = _ShellCleanupService()
+    monkeypatch.setattr(
+        dispatch_settlement_module,
+        "get_shell_session_service",
+        lambda: shell_service,
+    )
+    settlement = DispatchSettlement(registry=ProcessLocalAgentRunRegistry())
+    item = _plan("pathfinder")[0]
+    child = _TerminalAwaitable(asyncio.CancelledError(), raise_result=True)
+
+    completions = await settlement.settle_launched_batch_on_failure([(item, child)])
+
+    assert completions == ()
+    assert child.cancelled is True
+    assert shell_service.close_calls == [
+        {
+            "tenant_id": TENANT_ID,
+            "task_id": TASK_ID,
+            "execution_owner_id": "subagent:run-1",
+        }
+    ]
 
 
 def test_record_batch_completions_and_completed_entries_preserve_plan_order() -> None:

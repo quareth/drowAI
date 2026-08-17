@@ -1,4 +1,4 @@
-"""Artifact file metadata for filesystem-tool parameter planning.
+"""Artifact file metadata for planner parameter generation.
 
 This module collects compact artifact references already present in runtime
 metadata and resolves them to bounded file metadata for the native tool
@@ -10,22 +10,24 @@ from __future__ import annotations
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Sequence
 
+from runtime_shared.shell_capabilities import SHELL_UTILITY_TOOL_ID
 
-FILESYSTEM_ARTIFACT_TOOL_IDS = frozenset(
+ARTIFACT_FILE_CONTEXT_TOOL_IDS = frozenset(
     {
         "filesystem.read_file",
         "filesystem.search_text",
+        SHELL_UTILITY_TOOL_ID,
     }
 )
 
 _MAX_ARTIFACT_METADATA_ENTRIES = 8
 
 
-def filesystem_artifact_tools_selected(selected_tools: Iterable[str]) -> bool:
-    """Return whether selected tools need artifact file metadata."""
+def artifact_file_context_tools_selected(selected_tools: Iterable[str]) -> bool:
+    """Return whether selected tools can use artifact file metadata."""
 
     selected = {str(tool_id).strip() for tool_id in selected_tools if str(tool_id).strip()}
-    return not FILESYSTEM_ARTIFACT_TOOL_IDS.isdisjoint(selected)
+    return not ARTIFACT_FILE_CONTEXT_TOOL_IDS.isdisjoint(selected)
 
 
 def collect_artifact_file_ref_candidates(metadata: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -84,9 +86,9 @@ def build_artifact_file_metadata_for_prompt(
     workspace_path: str | None,
     artifact_refs: Sequence[Mapping[str, Any]] | None,
 ) -> list[dict[str, Any]]:
-    """Return bounded file metadata only when filesystem artifact tools are selected."""
+    """Return bounded file metadata when a selected tool can use file context."""
 
-    if not filesystem_artifact_tools_selected(selected_tools):
+    if not artifact_file_context_tools_selected(selected_tools):
         return []
     if not artifact_refs:
         return []
@@ -196,8 +198,8 @@ def _count_lines(path: Path) -> int:
 
 
 __all__ = [
-    "FILESYSTEM_ARTIFACT_TOOL_IDS",
+    "ARTIFACT_FILE_CONTEXT_TOOL_IDS",
+    "artifact_file_context_tools_selected",
     "build_artifact_file_metadata_for_prompt",
     "collect_artifact_file_ref_candidates",
-    "filesystem_artifact_tools_selected",
 ]

@@ -124,7 +124,7 @@ services:
     ports:
       - "${FRONTEND_PORT:-80}:80"
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:80"]
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:80"]
       interval: 30s
       timeout: 10s
       start_period: 30s

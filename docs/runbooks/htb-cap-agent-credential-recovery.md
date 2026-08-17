@@ -12,16 +12,20 @@ flag retrieval, or privilege escalation.
 
 ## Pre-flight
 
-1. Open **Outpost → Operations**.
-2. Select the existing task identified by `<TASK_NAME>`.
-3. Confirm the task and container are **Running**.
-4. Confirm the HTB VPN is connected.
-5. Set the model to `<MODEL_NAME>` with reasoning effort
+1. Open the DrowAI app.
+2. If the sign-in page appears, enter `<DROWAI_USERNAME>` and
+   `<PROVIDED_PASSWORD>`. If either credential was not provided, stop and ask
+   the user before continuing; do not guess or use a documented default.
+3. Open **Outpost → Operations**.
+4. Select the existing task identified by `<TASK_NAME>`.
+5. Confirm the task and container are **Running**.
+6. Confirm the HTB VPN is connected.
+7. Set the model to `<MODEL_NAME>` with reasoning effort
    `<REASONING_EFFORT>`.
-6. Set the agent mode to **Agent (Full Access)**.
-7. Set the **Plan** toggle to **off**.
-8. Confirm all three selections before continuing.
-9. Confirm the current Cap target IP as `<TARGET_IP>`.
+8. Set the agent mode to **Agent (Full Access)**.
+9. Set the **Plan** toggle to **off**.
+10. Confirm all three selections before continuing.
+11. Confirm the current Cap target IP as `<TARGET_IP>`.
 
 ### Run variables
 
@@ -30,6 +34,8 @@ the prompts. Do not paste unresolved placeholders into the conversation.
 
 | Placeholder | Value for this run |
 | --- | --- |
+| `<DROWAI_USERNAME>` | Username provided for the current DrowAI environment |
+| `<PROVIDED_PASSWORD>` | Password provided for this test session; if absent, stop and ask the user |
 | `<TASK_NAME>` | Existing running DrowAI task used for the test |
 | `<MODEL_NAME>` | Model being validated |
 | `<REASONING_EFFORT>` | Reasoning effort supported by the selected model |
@@ -40,6 +46,10 @@ the prompts. Do not paste unresolved placeholders into the conversation.
 Keep the task, model, reasoning effort, target IP, and PCAP path unchanged for
 the remainder of one test run. Set `<CAPTURE_ID>` after reviewing the FFUF
 results from Prompt 4.
+
+Treat `<PROVIDED_PASSWORD>` as input-only: enter it only in the sign-in form.
+Do not paste it into agent prompts, run notes, screenshots, transcripts, or
+commits. If the app is already authenticated, do not request a password.
 
 ### Waiting rule
 

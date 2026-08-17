@@ -7,9 +7,12 @@ No capability-specific logic, no streaming, no state mutation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Mapping, Optional, Tuple
 
-from core.prompts.builders.post_tool.evidence import read_compact_evidence
+from core.prompts.builders.post_tool.evidence import (
+    compact_tool_result_for_reasoning,
+    select_compact_evidence_for_reasoning,
+)
 
 if TYPE_CHECKING:
     from ...state import InteractiveState
@@ -82,7 +85,8 @@ def classify_failure_category(stderr: str, exit_code: Optional[int]) -> str:
         
     Returns:
         Failure category string (one of: network_error, permission_denied,
-        timeout, tool_unavailable, invalid_params, empty_output, unknown)
+        timeout, missing_dependency, tool_unavailable, invalid_params,
+        empty_output, unknown)
     """
     lowered_stderr = stderr.lower()
     
@@ -97,6 +101,11 @@ def classify_failure_category(stderr: str, exit_code: Optional[int]) -> str:
     # Timeout errors
     if exit_code == 124 or "timeout" in lowered_stderr:
         return "timeout"
+
+    # The shell capability ran successfully enough to report POSIX exit 127;
+    # the command it was asked to invoke is the unavailable dependency.
+    if exit_code == 127:
+        return "missing_dependency"
     
     # Tool not found errors
     if "not found" in lowered_stderr or "command not found" in lowered_stderr:
@@ -129,8 +138,8 @@ def build_failure_context_from_state(state: InteractiveState) -> FailureContext:
     metadata = state.facts.safe_metadata
     synthesized_output = metadata.get("synthesized_output", {}) or {}
     last_tool_result = metadata.get("last_tool_result", {}) or {}
-    evidence = read_compact_evidence(metadata)
-    compact_result = _primary_compact_from_evidence(evidence, metadata)
+    evidence, _ = select_compact_evidence_for_reasoning(metadata)
+    compact_result = _compact_from_reasoning_evidence(evidence, metadata)
     batch_failure_text = _batch_failure_text(evidence)
     
     # Compact-only mode: prefer compact and synthesized signals.
@@ -175,13 +184,13 @@ def build_failure_context_from_state(state: InteractiveState) -> FailureContext:
     )
 
 
-def _primary_compact_from_evidence(evidence: Any, metadata: dict) -> dict:
-    if evidence is not None and getattr(evidence, "rows", None):
-        first = evidence.rows[0]
-        if isinstance(first, dict):
-            compact = first.get("compact_tool_result")
-            if isinstance(compact, dict):
-                return compact
+def _compact_from_reasoning_evidence(
+    evidence: Any,
+    metadata: Mapping[str, Any],
+) -> dict:
+    compact = compact_tool_result_for_reasoning(evidence)
+    if compact:
+        return dict(compact)
     compact = metadata.get("last_tool_result_compact", {}) or {}
     return compact if isinstance(compact, dict) else {}
 

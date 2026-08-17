@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from backend.services.metrics.utils import safe_inc
 
+from ..runtime_controls import read_active_execution_control
 from ..state import InteractiveState
 
 logger = logging.getLogger(__name__)
@@ -119,13 +120,14 @@ def should_invalidate_plan(state: InteractiveState) -> bool:
     """Determine if cached plan should be invalidated.
     
     Checks multiple invalidation triggers:
-    1. Last tool execution failed (CRITICAL - prevents retry with same broken params)
-    2. Last tool execution succeeded with new observations (DEEP REASONING - ensures progression)
-    3. Capability changed from plan creation context
-    4. Goal changed from plan creation context
-    5. Significant new findings added (>50% increase)
-    6. Plan expired (>3 iterations old)
-    7. Plan quality degraded
+    1. Runtime execution yielded and requires a fresh continuation call
+    2. Last tool execution failed (CRITICAL - prevents retry with same broken params)
+    3. Last tool execution succeeded with new observations (DEEP REASONING - ensures progression)
+    4. Capability changed from plan creation context
+    5. Goal changed from plan creation context
+    6. Significant new findings added (>50% increase)
+    7. Plan expired (>3 iterations old)
+    8. Plan quality degraded
     
     Args:
         state: Current reasoning state
@@ -140,7 +142,15 @@ def should_invalidate_plan(state: InteractiveState) -> bool:
     planner_plan = metadata.get("planner_plan")
     if not planner_plan:
         return False  # No plan to invalidate
-    
+
+    # A runtime continuation is a new dispatch, not a replay of the batch that
+    # yielded the active execution. Reusing that consumed batch would hit the
+    # idempotency cache and return the same running result without progress.
+    if read_active_execution_control(metadata) is not None:
+        logger.info("[CACHE] Invalidating consumed plan for runtime continuation")
+        safe_inc("cache_invalidation_runtime_continuation")
+        return True
+
     # Get plan context
     plan_context = metadata.get("plan_context")
     if not plan_context:

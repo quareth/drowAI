@@ -128,14 +128,19 @@ def test_deep_reasoning_reflect_reenters_router_authority() -> None:
 
 
 def test_deep_reasoning_tool_dispatch_remains_approval_gated() -> None:
-    """Task 6.2 contract: DR tool execution stays behind approval flow."""
+    """DR keeps ordinary approval/dispatch before optional continuation."""
     graph = build_deep_reasoning_graph()
     edges = getattr(graph, "edges", set())
 
     assert ("select_categories", "prepare_tool_plan") in edges
     assert ("approval_gate", "dispatch_tool") in edges
-    # Router authority chooses a branch, but never bypasses approval ownership.
-    assert ("decision_router", "dispatch_tool") not in edges
+    assert ("tool_execution_session", "terminal_session_compressor") in edges
+    assert ("terminal_session_compressor", "tool_synthesizer") in edges
+    assert ("tool_synthesizer", "post_tool_reasoning") in edges
+    assert "approval_gate" in graph.nodes
+    assert "dispatch_tool" in graph.nodes
+    # Router authority never bypasses the normal approval boundary.
+    assert ("decision_router", "tool_execution_session") not in edges
 
 
 def test_deep_reasoning_terminal_chain_remains_finalize_then_suffix() -> None:

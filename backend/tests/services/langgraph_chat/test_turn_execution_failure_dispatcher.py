@@ -274,6 +274,38 @@ async def test_start_exception_timeout_uses_timeout_specific_retryable_content()
 
 
 @pytest.mark.asyncio
+async def test_start_exception_rate_limit_uses_provider_specific_content() -> None:
+    dispatcher, error_service = _make_dispatcher()
+    error_service.retryable_failure = {
+        "error_code": "llm_rate_limited",
+        "internal_error_message": "llm_rate_limited",
+        "retry_mode": "checkpoint",
+        "graph_name": None,
+        "diagnostics": {"provider": "mistral", "status_code": 429},
+    }
+
+    await dispatcher.dispatch_start_exception(
+        exc=RuntimeError("boom"),
+        task_id=42,
+        hub=object(),
+        workflow_id=99,
+        reserved_message_id=None,
+        retryable_post_tool_error_message="structured failure",
+        generation_failed_error_message="generation failed",
+        conversation_id="conv-z",
+        turn_id="turn-z",
+        turn_sequence=3,
+        mark_turn_workflow_failed=lambda **_kwargs: None,
+        publish_boundary_completion_events=_noop_publish,
+    )
+
+    call = error_service.calls[0]
+    assert call["error_code"] == "llm_rate_limited"
+    assert call["retryable"] is True
+    assert "rate limiting" in call["content"]
+
+
+@pytest.mark.asyncio
 async def test_retry_compression_failure_persists_sanitized_diagnostics() -> None:
     dispatcher, error_service = _make_dispatcher()
 

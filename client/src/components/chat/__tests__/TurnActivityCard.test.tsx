@@ -78,6 +78,102 @@ function makeBlock(turnKey: string): TurnActivityBlock {
 }
 
 describe("TurnActivityCard", () => {
+  it("shows a local processing placeholder after a terminal tool while the turn continues", () => {
+    const block = makeBlock("processing");
+    block.isComplete = false;
+    block.groups = [
+      {
+        key: "processing-tool",
+        ind: 1,
+        primaryType: "tool",
+        messages: [
+          makeMessage("processing-start", "tool_start", {
+            tool_call_id: "tc-processing",
+          }),
+          makeMessage("processing-end", "tool_end", {
+            tool_call_id: "tc-processing",
+            status: "success",
+            process_status: "completed",
+          }),
+        ],
+      },
+    ];
+
+    render(<TurnActivityCard block={block} taskId={42} />);
+
+    expect(screen.getByTestId("turn-activity-processing-result-processing")).toBeTruthy();
+    expect(screen.getByText("Processing result…")).toBeTruthy();
+    expect(
+      screen.getByTestId("turn-activity-details-processing-item-1").dataset.chainActive,
+    ).toBe("true");
+  });
+
+  it("does not show the processing placeholder while the tool is still running", () => {
+    const block = makeBlock("running-tool");
+    block.isComplete = false;
+    block.groups = [
+      {
+        key: "running-tool",
+        ind: 1,
+        primaryType: "tool",
+        messages: [
+          makeMessage("running-start", "tool_start", {
+            tool_call_id: "tc-running",
+          }),
+          makeMessage("running-delta", "tool_delta", {
+            tool_call_id: "tc-running",
+            status: "running",
+            process_status: "running",
+          }),
+        ],
+      },
+    ];
+
+    render(<TurnActivityCard block={block} taskId={42} />);
+
+    expect(screen.queryByTestId("turn-activity-processing-result-running-tool")).toBeNull();
+  });
+
+  it("removes the processing placeholder when the next activity arrives", () => {
+    const block = makeBlock("processing-transition");
+    block.isComplete = false;
+    const toolGroup: MessageGroup = {
+      key: "processing-transition-tool",
+      ind: 1,
+      primaryType: "tool",
+      messages: [
+        makeMessage("transition-start", "tool_start", {
+          tool_call_id: "tc-transition",
+        }),
+        makeMessage("transition-end", "tool_end", {
+          tool_call_id: "tc-transition",
+          status: "success",
+          process_status: "completed",
+        }),
+      ],
+    };
+    block.groups = [toolGroup];
+
+    const { rerender } = render(<TurnActivityCard block={block} taskId={42} />);
+    expect(
+      screen.getByTestId("turn-activity-processing-result-processing-transition"),
+    ).toBeTruthy();
+
+    rerender(
+      <TurnActivityCard
+        block={{
+          ...block,
+          groups: [toolGroup, makeGroup("processing-transition-observation", "observation")],
+        }}
+        taskId={42}
+      />,
+    );
+
+    expect(
+      screen.queryByTestId("turn-activity-processing-result-processing-transition"),
+    ).toBeNull();
+  });
+
   it("renders collapsed summary by default", () => {
     render(<TurnActivityCard block={makeBlock("summary")} taskId={42} />);
 

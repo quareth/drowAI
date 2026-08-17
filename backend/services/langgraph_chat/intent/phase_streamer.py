@@ -66,7 +66,12 @@ class IntentPhaseStreamer:
                     event.get("type"),
                 )
                 return
-            await get_in_memory_stream_hub().publish(task_id=task_id, event=processed)
+            published_event = await get_in_memory_stream_hub().publish(
+                task_id=task_id,
+                event=processed,
+            )
+            if state_container is not None and published_event is not None:
+                state_container.record_stream_event(published_event)
         except Exception:
             logger.warning(
                 "[FACADE] Failed to publish intent-phase reasoning event for task %s",

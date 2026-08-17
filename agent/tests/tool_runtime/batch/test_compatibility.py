@@ -150,6 +150,42 @@ def test_same_tool_same_target_above_limit_downgrades(monkeypatch):
     assert verdict.reason == "max_concurrent_per_target_exceeded"
 
 
+def test_same_tool_same_session_above_limit_downgrades(monkeypatch):
+    _patch_metadata(
+        monkeypatch,
+        {"shell.write_stdin": _meta(max_concurrent_per_target=1)},
+    )
+    verdict = BatchCompatibilityChecker().check(
+        _batch(
+            ["shell.write_stdin", "shell.write_stdin"],
+            params_by_index={
+                0: {"session_id": "shs_same", "chars": "yes\n"},
+                1: {"session_id": "shs_same", "chars": ""},
+            },
+        )
+    )
+    assert verdict.outcome is CompatibilityOutcome.DOWNGRADE_TO_SEQUENTIAL
+    assert verdict.reason == "max_concurrent_per_target_exceeded"
+
+
+def test_same_tool_different_sessions_remain_parallel(monkeypatch):
+    _patch_metadata(
+        monkeypatch,
+        {"shell.write_stdin": _meta(max_concurrent_per_target=1)},
+    )
+    verdict = BatchCompatibilityChecker().check(
+        _batch(
+            ["shell.write_stdin", "shell.write_stdin"],
+            params_by_index={
+                0: {"session_id": "shs_first", "chars": ""},
+                1: {"session_id": "shs_second", "chars": ""},
+            },
+        )
+    )
+    assert verdict.outcome is CompatibilityOutcome.PARALLEL_OK
+    assert verdict.effective_strategy is ExecutionStrategy.PARALLEL
+
+
 def test_same_tool_same_target_within_limit_is_parallel_ok(monkeypatch):
     _patch_metadata(
         monkeypatch,

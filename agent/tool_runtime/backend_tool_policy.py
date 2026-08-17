@@ -10,6 +10,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable, Literal
 
+from runtime_shared.shell_capabilities import (
+    SHELL_EXEC_TOOL_ID,
+    SHELL_SESSION_TOOL_IDS,
+    SHELL_WRITE_STDIN_TOOL_ID,
+)
+
 
 CVE_LOOKUP_TOOL_ID = "knowledge.cve_lookup"
 
@@ -18,13 +24,20 @@ _BACKEND_SCOPED_TOOL_IDS: frozenset[str] = frozenset(
         CVE_LOOKUP_TOOL_ID,
     }
 )
+_RUNTIME_SESSION_SCOPED_TOOL_IDS: frozenset[str] = SHELL_SESSION_TOOL_IDS
 
-ExecutionLane = Literal["container_scoped", "backend_scoped", "artifact_scoped"]
+ExecutionLane = Literal[
+    "container_scoped",
+    "backend_scoped",
+    "artifact_scoped",
+    "runtime_session_scoped",
+]
 DispatchAuthority = Literal[
     "container_local_transport",
     "container_runner_transport",
     "backend_direct",
     "artifact_direct",
+    "runtime_session_control",
 ]
 ToolSurfaceClass = Literal[
     "runtime_container_tool",
@@ -51,6 +64,12 @@ def is_backend_scoped_tool(tool_id: str) -> bool:
     """Return True when ``tool_id`` must execute in backend runtime scope."""
     normalized = str(tool_id or "").strip()
     return normalized in _BACKEND_SCOPED_TOOL_IDS
+
+
+def is_runtime_session_scoped_tool(tool_id: str) -> bool:
+    """Return True when ``tool_id`` must execute through session control."""
+    normalized = str(tool_id or "").strip()
+    return normalized in _RUNTIME_SESSION_SCOPED_TOOL_IDS
 
 
 def normalize_runtime_placement_mode(value: object) -> str | None:
@@ -84,6 +103,8 @@ def iter_backend_scoped_tools(tool_ids: Iterable[str]) -> list[str]:
 def resolve_execution_lane(tool_id: str) -> ExecutionLane:
     """Return execution lane classification for ``tool_id``."""
     normalized = str(tool_id or "").strip()
+    if is_runtime_session_scoped_tool(normalized):
+        return "runtime_session_scoped"
     if is_backend_scoped_tool(normalized):
         return "backend_scoped"
     if normalized.startswith("artifact."):
@@ -140,7 +161,7 @@ def is_supported_in_runner_runtime_image_v1(tool_id: str) -> bool:
 
 
 def lane_allows_pty(lane: ExecutionLane) -> bool:
-    """Return whether ``lane`` may use PTY transport."""
+    """Return whether ``lane`` may use legacy one-shot PTY transport."""
     return lane == "container_scoped"
 
 
@@ -161,6 +182,8 @@ def resolve_selected_authority(
 ) -> DispatchAuthority:
     """Resolve execution authority from lane + runtime placement mode."""
     placement = require_runtime_placement_mode(runtime_placement_mode)
+    if lane == "runtime_session_scoped":
+        return "runtime_session_control"
     if lane == "backend_scoped":
         return "backend_direct"
     if lane == "artifact_scoped":
@@ -192,9 +215,12 @@ def build_route_policy_metadata(
 
 __all__ = [
     "CVE_LOOKUP_TOOL_ID",
+    "SHELL_EXEC_TOOL_ID",
+    "SHELL_WRITE_STDIN_TOOL_ID",
     "ExecutionLane",
     "build_route_policy_metadata",
     "is_backend_scoped_tool",
+    "is_runtime_session_scoped_tool",
     "iter_backend_scoped_tools",
     "lane_allows_direct_execution",
     "lane_allows_file_comm",

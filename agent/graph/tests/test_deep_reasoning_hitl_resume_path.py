@@ -1,7 +1,4 @@
-""": Deep reasoning HITL resume path tests.
-
-Verifies that DR approved resume reaches dispatch directly without
-replaying decision_router or category selection."""
+"""Deep reasoning HITL resume and interactive-continuation path tests."""
 
 from __future__ import annotations
 
@@ -13,27 +10,25 @@ from agent.graph.state import FactsState, InteractiveState
 
 
 def test_dr_approved_resume_reaches_dispatch_directly() -> None:
-    """DR graph: approval_gate -> dispatch_tool (no cycle back to decision_router)."""
+    """DR retains explicit approval and dispatch before optional continuation."""
     graph = build_deep_reasoning_graph()
     edges = getattr(graph, "edges", set())
 
-    # Approved path: prepare_tool_plan routes to approval_gate -> dispatch_tool.
+    # The route label and target remain the original approval contract.
     state = InteractiveState(
         facts=FactsState(task_id=1, message="test", metadata={})
     )
     assert _route_after_prepare_tool_plan(state) == "approval_gate"
     assert ("approval_gate", "dispatch_tool") in edges
-    assert ("dispatch_tool", "tool_synthesizer") in edges
-
-    # No edge from approval_gate back to decision_router or select_categories
-    approval_targets = {dst for (src, dst) in edges if src == "approval_gate"}
-    assert approval_targets == {"dispatch_tool"}
-    assert "decision_router" not in approval_targets
-    assert "select_categories" not in approval_targets
+    assert ("tool_execution_session", "terminal_session_compressor") in edges
+    assert ("terminal_session_compressor", "tool_synthesizer") in edges
+    assert ("tool_synthesizer", "post_tool_reasoning") in edges
+    assert "approval_gate" in graph.nodes
+    assert "dispatch_tool" in graph.nodes
 
 
 def test_dr_tool_path_has_no_decision_router_before_dispatch() -> None:
-    """Tool execution path: select_categories -> prepare -> approval -> dispatch (no decision_router)."""
+    """Tool execution reaches the session without decision-router replay."""
     graph = build_deep_reasoning_graph()
     edges = getattr(graph, "edges", set())
 
@@ -42,7 +37,9 @@ def test_dr_tool_path_has_no_decision_router_before_dispatch() -> None:
         facts=FactsState(task_id=1, message="test", metadata={})
     )
     assert _route_after_prepare_tool_plan(state) == "approval_gate"
+    assert ("approval_gate", "dispatch_tool") in edges
 
-    # From approval_gate we go to dispatch_tool only
-    approval_targets = {dst for (src, dst) in edges if src == "approval_gate"}
-    assert approval_targets == {"dispatch_tool"}
+    assert ("tool_execution_session", "terminal_session_compressor") in edges
+    assert ("terminal_session_compressor", "tool_synthesizer") in edges
+    assert ("tool_synthesizer", "post_tool_reasoning") in edges
+    assert ("decision_router", "tool_execution_session") not in edges

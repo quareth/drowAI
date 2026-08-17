@@ -18,6 +18,7 @@ from agent.subagents.registry import SubagentRegistry, get_subagent_registry
 from agent.subagents.runtime.model import SUBAGENT_RESULT_METADATA_KEY
 from backend.services.agent_runs import continuation
 from backend.services.agent_runs.continuation import (
+    SUBAGENT_PARENT_CONTINUATION_PENDING,
     SUBAGENT_RECOVERY_ERROR,
     SubagentContinuationError,
     SubagentInterruptTicketSnapshot,
@@ -387,6 +388,69 @@ async def test_parent_handoff_resume_returns_execution_to_original_finalizer(
 
 
 @pytest.mark.asyncio
+async def test_parent_handoff_resume_keeps_original_finalizer_on_next_interrupt(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    broker = ParentHandoffContinuationBroker()
+    state_container = ChatStateContainer()
+    session = broker.open(
+        task_id=42,
+        thread_id="graph-" + ("a" * 32),
+        state_container=state_container,
+    )
+    execution_result = GraphExecutionResult(
+        final_state=_interactive_state(),
+        interrupt=_FakeInterrupt(),
+        metadata={"checkpoint_resume": True},
+    )
+
+    class _Executor:
+        async def stream_graph(
+            self,
+            _compiled: Any,
+            _graph_input: Any,
+            _config: dict[str, Any],
+            task_id: int,
+            **kwargs: Any,
+        ) -> GraphExecutionResult:
+            assert task_id == 42
+            assert kwargs["state_container"] is state_container
+            return execution_result
+
+    service = CheckpointContinuationService(
+        checkpointer_service=_FakeCheckpointerService(),
+        executor=_Executor(),
+        streaming_adapter=object(),
+        build_checkpoint_execution_config=lambda **kwargs: {
+            "configurable": {
+                "thread_id": f"graph-{kwargs['graph_thread_id']}",
+                "graph_name": kwargs["graph_name"],
+            }
+        },
+        hydrate_container_from_checkpoint_state=lambda *_args, **_kwargs: None,
+        extract_resume_conversation_id=lambda _state: "",
+        resolve_resume_turn_number=lambda **_kwargs: 0,
+        persist_chat_message_from_container=lambda **_kwargs: None,
+        build_result=lambda **_kwargs: None,
+        parent_handoff_continuation_broker=broker,
+    )
+    monkeypatch.setattr(service, "_compile_graph_for_name", _compile_stub)
+
+    result = await service.resume_from_interrupt(
+        task_id=42,
+        graph_thread_id="a" * 32,
+        graph_name=GRAPH_NAME_PARENT_HANDOFF,
+        response={"approved": True},
+    )
+
+    assert result.metadata["interrupt"] is True
+    assert result.metadata[SUBAGENT_PARENT_CONTINUATION_PENDING] is True
+    assert session.result_future.done() is False
+
+    broker.close(session)
+
+
+@pytest.mark.asyncio
 async def test_resume_from_interrupt_keeps_subagent_waiting_after_next_interrupt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -429,6 +493,7 @@ async def test_resume_from_interrupt_keeps_subagent_waiting_after_next_interrupt
     )
 
     assert result.metadata["interrupt"] is True
+    assert result.metadata[SUBAGENT_PARENT_CONTINUATION_PENDING] is True
     entry = await registry.get(
         tenant_id=7,
         task_id=42,

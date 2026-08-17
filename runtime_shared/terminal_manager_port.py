@@ -9,15 +9,27 @@ from __future__ import annotations
 
 from typing import Any, Callable, Protocol
 
+from runtime_shared.terminal_contracts import TerminalReadResult
+
 
 class TerminalSessionManagerPort(Protocol):
     """Protocol for PTY manager capabilities consumed by runtime modules."""
 
     async def prepare_agent_session(self, *args: Any, **kwargs: Any) -> Any: ...
 
+    async def create_agent_command_session(self, *args: Any, **kwargs: Any) -> Any: ...
+
     async def send_input(self, *args: Any, **kwargs: Any) -> bool: ...
 
     async def read_output(self, *args: Any, **kwargs: Any) -> bytes: ...
+
+    async def read_output_result(
+        self,
+        session_id: str,
+        size: int = 4096,
+        *,
+        timeout: float | None = None,
+    ) -> TerminalReadResult: ...
 
     async def close_session(self, *args: Any, **kwargs: Any) -> bool: ...
 

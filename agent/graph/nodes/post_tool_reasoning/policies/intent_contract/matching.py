@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, List, Mapping, Optional, TypedDict
 
 from agent.tool_runtime.batch.plan_view import serialized_tool_calls_from_metadata
+from runtime_shared.shell_capabilities import SHELL_SESSION_TOOL_IDS
 
 from .....state import InteractiveState
 from .extraction import (
@@ -132,20 +133,29 @@ def _evaluate_candidate(
     expected_ports: List[str],
 ) -> Dict[str, Any]:
     """Evaluate one structured execution candidate against explicit constraints."""
+    parameter_authority = (
+        "advisory"
+        if candidate["tool_id"] in SHELL_SESSION_TOOL_IDS
+        else "authoritative"
+    )
     executed_tool = _normalize_tool_alias(candidate["tool_id"])
     executed_targets_raw = _extract_executed_targets(candidate["params"])
     executed_targets = [_normalize_target_token(value) for value in executed_targets_raw]
     executed_ports = _extract_executed_ports(candidate["params"], executed_targets_raw)
 
     tool_match: Optional[bool] = None
-    if expected_tools:
+    if expected_tools and parameter_authority == "authoritative":
         tool_match = executed_tool in expected_tools
 
     target_match: Optional[bool] = None
-    if expected_targets:
+    if expected_targets and parameter_authority == "authoritative":
         target_match = any(target in executed_targets for target in expected_targets)
 
-    ports_match = _ports_match(expected_ports, executed_ports)
+    ports_match = (
+        _ports_match(expected_ports, executed_ports)
+        if parameter_authority == "authoritative"
+        else None
+    )
     checks = [value for value in (tool_match, target_match, ports_match) if value is not None]
     satisfied = all(checks) if checks else True
 
@@ -166,7 +176,12 @@ def _evaluate_candidate(
         "ports_match": ports_match,
         "mismatches": mismatches,
         "satisfied": satisfied,
-        "matched_via": candidate["matched_via"] if satisfied else None,
+        "matched_via": (
+            f'{candidate["matched_via"]}_advisory'
+            if satisfied and parameter_authority == "advisory"
+            else candidate["matched_via"] if satisfied else None
+        ),
+        "parameter_authority": parameter_authority,
     }
 
 
@@ -198,6 +213,7 @@ def _evaluate_simple_tool_intent_contract(
             "ports_match": None,
             "mismatches": [],
             "matched_via": None,
+            "parameter_authority": "authoritative",
         }
 
     last_evaluation: Dict[str, Any] = {
@@ -210,6 +226,7 @@ def _evaluate_simple_tool_intent_contract(
         "mismatches": [],
         "satisfied": True,
         "matched_via": None,
+        "parameter_authority": "authoritative",
     }
 
     for candidate in _iter_execution_candidates(interactive):
@@ -236,4 +253,5 @@ def _evaluate_simple_tool_intent_contract(
         "ports_match": last_evaluation["ports_match"],
         "mismatches": last_evaluation["mismatches"],
         "matched_via": last_evaluation["matched_via"],
+        "parameter_authority": last_evaluation["parameter_authority"],
     }

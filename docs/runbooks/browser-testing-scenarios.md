@@ -17,7 +17,9 @@ Use these scenarios to:
 
 1. Start the stack and the dev server.
 2. Open the app in Chrome / Firefox.
-3. Log in with the default credentials — username `bot`, password `bot123456`.
+3. Log in with the username and password provided for the current test
+   environment. If either credential was not provided, stop and ask the user
+   before continuing; do not guess or use a documented default.
 4. Open **Avatar → Settings → API** and confirm the required provider card shows **Connected**.
 5. For the default scenarios, use the Operations chat model selector to choose **Open models** → **GPT-OSS 20B** → **NVIDIA**; a scenario that names another model overrides this step.
 6. Open **Outpost → Operations → New → New Task**:

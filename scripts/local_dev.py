@@ -9,6 +9,7 @@ runner cloud client, and frontend as separate processes on one machine.
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import json
 import os
 import shlex
@@ -17,11 +18,14 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import IO
 from urllib import request as urllib_request
+
+import psutil
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -29,6 +33,16 @@ if str(REPO_ROOT) not in sys.path:
 from backend.config.generated_config import default_generated_paths, resolved_backend_env  # noqa: E402
 from backend.migrations.runtime import upgrade_database_to_head  # noqa: E402
 from deploy.env_contract import DEFAULT_RUNNER_CAPABILITIES, single_host_management_env  # noqa: E402
+from drowai_runner.process_lock import (  # noqa: E402
+    LOCAL_DEV_LAUNCHER,
+    RUNNER_INSTANCE_ID_ENV,
+    RUNNER_LAUNCHER_ENV,
+    RUNNER_PARENT_CREATE_TIME_ENV,
+    RUNNER_PARENT_PID_ENV,
+    process_create_time,
+    process_identity_matches,
+    read_active_runner_process_owner,
+)
 from runtime_shared.runtime_image_contract import default_runtime_image_for_machine  # noqa: E402
 from scripts.local_postgres_bootstrap import (  # noqa: E402
     ADMIN_DATABASE_URL_ENV,
@@ -244,29 +258,52 @@ def _pid_file_path(env: dict[str, str]) -> Path:
     return Path(env["DROWAI_RUNNER_ROOT"]).expanduser() / "local-cloud-pids.json"
 
 
+@dataclass(frozen=True, slots=True)
+class _ProcessRecord:
+    """Persisted identity for one process owned by the local launcher."""
+
+    name: str
+    pid: int
+    create_time: float | None
+
+
 def _write_pid_file(env: dict[str, str], processes: Sequence[tuple[str, subprocess.Popen[str]]]) -> None:
     path = _pid_file_path(env)
     path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
         "processes": [
-            {"name": name, "pid": int(process.pid)}
+            {
+                "name": name,
+                "pid": int(process.pid),
+                "create_time": process_create_time(int(process.pid)),
+            }
             for name, process in processes
             if process.pid
-        ]
+        ],
+        "instance_id": env.get(RUNNER_INSTANCE_ID_ENV, ""),
     }
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
 def _remove_pid_file(env: dict[str, str]) -> None:
+    path = _pid_file_path(env)
+    expected_instance_id = str(env.get(RUNNER_INSTANCE_ID_ENV) or "")
+    if expected_instance_id:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return
+        if str(payload.get("instance_id") or "") != expected_instance_id:
+            return
     try:
-        _pid_file_path(env).unlink()
+        path.unlink()
     except FileNotFoundError:
         return
     except OSError:
         return
 
 
-def _read_recorded_pids(env: dict[str, str]) -> list[tuple[str, int]]:
+def _read_recorded_pids(env: dict[str, str]) -> list[_ProcessRecord]:
     path = _pid_file_path(env)
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -275,7 +312,7 @@ def _read_recorded_pids(env: dict[str, str]) -> list[tuple[str, int]]:
     rows = payload.get("processes") if isinstance(payload, dict) else None
     if not isinstance(rows, list):
         return []
-    recorded: list[tuple[str, int]] = []
+    recorded: list[_ProcessRecord] = []
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -285,7 +322,13 @@ def _read_recorded_pids(env: dict[str, str]) -> list[tuple[str, int]]:
         except (TypeError, ValueError):
             continue
         if pid > 0:
-            recorded.append((name, pid))
+            try:
+                create_time = float(row["create_time"])
+            except (KeyError, TypeError, ValueError):
+                create_time = None
+            recorded.append(
+                _ProcessRecord(name=name, pid=pid, create_time=create_time)
+            )
     return recorded
 
 
@@ -567,14 +610,96 @@ def _terminate_process_group(*, pid: int, signal_number: int) -> None:
 
 
 def _stop_recorded_processes(env: dict[str, str]) -> None:
-    for name, pid in reversed(_read_recorded_pids(env)):
-        print(f"[local-cloud] stopping recorded {name} pid={pid}")
-        _terminate_process_group(pid=pid, signal_number=signal.SIGTERM)
+    records = _read_recorded_pids(env)
+    owned_records: list[_ProcessRecord] = []
+    for record in records:
+        verified_record = _verified_local_process_record(record)
+        if verified_record is not None:
+            owned_records.append(verified_record)
+    owned_record_keys = {(record.name, record.pid) for record in owned_records}
+    for record in records:
+        if (record.name, record.pid) not in owned_record_keys and _pid_exists(record.pid):
+            print(
+                f"[local-cloud] refusing to stop unverified recorded "
+                f"{record.name} pid={record.pid}"
+            )
+    for record in reversed(owned_records):
+        print(f"[local-cloud] stopping recorded {record.name} pid={record.pid}")
+        _terminate_process_group(pid=record.pid, signal_number=signal.SIGTERM)
     time.sleep(0.5)
-    for name, pid in reversed(_read_recorded_pids(env)):
-        if _pid_exists(pid):
-            print(f"[local-cloud] force stopping recorded {name} pid={pid}")
-            _terminate_process_group(pid=pid, signal_number=signal.SIGKILL)
+    for record in reversed(owned_records):
+        if _is_expected_local_process(record):
+            print(f"[local-cloud] force stopping recorded {record.name} pid={record.pid}")
+            _terminate_process_group(pid=record.pid, signal_number=signal.SIGKILL)
+
+
+def _is_expected_local_process(record: _ProcessRecord) -> bool:
+    return _verified_local_process_record(record) is not None
+
+
+def _verified_local_process_record(record: _ProcessRecord) -> _ProcessRecord | None:
+    """Return a start-time-bound record after launcher command and cwd verification."""
+    create_time = record.create_time
+    if create_time is None:
+        create_time = process_create_time(record.pid)
+    if create_time is None or not process_identity_matches(record.pid, create_time):
+        return None
+    try:
+        process = psutil.Process(record.pid)
+        command = process.cmdline()
+        working_directory = Path(process.cwd()).resolve()
+    except (psutil.Error, OSError):
+        return None
+    if working_directory != REPO_ROOT.resolve():
+        return None
+
+    command_text = " ".join(command)
+    expected_fragments = {
+        "backend": ("uvicorn", "backend.main:app"),
+        "runner": ("drowai_runner", "run"),
+        "frontend": ("vite",),
+    }.get(record.name)
+    if expected_fragments is None or not all(
+        fragment in command_text for fragment in expected_fragments
+    ):
+        return None
+    if not process_identity_matches(record.pid, create_time):
+        return None
+    return _ProcessRecord(
+        name=record.name,
+        pid=record.pid,
+        create_time=create_time,
+    )
+
+
+def _stop_owned_local_runner(env: dict[str, str]) -> None:
+    runner_root = Path(env["DROWAI_RUNNER_ROOT"]).expanduser()
+    owner = read_active_runner_process_owner(runner_root)
+    if owner is None:
+        return
+    if owner.launcher != LOCAL_DEV_LAUNCHER:
+        print(
+            f"[local-cloud] leaving {owner.launcher} runner pid={owner.pid} running; "
+            "it is not owned by local_dev.py"
+        )
+        return
+    if not process_identity_matches(owner.pid, owner.create_time):
+        print(
+            f"[local-cloud] refusing to stop unverifiable local-dev runner pid={owner.pid}"
+        )
+        return
+
+    print(f"[local-cloud] stopping orphaned local-dev runner pid={owner.pid}")
+    _terminate_process_group(pid=owner.pid, signal_number=signal.SIGTERM)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        current_owner = read_active_runner_process_owner(runner_root)
+        if current_owner is None or current_owner != owner:
+            return
+        time.sleep(0.1)
+    if process_identity_matches(owner.pid, owner.create_time):
+        print(f"[local-cloud] force stopping orphaned local-dev runner pid={owner.pid}")
+        _terminate_process_group(pid=owner.pid, signal_number=signal.SIGKILL)
 
 
 def _pid_exists(pid: int) -> bool:
@@ -608,20 +733,33 @@ def _pids_listening_on_port(port: int) -> list[int]:
     return pids
 
 
-def _stop_port_listeners(*, ports: Sequence[int]) -> None:
+def _stop_port_listeners(*, port_owners: Sequence[tuple[int, str]]) -> None:
     seen: set[int] = set()
-    for port in ports:
+    owned_records: list[_ProcessRecord] = []
+    for port, name in port_owners:
         for pid in _pids_listening_on_port(port):
             if pid in seen:
                 continue
             seen.add(pid)
+            record = _ProcessRecord(
+                name=name,
+                pid=pid,
+                create_time=process_create_time(pid),
+            )
+            if not _is_expected_local_process(record):
+                print(
+                    f"[local-cloud] leaving unrelated process listening on port "
+                    f"{port} pid={pid} running"
+                )
+                continue
+            owned_records.append(record)
             print(f"[local-cloud] stopping process listening on port {port} pid={pid}")
             _terminate_process_group(pid=pid, signal_number=signal.SIGTERM)
     time.sleep(0.5)
-    for pid in seen:
-        if _pid_exists(pid):
-            print(f"[local-cloud] force stopping port listener pid={pid}")
-            _terminate_process_group(pid=pid, signal_number=signal.SIGKILL)
+    for record in owned_records:
+        if _is_expected_local_process(record):
+            print(f"[local-cloud] force stopping port listener pid={record.pid}")
+            _terminate_process_group(pid=record.pid, signal_number=signal.SIGKILL)
 
 
 def _run_backend(args: argparse.Namespace, env: dict[str, str]) -> subprocess.Popen[str]:
@@ -774,6 +912,32 @@ def _print_env(env: dict[str, str]) -> None:
 def _run_up(args: argparse.Namespace, env: dict[str, str]) -> int:
     runner_env = dict(env)
 
+    active_owner = read_active_runner_process_owner(
+        Path(env["DROWAI_RUNNER_ROOT"]).expanduser()
+    )
+    if active_owner is not None:
+        print(
+            "[local-cloud] cannot start: configured runner root is already owned by "
+            f"{active_owner.launcher} runner pid={active_owner.pid}; "
+            "stop it with its owning supervisor first"
+        )
+        return 1
+
+    parent_create_time = process_create_time(os.getpid())
+    if parent_create_time is None:
+        print("[local-cloud] cannot start: local launcher identity could not be verified")
+        return 1
+    instance_id = uuid.uuid4().hex
+    env[RUNNER_INSTANCE_ID_ENV] = instance_id
+    runner_env.update(
+        {
+            RUNNER_LAUNCHER_ENV: LOCAL_DEV_LAUNCHER,
+            RUNNER_INSTANCE_ID_ENV: instance_id,
+            RUNNER_PARENT_PID_ENV: str(os.getpid()),
+            RUNNER_PARENT_CREATE_TIME_ENV: str(parent_create_time),
+        }
+    )
+
     processes: list[tuple[str, subprocess.Popen[str]]] = []
     output_threads: list[threading.Thread] = []
 
@@ -846,7 +1010,13 @@ def _run_up(args: argparse.Namespace, env: dict[str, str]) -> int:
 
 def _run_down(args: argparse.Namespace, env: dict[str, str]) -> int:
     _stop_recorded_processes(env)
-    _stop_port_listeners(ports=(args.backend_port, args.frontend_port))
+    _stop_owned_local_runner(env)
+    _stop_port_listeners(
+        port_owners=(
+            (args.backend_port, "backend"),
+            (args.frontend_port, "frontend"),
+        )
+    )
     _remove_pid_file(env)
     print("[local-cloud] local single-host managed-runtime processes stopped")
     return 0

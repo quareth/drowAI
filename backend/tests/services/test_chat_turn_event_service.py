@@ -9,6 +9,7 @@ from sqlalchemy.orm import sessionmaker
 from backend.database import Base
 from backend.models.chat import ChatMessage, ChatTurnEvent
 from backend.models.core import Task, User
+from backend.models.hitl import TurnWorkflow
 from backend.services.chat.turn_event_service import ChatTurnEventService
 
 
@@ -60,6 +61,13 @@ def test_replace_events_for_message_replaces_rows_and_orders_by_phase_sequence()
                     "tool_name": "second_tool",
                     "tool_arguments": {"z": 1, "a": 2},
                     "tool_result": {"ok": True},
+                    "status": "success",
+                    "process_status": "completed",
+                    "session_status": "closed",
+                    "interaction_boundary": "terminal",
+                    "session_id": "shs-second-tool",
+                    "output_persistence": "transient",
+                    "sequence": 35,
                     "phase_sequence": 2,
                     "turn_index": 1,
                 }
@@ -69,6 +77,7 @@ def test_replace_events_for_message_replaces_rows_and_orders_by_phase_sequence()
                     "content": "first observation",
                     "phase_sequence": 1,
                     "sub_turn_index": 0,
+                    "sequence": 32,
                 }
             ],
         )
@@ -86,7 +95,14 @@ def test_replace_events_for_message_replaces_rows_and_orders_by_phase_sequence()
         assert rows[1].event_metadata is not None
         assert rows[1].event_metadata["tool_name"] == "second_tool"
         assert rows[1].event_metadata["tool_batch_id"] == "tb-refresh"
-
+        assert rows[1].event_metadata["status"] == "success"
+        assert rows[1].event_metadata["process_status"] == "completed"
+        assert rows[1].event_metadata["session_status"] == "closed"
+        assert rows[1].event_metadata["interaction_boundary"] == "terminal"
+        assert rows[1].event_metadata["session_id"] == "shs-second-tool"
+        assert rows[1].event_metadata["output_persistence"] == "transient"
+        assert rows[0].event_metadata["sequence"] == 32
+        assert rows[1].event_metadata["sequence"] == 35
         service.replace_events_for_message(
             task_id=message.task_id,
             conversation_id=message.conversation_id,
@@ -106,6 +122,209 @@ def test_replace_events_for_message_replaces_rows_and_orders_by_phase_sequence()
         assert len(replacement_rows) == 1
         assert replacement_rows[0].phase_sequence == 0
         assert replacement_rows[0].kind == "observation"
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_terminal_lifecycle_update_replaces_existing_correlated_tool_row() -> None:
+    engine, db = _build_session()
+    try:
+        message = _seed_assistant_message(db)
+        db.add(
+            TurnWorkflow(
+                task_id=message.task_id,
+                tenant_id=message.tenant_id,
+                conversation_id=message.conversation_id,
+                turn_id="turn-shell",
+                turn_sequence=message.turn_number,
+                state="COMPLETED",
+                reserved_message_id=message.id,
+            )
+        )
+        service = ChatTurnEventService(db)
+        service.replace_events_for_message(
+            task_id=message.task_id,
+            conversation_id=message.conversation_id,
+            chat_message_id=message.id,
+            turn_number=message.turn_number or 0,
+            tool_calls=[
+                {
+                    "tool_call_id": "call-shell-origin",
+                    "tool_name": "shell.utility",
+                    "tool_result": {"process_status": "running"},
+                    "status": "success",
+                    "process_status": "running",
+                    "session_status": "active",
+                    "interaction_boundary": "output_available",
+                    "session_id": "shs-terminal-update",
+                    "output_persistence": "transient",
+                    "sequence": 19,
+                    "phase_sequence": 0,
+                }
+            ],
+        )
+        db.commit()
+
+        row = service.append_terminal_tool_lifecycle_event(
+            task_id=message.task_id,
+            turn_id="turn-shell",
+            tool_call_id="call-shell-origin",
+            tool_name="shell.utility",
+            content="Shell session completed",
+            status="success",
+            process_status="completed",
+            session_status="closed",
+            interaction_boundary="terminal",
+            session_id="shs-terminal-update",
+            close_reason="process_completed",
+        )
+        db.commit()
+
+        rows = db.execute(
+            select(ChatTurnEvent)
+            .where(ChatTurnEvent.chat_message_id == message.id)
+            .order_by(ChatTurnEvent.phase_sequence.asc())
+        ).scalars().all()
+        assert len(rows) == 1
+        assert row is not None
+        assert rows[0].id == row.id
+        assert rows[0].tool_call_id == "call-shell-origin"
+        assert rows[0].content == "Shell session completed"
+        assert rows[0].event_metadata["lifecycle_event"] == "shell_session_terminal"
+        assert rows[0].event_metadata["process_status"] == "completed"
+        assert rows[0].event_metadata["session_status"] == "closed"
+        assert rows[0].event_metadata["interaction_boundary"] == "terminal"
+        assert rows[0].event_metadata["sequence"] == 19
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_terminal_lifecycle_update_preserves_durable_assessment_evidence() -> None:
+    engine, db = _build_session()
+    try:
+        message = _seed_assistant_message(db)
+        db.add(
+            TurnWorkflow(
+                task_id=message.task_id,
+                tenant_id=message.tenant_id,
+                conversation_id=message.conversation_id,
+                turn_id="turn-shell-assessment",
+                turn_sequence=message.turn_number,
+                state="COMPLETED",
+                reserved_message_id=message.id,
+            )
+        )
+        service = ChatTurnEventService(db)
+        durable_result = {
+            "status": "success",
+            "summary": "Assessment found exposed credentials.",
+            "key_findings": ["Credentials were accepted by the target."],
+            "stdout": "proof-of-access",
+            "process_status": "running",
+            "session_status": "active",
+            "interaction_boundary": "output_available",
+            "session_id": "shs-durable-assessment",
+        }
+        service.replace_events_for_message(
+            task_id=message.task_id,
+            conversation_id=message.conversation_id,
+            chat_message_id=message.id,
+            turn_number=message.turn_number or 0,
+            tool_calls=[
+                {
+                    "tool_call_id": "call-shell-assessment",
+                    "tool_name": "shell.assessment",
+                    "tool_arguments": {"command": "verify target"},
+                    "tool_result": durable_result,
+                    "status": "success",
+                    "process_status": "running",
+                    "session_status": "active",
+                    "interaction_boundary": "output_available",
+                    "session_id": "shs-durable-assessment",
+                    "output_persistence": "durable",
+                    "compact_tool_result": durable_result,
+                    "phase_sequence": 0,
+                }
+            ],
+        )
+        db.commit()
+
+        original_row = db.execute(select(ChatTurnEvent)).scalar_one()
+        original_content = original_row.content
+        row = service.append_terminal_tool_lifecycle_event(
+            task_id=message.task_id,
+            turn_id="turn-shell-assessment",
+            tool_call_id="call-shell-assessment",
+            tool_name="shell.assessment",
+            content="Shell session closed",
+            status="cancelled",
+            process_status="terminated",
+            session_status="closed",
+            interaction_boundary="terminal",
+            session_id="shs-durable-assessment",
+            close_reason="task_cleanup",
+            metadata={
+                "compact_tool_result": {
+                    "status": "cancelled",
+                    "summary": "Shell session closed",
+                    "process_status": "terminated",
+                    "session_status": "closed",
+                    "interaction_boundary": "terminal",
+                    "session_id": "shs-durable-assessment",
+                }
+            },
+        )
+        db.commit()
+
+        assert row is not None
+        assert row.content == original_content
+        metadata = row.event_metadata
+        assert metadata["tool_arguments"] == {"command": "verify target"}
+        assert metadata["output_persistence"] == "durable"
+        assert metadata["status"] == "cancelled"
+        assert metadata["process_status"] == "terminated"
+        assert metadata["session_status"] == "closed"
+        assert metadata["interaction_boundary"] == "terminal"
+        assert metadata["close_reason"] == "task_cleanup"
+        compact = metadata["compact_tool_result"]
+        assert compact["status"] == "success"
+        assert compact["summary"] == "Assessment found exposed credentials."
+        assert compact["key_findings"] == [
+            "Credentials were accepted by the target."
+        ]
+        assert compact["stdout"] == "proof-of-access"
+        assert compact["process_status"] == "terminated"
+        assert compact["session_status"] == "closed"
+        assert compact["interaction_boundary"] == "terminal"
+
+        created = service.merge_events_for_message(
+            task_id=message.task_id,
+            conversation_id=message.conversation_id,
+            chat_message_id=message.id,
+            turn_number=message.turn_number or 0,
+            tool_calls=[
+                {
+                    "tool_call_id": "call-shell-assessment",
+                    "tool_name": "shell.assessment",
+                    "tool_arguments": {"command": "verify target"},
+                    "tool_result": durable_result,
+                    "output_persistence": "durable",
+                    "compact_tool_result": durable_result,
+                    "phase_sequence": 0,
+                }
+            ],
+        )
+        db.commit()
+
+        assert created == []
+        persisted = db.execute(select(ChatTurnEvent)).scalar_one()
+        assert persisted.content == original_content
+        assert persisted.event_metadata["compact_tool_result"]["stdout"] == (
+            "proof-of-access"
+        )
+        assert persisted.event_metadata["session_status"] == "closed"
     finally:
         db.close()
         engine.dispose()
@@ -515,6 +734,61 @@ def test_merge_reasoning_rows_are_idempotent() -> None:
             .where(ChatTurnEvent.chat_message_id == message.id)
         ).scalars().all()
         assert len(rows) == 1
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_merge_reasoning_rows_keep_distinct_section_ids_with_same_content() -> None:
+    """Repeated planner text across resume stages remains distinct by identity."""
+    engine, db = _build_session()
+    try:
+        message = _seed_assistant_message(db)
+        service = ChatTurnEventService(db)
+
+        first = service.merge_events_for_message(
+            task_id=message.task_id,
+            conversation_id=message.conversation_id,
+            chat_message_id=message.id,
+            turn_number=message.turn_number or 0,
+            reasoning_sections=[
+                {
+                    "content": "Preparing tool execution.",
+                    "phase_sequence": 0,
+                    "section_name": "tool_planning",
+                    "reasoning_section_id": "turn-1:reasoning:initial",
+                }
+            ],
+        )
+        db.commit()
+        assert len(first) == 1
+
+        resumed = service.merge_events_for_message(
+            task_id=message.task_id,
+            conversation_id=message.conversation_id,
+            chat_message_id=message.id,
+            turn_number=message.turn_number or 0,
+            reasoning_sections=[
+                {
+                    "content": "Preparing tool execution.",
+                    "phase_sequence": 0,
+                    "section_name": "tool_planning",
+                    "reasoning_section_id": "turn-1:reasoning:resume",
+                }
+            ],
+        )
+        db.commit()
+
+        assert len(resumed) == 1
+        rows = db.execute(
+            select(ChatTurnEvent)
+            .where(ChatTurnEvent.chat_message_id == message.id)
+            .order_by(ChatTurnEvent.phase_sequence.asc())
+        ).scalars().all()
+        assert [row.event_metadata["reasoning_section_id"] for row in rows] == [
+            "turn-1:reasoning:initial",
+            "turn-1:reasoning:resume",
+        ]
     finally:
         db.close()
         engine.dispose()

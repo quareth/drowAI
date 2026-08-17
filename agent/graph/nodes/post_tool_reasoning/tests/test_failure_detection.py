@@ -7,6 +7,9 @@ from typing import Any, Dict, List
 import pytest
 
 from agent.graph.nodes.post_tool_reasoning import node
+from agent.graph.nodes.post_tool_reasoning.core.failure_detection import (
+    build_failure_context_from_state,
+)
 from agent.graph.nodes.post_tool_reasoning.models import (
     PostToolReasoningDecisionOutput,
     PostToolReasoningOutput,
@@ -17,6 +20,7 @@ from agent.providers.llm.core.base import ToolCall, ToolCallResult
 from agent.graph.nodes.post_tool_reasoning.node import _update_active_decision_memory
 from agent.graph.state import FactsState, InteractiveState, TodoItem, TodoStatus, TraceState
 from agent.graph.utils.todo_stall_guard import TODO_STALL_METADATA_KEY
+from core.prompts.builders.post_tool.evidence import register_runtime_compact_evidence
 
 
 DecisionCall = Callable[..., Awaitable[PostToolReasoningOutput]]
@@ -167,6 +171,67 @@ def test_detect_network_failure() -> None:
     assert category == "network_error"
 
 
+def test_failure_context_uses_terminal_interactive_session_row() -> None:
+    batch_id = "batch-failure-context-terminal-session"
+    running_rows = [
+        {
+            "tool_call_id": f"tc-running-{index}",
+            "tool_id": "shell.write_stdin",
+            "status": "success",
+            "success": True,
+            "compact_tool_result": {
+                "tool": "shell.write_stdin",
+                "summary": f"running step {index}",
+                "process_status": "running",
+                "session_status": "active",
+                "stdout": f"progress-{index}\n",
+            },
+        }
+        for index in range(12)
+    ]
+    terminal_compact = {
+        "tool": "shell.write_stdin",
+        "summary": "Calculator session failed after final input.",
+        "success": False,
+        "status": "failed",
+        "errors": ["Process exited with failure."],
+        "process_status": "failed",
+        "session_status": "closed",
+        "input": "quit\n",
+        "stdout": "7\n42\n50\n50\n",
+        "exit_code": 2,
+    }
+    register_runtime_compact_evidence(
+        {
+            "tool_batch_id": batch_id,
+            "execution_session_aggregate": True,
+            "status": "failed",
+            "success": False,
+            "results": [
+                *running_rows,
+                {
+                    "tool_call_id": "tc-terminal",
+                    "tool_id": "shell.write_stdin",
+                    "status": "failed",
+                    "success": False,
+                    "failure_category": "invalid_params",
+                    "compact_tool_result": terminal_compact,
+                },
+            ],
+        },
+        single_compact=terminal_compact,
+    )
+    state = _make_state({"tool_batch_id": batch_id})
+
+    context = build_failure_context_from_state(state)
+
+    assert context.success_flag is False
+    assert context.status == "failed"
+    assert context.exit_code == 2
+    assert context.summary == "Calculator session failed after final input."
+    assert "progress-11" not in context.summary
+
+
 def test_detect_permission_failure() -> None:
     state = _make_state(
         {
@@ -206,6 +271,189 @@ def test_detect_empty_output() -> None:
     detected, category = node._detect_tool_failure(state)
     assert detected is True
     assert category == "empty_output"
+
+
+@pytest.mark.asyncio
+async def test_runtime_only_shell_evidence_reaches_ptr_without_checkpoint_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch_id = "tb-runtime-only-ptr"
+    compact = {
+        "schema_version": "2.0",
+        "tool": "shell.write_stdin",
+        "status": "success",
+        "success": True,
+        "exit_code": 0,
+        "summary": "Created /workspace/boris.txt.",
+        "key_findings": [],
+        "errors": [],
+        "report_recommendations": [],
+        "structured_signals": [],
+        "decision_evidence": [],
+        "lossiness_risk": "low",
+    }
+    register_runtime_compact_evidence(
+        {
+            "tool_batch_id": batch_id,
+            "status": "completed",
+            "success": True,
+            "results": [
+                {
+                    "tool_call_id": "tc-runtime-only-ptr",
+                    "tool_id": "shell.write_stdin",
+                    "status": "success",
+                    "success": True,
+                    "compact_tool_result": compact,
+                }
+            ],
+        },
+        single_compact=compact,
+    )
+    captured: Dict[str, str] = {}
+
+    async def fake_decision_call(**kwargs: Any) -> PostToolReasoningOutput:
+        captured["user_prompt"] = kwargs["user_prompt"]
+        return PostToolReasoningOutput(
+            observation="The requested workspace file was created successfully.",
+            next_action="finalize",
+            action_reasoning="The requested utility action completed successfully.",
+            tool_intent=None,
+            user_goal_achieved=True,
+            todo_progress=[],
+            effective_next_goal=None,
+            failure_detected=False,
+            failure_category=None,
+            retry_suggested=False,
+        )
+
+    _install_route_client(monkeypatch, fake_decision_call)
+    state = _make_state(
+        {"tool_batch_id": batch_id, "turn_sequence": 1},
+        capability="simple_tool_execution",
+        message="Create boris.txt in /workspace",
+    )
+
+    update = await node.post_tool_reasoning(
+        state,
+        context=None,
+        config={},
+        writer=None,
+    )
+    updated = InteractiveState.from_mapping(update)
+
+    assert "Created /workspace/boris.txt." in captured["user_prompt"]
+    assert "synthesized_output" not in updated.facts.metadata
+    assert "working_memory" not in updated.facts.metadata
+    assert updated.trace.observations == []
+
+
+@pytest.mark.asyncio
+async def test_mixed_runtime_evidence_uses_only_durable_rows_for_ptr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    batch_id = "tb-mixed-ptr"
+    utility_compact = {
+        "tool": "shell.utility",
+        "status": "success",
+        "success": True,
+        "summary": "TRANSIENT_UTILITY_SENTINEL",
+        "key_findings": [],
+        "errors": [],
+        "report_recommendations": [],
+    }
+    assessment_compact = {
+        "tool": "shell.assessment",
+        "status": "success",
+        "success": True,
+        "summary": "DURABLE_ASSESSMENT_SENTINEL",
+        "key_findings": ["Port 443 is open."],
+        "errors": [],
+        "report_recommendations": [],
+    }
+    register_runtime_compact_evidence(
+        {
+            "tool_batch_id": batch_id,
+            "status": "completed",
+            "success": True,
+            "results": [
+                {
+                    "tool_call_id": "tc-utility",
+                    "tool_id": "shell.utility",
+                    "status": "success",
+                    "success": True,
+                    "compact_tool_result": utility_compact,
+                },
+                {
+                    "tool_call_id": "tc-assessment",
+                    "tool_id": "shell.assessment",
+                    "status": "success",
+                    "success": True,
+                    "compact_tool_result": assessment_compact,
+                },
+            ],
+        },
+        single_compact=utility_compact,
+    )
+    captured: Dict[str, str] = {}
+
+    async def fake_decision_call(**kwargs: Any) -> PostToolReasoningOutput:
+        captured["user_prompt"] = kwargs["user_prompt"]
+        return PostToolReasoningOutput(
+            observation="The durable assessment found port 443 open.",
+            next_action="finalize",
+            action_reasoning="The durable assessment completed successfully.",
+            tool_intent=None,
+            user_goal_achieved=True,
+            todo_progress=[],
+            effective_next_goal=None,
+            failure_detected=False,
+            failure_category=None,
+            retry_suggested=False,
+        )
+
+    _install_route_client(monkeypatch, fake_decision_call)
+    state = _make_state(
+        {
+            "tool_batch_id": batch_id,
+            "turn_sequence": 1,
+            "last_tool_result_compact_batch": {
+                "tool_batch_id": batch_id,
+                "status": "completed",
+                "success": True,
+                "results": [
+                    {
+                        "tool_call_id": "tc-assessment",
+                        "tool_id": "shell.assessment",
+                        "status": "success",
+                        "success": True,
+                        "compact_tool_result": assessment_compact,
+                    }
+                ],
+            },
+        },
+        capability="simple_tool_execution",
+        message="Assess the local service and report the result",
+        selected_tool="shell.assessment",
+        tool_parameters={"command": "nmap localhost"},
+    )
+
+    update = await node.post_tool_reasoning(
+        state,
+        context=None,
+        config={},
+        writer=None,
+    )
+    updated = InteractiveState.from_mapping(update)
+
+    assert "DURABLE_ASSESSMENT_SENTINEL" in captured["user_prompt"]
+    assert "TRANSIENT_UTILITY_SENTINEL" not in captured["user_prompt"]
+    assert updated.trace.observations == [
+        "The durable assessment found port 443 open."
+    ]
+    assert updated.facts.metadata["synthesized_output"]["observation_text"] == (
+        "The durable assessment found port 443 open."
+    )
+    assert updated.facts.metadata["working_memory"]["current_turn_phases"]
 
 
 def test_retry_budget_tracking() -> None:

@@ -1,14 +1,22 @@
 """
 Configuration module for DrowAI backend
 """
+import logging
+import math
 import os
 import re
-import logging
 import time
 from pathlib import Path
 
 from core.llm import LLM_TIMEOUT_INTENT_CLASSIFIER_SEC
 from backend.config.generated_config import resolved_backend_env
+from runtime_shared.shell_timeouts import (
+    DEFAULT_TOOL_TIMEOUT_SECONDS,
+    SHELL_SESSION_DEFAULT_CLEANUP_INTERVAL_SEC,
+    SHELL_SESSION_DEFAULT_IDLE_TIMEOUT_SEC,
+    SHELL_SESSION_DEFAULT_TERMINAL_IO_GRACE_SEC,
+    SHELL_SESSION_DEFAULT_TERMINATION_GRACE_SEC,
+)
 
 try:
     from dotenv import load_dotenv
@@ -52,6 +60,18 @@ def _read_positive_int_env(key: str, default: int) -> int:
     """Return a positive int env value or default."""
     value = _read_int_env(key, default)
     return value if value > 0 else default
+
+
+def _read_positive_float_env(key: str, default: float) -> float:
+    """Return a positive float env value or default."""
+    raw = os.getenv(key)
+    if raw is None:
+        return default
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if math.isfinite(value) and value > 0 else default
 
 
 def _read_size_env(key: str, default: str) -> str:
@@ -149,6 +169,31 @@ TERMINAL_SESSION_TIMEOUT = int(os.getenv('TERMINAL_SESSION_TIMEOUT', '3600'))  #
 TERMINAL_CLEANUP_INTERVAL = int(os.getenv('TERMINAL_CLEANUP_INTERVAL', '300'))  # 5 minutes
 MAX_SESSIONS_PER_USER = int(os.getenv('MAX_SESSIONS_PER_USER', '10'))
 MAX_TOTAL_SESSIONS = int(os.getenv('MAX_TOTAL_SESSIONS', '1000'))
+SHELL_SESSION_MAX_ACTIVE_PER_OWNER = _read_positive_int_env("SHELL_SESSION_MAX_ACTIVE_PER_OWNER", 4)
+SHELL_SESSION_MAX_ACTIVE_PER_TASK = _read_positive_int_env("SHELL_SESSION_MAX_ACTIVE_PER_TASK", 16)
+SHELL_SESSION_IDLE_TIMEOUT_SEC = _read_positive_int_env(
+    "SHELL_SESSION_IDLE_TIMEOUT_SEC",
+    SHELL_SESSION_DEFAULT_IDLE_TIMEOUT_SEC,
+)
+SHELL_SESSION_CLEANUP_INTERVAL_SEC = _read_positive_int_env(
+    "SHELL_SESSION_CLEANUP_INTERVAL_SEC",
+    SHELL_SESSION_DEFAULT_CLEANUP_INTERVAL_SEC,
+)
+SHELL_SESSION_TERMINATION_GRACE_SEC = _read_positive_int_env(
+    "SHELL_SESSION_TERMINATION_GRACE_SEC",
+    SHELL_SESSION_DEFAULT_TERMINATION_GRACE_SEC,
+)
+SHELL_SESSION_TERMINAL_IO_GRACE_SEC = _read_positive_int_env(
+    "SHELL_SESSION_TERMINAL_IO_GRACE_SEC",
+    SHELL_SESSION_DEFAULT_TERMINAL_IO_GRACE_SEC,
+)
+TOOL_TIMEOUT_MAX_SECONDS = _read_positive_float_env(
+    "TOOL_TIMEOUT_MAX_SECONDS",
+    _read_positive_float_env(
+        "TOOL_TIMEOUT_DEFAULT_SECONDS",
+        DEFAULT_TOOL_TIMEOUT_SECONDS,
+    ),
+)
 
 # Output buffer configuration
 MAX_BUFFER_SIZE = int(os.getenv('MAX_BUFFER_SIZE', '10000'))  # lines
@@ -256,8 +301,15 @@ __all__ = [
     "REASONING_WS_MAX_SUBSCRIPTIONS",
     "REASONING_WS_MULTIPLEX",
     "RELOAD",
+    "SHELL_SESSION_CLEANUP_INTERVAL_SEC",
+    "SHELL_SESSION_IDLE_TIMEOUT_SEC",
+    "SHELL_SESSION_MAX_ACTIVE_PER_OWNER",
+    "SHELL_SESSION_MAX_ACTIVE_PER_TASK",
+    "SHELL_SESSION_TERMINAL_IO_GRACE_SEC",
+    "SHELL_SESSION_TERMINATION_GRACE_SEC",
     "TERMINAL_CLEANUP_INTERVAL",
     "TERMINAL_SESSION_TIMEOUT",
+    "TOOL_TIMEOUT_MAX_SECONDS",
     "WEBSOCKET_PING_INTERVAL",
     "WEBSOCKET_PING_TIMEOUT",
 ]

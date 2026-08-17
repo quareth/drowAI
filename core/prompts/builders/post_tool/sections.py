@@ -98,6 +98,9 @@ def format_intent_contract(contract: Any) -> str:
     executed_ports = ", ".join(contract.get("executed_ports") or []) or "none"
     mismatches = ", ".join(contract.get("mismatches") or []) or "none"
     matched_via = str(contract.get("matched_via") or "").strip()
+    parameter_authority = str(
+        contract.get("parameter_authority") or "authoritative"
+    ).strip()
 
     rendered = (
         f"Status: {status}\n"
@@ -107,10 +110,17 @@ def format_intent_contract(contract: Any) -> str:
         f"Executed tool: {executed_tool}\n"
         f"Executed target(s): {executed_targets}\n"
         f"Executed port(s): {executed_ports}\n"
+        f"Parameter authority: {parameter_authority}\n"
         f"Mismatches: {mismatches}"
     )
     if matched_via:
         rendered += f"\nMatched via: {matched_via}"
+    if parameter_authority == "advisory":
+        rendered += (
+            "\nConstraint note: shell parameters are free-form; expected tool, "
+            "target, and port values are guidance, not grounds for an automatic "
+            "invalid-parameters retry."
+        )
     return rendered
 
 

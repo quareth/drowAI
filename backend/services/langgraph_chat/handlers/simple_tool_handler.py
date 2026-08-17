@@ -11,6 +11,7 @@ Persistence is handled via ChatMessage updates in the completion callback."""
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
 from typing import Optional
 
 from agent.graph import InteractiveState
@@ -50,6 +51,15 @@ from .turn_runtime import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _has_late_subagent_handoff(interactive_state: InteractiveState) -> bool:
+    """Return whether PTR ended direct execution with a delegation control."""
+    outcome = interactive_state.facts.safe_metadata.get("router_outcome")
+    if not isinstance(outcome, Mapping):
+        return False
+    action = str(outcome.get("action") or "").strip().lower()
+    return action == "delegate_subagent"
 
 
 class SimpleToolHandler(BaseLangGraphHandler):
@@ -205,6 +215,10 @@ class SimpleToolHandler(BaseLangGraphHandler):
                 captured_state["final_state"] = final_state
                 captured_state["interactive_state"] = interactive_state
 
+                if _has_late_subagent_handoff(interactive_state):
+                    result_holder["late_subagent_handoff"] = True
+                    return None
+
                 # Return final message
                 final_text = interactive_state.trace.final_text or interactive_state.facts.message
                 return final_text
@@ -250,8 +264,14 @@ class SimpleToolHandler(BaseLangGraphHandler):
         if not interactive_state:
             raise RuntimeError(f"Simple tool execution did not capture a final state for task {task_id}")
 
-        final_text = interactive_state.trace.final_text or interactive_state.facts.message
-        interactive_state.trace.final_text = final_text
+        late_subagent_handoff = result_holder.get("late_subagent_handoff") is True
+        final_text = (
+            None
+            if late_subagent_handoff
+            else interactive_state.trace.final_text or interactive_state.facts.message
+        )
+        if final_text is not None:
+            interactive_state.trace.final_text = final_text
         persist_intent_context(runtime_config, interactive_state)
 
         # No adapter buffer; events list is empty (persistence via completion callback).
@@ -262,6 +282,9 @@ class SimpleToolHandler(BaseLangGraphHandler):
             chat_inputs.conversation_id or "",
         )
         merge_execution_metadata(result_metadata, captured_state)
+        router_outcome = interactive_state.facts.safe_metadata.get("router_outcome")
+        if isinstance(router_outcome, Mapping):
+            result_metadata["router_outcome"] = dict(router_outcome)
 
         turn_metadata = build_agent_turn_metadata(interactive_state)
         for key, value in turn_metadata.items():

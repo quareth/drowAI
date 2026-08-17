@@ -416,6 +416,7 @@ class LLMClientFactory:
                 base_url=base_url,
                 auth=_openai_compatible_bearer_auth(api_key),
                 wire_model_id=wire_model_id,
+                provider_id=lookup_ref.provider,
                 dialect_policy=dialect_policy,
                 request_policy_id=request_policy_id,
                 model_profile=profile,

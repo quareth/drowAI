@@ -381,16 +381,16 @@ class EnhancedActionPlanner:
         context: Dict[str, Any],
         user_message: str,
     ) -> List[str]:
-        """Resolve, expose, and limit the planner tool catalog for LLM selection."""
+        """Resolve and expose the visible planner tool catalog for LLM selection."""
         resolved_tools = context.get("resolved_tools", [])
         if not isinstance(resolved_tools, list):
             resolved_tools = list(resolved_tools or [])
         resolved_tools = [str(tool_id) for tool_id in resolved_tools if tool_id]
         if not resolved_tools:
-            resolved_tools = build_full_tool_catalog(self.config, logger=self._log)
+            resolved_tools = build_full_tool_catalog(logger=self._log)
 
         if not resolved_tools:
-            resolved_tools = build_full_tool_catalog(self.config, logger=self._log)
+            resolved_tools = build_full_tool_catalog(logger=self._log)
         if not resolved_tools:
             raise RuntimeError("No tools available for LLM selection")
 
@@ -413,10 +413,7 @@ class EnhancedActionPlanner:
         if not resolved_tools:
             raise RuntimeError("No visible tools available for LLM selection")
 
-        if context.get("selected_categories"):
-            return resolved_tools
-        max_tools_for_llm = int(getattr(self.config, "max_tools_exposed", 3))
-        return resolved_tools[: max(1, max_tools_for_llm)]
+        return resolved_tools
 
     async def _try_llm_action_plan(self, action: Action, context: Dict[str, Any]) -> ActionPlan | None:
         """Attempt to have the LLM choose tools/count/strategy and params.
@@ -432,38 +429,9 @@ class EnhancedActionPlanner:
         prompt_builder = ToolPlanningPromptBuilder()
         user_message = self._extract_user_message(context)
         intent_brief = self._extract_intent_brief(context)
-        selection_system_prompt = prompt_builder.build_select_tools_system_prompt()
         limited_tool_list = self._resolve_tool_catalog_for_llm(context=context, user_message=user_message)
-        tool_entries = build_tool_catalog_entries(limited_tool_list)
-        capability_surface = render_capability_surface(limited_tool_list)
         max_tools = int(getattr(self.config, "max_tools_per_action", 3))
         max_committed = int(getattr(self.config, "max_committed_tools_per_batch", 1) or 1)
-        parameter_system_prompt = prompt_builder.build_tool_parameters_system_prompt(
-            max_committed_tools_per_batch=max_committed,
-        )
-        selection_prompt = prompt_builder.build_select_tools_prompt(
-            resolved_tools=limited_tool_list,
-            catalog=tool_entries,
-            target=action.target,
-            phase=context.get("current_phase", "enumeration"),
-            constraints=context.get("constraints", {}),
-            intent_brief=intent_brief,
-            next_tool_hint=context.get("next_tool_hint"),
-            latest_phase_memory=context.get("latest_phase_memory"),
-            capability_surface=capability_surface,
-            working_memory_summary=context.get("selection_working_memory_summary"),
-            referenced_prior_turns=context.get("referenced_prior_turns"),
-            selected_categories=list(context.get("selected_categories") or []),
-            max_tools_per_action=max_tools,
-            max_committed_tools_per_batch=max_committed,
-        )
-        selection_timeout_s = int(
-            getattr(
-                self.config,
-                "llm_tool_selection_timeout",
-                LLM_TIMEOUT_PLANNER_TOOL_SELECTION_SEC,
-            )
-        )
         parameter_timeout_s = int(
             getattr(
                 self.config,
@@ -471,15 +439,58 @@ class EnhancedActionPlanner:
                 LLM_TIMEOUT_PLANNER_PARAMETER_RESOLUTION_SEC,
             )
         )
-        selection = await self._tool_selector.select_tools(
-            system_prompt=selection_system_prompt,
-            selection_prompt=selection_prompt,
-            catalog=tool_entries,
-            limited_tool_list=limited_tool_list,
-            default_strategy=default_exec,
-            max_tools=max_tools,
-            timeout_s=selection_timeout_s,
-        )
+        continuation_tool_id = str(
+            context.get("runtime_continuation_tool") or ""
+        ).strip()
+        if continuation_tool_id:
+            if continuation_tool_id not in limited_tool_list:
+                raise RuntimeError(
+                    "Runtime continuation capability is not available in the planner catalog"
+                )
+            from .llm_tool_selection import ToolSelectionResult
+
+            selection = ToolSelectionResult(
+                selected_tools=[continuation_tool_id],
+                execution_strategy=ExecutionStrategy.SEQUENTIAL,
+                usage_record=None,
+                reasoning="Continue the active runtime execution.",
+            )
+        else:
+            selection_system_prompt = prompt_builder.build_select_tools_system_prompt()
+            tool_entries = build_tool_catalog_entries(limited_tool_list)
+            capability_surface = render_capability_surface(limited_tool_list)
+            selection_prompt = prompt_builder.build_select_tools_prompt(
+                resolved_tools=limited_tool_list,
+                catalog=tool_entries,
+                target=action.target,
+                phase=context.get("current_phase", "enumeration"),
+                constraints=context.get("constraints", {}),
+                intent_brief=intent_brief,
+                next_tool_hint=context.get("next_tool_hint"),
+                latest_phase_memory=context.get("latest_phase_memory"),
+                capability_surface=capability_surface,
+                working_memory_summary=context.get("selection_working_memory_summary"),
+                referenced_prior_turns=context.get("referenced_prior_turns"),
+                selected_categories=list(context.get("selected_categories") or []),
+                max_tools_per_action=max_tools,
+                max_committed_tools_per_batch=max_committed,
+            )
+            selection_timeout_s = int(
+                getattr(
+                    self.config,
+                    "llm_tool_selection_timeout",
+                    LLM_TIMEOUT_PLANNER_TOOL_SELECTION_SEC,
+                )
+            )
+            selection = await self._tool_selector.select_tools(
+                system_prompt=selection_system_prompt,
+                selection_prompt=selection_prompt,
+                catalog=tool_entries,
+                limited_tool_list=limited_tool_list,
+                default_strategy=default_exec,
+                max_tools=max_tools,
+                timeout_s=selection_timeout_s,
+            )
         if selection_is_unavailable_capability(selection.selected_tools):
             return ActionPlan(
                 type=action.type,
@@ -501,6 +512,10 @@ class EnhancedActionPlanner:
                 tool_batch=None,
             )
         specs, fn_map = build_function_tool_specs_for(selection.selected_tools)
+        parameter_system_prompt = prompt_builder.build_tool_parameters_system_prompt(
+            max_committed_tools_per_batch=max_committed,
+            callable_tool_ids=selection.selected_tools,
+        )
         artifact_file_metadata = build_artifact_file_metadata_for_prompt(
             selected_tools=selection.selected_tools,
             workspace_path=context.get("workspace_path"),

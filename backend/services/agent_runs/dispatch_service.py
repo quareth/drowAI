@@ -22,6 +22,7 @@ from .dispatch_contracts import (
     AgentRunDispatchStop,
     AgentRunLaunchService,
     DispatchBatchLaunchFailure,
+    ReadyHandoffProjector,
     ReadyHandoffProcessor,
 )
 from .dispatch_followup import FollowupDispatcher
@@ -76,6 +77,7 @@ class SubagentDispatchService:
         *,
         parent_turn_sequence: int | None,
         process_ready_handoffs: ReadyHandoffProcessor,
+        project_ready_handoffs: ReadyHandoffProjector | None = None,
     ) -> AgentRunDispatchResult:
         """Launch validated invocations in concurrency-limited ordered batches."""
         completions: list[AgentRunCompletion | None] = [None] * len(plan)
@@ -99,7 +101,7 @@ class SubagentDispatchService:
                 return AgentRunDispatchResult(
                     stop=AgentRunDispatchStop(
                         invocation=pending[0],
-                        status="failed",
+                        status="interrupted",
                     )
                 )
 
@@ -124,17 +126,45 @@ class SubagentDispatchService:
 
             child_tasks = launch_result.children
             should_process_parent = len(child_tasks) > 1 and not deferred
-
-            batch_results = await asyncio.gather(
-                *(
+            result_tasks = tuple(
+                asyncio.create_task(
                     self._settlement.require_child_task_result(
                         child.terminal,
                         assignment=child.invocation.assignment,
                         graph_thread_id=child.invocation.graph_thread_id,
                     )
-                    for child in child_tasks
                 )
+                for child in child_tasks
             )
+            pending_results = set(result_tasks)
+            try:
+                while pending_results:
+                    done, pending_results = await asyncio.wait(
+                        pending_results,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if (
+                        project_ready_handoffs is not None
+                        and should_process_parent
+                        and pending_results
+                    ):
+                        partial_completions: list[AgentRunCompletion] = []
+                        for task in result_tasks:
+                            if task not in done:
+                                continue
+                            result = task.result()
+                            if isinstance(result, AgentRunCompletion):
+                                partial_completions.append(result)
+                        if partial_completions:
+                            await project_ready_handoffs(
+                                tuple(partial_completions)
+                            )
+            except BaseException:
+                for task in pending_results:
+                    task.cancel()
+                await asyncio.gather(*result_tasks, return_exceptions=True)
+                raise
+            batch_results = tuple(task.result() for task in result_tasks)
 
             paused = False
             for child, batch_result in zip(child_tasks, batch_results, strict=True):
@@ -248,6 +278,7 @@ class SubagentDispatchService:
             if entry.status in ACTIVE_AGENT_RUN_STATUSES:
                 counts[entry.agent_id] = counts.get(entry.agent_id, 0) + 1
         return counts
+
 
 __all__ = [
     "SubagentDispatchService",

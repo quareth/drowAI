@@ -19,3 +19,6 @@ Bounded Prior Observations:
 
 Assignment:
 {"agent_id": "pathfinder", "agent_kind": "recon", "agent_run_id": "run-1", "assignment_id": "assign-1", "conversation_id": "conversation-1", "objective": "Map live hosts on the approved target.", "parent_graph_thread_id": "parent-thread-1", "parent_turn_id": "turn-1", "relevant_context": {"ticket": "ENG-123"}, "scope_summary": "Approved internal test host only.", "suggested_capabilities": ["host_discovery", "port_scan"], "targets": ["10.0.0.10"], "task_id": 42, "tenant_id": 7}
+
+Prior Tool Outcomes:
+[{"calls": [{"intent": "Check whether the target responds.", "status": "success", "success": true, "summary": "10.0.0.10 responded", "tool": "information_gathering.network_discovery.fping"}, {"errors": ["Deadline exceeded."], "failure_category": "timeout", "intent": "Enumerate exposed services.", "status": "failed", "success": false, "summary": "Service enumeration timed out.", "tool": "information_gathering.network_discovery.nmap"}], "phase": 0, "status": "completed_with_errors", "success": false}]

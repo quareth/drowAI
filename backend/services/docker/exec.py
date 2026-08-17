@@ -19,6 +19,7 @@ import subprocess
 from typing import Any, Dict, List
 
 from backend.core.time_utils import format_iso, utc_now
+from runtime_shared.docker_contracts import CONTAINER_WORKSPACE_PATH
 
 from ..container_utils import get_container_name
 from .client import DockerClient
@@ -172,7 +173,16 @@ class ContainerExec:
         return get_container_name(task_id)
 
     async def start_persistent_pty(
-        self, task_id: int, shell: str = "/bin/bash", cols: int = 80, rows: int = 24
+        self,
+        task_id: int,
+        shell: str = "/bin/bash",
+        cols: int = 80,
+        rows: int = 24,
+        *,
+        command: str | None = None,
+        cwd: str = CONTAINER_WORKSPACE_PATH,
+        env: Dict[str, str] | None = None,
+        interactive: bool = True,
     ):
         """
         Start a persistent PTY exec session in the container for interactive terminal use.
@@ -184,16 +194,21 @@ class ContainerExec:
         if self.api_mode != "sdk":
             raise RuntimeError("Persistent PTY only supported in SDK mode")
         container = self.client.containers.get(container_name)
+        _ = interactive
+        exec_command: str | List[str] = shell
+        if command is not None:
+            exec_command = [shell, "-lc", command]
         exec_id = self.client.api.exec_create(
             container.id,
-            cmd=shell,
+            cmd=exec_command,
             tty=True,
             stdin=True,
             stdout=True,
             stderr=True,
-            environment=None,
+            environment=dict(env or {}) or None,
             privileged=True,
             user="root",
+            workdir=cwd or CONTAINER_WORKSPACE_PATH,
         )["Id"]
         sock = self.client.api.exec_start(
             exec_id, detach=False, tty=True, stream=True, socket=True, demux=False
@@ -204,3 +219,7 @@ class ContainerExec:
         except Exception as e:
             logger.warning(f"PTY resize failed: {e}")
         return exec_id, sock
+
+    def inspect_exec(self, exec_id: str) -> Dict[str, Any]:
+        """Return authoritative Docker exec lifecycle metadata."""
+        return dict(self.client.api.exec_inspect(exec_id))

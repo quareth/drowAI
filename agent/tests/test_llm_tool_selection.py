@@ -218,7 +218,6 @@ class PlannerParityConfig:
     enforce_llm_tool_selection = False
     llm_tool_selection_timeout = 5
     use_llm_tool_calls = True
-    max_tools_exposed = 1
     tool_call_timeout = 5
 
 

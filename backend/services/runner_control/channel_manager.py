@@ -117,6 +117,14 @@ class RunnerChannelManager:
         """Mark a runner connection row as disconnected."""
         self._lifecycle.close_session(session)
 
+    async def reset_terminal_state(self, session: RunnerChannelSession) -> None:
+        """Invalidate terminal state owned by the channel this session replaced."""
+        await self._lifecycle.reset_terminal_state(session)
+
+    def is_session_current(self, session: RunnerChannelSession) -> bool:
+        """Return whether this session is still the runner's active connection."""
+        return self._lifecycle.is_session_current(session)
+
     async def dispatch_outbound_messages(
         self,
         session: RunnerChannelSession,

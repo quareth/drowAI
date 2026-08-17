@@ -81,13 +81,30 @@ def test_build_artifact_file_metadata_rejects_workspace_escape(tmp_path) -> None
     ]
 
 
-def test_build_artifact_file_metadata_omits_when_filesystem_tools_not_selected(tmp_path) -> None:
+def test_build_artifact_file_metadata_supports_visible_utility_shell(tmp_path) -> None:
     artifact = tmp_path / "artifacts" / "scan.xml"
     artifact.parent.mkdir()
     artifact.write_text("<host />\n", encoding="utf-8")
 
     entries = build_artifact_file_metadata_for_prompt(
-        selected_tools=["shell.exec"],
+        selected_tools=["shell.utility"],
+        workspace_path=str(tmp_path),
+        artifact_refs=[{"path": "artifacts/scan.xml"}],
+    )
+
+    assert entries == [
+        {
+            "path": "artifacts/scan.xml",
+            "status": "ready",
+            "size_bytes": artifact.stat().st_size,
+            "line_count": 1,
+        }
+    ]
+
+
+def test_build_artifact_file_metadata_omits_for_non_file_tool(tmp_path) -> None:
+    entries = build_artifact_file_metadata_for_prompt(
+        selected_tools=["information_gathering.network_discovery.nmap"],
         workspace_path=str(tmp_path),
         artifact_refs=[{"path": "artifacts/scan.xml"}],
     )

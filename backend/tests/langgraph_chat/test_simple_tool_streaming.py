@@ -541,6 +541,43 @@ class TestSimpleToolStreaming:
         ]
         assert "decision_router" not in usage_sources
 
+    @pytest.mark.asyncio
+    async def test_late_subagent_handoff_does_not_finalize_parent_message(
+        self,
+        mock_checkpointer_service,
+        mock_executor,
+        mock_adapter,
+        runtime_config,
+        sample_state,
+    ):
+        """PTR delegation remains a backend control instead of response text."""
+        handler = SimpleToolHandler(
+            checkpointer_service=mock_checkpointer_service,
+            executor=mock_executor,
+            streaming_adapter=mock_adapter,
+        )
+        sample_state["trace"]["final_text"] = None
+        sample_state["facts"]["metadata"]["router_outcome"] = {
+            "action": "delegate_subagent",
+            "candidate_id": "ptr-delegate-1",
+            "agent_handoff": {
+                "agent_handoff": "required",
+                "subagent": "pathfinder",
+                "objective": "Scan ports on 10.0.0.10.",
+            },
+        }
+        mock_executor.stream_graph.return_value = GraphExecutionResult(
+            final_state=sample_state
+        )
+
+        with patch(
+            "backend.services.langgraph_chat.handlers.simple_tool_handler.build_simple_tool_graph"
+        ):
+            result = await handler.handle(runtime_config)
+
+        assert result.final_text is None
+        assert result.metadata["router_outcome"]["action"] == "delegate_subagent"
+
 
 __all__ = [
     "TestSimpleToolStreaming",

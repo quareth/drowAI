@@ -6,6 +6,11 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
+from runtime_shared.shell_capabilities import (
+    SHELL_ASSESSMENT_TOOL_ID,
+    SHELL_UTILITY_TOOL_ID,
+)
+
 resolve_tools_for_capability = None  # type: ignore[assignment]
 filter_visible_tool_ids = None  # type: ignore[assignment]
 get_tool_metadata = None  # type: ignore[assignment]
@@ -45,7 +50,10 @@ HINT_TO_CAPABILITY = {
 }
 
 _FALLBACK_CAPABILITY_TOOLS: Dict[str, List[str]] = {
-    "simple_tool_execution": ["shell.exec"],
+    "simple_tool_execution": [
+        SHELL_UTILITY_TOOL_ID,
+        SHELL_ASSESSMENT_TOOL_ID,
+    ],
     "scan_ports": ["information_gathering.network_discovery.nmap"],
     "scan_web": ["information_gathering.web_enumeration.http_request"],
     "http_request": ["information_gathering.web_enumeration.http_request"],
@@ -288,14 +296,6 @@ def build_tool_catalog(
         tool_context["current_phase"] = metadata["current_phase"]
 
     max_tools = limit
-    if max_tools is None:
-        try:
-            if config and hasattr(config, "max_tools_exposed"):
-                max_tools = int(getattr(config, "max_tools_exposed"))
-            else:
-                max_tools = int(metadata.get("max_tools_exposed", 3))
-        except Exception:
-            max_tools = 3
 
     candidate_ids: List[str] = []
     primary_capability: Optional[str] = None

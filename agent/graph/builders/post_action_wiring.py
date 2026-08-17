@@ -1,9 +1,9 @@
 """Shared graph wiring for post-action continuation paths.
 
 This module owns the reusable LangGraph node and edge registration shared by
-the simple-tool graph and the parent-handoff continuation graph. It wires
-existing nodes only; semantic action decisions remain in PAR and deterministic
-routing remains in the decision router.
+the simple-tool graph and the parent-handoff continuation graph. Ordinary
+tools retain the approval, dispatch, and synthesis path; only a running
+execution enters the continuation-session boundary.
 """
 
 from __future__ import annotations
@@ -22,12 +22,19 @@ from ..nodes.select_tool_categories import select_tool_categories_node
 from ..nodes.synthesis import synthesis_node
 from ..nodes.think_more import think_more_node
 from ..nodes.tool_articulation import articulate_tool_intent
+from ..nodes.terminal_session_compressor import (
+    compress_terminal_execution_session_output,
+)
 from ..nodes.tool_synthesizer import synthesize_tool_output
 from ..state import InteractiveState
 from ..subgraphs.tool_execution import (
     approval_gate_node,
     dispatch_tool_execution_node,
     prepare_tool_execution_plan,
+)
+from ..subgraphs.tool_execution_session import (
+    build_tool_execution_session_subgraph,
+    route_after_tool_dispatch,
 )
 from .common_edges import (
     require_conditional_edges,
@@ -48,6 +55,9 @@ def add_direct_tool_action_nodes(
     approval_gate_node_fn: Callable[..., Any] = approval_gate_node,
     dispatch_tool_execution_node_fn: Callable[..., Any] = (
         dispatch_tool_execution_node
+    ),
+    terminal_session_compressor_fn: Callable[..., Any] = (
+        compress_terminal_execution_session_output
     ),
     synthesize_tool_output_fn: Callable[..., Any] = synthesize_tool_output,
 ) -> None:
@@ -89,10 +99,22 @@ def add_direct_tool_action_nodes(
         ),
     )
     graph.add_node(
+        "tool_execution_session",
+        build_tool_execution_session_subgraph(on_wrap_log=on_wrap_log),
+    )
+    graph.add_node(
+        "terminal_session_compressor",
+        wrap_with_context_async(
+            terminal_session_compressor_fn,
+            node_name="terminal_session_compressor",
+            on_wrap_log=on_wrap_log,
+        ),
+    )
+    graph.add_node(
         "tool_synthesizer",
         wrap_with_context_async(
             synthesize_tool_output_fn,
-            node_name="synthesizer",
+            node_name="tool_synthesizer",
             on_wrap_log=on_wrap_log,
         ),
     )
@@ -102,10 +124,10 @@ def wire_direct_tool_action_path(
     graph: Any,
     *,
     route_after_prepare_tool_plan: Callable[[InteractiveState], str],
-    tool_synthesizer_target: str,
+    terminal_target: str,
     conditional: Callable[..., Any] | None = None,
 ) -> Callable[..., Any]:
-    """Wire the existing direct-tool path through a caller-supplied PAR target."""
+    """Wire ordinary execution directly and branch running work to continuation."""
     add_conditional_edges = conditional or require_conditional_edges(graph)
     graph.add_edge("select_tool_categories", "prepare_tool_plan")
     add_conditional_edges(
@@ -114,13 +136,22 @@ def wire_direct_tool_action_path(
         {
             "articulation": "articulation",
             "approval_gate": "approval_gate",
-            "post_tool_reasoning": tool_synthesizer_target,
+            "post_tool_reasoning": terminal_target,
         },
     )
     graph.add_edge("articulation", "approval_gate")
     graph.add_edge("approval_gate", "dispatch_tool")
-    graph.add_edge("dispatch_tool", "tool_synthesizer")
-    graph.add_edge("tool_synthesizer", tool_synthesizer_target)
+    add_conditional_edges(
+        "dispatch_tool",
+        with_interactive_state(route_after_tool_dispatch),
+        {
+            "execution_session": "tool_execution_session",
+            "terminal": "tool_synthesizer",
+        },
+    )
+    graph.add_edge("tool_execution_session", "terminal_session_compressor")
+    graph.add_edge("terminal_session_compressor", "tool_synthesizer")
+    graph.add_edge("tool_synthesizer", terminal_target)
     return add_conditional_edges
 
 

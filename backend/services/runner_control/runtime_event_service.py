@@ -36,6 +36,9 @@ from backend.services.data_plane.registry import get_object_store
 from backend.services.artifact.runner_result_ingest_service import RunnerResultIngestService
 from backend.services.runner_control.audit import RunnerControlAuditEmitter, RunnerControlAuditService
 from backend.services.runner_control.terminal_frame_buffer import get_runner_terminal_frame_buffer
+from backend.services.runner_control.terminal_stream_registry import (
+    get_runner_terminal_stream_registry,
+)
 from backend.services.runner_control.runtime_job_service import RuntimeJobService, RuntimeJobServiceError
 from backend.services.task.retirement_service import TaskRetirementService
 from backend.services.task.state_service import TaskStateService
@@ -251,6 +254,7 @@ class RuntimeEventService:
         )
 
         task_status = self._transition_task_for_event(
+            tenant_id=tenant_id,
             task_id=task_id,
             runtime_job=runtime_job,
             envelope=envelope,
@@ -569,7 +573,7 @@ class RuntimeEventService:
         error_code = _payload_error_code(payload=payload)
         error_message = _payload_error_message(payload=payload)
         try:
-            transitioned = RuntimeJobService(self._db).transition_runtime_job(
+            transitioned = RuntimeJobService(self._db).complete_runtime_job_from_result(
                 tenant_id=tenant_id,
                 runtime_job_id=runtime_job.id,
                 next_status=next_status,
@@ -578,14 +582,6 @@ class RuntimeEventService:
                 error_message=error_message,
             )
         except RuntimeJobServiceError as exc:
-            if exc.error_code in {"RUNTIME_JOB_TRANSITION_STALE", "RUNTIME_JOB_TRANSITION_INVALID"}:
-                logger.info(
-                    "runner_control.runtime_event_stale_transition runtime_job_id=%s message_type=%s error_code=%s",
-                    runtime_job.id,
-                    envelope.type,
-                    exc.error_code,
-                )
-                return None
             raise RuntimeEventServiceError(
                 error_code=exc.error_code,
                 message=str(exc),
@@ -595,6 +591,7 @@ class RuntimeEventService:
     def _transition_task_for_event(
         self,
         *,
+        tenant_id: int,
         task_id: int | None,
         runtime_job: RuntimeJob | None,
         envelope: RunnerEnvelope,
@@ -619,7 +616,7 @@ class RuntimeEventService:
             reason = "Runner lifecycle cancellation completed"
         elif envelope.message_type is RunnerMessageType.RUNTIME_RETIRED:
             reason = "Runner lifecycle retirement completed"
-            self._schedule_retirement_cleanup(task_id=task_id)
+            self._schedule_retirement_cleanup(tenant_id=tenant_id, task_id=task_id)
 
         success, _, _ = TaskStateService(self._db).change_task_status(
             task_id=task_id,
@@ -634,13 +631,23 @@ class RuntimeEventService:
         return target_status
 
     @staticmethod
-    def _schedule_retirement_cleanup(*, task_id: int) -> None:
+    def _schedule_retirement_cleanup(*, tenant_id: int, task_id: int) -> None:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            asyncio.run(TaskRetirementService.cleanup_runtime_stream_state(task_id=task_id))
+            asyncio.run(
+                TaskRetirementService.cleanup_runtime_stream_state(
+                    tenant_id=tenant_id,
+                    task_id=task_id,
+                )
+            )
             return
-        loop.create_task(TaskRetirementService.cleanup_runtime_stream_state(task_id=task_id))
+        loop.create_task(
+            TaskRetirementService.cleanup_runtime_stream_state(
+                tenant_id=tenant_id,
+                task_id=task_id,
+            )
+        )
 
     def _publish_runtime_event(
         self,
@@ -675,6 +682,19 @@ class RuntimeEventService:
                 sequence=payload.sequence,
                 stream=payload.stream,
                 data=safe_frame_data,
+                eof=payload.eof,
+                process_status=payload.process_status,
+                exit_code=payload.exit_code,
+            )
+            streamed = get_runner_terminal_stream_registry().append_stream_frame(
+                tenant_id=tenant_id,
+                runner_id=runner_id,
+                task_id=task_id,
+                session_id=payload.session_id,
+                data=safe_frame_data,
+                eof=payload.eof,
+                process_status=payload.process_status,
+                exit_code=payload.exit_code,
             )
             event_metadata["terminal"] = {
                 "session_id": payload.session_id,
@@ -682,6 +702,10 @@ class RuntimeEventService:
                 "stream": payload.stream,
                 "data": safe_frame_data,
                 "buffered": buffered,
+                "streamed": streamed,
+                "eof": payload.eof,
+                "process_status": payload.process_status,
+                "exit_code": payload.exit_code,
             }
         elif isinstance(payload, _RESULT_PAYLOAD_TYPES):
             event_metadata["operation_id"] = str(payload.operation_id)
@@ -704,6 +728,12 @@ class RuntimeEventService:
                         runtime_job_id=binding_runtime_job_id,
                         session_id=payload.session_id,
                     )
+                    get_runner_terminal_stream_registry().authorize_stream(
+                        tenant_id=tenant_id,
+                        runner_id=runner_id,
+                        task_id=task_id,
+                        session_id=payload.session_id,
+                    )
             if (
                 isinstance(payload, RunnerTerminalResultPayload)
                 and payload.terminal_operation == "close"
@@ -722,6 +752,12 @@ class RuntimeEventService:
                     tenant_id=tenant_id,
                     task_id=task_id,
                     runtime_job_id=binding_runtime_job_id,
+                    session_id=payload.session_id,
+                )
+                get_runner_terminal_stream_registry().unregister_stream(
+                    tenant_id=tenant_id,
+                    runner_id=runner_id,
+                    task_id=task_id,
                     session_id=payload.session_id,
                 )
             if isinstance(payload, RunnerToolResultPayload) and tool_result_promotion is not None:

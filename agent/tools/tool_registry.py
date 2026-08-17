@@ -9,6 +9,11 @@ import inspect
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Type, TYPE_CHECKING
 
+from runtime_shared.shell_capabilities import (
+    MODEL_FACING_SHELL_START_TOOL_IDS,
+    canonical_shell_implementation_tool_id,
+)
+
 if TYPE_CHECKING:  # pragma: no cover - avoid circular import at runtime
     from .base_tool import BaseTool
     from .schemas import ToolResult
@@ -138,8 +143,10 @@ def register_tool(name: str, tool_cls: Type["BaseTool"]) -> None:
 
 def tool_exists(name: str) -> bool:
     """Return True if a tool module or registered tool exists."""
-    if name in _TOOLS or name in _MODULE_INDEX:
+    canonical_name = canonical_shell_implementation_tool_id(name)
+    if canonical_name in _TOOLS or canonical_name in _MODULE_INDEX:
         return True
+    name = canonical_name
     try:
         spec = importlib.util.find_spec(f"agent.tools.{name}")
     except ModuleNotFoundError:
@@ -151,8 +158,13 @@ def tool_exists(name: str) -> bool:
 
 def get_tool(name: str) -> Type["BaseTool"]:
     """Load and return the tool class with the given name."""
+    requested_name = name
+    name = canonical_shell_implementation_tool_id(name)
     if name in _TOOLS:
-        return _TOOLS[name]
+        tool_cls = _TOOLS[name]
+        if requested_name != name:
+            register_tool(requested_name, tool_cls)
+        return tool_cls
 
     module_path = _MODULE_INDEX.get(name)
     if module_path is None:
@@ -182,6 +194,8 @@ def get_tool(name: str) -> Type["BaseTool"]:
         obj = getattr(module, class_name, None)
         if isinstance(obj, type) and issubclass(obj, BaseTool) and obj is not BaseTool:
             register_tool(name, obj)
+            if requested_name != name:
+                register_tool(requested_name, obj)
             return obj
         raise ValueError(f"Tool '{name}' has no BaseTool subclass")
 
@@ -189,6 +203,8 @@ def get_tool(name: str) -> Type["BaseTool"]:
         obj = getattr(module, attr)
         if isinstance(obj, type) and issubclass(obj, BaseTool) and obj is not BaseTool:
             register_tool(name, obj)
+            if requested_name != name:
+                register_tool(requested_name, obj)
             return obj
 
     raise ValueError(f"Tool '{name}' has no BaseTool subclass")
@@ -205,7 +221,9 @@ def run_tool_by_name(name: str, data: Dict[str, Any]) -> 'ToolResult':
 
 def available_tools() -> List[str]:
     """Return a sorted list of discovered tool names."""
-    return sorted(set(_MODULE_INDEX) | set(_TOOLS))
+    return sorted(
+        set(_MODULE_INDEX) | set(_TOOLS) | set(MODEL_FACING_SHELL_START_TOOL_IDS)
+    )
 
 
 def get_tool_metadata(name: str) -> Dict[str, Any]:

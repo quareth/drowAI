@@ -8,9 +8,23 @@ from __future__ import annotations
 
 from typing import Dict, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from agent.tools.schemas import CONTAINER_TRANSPORT_DESCRIPTION, ContainerTransport
+from runtime_shared.shell_session_contracts import (
+    SHELL_SESSION_DEFAULT_MAX_OUTPUT_CHARS,
+    SHELL_SESSION_MAX_INPUT_CHARS,
+    SHELL_SESSION_MAX_OUTPUT_CHARS,
+    SHELL_SESSION_MAX_PUBLIC_ID_CHARS,
+    SHELL_SESSION_MIN_OUTPUT_CHARS,
+    ShellExecRequest,
+)
+from runtime_shared.shell_timeouts import (
+    SHELL_SESSION_DEFAULT_MAX_RUNTIME_SEC,
+    SHELL_SESSION_DEFAULT_YIELD_TIME_MS,
+    SHELL_SESSION_MAX_RUNTIME_SEC,
+    SHELL_SESSION_MAX_YIELD_TIME_MS,
+)
 
 ShellTransport = Literal["direct", "file-comm", "pty"]
 """
@@ -23,54 +37,105 @@ Execution transport values that may appear in legacy shell result metadata:
 
 class ShellExecArgs(BaseModel):
     """
-    Execute a single shell command inside the task container.
+    Start one provider-backed shell command session inside the task runtime.
     
     Args:
-        command: Shell command to execute
-        cwd: Optional working directory relative to workspace root
-        env: Additional environment variables
-        timeout_sec: Command timeout in seconds (default: 120)
-        transport: Execution method (optional):
-            - "file-comm": Execute via Kali container queue
-            - "pty": Execute in persistent PTY session (visible to users, troubleshooting)
-            - None: Executor auto-selects based on availability
-        idempotent: Whether rerunning has the same effect
-        redact_output: Apply secret redaction heuristics
+        command: Shell command interpreted by the runtime shell.
+        cwd: Optional runtime working directory. Relative paths resolve from /workspace.
+        env: Additional bounded environment variables for the runtime command.
+        interactive: Enable stdin-driven continuation for the dedicated command process.
+        yield_time_ms: Maximum silent wait before returning a live session.
+        max_output_chars: Maximum output delta characters returned in this response.
+        max_runtime_sec: Hard process lifetime measured from session creation.
     
     Examples:
-        # Auto-select transport (recommended)
         {"command": "whoami"}
-        
-        # Force PTY for visibility
-        {"command": "nmap -p 80 10.0.0.1", "transport": "pty"}
+        {"command": "nmap -p 80 10.0.0.1", "yield_time_ms": 1000}
     """
+
+    model_config = ConfigDict(extra="forbid")
 
     command: str = Field(..., description="Command line to execute (interpreted by /bin/sh -lc).")
     cwd: Optional[str] = Field(
         None,
-        description="Optional working directory relative to the workspace root.",
+        description="Optional runtime working directory. Relative paths resolve from /workspace.",
     )
     env: Optional[Dict[str, str]] = Field(
         default=None,
-        description="Additional environment variables to merge into the execution environment.",
+        description="Additional bounded environment variables for the runtime command.",
     )
-    timeout_sec: int = Field(
-        120,
+    interactive: bool = Field(
+        default=False,
+        description=(
+            "Enable stdin-driven interaction for this dedicated command process. "
+            "Leave false for ordinary commands."
+        ),
+    )
+    yield_time_ms: int = Field(
+        default=SHELL_SESSION_DEFAULT_YIELD_TIME_MS,
+        ge=0,
+        le=SHELL_SESSION_MAX_YIELD_TIME_MS,
+        description=(
+            "Maximum silent wait before returning a live session. Output and "
+            "process completion return earlier."
+        ),
+    )
+    max_output_chars: int = Field(
+        default=SHELL_SESSION_DEFAULT_MAX_OUTPUT_CHARS,
+        ge=SHELL_SESSION_MIN_OUTPUT_CHARS,
+        le=SHELL_SESSION_MAX_OUTPUT_CHARS,
+        description="Maximum output delta characters returned in this response.",
+    )
+    max_runtime_sec: int = Field(
+        default=SHELL_SESSION_DEFAULT_MAX_RUNTIME_SEC,
         ge=1,
-        le=900,
-        description="Maximum time in seconds to allow the command to run before termination.",
+        le=SHELL_SESSION_MAX_RUNTIME_SEC,
+        description="Hard process lifetime measured from session creation.",
     )
-    transport: Optional[ContainerTransport] = Field(
-        None,
-        description=CONTAINER_TRANSPORT_DESCRIPTION,
+
+    @field_validator("env")
+    @classmethod
+    def _validate_env(cls, value: Optional[Dict[str, str]]) -> Optional[Dict[str, str]]:
+        if value is None:
+            return None
+        return ShellExecRequest(command=":", env=value).env
+
+    @field_validator("yield_time_ms", mode="before")
+    @classmethod
+    def _default_null_yield_time(cls, value: object) -> object:
+        return SHELL_SESSION_DEFAULT_YIELD_TIME_MS if value is None else value
+
+
+class ShellWriteStdinArgs(BaseModel):
+    """Write non-empty input to an existing provider-backed shell session."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=SHELL_SESSION_MAX_PUBLIC_ID_CHARS,
+        description="Opaque public shell-session handle returned by a shell start alias.",
     )
-    idempotent: bool = Field(
-        True,
-        description="Indicates whether rerunning the command is expected to have the same effect (used for policy decisions).",
+    chars: str = Field(
+        ...,
+        min_length=1,
+        max_length=SHELL_SESSION_MAX_INPUT_CHARS,
+        description="Non-empty characters to send to stdin exactly as provided.",
     )
-    redact_output: bool = Field(
-        True,
-        description="When true, the tool should apply secret redaction heuristics before returning output.",
+    yield_time_ms: int = Field(
+        default=SHELL_SESSION_DEFAULT_YIELD_TIME_MS,
+        ge=0,
+        le=SHELL_SESSION_MAX_YIELD_TIME_MS,
+        description=(
+            "Fallback wait when the shell produces neither output nor process completion."
+        ),
+    )
+    max_output_chars: int = Field(
+        default=SHELL_SESSION_DEFAULT_MAX_OUTPUT_CHARS,
+        ge=SHELL_SESSION_MIN_OUTPUT_CHARS,
+        le=SHELL_SESSION_MAX_OUTPUT_CHARS,
+        description="Maximum output delta characters returned in this response.",
     )
 
 

@@ -352,6 +352,50 @@ class TestToolEventProcessing:
         assert result["metadata"]["ind"] == stream_consts.TOOL_PHASE_INDEX
         assert "Executing nmap" in result["content"]
 
+    def test_shell_tool_start_exposes_sanitized_command_for_live_display(self, adapter):
+        """Shell cards receive display text without persisting or exposing secrets."""
+        result = adapter.process_streaming_event(
+            {
+                "type": "tool_start",
+                "tool": "shell.utility",
+                "conversation_id": "conv-1",
+                "turn_id": "turn-1",
+                "parameters": {
+                    "command": "TOKEN=secret touch /workspace/boris.txt",
+                },
+            }
+        )
+
+        assert result is not None
+        assert result["metadata"]["command_display"] == (
+            "TOKEN=<REDACTED> touch /workspace/boris.txt"
+        )
+
+    def test_shell_stdin_tool_start_redacts_raw_input_for_stream_replay(self, adapter):
+        """Interactive input must not enter replayable tool_start metadata."""
+        result = adapter.process_streaming_event(
+            {
+                "type": "tool_start",
+                "tool": "shell.write_stdin",
+                "conversation_id": "conv-1",
+                "turn_id": "turn-1",
+                "parameters": {
+                    "session_id": "sess-1",
+                    "chars": "yes\n",
+                    "input": "yes\n",
+                },
+            }
+        )
+
+        assert result is not None
+        parameters = result["metadata"]["parameters"]
+        assert parameters["session_id"] == "sess-1"
+        assert parameters["chars_redacted"] is True
+        assert parameters["chars_length"] == 4
+        assert "chars" not in parameters
+        assert "input" not in parameters
+        assert "yes\n" not in str(result)
+
     def test_adapter_processes_tool_batch_start(self, adapter):
         event = {
             "type": "tool_batch_start",
@@ -403,6 +447,132 @@ class TestToolEventProcessing:
         result = adapter.process_streaming_event(event)
 
         assert result is None
+
+    def test_adapter_allows_correlated_shell_lifecycle_delta_without_durable_output(
+        self,
+        adapter,
+    ):
+        """Interactive shell progress updates the existing card lifecycle only."""
+        state_container = ChatStateContainer(reserved_message_id=101)
+        adapter.process_streaming_event(
+            {
+                "type": "tool_end",
+                "tool": "shell.utility",
+                "tool_call_id": "call-shell-origin",
+                "tool_batch_id": "batch-shell-origin",
+                "conversation_id": "conv-1",
+                "turn_id": "turn-1",
+                "status": "success",
+                "process_status": "running",
+                "session_status": "active",
+                "interaction_boundary": "output_available",
+                "session_id": "shs-progress",
+                "output_persistence": "transient",
+                "compact_tool_result": {
+                    "schema_version": "2.0",
+                    "tool": "shell.utility",
+                    "status": "success",
+                    "success": True,
+                    "summary": "started",
+                    "process_status": "running",
+                    "session_status": "active",
+                    "interaction_boundary": "output_available",
+                    "session_id": "shs-progress",
+                },
+            },
+            state_container=state_container,
+        )
+
+        result = adapter.process_streaming_event(
+            {
+                "type": "tool_delta",
+                "tool": "shell.utility",
+                "tool_call_id": "call-shell-origin",
+                "tool_batch_id": "batch-shell-origin",
+                "conversation_id": "conv-1",
+                "turn_id": "turn-1",
+                "status": "success",
+                "process_status": "running",
+                "session_status": "active",
+                "interaction_boundary": "output_available",
+                "session_id": "shs-progress",
+                "content": "progress line\n",
+                "stdout_ends_with_newline": True,
+                "summary": {"summary": "progress line\n"},
+                "compact_tool_result": {
+                    "schema_version": "2.0",
+                    "tool": "shell.utility",
+                    "status": "success",
+                    "success": True,
+                    "summary": "progress line\n",
+                    "process_status": "running",
+                    "session_status": "active",
+                    "interaction_boundary": "output_available",
+                    "session_id": "shs-progress",
+                },
+                "output_persistence": "transient",
+            },
+            state_container=state_container,
+        )
+
+        assert result is not None
+        assert result["type"] == "tool_delta"
+        assert result["metadata"]["step_type"] == "tool_delta"
+        assert result["metadata"]["tool_call_id"] == "call-shell-origin"
+        assert result["metadata"]["process_status"] == "running"
+        assert result["metadata"]["shell_lifecycle_event"] is True
+        assert result["metadata"]["stdout_ends_with_newline"] is True
+        assert result["metadata"]["compact_tool_result"]["summary"] == "progress line\n"
+        stored_calls = state_container.get_tool_calls()
+        assert len(stored_calls) == 1
+        assert stored_calls[0]["tool_call_id"] == "call-shell-origin"
+        assert stored_calls[0]["process_status"] == "running"
+        assert stored_calls[0]["tool_result"]["summary"] == ""
+        assert "progress line" not in repr(stored_calls)
+
+        terminal_result = adapter.process_streaming_event(
+            {
+                "type": "tool_end",
+                "tool": "shell.utility",
+                "tool_call_id": "call-shell-origin",
+                "tool_batch_id": "batch-shell-origin",
+                "conversation_id": "conv-1",
+                "turn_id": "turn-1",
+                "status": "success",
+                "process_status": "completed",
+                "session_status": "closed",
+                "interaction_boundary": "terminal",
+                "session_id": "shs-progress",
+                "content": "done\n",
+                "stdout_ends_with_newline": True,
+                "summary": {"summary": "done\n"},
+                "output_persistence": "transient",
+                "compact_tool_result": {
+                    "schema_version": "2.0",
+                    "tool": "shell.utility",
+                    "status": "success",
+                    "success": True,
+                    "summary": "done",
+                    "process_status": "completed",
+                    "session_status": "closed",
+                    "interaction_boundary": "terminal",
+                    "session_id": "shs-progress",
+                },
+                "shell_lifecycle_event": True,
+                "shell_output_chunk": True,
+            },
+            state_container=state_container,
+        )
+        assert terminal_result is not None
+        assert terminal_result["content"] == "done\n"
+        assert terminal_result["metadata"]["shell_lifecycle_event"] is True
+        assert terminal_result["metadata"]["shell_output_chunk"] is True
+        assert terminal_result["metadata"]["stdout_ends_with_newline"] is True
+        terminal_calls = state_container.get_tool_calls()
+        assert len(terminal_calls) == 1
+        assert terminal_calls[0]["process_status"] == "completed"
+        assert terminal_calls[0]["session_status"] == "closed"
+        assert terminal_calls[0]["interaction_boundary"] == "terminal"
 
     def test_adapter_forwards_tool_batch_id_on_tool_events(self, adapter):
         start = adapter.process_streaming_event(
@@ -490,6 +660,8 @@ class TestToolEventProcessing:
         assert result["metadata"]["step_type"] == stream_consts.STEP_TOOL_END
         assert result["metadata"]["ind"] == stream_consts.TOOL_PHASE_INDEX
         assert result["metadata"]["streaming"] is False
+        assert result["content"] == "Tool nmap completed (success)"
+        assert "shell_output_chunk" not in result["metadata"]
     
     def test_adapter_processes_tool_end_with_error(self, adapter):
         """Test adapter processes tool_end with error."""
@@ -645,6 +817,234 @@ class TestToolEventProcessing:
         assert mock_persist.call_args.kwargs["reserved_message_id"] == 101
         assert mock_persist.call_args.kwargs["tool_call_info"]["persisted_marker"] is True
 
+    def test_durable_tool_end_masks_cached_stdin_before_state_and_snapshot_persistence(
+        self,
+        adapter,
+    ):
+        """Interactive stdin must not survive in durable tool-call arguments."""
+        secret_input = "assessment-password\n"
+        tool_call_id = "call-write-stdin-1"
+        state_container = ChatStateContainer(reserved_message_id=101)
+
+        adapter.process_streaming_event(
+            {
+                "type": "tool_start",
+                "tool": "shell.write_stdin",
+                "tool_call_id": tool_call_id,
+                "conversation_id": "conv-1",
+                "turn_id": "turn-1",
+                "parameters": {
+                    "session_id": "shs_assessment_1",
+                    "chars": secret_input,
+                    "max_tokens": 512,
+                },
+            },
+            state_container=state_container,
+        )
+
+        with patch.object(adapter._tool_call_snapshot_service, "persist_snapshot") as mock_persist:
+            adapter.process_streaming_event(
+                {
+                    "type": "tool_end",
+                    "tool": "shell.write_stdin",
+                    "tool_call_id": tool_call_id,
+                    "conversation_id": "conv-1",
+                    "turn_id": "turn-1",
+                    "status": "success",
+                    "output_persistence": "durable",
+                },
+                state_container=state_container,
+            )
+
+        stored_arguments = state_container.get_tool_calls()[0]["tool_arguments"]
+        snapshot_arguments = mock_persist.call_args.kwargs["tool_call_info"][
+            "tool_arguments"
+        ]
+        assert "chars" not in stored_arguments
+        assert "chars" not in snapshot_arguments
+        assert stored_arguments["chars_redacted"] is True
+        assert snapshot_arguments["chars_redacted"] is True
+        assert stored_arguments["chars_length"] == len(secret_input)
+        assert snapshot_arguments["chars_length"] == len(secret_input)
+        assert stored_arguments["max_tokens"] == 512
+        assert secret_input not in repr(state_container.get_tool_calls())
+        assert secret_input not in repr(mock_persist.call_args.kwargs)
+
+    def test_transient_tool_end_persists_lifecycle_without_compact_output(
+        self,
+        adapter,
+    ):
+        """Refresh keeps the tool card without durably storing transient output."""
+        event = {
+            "type": "tool_end",
+            "tool": "shell.utility",
+            "tool_call_id": "call-transient-1",
+            "conversation_id": "conv-1",
+            "turn_id": "turn-1",
+            "status": "success",
+            "process_status": "running",
+            "session_status": "active",
+            "interaction_boundary": "output_available",
+            "session_id": "shs_transient_1",
+            "output_persistence": "transient",
+            "compact_tool_result": {
+                "schema_version": "2.0",
+                "tool": "shell.utility",
+                "status": "success",
+                "success": True,
+                "summary": "Created /workspace/boris.txt.",
+                "process_status": "running",
+                "session_status": "active",
+                "interaction_boundary": "output_available",
+                "session_id": "shs_transient_1",
+                "key_findings": [],
+                "errors": [],
+                "report_recommendations": [],
+                "structured_signals": [],
+                "decision_evidence": [],
+                "lossiness_risk": "low",
+            },
+        }
+        state_container = ChatStateContainer(reserved_message_id=101)
+
+        with patch.object(adapter._tool_call_snapshot_service, "persist_snapshot") as mock_persist:
+            result = adapter.process_streaming_event(event, state_container=state_container)
+
+        assert result["metadata"]["output_persistence"] == "transient"
+        assert result["metadata"]["compact_tool_result"]["summary"] == (
+            "Created /workspace/boris.txt."
+        )
+        stored = state_container.get_tool_calls()[0]
+        assert stored["tool_name"] == "shell.utility"
+        assert stored["status"] == "success"
+        assert stored["output_persistence"] == "transient"
+        assert stored["process_status"] == "running"
+        assert stored["session_status"] == "active"
+        assert stored["interaction_boundary"] == "output_available"
+        assert stored["session_id"] == "shs_transient_1"
+        assert stored["tool_result"]["schema_version"] == "2.0"
+        assert stored["tool_result"]["tool"] == "shell.utility"
+        assert stored["tool_result"]["status"] == "success"
+        assert stored["tool_result"]["success"] is True
+        assert stored["tool_result"]["summary"] == ""
+        assert stored["tool_result"]["key_findings"] == []
+        assert stored["compact_tool_result"] == stored["tool_result"]
+        assert "Created /workspace/boris.txt." not in repr(stored)
+        mock_persist.assert_called_once()
+        assert "Created /workspace/boris.txt." not in repr(mock_persist.call_args.kwargs)
+
+    def test_terminal_assessment_replaces_partial_durable_output(self, adapter):
+        """Refresh replays terminal assessment output instead of its start banner."""
+        state_container = ChatStateContainer()
+        base = {
+            "type": "tool_end",
+            "tool": "shell.assessment",
+            "tool_call_id": "call-assessment-refresh",
+            "tool_batch_id": "batch-assessment-refresh",
+            "conversation_id": "conv-1",
+            "turn_id": "turn-1",
+            "status": "success",
+            "output_persistence": "durable",
+            "shell_lifecycle_event": True,
+        }
+        adapter.process_streaming_event(
+            {
+                **base,
+                "process_status": "running",
+                "session_status": "active",
+                "interaction_boundary": "output_available",
+                "session_id": "shs-assessment-refresh",
+                "compact_tool_result": {
+                    "status": "success",
+                    "success": True,
+                    "summary": "Kali banner",
+                    "process_status": "running",
+                },
+            },
+            state_container=state_container,
+        )
+        adapter.process_streaming_event(
+            {
+                **base,
+                "process_status": "completed",
+                "session_status": "closed",
+                "interaction_boundary": "terminal",
+                "session_id": None,
+                "compact_tool_result": {
+                    "status": "success",
+                    "success": True,
+                    "summary": "HTTP response body",
+                    "process_status": "completed",
+                    "artifact_refs": [
+                        {
+                            "path": (
+                                "artifacts/shell-assessment-"
+                                "shs-assessment-refresh.txt"
+                            )
+                        }
+                    ],
+                },
+            },
+            state_container=state_container,
+        )
+
+        [stored] = state_container.get_tool_calls()
+        assert stored["output_persistence"] == "durable"
+        assert stored["process_status"] == "completed"
+        assert stored["tool_result"]["summary"] == "HTTP response body"
+        assert stored["tool_result"]["artifact_refs"][0]["path"] == (
+            "artifacts/shell-assessment-shs-assessment-refresh.txt"
+        )
+        assert "Kali banner" not in repr(stored)
+
+    def test_shell_write_stdin_arguments_are_redacted_before_turn_event_persistence(
+        self,
+        adapter,
+    ):
+        """Continuation input metadata keeps correlation but not raw stdin."""
+        state_container = ChatStateContainer(reserved_message_id=202)
+        state_container.record_tool_call_start(
+            "call-stdin",
+            {"session_id": "shs_stdin_1", "chars": "password123\n"},
+        )
+
+        with patch.object(adapter._tool_call_snapshot_service, "persist_snapshot") as mock_persist:
+            adapter.process_streaming_event(
+                {
+                    "type": "tool_end",
+                    "tool": "shell.write_stdin",
+                    "tool_call_id": "call-stdin",
+                    "conversation_id": "conv-1",
+                    "turn_id": "turn-1",
+                    "status": "success",
+                    "process_status": "completed",
+                    "session_status": "closed",
+                    "interaction_boundary": "terminal",
+                    "session_id": "shs_stdin_1",
+                    "compact_tool_result": {
+                        "schema_version": "2.0",
+                        "tool": "shell.write_stdin",
+                        "status": "success",
+                        "success": True,
+                        "summary": "done",
+                        "process_status": "completed",
+                        "session_status": "closed",
+                        "interaction_boundary": "terminal",
+                        "session_id": "shs_stdin_1",
+                    },
+                },
+                state_container=state_container,
+            )
+
+        stored = state_container.get_tool_calls()[0]
+        assert stored["tool_arguments"] == {
+            "session_id": "<DURABLE_SECRET_MASK:secret>",
+            "chars_redacted": True,
+            "chars_length": len("password123\n"),
+        }
+        assert "password123" not in repr(stored)
+        assert "password123" not in repr(mock_persist.call_args.kwargs)
+
     @pytest.mark.parametrize(
         ("reserved_message_id", "tool_call_id"),
         [
@@ -705,6 +1105,10 @@ class TestToolEventProcessing:
             "conversation_id": "conv-1",
             "turn_id": "turn-1",
             "status": "success",
+            "process_status": "running",
+            "session_status": "active",
+            "interaction_boundary": "output_available",
+            "session_id": "shs_running_123",
             "duration": 2.0,
         }
         
@@ -713,6 +1117,11 @@ class TestToolEventProcessing:
             
             # Verify metric was incremented
             mock_inc.assert_called_with("langgraph_tool_ends_processed")
+            assert result["metadata"]["status"] == "success"
+            assert result["metadata"]["process_status"] == "running"
+            assert result["metadata"]["session_status"] == "active"
+            assert result["metadata"]["interaction_boundary"] == "output_available"
+            assert result["metadata"]["session_id"] == "shs_running_123"
 
     def test_build_tool_event_sequence_has_contract_metadata(self):
         """Synthetic tool events should carry step_type/ind like live events."""
@@ -731,6 +1140,47 @@ class TestToolEventProcessing:
         assert delta_event["metadata"]["ind"] == stream_consts.TOOL_PHASE_INDEX
         assert end_event["metadata"]["step_type"] == stream_consts.STEP_TOOL_END
         assert end_event["metadata"]["ind"] == stream_consts.TOOL_PHASE_INDEX
+
+    @pytest.mark.parametrize(
+        ("process_status", "expected_status"),
+        [
+            ("running", "success"),
+            ("completed", "success"),
+            ("timed_out", "success"),
+            ("terminated", "success"),
+        ],
+    )
+    def test_build_tool_event_sequence_preserves_shell_process_status(
+        self,
+        process_status: str,
+        expected_status: str,
+    ) -> None:
+        events = build_tool_event_sequence(
+            "shell.exec",
+            {
+                "status": "success",
+                "success": True,
+                "process_status": process_status,
+                "session_status": "active" if process_status == "running" else "closed",
+                "interaction_boundary": (
+                    "output_available" if process_status == "running" else "terminal"
+                ),
+                "session_id": "shs_sequence_1",
+                "summary": "shell update",
+            },
+            conversation_id="conv-1",
+            turn_id="turn-1",
+        )
+
+        assert events[-1]["metadata"]["process_status"] == process_status
+        assert events[-1]["metadata"]["session_status"] == (
+            "active" if process_status == "running" else "closed"
+        )
+        assert events[-1]["metadata"]["interaction_boundary"] == (
+            "output_available" if process_status == "running" else "terminal"
+        )
+        assert events[-1]["metadata"]["session_id"] == "shs_sequence_1"
+        assert events[-1]["metadata"]["status"] == expected_status
 
 
 class TestEventSchemaCompatibility:

@@ -16,7 +16,7 @@
         "cwd": "artifacts",
         "env": {"DEBUG": "1"},
         "timeout_sec": 120,
-        "transport": "direct",
+        "transport": "file-comm",
         "strict_mode": true
       },
       "expected_valid": true

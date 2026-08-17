@@ -12,7 +12,7 @@ from agent.graph.utils.tool_catalog import build_tool_catalog
 
 
 class DummyConfig:
-    max_tools_exposed = 2
+    max_tools_per_action = 2
 
 
 def test_build_tool_catalog_uses_hints():
@@ -23,14 +23,43 @@ def test_build_tool_catalog_uses_hints():
     result = build_tool_catalog(capability=None, metadata=metadata, config=DummyConfig())
 
     assert isinstance(result.candidates, list)
-    assert len(result.candidates) <= DummyConfig.max_tools_exposed
+    assert len(result.candidates) <= DummyConfig.max_tools_per_action
     assert len(result.entries) == len(result.candidates)
     assert all(entry.tool_id for entry in result.entries)
     assert result.hints == ["network_scan"]
     assert result.targets == ["127.0.0.1"]
 
 
-def test_build_tool_catalog_hides_nikto_and_openvas(monkeypatch: pytest.MonkeyPatch):
+def test_build_tool_catalog_does_not_apply_implicit_exposure_cap(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    visible_tools = [
+        "information_gathering.network_discovery.nmap",
+        "information_gathering.web_enumeration.http_request",
+        "web_applications.web_crawlers.ffuf",
+    ]
+
+    monkeypatch.setattr(
+        tool_catalog,
+        "resolve_tools_for_capability",
+        lambda _capability, _context, config=None: visible_tools,
+    )
+    monkeypatch.setattr(
+        tool_catalog,
+        "get_tool_metadata",
+        lambda tool_id: {"name": tool_id},
+    )
+
+    result = build_tool_catalog(
+        capability="scan_ports",
+        metadata={},
+        config=DummyConfig(),
+    )
+
+    assert result.candidates == visible_tools
+
+
+def test_build_tool_catalog_applies_visible_tool_allowlist(monkeypatch: pytest.MonkeyPatch):
     def _fake_resolve_tools_for_capability(_capability, _context, config=None):  # noqa: ANN001
         return [
             "filesystem.grep",
@@ -53,7 +82,7 @@ def test_build_tool_catalog_hides_nikto_and_openvas(monkeypatch: pytest.MonkeyPa
     )
 
     assert "information_gathering.network_discovery.nmap" in result.candidates
-    assert "filesystem.grep" in result.candidates
+    assert "filesystem.grep" not in result.candidates
     assert "web_applications.web_vulnerability_scanners.nikto" not in result.candidates
     assert "vulnerability_analysis.openvas.openvas" not in result.candidates
     assert "vulnerability_analysis.openvas.greenbone" not in result.candidates
@@ -67,6 +96,8 @@ def test_build_tool_catalog_hides_internal_utility_tools(monkeypatch: pytest.Mon
             "artifact.search",
             "artifact.read",
             "filesystem.search_text",
+            "shell.utility",
+            "shell.assessment",
         ]
 
     def _fake_get_tool_metadata(tool_id: str):
@@ -82,9 +113,10 @@ def test_build_tool_catalog_hides_internal_utility_tools(monkeypatch: pytest.Mon
     )
 
     assert "shell.exec" not in result.candidates
-    assert "filesystem.search_text" in result.candidates
+    assert "filesystem.search_text" not in result.candidates
     assert "artifact.search" not in result.candidates
     assert "artifact.read" not in result.candidates
+    assert result.candidates == ["shell.utility", "shell.assessment"]
 
 
 @pytest.mark.parametrize(

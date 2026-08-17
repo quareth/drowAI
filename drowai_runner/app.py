@@ -35,6 +35,10 @@ from drowai_runner.job_store import initialize_runner_job_store
 from drowai_runner.logging import configure_runner_logging
 from drowai_runner.logs_metrics import RunnerLogsMetricsAdapter
 from drowai_runner.operation_service import RunnerOperationService
+from drowai_runner.process_lock import (
+    parent_process_watchdog,
+    runner_process_lock as _runner_process_lock,
+)
 from drowai_runner.runtime_image import verify_runtime_info_payload
 from drowai_runner.terminal_proxy import RunnerTerminalProxy
 from drowai_runner.workspace import RunnerWorkspaceManager
@@ -464,8 +468,9 @@ def runtime_info_command(config: RunnerConfig) -> int:
 def managed_run_command(config: RunnerConfig) -> int:
     """Run managed runner control-plane loop with deterministic error mapping."""
     try:
-        logger.info("runner.cloud.start %s", _masked_runner_log(config))
-        return run_cloud_mode(config)
+        with _runner_process_lock(config.runner_root), parent_process_watchdog():
+            logger.info("runner.cloud.start %s", _masked_runner_log(config))
+            return run_cloud_mode(config)
     except RunnerCloudClientError as exc:
         logger.error(
             "runner.cloud.failed error_code=%s message=%s",

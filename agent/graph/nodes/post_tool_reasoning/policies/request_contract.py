@@ -6,6 +6,7 @@ import logging
 from typing import Any, Dict, Mapping
 
 from ....state import InteractiveState
+from ....runtime_controls import read_active_execution_control
 from ..models import PostToolReasoningOutput
 
 REQUEST_CONTRACT_TERMINAL_KEY = "request_contract_terminal"
@@ -37,6 +38,8 @@ def _should_finalize_from_request_contract(
     contract: Mapping[str, str],
 ) -> bool:
     """Return True when contract says this request is terminally answerable."""
+    if read_active_execution_control(interactive.facts.safe_metadata) is not None:
+        return False
     if contract.get("terminal_when") != "determined":
         return False
     if output.failure_detected:
@@ -92,4 +95,3 @@ def _apply_request_contract_policy(
             "(Override: request contract terminal_when=determined) "
             + output.action_reasoning
         )
-

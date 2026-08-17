@@ -49,7 +49,6 @@ class _BriefOnlyDummyConfig:
     enforce_llm_tool_selection = False
     llm_tool_selection_timeout = 5
     use_llm_tool_calls = True
-    max_tools_exposed = 2
     tool_call_timeout = 5
 
 
@@ -64,6 +63,7 @@ class _BriefOnlyFakeLLM:
 
     def __init__(self, tool_id: str) -> None:
         self.tool_id = tool_id
+        self.usage_requests: List[Dict[str, Any]] = []
 
     def _parameters(self) -> Dict[str, Any]:
         if self.tool_id == _VISIBLE_TEST_TOOL_ID:
@@ -73,6 +73,13 @@ class _BriefOnlyFakeLLM:
     async def chat_with_usage(self, _system_prompt, _user_prompt, **kwargs):
         spec = kwargs.get("structured_output")
         spec_name = getattr(spec, "name", None)
+        self.usage_requests.append(
+            {
+                "system_prompt": _system_prompt,
+                "user_prompt": _user_prompt,
+                "structured_output_name": spec_name,
+            }
+        )
         if spec_name == "commit_tool_batch":
             return SimpleNamespace(
                 content="",
@@ -102,6 +109,13 @@ class _BriefOnlyFakeLLM:
         )
 
     async def chat_with_tools_with_usage(self, _system_prompt, _user_prompt, tools, **_kwargs):
+        self.usage_requests.append(
+            {
+                "system_prompt": _system_prompt,
+                "user_prompt": _user_prompt,
+                "structured_output_name": "native_tool_calls",
+            }
+        )
         first_tool = tools[0]
         if isinstance(first_tool, dict):
             fn_name = first_tool["function"]["name"]
@@ -240,6 +254,61 @@ def test_try_llm_action_plan_passes_intent_brief_to_builders(monkeypatch) -> Non
     assert params_kwargs["execution_strategy"] == "sequential"
 
 
+def test_main_selector_and_parameter_prompts_share_shell_profiles() -> None:
+    fake_llm = _BriefOnlyFakeLLM(tool_id="shell.utility")
+    planner = EnhancedActionPlanner(_BriefOnlyDummyConfig(), llm_client=fake_llm)
+    action = Action(
+        type=ActionType.GATHER_INFO,
+        target="localhost",
+        parameters={},
+        reasoning="",
+        expected_outcome="",
+    )
+
+    plan = asyncio.run(
+        planner.build_action_plan(
+            action,
+            {
+                "current_phase": "enumeration",
+                "resolved_tools": ["shell.utility"],
+                "history": [],
+                "user_message": "run a utility check",
+                "intent_brief": _POPULATED_BRIEF,
+            },
+        )
+    )
+
+    assert plan.selected_tools == ["shell.utility"]
+    commit_request = next(
+        request
+        for request in fake_llm.usage_requests
+        if request["structured_output_name"] == "native_tool_calls"
+    )
+    selector_request = next(
+        request
+        for request in fake_llm.usage_requests
+        if request["structured_output_name"] == "tool_selector"
+    )
+    assert commit_request["system_prompt"].count(
+        "Use shell.utility for ordinary operating-system"
+    ) == 1
+    assert commit_request["system_prompt"].count(
+        "Use shell.assessment for commands whose purpose"
+    ) == 1
+    assert "Use shell.utility for ordinary operating-system" not in commit_request[
+        "user_prompt"
+    ]
+    assert "Use shell.utility for ordinary operating-system" not in selector_request[
+        "system_prompt"
+    ]
+    assert selector_request["user_prompt"].count(
+        "Use shell.utility for ordinary operating-system"
+    ) == 1
+    assert selector_request["user_prompt"].count(
+        "Use shell.assessment for commands whose purpose"
+    ) == 1
+
+
 def test_try_llm_action_plan_does_not_fallback_selector_to_planner_summary(monkeypatch) -> None:
     """Selection uses selector memory only; parameters may use planner summary."""
     captured = _install_builder_capture(monkeypatch)
@@ -346,11 +415,14 @@ def test_try_llm_action_plan_tolerates_missing_intent_brief(monkeypatch) -> None
 
 
 def test_llm_catalog_filters_hidden_tools() -> None:
-    """LLM-facing planner catalog must not expose hidden tools."""
-    planner = EnhancedActionPlanner(_BriefOnlyDummyConfig(), llm_client=_BriefOnlyFakeLLM("shell.exec"))
+    """LLM-facing planner catalog exposes universal tools but not hidden tools."""
+    planner = EnhancedActionPlanner(_BriefOnlyDummyConfig(), llm_client=_BriefOnlyFakeLLM("shell.utility"))
     context: Dict[str, Any] = {
         "resolved_tools": [
             "shell.exec",
+            "shell.utility",
+            "shell.assessment",
+            "shell.write_stdin",
             "shell.script",
             "artifact.search",
             "filesystem.read_file",
@@ -374,18 +446,28 @@ def test_llm_catalog_filters_hidden_tools() -> None:
     assert "artifact.search" not in visible
     assert "information_gathering.network_discovery.netdiscover" not in visible
     assert "shell.exec" not in visible
+    assert "shell.utility" in visible
+    assert "shell.assessment" in visible
+    assert "shell.write_stdin" in visible
     assert "shell.script" not in visible
-    assert "filesystem.read_file" in visible
+    assert "filesystem.read_file" not in visible
 
 
-def test_llm_catalog_hides_artifact_overlay_tools_even_when_exposure_allows_them() -> None:
-    """Artifact tools do not survive the final visibility guard."""
+def test_llm_catalog_does_not_cap_visible_mission_tools() -> None:
+    """Direct planning retains visible mission tools alongside shell tools."""
     planner = EnhancedActionPlanner(_BriefOnlyDummyConfig(), llm_client=_BriefOnlyFakeLLM("artifact.search"))
     context: Dict[str, Any] = {
         "resolved_tools": [
-            "shell.exec",
-            "artifact.search",
             "filesystem.read_file",
+            "filesystem.grep",
+            "artifact.search",
+            "shell.script",
+            "shell.exec",
+            "shell.utility",
+            "shell.assessment",
+            "shell.write_stdin",
+            "information_gathering.network_discovery.nmap",
+            "web_applications.web_crawlers.ffuf",
         ],
         "artifact_tool_exposure": {
             "allow_search": True,
@@ -401,9 +483,15 @@ def test_llm_catalog_hides_artifact_overlay_tools_even_when_exposure_allows_them
         user_message="search prior outputs",
     )
 
+    assert visible == [
+        "shell.utility",
+        "shell.assessment",
+        "shell.write_stdin",
+        "information_gathering.network_discovery.nmap",
+        "web_applications.web_crawlers.ffuf",
+    ]
     assert "artifact.search" not in visible
-    assert "filesystem.read_file" in visible
-    assert "shell.exec" not in visible
+    assert "shell.script" not in visible
 
 
 def test_llm_catalog_does_not_fallback_to_raw_registry_tools(monkeypatch) -> None:
@@ -421,7 +509,7 @@ def test_llm_catalog_does_not_fallback_to_raw_registry_tools(monkeypatch) -> Non
     }
     monkeypatch.setattr(
         "agent.reasoning.enhanced_planner_impl.build_full_tool_catalog",
-        lambda _config, *, logger: [],
+        lambda *, logger: [],
     )
     with pytest.raises(RuntimeError, match="No tools available for LLM selection"):
         planner._resolve_tool_catalog_for_llm(
@@ -432,12 +520,14 @@ def test_llm_catalog_does_not_fallback_to_raw_registry_tools(monkeypatch) -> Non
 
 def test_llm_catalog_excludes_current_turn_tool_unavailable_from_runtime_signal() -> None:
     """Runtime-owned unavailable-tool signal disqualifies tools before selection."""
-    planner = EnhancedActionPlanner(_BriefOnlyDummyConfig(), llm_client=_BriefOnlyFakeLLM("shell.exec"))
+    planner = EnhancedActionPlanner(_BriefOnlyDummyConfig(), llm_client=_BriefOnlyFakeLLM("shell.utility"))
     context: Dict[str, Any] = {
         "resolved_tools": [
             "information_gathering.network_discovery.netdiscover",
             "information_gathering.network_discovery.nmap",
             "shell.exec",
+            "shell.utility",
+            "shell.assessment",
         ],
         "selected_categories": ["information_gathering", "shell"],
         "working_memory": {
@@ -468,6 +558,8 @@ def test_llm_catalog_excludes_current_turn_tool_unavailable_from_runtime_signal(
     assert "information_gathering.network_discovery.netdiscover" not in visible
     assert "information_gathering.network_discovery.nmap" in visible
     assert "shell.exec" not in visible
+    assert "shell.utility" in visible
+    assert "shell.assessment" in visible
 
 
 # ---------------------------------------------------------------------------
