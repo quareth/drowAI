@@ -29,6 +29,19 @@ from drowai_runner.control_channel.terminal.models import (
 )
 
 
+def _take_utf8_chunk(value: str, max_bytes: int) -> tuple[str, str, int]:
+    """Take the largest complete-codepoint prefix within the byte limit."""
+    used_bytes = 0
+    used_chars = 0
+    for character in value:
+        character_bytes = len(character.encode("utf-8", errors="replace"))
+        if used_bytes + character_bytes > max_bytes:
+            break
+        used_bytes += character_bytes
+        used_chars += 1
+    return value[:used_chars], value[used_chars:], used_bytes
+
+
 class TerminalFrameLifecycle:
     """Terminal frame/session lifecycle for runner cloud control channel."""
 
@@ -140,24 +153,25 @@ class TerminalFrameLifecycle:
                     frames.append(terminal_frame)
                     should_drop_session = True
                 break
-            encoded = data.encode("utf-8", errors="replace")
-            start = 0
+            remaining_data = data
             while (
-                start < len(encoded)
+                remaining_data
                 and len(frames) < _TERMINAL_FRAME_MAX_FRAMES_PER_OPERATION
                 and bytes_remaining > 0
             ):
-                chunk = encoded[start : start + min(_TERMINAL_FRAME_MAX_BYTES, bytes_remaining)]
-                start += len(chunk)
-                bytes_remaining -= len(chunk)
+                chunk, remaining_data, chunk_bytes = _take_utf8_chunk(
+                    remaining_data,
+                    min(_TERMINAL_FRAME_MAX_BYTES, bytes_remaining),
+                )
                 if not chunk:
-                    continue
+                    break
+                bytes_remaining -= chunk_bytes
                 frames.append(
                     {
                         "session_id": session_id,
                         "sequence": self.next_frame_sequence(session_id),
                         "stream": "stdout",
-                        "data": chunk.decode("utf-8", errors="replace"),
+                        "data": chunk,
                     }
                 )
         return frames, should_drop_session

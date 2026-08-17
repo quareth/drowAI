@@ -124,6 +124,46 @@ class _DedicatedPtyAdapter(_FakePtyAdapter):
         )
 
 
+class _ChunkedUtf8PtyAdapter(_FakePtyAdapter):
+    def __init__(self) -> None:
+        super().__init__()
+        self.results = [
+            TerminalReadResult(ok=True, data=b"\xe2\x82", process_status="running"),
+            TerminalReadResult(ok=True, data=b"\xac tail", process_status="running"),
+        ]
+
+    def read_output_result(self, *, session_id: str, max_bytes: int) -> TerminalReadResult:
+        self.reads.append((session_id, max_bytes))
+        return self.results.pop(0)
+
+
+def test_terminal_proxy_decodes_utf8_across_pty_read_boundaries(tmp_path: Path) -> None:
+    store = initialize_runner_job_store(tmp_path / "runner-jobs.sqlite")
+    store.start_job(
+        runtime_job_id="job-utf8",
+        tenant_id="tenant-a",
+        task_id="23",
+        workspace_id="task-23",
+        image="runtime:test",
+        container_id="cid-23",
+    )
+    adapter = _ChunkedUtf8PtyAdapter()
+    proxy = RunnerTerminalProxy(job_store=store, pty_adapter=adapter)
+    opened = proxy.open_terminal_session(
+        runtime_job_id="job-utf8",
+        session_name="shell",
+    )
+    session_id = str((opened.metadata or {})["session_id"])
+
+    first = proxy.read_terminal_output(session_id=session_id)
+    second = proxy.read_terminal_output(session_id=session_id)
+
+    assert first.metadata is not None
+    assert first.metadata["output"] == ""
+    assert second.metadata is not None
+    assert second.metadata["output"] == "€ tail"
+
+
 def test_terminal_proxy_owns_dedicated_command_status_and_interaction_mode(
     tmp_path: Path,
 ) -> None:

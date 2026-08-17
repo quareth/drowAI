@@ -45,6 +45,7 @@ interface BatchRowState {
   retryMaxAttempts?: number;
   compactToolResult?: CompactToolResult;
   shellOutputChunks?: ShellOutputChunk[];
+  preferDurableRawOutput?: boolean;
   /** First-seen index in the message stream — used as a stable order key when
    * the batch_start manifest is absent. */
   firstSeenIndex: number;
@@ -245,12 +246,24 @@ function buildRows(messages: ChatMessage[], manifest: Map<string, number>): Batc
       row.sessionStatus = readString(metadata, "session_status") ?? row.sessionStatus;
       row.interactionBoundary =
         readString(metadata, "interaction_boundary") ?? row.interactionBoundary;
-      if (metadata?.output_persistence === "transient") {
-        const isShellLifecycle = metadata.shell_lifecycle_event === true;
-        const isShellOutputChunk =
-          (stepType === "tool_delta" &&
-            readString(metadata, "interaction_boundary") === "output_available") ||
-          (stepType === "tool_end" && metadata.shell_output_chunk === true);
+      const isShellLifecycle = metadata?.shell_lifecycle_event === true;
+      const isShellOutputChunk =
+        (stepType === "tool_delta" &&
+          readString(metadata, "interaction_boundary") === "output_available") ||
+        (stepType === "tool_end" && metadata?.shell_output_chunk === true);
+      const isDurableShellTerminal =
+        isShellLifecycle &&
+        stepType === "tool_end" &&
+        metadata?.output_persistence === "durable";
+      if (isDurableShellTerminal) {
+        row.preferDurableRawOutput = true;
+        row.shellOutputChunks = undefined;
+        row.compactToolResult = undefined;
+      }
+      if (
+        metadata?.output_persistence === "transient" &&
+        !row.preferDurableRawOutput
+      ) {
         if (
           isShellLifecycle &&
           isShellOutputChunk &&

@@ -7,6 +7,7 @@ inactive or unassigned runtime jobs.
 
 from __future__ import annotations
 
+import codecs
 from dataclasses import dataclass
 from typing import Mapping, Protocol
 
@@ -80,6 +81,7 @@ class RunnerTerminalProxy:
         self._job_store = job_store
         self._pty_adapter = pty_adapter
         self._sessions: dict[str, TerminalSessionBinding] = {}
+        self._output_decoders: dict[str, codecs.IncrementalDecoder] = {}
 
     def open_terminal_session(
         self,
@@ -125,6 +127,9 @@ class RunnerTerminalProxy:
             container_id=job.container_id,
             interactive=bool(interactive),
             dedicated_command=command is not None,
+        )
+        self._output_decoders[session_id] = codecs.getincrementaldecoder("utf-8")(
+            errors="replace"
         )
         return TerminalProxyResponse(
             accepted=True,
@@ -184,13 +189,20 @@ class RunnerTerminalProxy:
                 ),
                 process_status="running",
             )
+        decoder = self._output_decoders.get(session_id)
+        if decoder is None:
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+            self._output_decoders[session_id] = decoder
+        output = decoder.decode(read_result.data, final=read_result.eof)
+        if read_result.eof:
+            self._output_decoders.pop(session_id, None)
         return TerminalProxyResponse(
             accepted=read_result.ok,
             status="succeeded" if read_result.ok else "failed",
             error_code=read_result.error_code,
             metadata={
                 "session_id": session_id,
-                "output": read_result.data.decode("utf-8", errors="replace"),
+                "output": output,
                 "eof": read_result.eof,
                 "process_status": read_result.process_status,
                 "exit_code": read_result.exit_code,
@@ -222,6 +234,7 @@ class RunnerTerminalProxy:
             return session_check
         self._pty_adapter.close_session(session_id=session_id)
         self._sessions.pop(session_id, None)
+        self._output_decoders.pop(session_id, None)
         return TerminalProxyResponse(accepted=True, status="succeeded")
 
     def _validate_session(self, session_id: str) -> TerminalProxyResponse | None:

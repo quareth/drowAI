@@ -531,7 +531,7 @@ describe("ToolBatchCard", () => {
     );
   });
 
-  it("keeps the accumulated shell stream when the terminal lifecycle event arrives", () => {
+  it("keeps the accumulated utility stream when the terminal lifecycle event arrives", () => {
     const messages: ChatMessage[] = [
       makeMsg({
         id: "shell-start",
@@ -539,7 +539,7 @@ describe("ToolBatchCard", () => {
           step_type: "tool_start",
           tool_batch_id: "tb_shell_transcript",
           tool_call_id: "tc_shell_transcript",
-          tool_name: "shell.assessment",
+          tool_name: "shell.utility",
           command_display: "nmap -p 5432 127.0.0.1; bc",
         },
       }),
@@ -550,7 +550,7 @@ describe("ToolBatchCard", () => {
           step_type: "tool_delta",
           tool_batch_id: "tb_shell_transcript",
           tool_call_id: "tc_shell_transcript",
-          tool_name: "shell.assessment",
+          tool_name: "shell.utility",
           status: "success",
           process_status: "running",
           session_status: "active",
@@ -567,7 +567,7 @@ describe("ToolBatchCard", () => {
           step_type: "tool_delta",
           tool_batch_id: "tb_shell_transcript",
           tool_call_id: "tc_shell_transcript",
-          tool_name: "shell.assessment",
+          tool_name: "shell.utility",
           status: "success",
           process_status: "running",
           session_status: "active",
@@ -583,7 +583,7 @@ describe("ToolBatchCard", () => {
           step_type: "tool_delta",
           tool_batch_id: "tb_shell_transcript",
           tool_call_id: "tc_shell_transcript",
-          tool_name: "shell.assessment",
+          tool_name: "shell.utility",
           status: "success",
           process_status: "running",
           session_status: "active",
@@ -600,7 +600,7 @@ describe("ToolBatchCard", () => {
           step_type: "tool_end",
           tool_batch_id: "tb_shell_transcript",
           tool_call_id: "tc_shell_transcript",
-          tool_name: "shell.assessment",
+          tool_name: "shell.utility",
           status: "success",
           process_status: "completed",
           session_status: "closed",
@@ -617,7 +617,7 @@ describe("ToolBatchCard", () => {
           step_type: "tool_end",
           tool_batch_id: "tb_shell_transcript",
           tool_call_id: "tc_shell_transcript",
-          tool_name: "shell.assessment",
+          tool_name: "shell.utility",
           status: "success",
           process_status: "completed",
           session_status: "closed",
@@ -626,7 +626,7 @@ describe("ToolBatchCard", () => {
           shell_lifecycle_event: true,
           compact_tool_result: {
             schema_version: "2.0",
-            tool: "shell.assessment",
+            tool: "shell.utility",
             status: "success",
             success: true,
             summary: "Shell session closed.",
@@ -650,6 +650,74 @@ describe("ToolBatchCard", () => {
     ).toBe(
       "$ nmap -p 5432 127.0.0.1; bc\nStarting Nmap\n5432/tcp closed\nx\n7\ndone",
     );
+  });
+
+  it("loads the durable assessment transcript after terminal completion", () => {
+    mocked.useToolRawOutputMock.mockClear();
+    const messages: ChatMessage[] = [
+      makeMsg({
+        id: "assessment-start",
+        metadata: {
+          step_type: "tool_start",
+          tool_batch_id: "tb_durable_assessment",
+          tool_call_id: "tc_durable_assessment",
+          tool_name: "shell.assessment",
+          command_display: "nmap -sV 127.0.0.1",
+        },
+      }),
+      makeMsg({
+        id: "assessment-live-output",
+        content: "partial output\n",
+        metadata: {
+          step_type: "tool_delta",
+          tool_batch_id: "tb_durable_assessment",
+          tool_call_id: "tc_durable_assessment",
+          tool_name: "shell.assessment",
+          status: "success",
+          process_status: "running",
+          session_status: "active",
+          interaction_boundary: "output_available",
+          output_persistence: "transient",
+          shell_lifecycle_event: true,
+          stdout_ends_with_newline: true,
+        },
+      }),
+      makeMsg({
+        id: "assessment-terminal-output",
+        content: "partial output\nverified tail\n",
+        metadata: {
+          step_type: "tool_end",
+          tool_batch_id: "tb_durable_assessment",
+          tool_call_id: "tc_durable_assessment",
+          tool_name: "shell.assessment",
+          status: "success",
+          process_status: "completed",
+          session_status: "closed",
+          interaction_boundary: "terminal",
+          output_persistence: "durable",
+          shell_lifecycle_event: true,
+          shell_output_chunk: true,
+          stdout_ends_with_newline: true,
+        },
+      }),
+    ];
+
+    render(
+      <ToolBatchCard messages={messages} groupKey="durable-assessment" taskId={42} />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Toggle tool output" }));
+
+    expect(screen.getByText("Loading raw output...")).toBeTruthy();
+    expect(
+      screen.queryByTestId(
+        "tool-batch-card-durable-assessment-row-tc_durable_assessment-terminal",
+      ),
+    ).toBeNull();
+    expect(mocked.useToolRawOutputMock).toHaveBeenLastCalledWith({
+      taskId: 42,
+      toolCallId: "tc_durable_assessment",
+      enabled: true,
+    });
   });
 
   it("reconstructs partial shell lines without trimming meaningful whitespace", () => {

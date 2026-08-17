@@ -30,7 +30,10 @@ The format is based on
   that the command has exited.
 - Live interactive shell cards now retain output emitted as the command completes
   and reconstruct streamed windows without adding line breaks or stripping
-  meaningful whitespace.
+  meaningful whitespace; completed assessments switch from partial live output
+  to their verified durable transcript.
+- Managed-runner terminal output now preserves multibyte UTF-8 characters across
+  PTY read and terminal-frame boundaries.
 - Main agents and subagents now separate dependent shell stages and verify each
   prerequisite completes successfully before starting the next command.
 - Shell-session lifecycle status and interaction boundaries now remain intact
