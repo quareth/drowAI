@@ -876,6 +876,9 @@ class TurnExecutionOrchestrator:
                 result_metadata = (
                     result.metadata if isinstance(result.metadata, dict) else {}
                 )
+                parent_continuation_pending = (
+                    result_metadata.get(SUBAGENT_PARENT_CONTINUATION_PENDING) is True
+                )
                 _apply_runtime_selection_from_result(
                     runtime_context,
                     result_metadata,
@@ -915,7 +918,7 @@ class TurnExecutionOrchestrator:
                     lifecycle_status = "waiting_for_human"
                     return
 
-                if result_metadata.get(SUBAGENT_PARENT_CONTINUATION_PENDING) is True:
+                if parent_continuation_pending:
                     service._record_result_usage(
                         task_id=task_id,
                         user_id=user_id,
@@ -932,7 +935,6 @@ class TurnExecutionOrchestrator:
                         task_id=task_id,
                         interrupt_id=interrupt_id,
                     )
-                    parent_continuation_pending = True
                     return
 
                 final_content = service._result_service.extract_final_content(

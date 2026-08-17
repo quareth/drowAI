@@ -19,6 +19,9 @@ import pytest
 
 from agent.graph.utils.retry_context import RetryContext, read_retry_context
 from agent.providers.llm.core.exceptions import LLMRefusalError, LLMRefusalOutcome
+from backend.services.agent_runs.continuation import (
+    SUBAGENT_PARENT_CONTINUATION_PENDING,
+)
 from backend.services.langgraph_chat.compression.context_models import (
     CompressionRequiredError,
 )
@@ -448,6 +451,100 @@ async def test_subagent_resume_defers_parent_completion_to_original_turn(
     assert boundary_events == []
     assert lifecycle.end_calls == []
     assert hub_states == [True]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("graph_name", "retained_parent", "expected_hub_states"),
+    [
+        ("subagent", True, [True]),
+        ("simple_tool", False, [True, False]),
+    ],
+)
+async def test_resume_interruption_preserves_only_retained_parent_execution(
+    monkeypatch: pytest.MonkeyPatch,
+    graph_name: str,
+    retained_parent: bool,
+    expected_hub_states: list[bool],
+) -> None:
+    """Repeated HITL pauses must preserve only an actually retained parent."""
+    _patch_provider_runtime_with_session(monkeypatch)
+    hub_states: list[bool] = []
+    lifecycle = _RetryTestLifecycle(cancel_requested=False)
+    waiting_workflows: list[Dict[str, Any]] = []
+
+    class _TrackingHub(_RetryTestHub):
+        def set_streaming_state(self, task_id: int, state: bool) -> None:
+            hub_states.append(state)
+
+    monkeypatch.setattr(
+        "backend.services.streaming.in_memory_hub.get_in_memory_stream_hub",
+        lambda: _TrackingHub(),
+    )
+    monkeypatch.setattr(
+        "backend.services.langgraph_chat.execution.orchestration.orchestrator.get_run_lifecycle_service",
+        lambda: lifecycle,
+    )
+    monkeypatch.setattr(
+        "backend.services.langgraph_chat.execution.orchestration.orchestrator.resolve_turn_id_from_workflow_best_effort",
+        lambda _workflow_id: "task-403-turn-1",
+    )
+    monkeypatch.setattr(
+        "backend.services.langgraph_chat.execution.orchestration.orchestrator.resolve_checkpoint_retry_identity_best_effort",
+        lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        "backend.services.langgraph_chat.execution.turn_service.resolve_interrupt_tool_call_id_best_effort",
+        lambda **_kwargs: None,
+    )
+
+    result_metadata: Dict[str, Any] = {
+        "interrupt": True,
+        "graph_name": graph_name,
+        "checkpoint_id": "cp-next",
+    }
+    if retained_parent:
+        result_metadata[SUBAGENT_PARENT_CONTINUATION_PENDING] = True
+    monkeypatch.setattr(
+        "backend.services.langgraph_chat.execution.turn_service.LangGraphChatFacade.resume_from_interrupt",
+        AsyncMock(
+            return_value=LangGraphChatResult(
+                final_text=None,
+                conversation_id=None,
+                metadata=result_metadata,
+                persistence_handled=True,
+            )
+        ),
+    )
+
+    service = TurnExecutionService()
+    await service.resume_turn_generation(
+        task_id=403,
+        user_id=15,
+        graph_thread_id=GRAPH_THREAD_ID,
+        response={"action": "approve"},
+        graph_name=graph_name,
+        checkpoint_id="cp-current",
+        workflow_id=9403,
+        interrupt_id="intr-403",
+        mark_turn_workflow_waiting=lambda **kwargs: waiting_workflows.append(
+            kwargs
+        ),
+        mark_interrupt_ticket_resumed=lambda **_kwargs: None,
+    )
+
+    assert len(waiting_workflows) == 1
+    assert hub_states == expected_hub_states
+    if retained_parent:
+        assert lifecycle.end_calls == []
+    else:
+        assert lifecycle.end_calls == [
+            {
+                "task_id": 403,
+                "turn_id": "task-403-turn-1",
+                "status": "waiting_for_human",
+            }
+        ]
 
 
 @pytest.mark.asyncio

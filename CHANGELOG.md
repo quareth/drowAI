@@ -26,6 +26,8 @@ The format is based on
 
 ### Fixed
 
+- Messages sent while a subagent handoff is still running now remain queued
+  behind the active parent turn, including across repeated approval pauses.
 - Distributed runner packages now install the process-inspection dependency
   required by the managed runner at startup.
 - The distributed frontend health probe now uses the IPv4 loopback address,
