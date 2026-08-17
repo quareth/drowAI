@@ -525,6 +525,37 @@ def split_shell_executable_segments(command_line: str) -> List[str]:
     )
 
 
+def _join_shell_line_continuations(raw_text: str) -> str:
+    """Remove shell continuations while preserving escaped backslash newlines."""
+    text = str(raw_text or "")
+    normalized: List[str] = []
+    index = 0
+    while index < len(text):
+        if text[index] != "\\":
+            normalized.append(text[index])
+            index += 1
+            continue
+
+        run_start = index
+        while index < len(text) and text[index] == "\\":
+            index += 1
+        backslash_count = index - run_start
+        newline_width = 0
+        if index < len(text) and text[index] == "\n":
+            newline_width = 1
+        elif text[index : index + 2] == "\r\n":
+            newline_width = 2
+
+        if newline_width and backslash_count % 2 == 1:
+            normalized.append("\\" * (backslash_count - 1))
+            index += newline_width
+            continue
+
+        normalized.append("\\" * backslash_count)
+
+    return "".join(normalized)
+
+
 def validate_shell_exec_command(
     command: str,
     *,
@@ -533,7 +564,7 @@ def validate_shell_exec_command(
 ) -> List[Dict[str, str]]:
     """Validate shell command text and return error descriptors."""
     validation_errors: List[Dict[str, str]] = []
-    command_text = str(command or "")
+    command_text = _join_shell_line_continuations(str(command or ""))
 
     if policy is None:
         policy = CommandPolicy()

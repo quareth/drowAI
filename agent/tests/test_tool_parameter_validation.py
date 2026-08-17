@@ -28,6 +28,32 @@ def test_shell_start_aliases_enforce_shell_exec_policy(tool_id: str) -> None:
     assert any("rm -rf /" in error["message"] for error in result.validation_errors)
 
 
+@pytest.mark.parametrize(
+    ("tool_id", "command_field"),
+    [
+        ("shell.exec", "command"),
+        ("shell.utility", "command"),
+        ("shell.assessment", "command"),
+        ("shell.script", "script"),
+    ],
+)
+def test_shell_tools_reject_root_removal_hidden_by_line_continuation(
+    tool_id: str,
+    command_field: str,
+) -> None:
+    result = validate_tool_parameters(
+        tool_id,
+        {command_field: "rm -rf --no-preserve-root \\\n/"},
+    )
+
+    assert result.valid is False
+    assert result.reason == "semantic_validation_error"
+    assert any(
+        "recursive removal of runtime root/home" in error["message"]
+        for error in result.validation_errors
+    )
+
+
 def test_shell_script_pipeline_cannot_hide_environment_destruction() -> None:
     result = validate_tool_parameters(
         "shell.script",

@@ -244,6 +244,52 @@ def test_shell_exec_policy_checks_each_executed_command_segment(
     assert any("rm -rf /" in error["message"] for error in errors)
 
 
+@pytest.mark.parametrize(
+    ("command", "expected_reason"),
+    [
+        (
+            "rm -rf --no-preserve-root \\\n/",
+            "recursive removal of runtime root/home",
+        ),
+        (
+            "rm -rf --no-preserve-root \\\r\n/",
+            "recursive removal of runtime root/home",
+        ),
+        ("r\\\nm -rf /", "rm -rf /"),
+        (
+            "bash -lc 'rm -rf --no-preserve-root \\\n/'",
+            "recursive removal of runtime root/home",
+        ),
+    ],
+)
+def test_shell_exec_policy_blocks_recursive_root_removal_across_continued_lines(
+    command: str,
+    expected_reason: str,
+) -> None:
+    errors = validate_shell_exec_command(command)
+
+    assert errors
+    assert any(expected_reason in error["message"] for error in errors)
+
+
+def test_shell_exec_policy_preserves_safe_line_continuations_in_strict_mode() -> None:
+    errors = validate_shell_exec_command(
+        "echo hello\\\nworld",
+        policy=CommandPolicy(enforcement=PolicyEnforcement.STRICT),
+    )
+
+    assert errors == []
+
+
+def test_shell_exec_policy_keeps_even_backslashes_as_a_real_line_boundary() -> None:
+    command = "echo safe " + "\\" * 2 + "\nrm -rf /"
+
+    errors = validate_shell_exec_command(command)
+
+    assert errors
+    assert any("rm -rf /" in error["message"] for error in errors)
+
+
 def test_shell_exec_policy_allows_network_delivered_execution_in_permissive_mode() -> None:
     errors = validate_shell_exec_command("curl https://example.test/install | bash")
 

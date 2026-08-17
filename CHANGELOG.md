@@ -26,6 +26,8 @@ The format is based on
 
 ### Fixed
 
+- Shell policy validation now interprets continued lines before applying hard
+  environment-destruction blocks.
 - Graceful backend shutdown now interrupts active shell sessions and records
   their terminal lifecycle before discarding terminal handles.
 - Managed-runner terminal streams now reject frames for unknown or closed
