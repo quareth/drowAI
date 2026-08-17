@@ -27,7 +27,7 @@ import { openTaskInChat } from "../fixtures/tasks";
 
 const JOURNEY_TIMEOUT_MS = 120_000;
 
-test("handles deterministic interrupts with task-local isolation", { tag: "@journey" }, async ({ page }) => {
+test("handles deterministic interrupts with task-local isolation", { tag: ["@journey", "@pr-core"] }, async ({ page }) => {
   test.setTimeout(JOURNEY_TIMEOUT_MS);
   let stack: DeterministicBackendHandle | null = null;
   let api: APIRequestContext | null = null;
@@ -95,6 +95,7 @@ test("handles deterministic interrupts with task-local isolation", { tag: "@jour
       "Approved and resumed.",
       ["reasoning", "tool"],
     );
+    await expect(page.getByText("Workspace Read", { exact: true }).last()).toBeVisible();
     await expectDuplicateResumeRejected(api, owner, approvalTask.id, approval, { action: "approve" });
 
     const rejectionPrompt = "deterministic-interrupt-plan-review";

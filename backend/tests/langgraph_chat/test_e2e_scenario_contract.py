@@ -97,7 +97,11 @@ async def test_interrupt_scenario_selects_typed_payload_from_prompt(
         )
     ]
 
-    assert [event.get("type") for event in events[:2]] == ["reasoning_start", "reasoning_delta"]
+    assert [event.get("type") for event in events[:3]] == [
+        "reasoning_start",
+        "reasoning_delta",
+        "reasoning_section_end",
+    ]
     interrupt = next(event["__interrupt__"][0] for event in events if "__interrupt__" in event)
     assert interrupt["type"] == expected_type
     assert interrupt["turn_id"] == "task-42-turn-1"
@@ -110,6 +114,46 @@ async def test_interrupt_scenario_selects_typed_payload_from_prompt(
         assert interrupt["plan_steps"]
     else:
         assert interrupt["questions"][0]["options"] == ["Internal", "External"]
+
+
+@pytest.mark.asyncio
+async def test_interrupt_resume_scenario_emits_renderable_tool_lifecycle() -> None:
+    """Approved deterministic tools must match the production UI event contract."""
+    graph = get_scenario_graph(GRAPH_NAME_INTERRUPT_RESUME, checkpointer=None)
+    events = [
+        chunk
+        async for mode, chunk in graph.astream(
+            Command(resume={"action": "approve"}),
+            config={
+                "configurable": {
+                    "runtime_projection": {"task_id": 42},
+                    "canonical_conversation_id": "conv-42",
+                    "canonical_turn_id": "task-42-turn-1",
+                    "canonical_turn_sequence": 1,
+                }
+            },
+            stream_mode=["custom", "values"],
+        )
+        if mode == "custom"
+    ]
+
+    assert [event["type"] for event in events] == [
+        "tool_start",
+        "tool_end",
+        "message_start",
+        "message_delta",
+        "section_end",
+    ]
+    tool_events = events[:2]
+    assert {event["tool_call_id"] for event in tool_events} == {
+        "deterministic-hitl-workspace-read-1"
+    }
+    assert all(event["tool"] == "workspace_read" for event in tool_events)
+    assert tool_events[0]["status"] == "running"
+    assert tool_events[1]["status"] == "success"
+    assert tool_events[1]["output"] == (
+        "Deterministic approved workspace inspection completed."
+    )
 
 
 @pytest.mark.asyncio
