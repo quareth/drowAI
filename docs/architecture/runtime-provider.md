@@ -132,6 +132,26 @@ sequenceDiagram
     Ops-->>Caller: normalized result
 ```
 
+### Interactive shell adaptation
+
+The model-facing shell does not introduce a provider-specific graph transport.
+`ShellSessionService` is the application-side coordinator over the
+runtime-shared `ShellSessionServicePort`. It validates backend-projected tenant,
+task, execution-owner, workspace, and placement identity; allocates a public
+`shs_` handle; and asks `TerminalSessionManager` to create one dedicated agent
+command session. The manager resolves the task context again for physical
+terminal I/O and calls the selected provider's existing open, read, input, and
+close operations.
+
+The logical shell handle and the physical provider terminal id are deliberately
+different capabilities. Continuation requires the original tenant, task,
+execution owner, and current runtime binding; model-supplied task or runtime ids
+cannot rebind a handle. Same-session operations are serialized, while capacity,
+idle expiry, hard deadlines, and owner/task cleanup are enforced by the
+process-local shell registry. If backend composition has not bound the service,
+the runtime-shared port returns a structured unavailable result rather than
+falling back to host execution.
+
 ## Explicit Local Docker Provider
 
 `LocalDockerRuntimeProvider` adapts provider operations to existing local
@@ -201,6 +221,14 @@ I/O:
   keeps PTY cleanup authoritative in the durable `terminal.close` operation. A
   successful close result clears buffered frame state and unbinds the terminal
   session from its runtime route.
+
+Interactive agent shell starts use this terminal contract with a command,
+runtime `cwd`, bounded environment, and explicit `interactive` flag. The runner
+opens `/bin/bash -lc <command>` as a dedicated exec and reports
+`process_status`, EOF, and `exit_code` independently of visible output. Shell
+session admission requires the live `terminal_stream_v1` binding; it does not
+downgrade to runner `tool.command`, local file-comm, or backend subprocess
+execution.
 
 ## Runner Control Channel Contract
 
@@ -278,6 +306,9 @@ environment variables are not the primary product deployment contract.
 - Runner operations require runner/workspace/runtime-job binding checks before
   accepting tool and artifact results.
 - Workspace reads and writes must stay inside the task workspace.
+- Public shell continuation handles are process-local, owner-bound capabilities;
+  provider terminal ids and backend-local paths are not exposed as model
+  authority.
 - Provider results should not expose backend-local paths or secret material to
   frontend callers.
 

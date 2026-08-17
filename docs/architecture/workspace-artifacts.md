@@ -68,6 +68,12 @@ Not owned by workspace/artifact architecture:
   - Runner workspace read/write/query/promote provider operations.
 - `backend/services/runtime_provider/local_docker_provider.py`
   - Local workspace file read/write provider operations.
+- `backend/services/terminal/shell_session_service.py`
+  - Creates assessment transcript paths inside the selected runtime and exposes
+    them only after provider-backed existence confirmation.
+- `agent/graph/subgraphs/tool_execution_terminal_finalization.py`
+  - Promotes a confirmed assessment transcript through existing provenance
+    helpers without a backend mirror file.
 - `agent/tools/tool_registry.py`
   - Dynamic discovery of executable `BaseTool` subclasses, including
     `agent/tools/filesystem/*`.
@@ -254,6 +260,21 @@ Callers should choose the correct surface:
 - Use runtime artifact access helpers for backend services that must read a
   runtime file through the provider boundary.
 
+### Interactive shell transcript boundary
+
+Shell sessions do not make all terminal output a workspace artifact.
+`shell.utility` starts an unwrapped dedicated runtime exec and creates no
+transcript file. `shell.assessment` wraps the command inside the Kali runtime,
+writes its combined transcript beneath `/workspace/artifacts`, and atomically
+finalizes the file after capture. Local and runner placements therefore share
+one runtime-relative artifact path even though their physical storage differs.
+
+The backend accepts that path only after querying the selected runtime provider.
+Provenance finalization then reads the exact file through runtime artifact
+access and creates durable refs; it skips the generic backend stdout/stderr
+artifact writer, preventing duplicate files. A missing/unconfirmed transcript
+is not invented from the graph's bounded output windows.
+
 ## Security / Isolation Notes
 
 - Host/direct workspace validation rejects absolute paths and traversal outside
@@ -283,7 +304,8 @@ Callers should choose the correct surface:
 - Object-backed artifact rows can be `upload_pending`, `ready`, or
   `upload_failed`.
 - `scope.md` for runner placement is read from object-backed artifact browser
-  when available.
+  when available. Its contents guide agent prompts; file placement does not
+  make it a runtime command-target or network-egress enforcement mechanism.
 - Temporary files are used for downloads and ZIPs from runner/object-backed
   sources.
 - Legacy regular runtime input is copied into the control root during runtime

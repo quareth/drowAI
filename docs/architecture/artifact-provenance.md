@@ -88,6 +88,12 @@ Writers and ingestors:
   - Runner `artifact.upload.complete` verification and readiness updates.
 - `agent/graph/subgraphs/tool_execution_runtime/artifact_and_provenance.py`
   - Graph-side provenance finalization and artifact-ref enrichment.
+- `agent/graph/subgraphs/tool_execution_terminal_finalization.py`
+  - Finalizes a terminal assessment-shell aggregate through the existing
+    provenance service and projects its verified artifact refs before PTR.
+- `backend/services/runtime_provider/runtime_artifact_access.py`
+  - Performs bounded, waiting runtime artifact queries/reads through the
+    selected provider for internal provenance callers.
 - `backend/routers/chat/cancel.py` and
   `backend/services/langgraph_chat/runtime/tool_cancel_service.py`
   - Project an accepted task-scoped chat cancellation onto active
@@ -211,6 +217,32 @@ Local completion can persist:
 
 Small text artifacts are stored inline. Runtime files are read through the
 runtime-provider boundary before artifact rows are created.
+
+### Assessment-shell provenance
+
+Interactive shell persistence is capability-driven rather than inferred from
+the invoked binary:
+
+1. `shell.assessment` allocates a workspace-relative
+   `artifacts/shell-assessment-<shs-id>.txt` path and wraps capture with a
+   Kali-side `tee` plus atomic finalization.
+2. The dedicated runtime exec owns transcript creation. The backend does not
+   create a second stdout/stderr artifact for shell-session results.
+3. When the process reaches a terminal state, `ShellSessionService` exposes the
+   path only if a provider-backed runtime artifact query confirms it exists.
+4. `finalize_terminal_shell_assessment()` completes the already-started
+   `ToolExecution`, reads the exact runtime file through the provider boundary,
+   creates or links `ExecutionArtifact` rows, and attaches sanitized durable
+   refs to the terminal compact result before post-tool reasoning.
+
+This graph-side finalization applies to local and runner placement. A managed
+shell transcript is not a runner `tool.command` result and does not enter the
+runner artifact-manifest/upload flow described below.
+
+`shell.utility` and utility-origin `shell.write_stdin` calls do not enter this
+flow. Their output may be retained for bounded stream/turn replay, but it is not
+eligible for a durable execution artifact, provenance-backed raw-output lookup,
+or baseline Knowledge ingestion.
 
 ## Runner Provenance Flow
 
@@ -377,8 +409,9 @@ wired graph path does not convert those ids into reference objects.
 - Runner manifest artifacts can exist before the final `tool.result` arrives.
 - Every persisted graph tool call queues best-effort knowledge ingestion from
   the shared batch-completion seam, including calls made inside subagent
-  graphs. Post-tool reasoning may provide later candidate enrichment, but is
-  not the trigger for baseline deterministic ingestion.
+  graphs, except calls whose output-persistence policy marks them transient.
+  Post-tool reasoning may provide later candidate enrichment, but is not the
+  trigger for baseline deterministic ingestion.
 - Upload completion can trigger knowledge ingestion reconciliation for ready
   execution artifacts.
 - Timeline and catalog queries rely on tenant/task indexes in provenance tables.

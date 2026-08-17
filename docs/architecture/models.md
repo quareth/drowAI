@@ -171,6 +171,9 @@ Agent provider and graph wiring:
   - Central graph-node resolver for role-owned LLM clients.
 - `core/llm/role_policy.py`
   - Shared role-based provider/model/reasoning-effort policy.
+- `core/llm/api_retry.py`
+  - Shared transient-error classification, bounded `Retry-After` parsing, and
+    exponential-jitter delay policy used by provider adapters.
 
 ## Model Catalog And Profiles
 
@@ -317,6 +320,14 @@ Graph nodes call `agent/graph/utils/llm_resolver.py`. That resolver requires
 `runtime_services.client_resolver` and `llm_runtime_selection` in graph config.
 Raw API keys in metadata are not supported.
 
+OpenAI Responses, OpenAI Chat/compatible, and Anthropic adapters apply the same
+provider-neutral transient API retry policy without changing the selected
+deployment. Retryable timeouts/rate limits/server failures receive up to three
+retries. A valid `Retry-After` delay is honored with a 60-second cap; otherwise
+the policy uses 1/2/4-second exponential delays plus bounded jitter. Exhausted
+adapter retries surface through the existing provider-neutral exception and
+turn/checkpoint retry flow rather than silently selecting another provider.
+
 `runtime_services` is a live object, so it is attached only to local invocation
 config and stripped before checkpoint/state inspection. The serializable state
 keeps V2 deployment references plus compatibility provider/model snapshots
@@ -383,6 +394,11 @@ the submitted effort. Lightweight internal roles request `low`; the shared
 policy chooses the closest supported effort without escalating into a hidden
 high-effort call when a lower level exists. Non-reasoning models omit the
 setting.
+
+The generic subagent tool loop uses the same rule for parallel tool calls. It
+sets the native `parallel_tool_calls` control only when the resolved,
+route-effective client advertises `PARALLEL_TOOLS`; otherwise the model-agnostic
+subagent graph remains sequential without sending an unsupported option.
 
 ## OpenAI Implementation
 
@@ -580,6 +596,8 @@ or router code should change.
 - Live runtime services are not checkpointed.
 - Output budget and context-window checks run before provider API calls.
 - Provider adapters normalize errors into provider-neutral exceptions.
+- Retry classification and delays are provider-neutral, bounded, and do not
+  authorize provider/deployment fallback.
 
 ## Deployment-Aware Implementation Notes
 

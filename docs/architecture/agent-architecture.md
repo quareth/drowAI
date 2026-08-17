@@ -306,6 +306,10 @@ parent's wait/delegate/finalize policy.
 - Runtime-session shell calls require backend-projected tenant, task, execution
   owner, workspace, and runtime placement identity. Model-provided ids and
   host paths are not authority for session continuation or cleanup.
+- Shell command policy blocks a bounded set of obvious runtime-destruction and
+  escape patterns but otherwise permits general pentesting commands. The
+  structured tool catalog and `scope.md` are not command-target or egress
+  enforcement boundaries.
 - Runtime metadata sanitization removes raw LLM secret keys from tool execution
   request metadata.
 - Provider adapters receive plaintext credentials only through backend-owned
@@ -327,9 +331,8 @@ parent's wait/delegate/finalize policy.
   provider-backed dedicated exec sessions through the runtime provider
   boundary. The process-local shell-session registry owns public handles,
   capacity, claims, and idle/deadline selection. The shell-session service
-  coordinates PTY I/O,
-  owner cleanup for terminal main and subagent runs, task retirement cleanup,
-  and managed-runner disconnect handle expiry.
+  coordinates PTY I/O, owner cleanup for terminal main and subagent runs, task
+  retirement cleanup, and managed-runner disconnect handle expiry.
 - Legacy PTY use outside the shell-session tools remains policy- and
   capability-gated; parallel compatibility PTY calls use named internal
   sessions when enabled.

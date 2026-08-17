@@ -452,13 +452,19 @@ Important boundaries:
 - `model` builds the versioned `subagent_runtime` prompt, binds all
   definition-visible native tools with runtime scheduling metadata, and routes
   either to shared tool execution or directly to handoff text.
+- The model node requests parallel native tool calls only when the resolved
+  route-effective LLM profile advertises `PARALLEL_TOOLS`; sequential-only
+  deployments use the same graph without receiving an unsupported control.
 - `approval_gate` and `dispatch_tool` reuse the existing initial-execution
   boundary. A running result alone enters `tool_execution_session`; terminal
   aggregate compression and compact synthesis occur afterward, before
   observation.
 - `observation` syncs the completed tool-iteration budget from canonical
   `working_memory.current_turn_phases` records before returning to the same
-  model session.
+  model session. Each iteration adds a bounded, secret-masked tool-outcome
+  projection to phase memory so later attempts retain status, invocation,
+  errors, findings, artifact refs, and shell lifecycle without retaining raw
+  shell output.
 - `handoff` derives the terminal state from canonical working memory, compact
   tool results, executed-tool records, and model handoff text, then projects it
   into the generic `AgentResult` contract. Child PTR, decision-router,

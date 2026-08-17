@@ -31,6 +31,8 @@ Owned by the execution plane:
 - Runtime provider operations for product Runner placement and explicit
   dev/test/diagnostic local placement.
 - Tool command dispatch and result collection.
+- Dedicated provider-backed shell command sessions, including bounded output,
+  exact interactive input, process completion, and exit-code reporting.
 - Runner-owned Kali container lifecycle and `/workspace` execution model.
 - Runner lifecycle, terminal, artifact, metadata, and tool-command operations.
 - Runtime observations, artifacts, logs, metrics, terminal output, and VPN state.
@@ -100,6 +102,12 @@ Not owned by the execution plane:
   - Explicit dev/test/diagnostic Local Docker-backed provider.
 - `backend/services/runtime_provider/cloud_runner_provider.py`
   - Managed runner-backed provider.
+- `backend/services/terminal/shell_session_service.py`
+  - Logical interactive shell-session coordination and bounded result
+    projection over provider-backed terminal operations.
+- `backend/services/terminal/manager.py`
+  - Physical user/agent terminal orchestration through the runtime-provider
+    boundary.
 - `backend/services/docker/*`
   - Docker client, config, lifecycle, logs, metrics, exec, and operations.
 - `kali_executor/executor_daemon.py`
@@ -129,6 +137,48 @@ Provider requests include:
 - operation name, payload, and metadata
 
 Unsupported placement modes fail closed in the registry.
+
+## Interactive Shell Command Flow
+
+`shell.utility` and `shell.assessment` are model-facing start aliases for the
+hidden `shell.exec` implementation contract. `shell.write_stdin` continues an
+explicitly interactive command with exact non-empty input or an interrupt;
+empty model writes are not used as a polling protocol. Each start creates a
+dedicated command exec inside the selected task runtime rather than reusing a
+shared login shell.
+
+```mermaid
+sequenceDiagram
+    participant Graph as LangGraph tool dispatch
+    participant Shell as ShellSessionService
+    participant Terminal as TerminalSessionManager
+    participant Provider as Runtime provider
+    participant Runtime as Local container or Runner
+
+    Graph->>Shell: execute(identity, command, capability)
+    Shell->>Terminal: create dedicated agent command session
+    Terminal->>Provider: open/read/input/close terminal operations
+    Provider->>Runtime: dedicated Kali PTY exec
+    Runtime-->>Provider: bounded output + process status + exit code
+    Provider-->>Shell: provider-neutral terminal read
+    Shell-->>Graph: bounded update or public shs_ handle
+```
+
+`ShellSessionService` keeps only logical control records, bounded per-operation
+output, and public handles; `TerminalSessionManager` keeps the provider session
+reference needed for I/O. The selected runtime owns the command process and
+terminal output.
+Running commands return to the shared graph execution-session subgraph, which
+waits below the model boundary for non-interactive progress and uses a bounded
+interaction-decision call only for an explicitly interactive session. Main
+turn completion, subagent settlement, cancellation, task retirement, runner
+disconnect, idle/deadline cleanup, and backend shutdown close the corresponding
+sessions.
+
+Assessment commands wrap capture inside the Kali runtime and become eligible
+for provenance and Knowledge only after provider confirmation of the finalized
+workspace artifact. Utility commands create no transcript artifact and remain
+transient. `shell.script` stays on its pre-existing compatibility transport.
 
 ## Task Creation And Admission Flow
 
@@ -209,8 +259,9 @@ Key boundaries:
 - Host task workspace is mounted as `/workspace`.
 - Host control material is mounted read-only as `/run/drowai/control`; VPN and
   runtime input are not workspace-visible artifacts.
-- Command transport uses lock-protected `commands.jsonl`, `results.jsonl`, and
-  `cancellations.jsonl`.
+- Structured tool-command transport uses lock-protected `commands.jsonl`,
+  `results.jsonl`, and `cancellations.jsonl`. Provider-backed shell sessions
+  bypass that queue and use dedicated terminal execs.
 - `LocalDockerRuntimeProvider.cancel_tool_command` owns local cancellation
   dispatch by appending cancellation rows for file-comm command ids; unsupported
   command transports are reported as not kill-supported.
@@ -326,8 +377,10 @@ Branches:
   leaking provider-specific internals to routers.
 - Decrypted LLM credentials should not be serialized into graph state,
   checkpoints, stream packets, runner messages, or logs.
-- Tool execution in task runtimes should not bypass scope validation and
-  workspace-safe path helpers.
+- Workspace file access should not bypass workspace-safe path helpers.
+- `scope.md` and graph intent constraints are model guidance, not command-target
+  or network-egress enforcement. Technical target restrictions require
+  deployment-level firewall, VPN, egress, or lab segmentation controls.
 
 ## Operational Notes
 

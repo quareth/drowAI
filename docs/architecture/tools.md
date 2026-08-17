@@ -15,6 +15,14 @@ manifest, optionally approved by the user, routed through explicit execution
 lanes, and projected back into graph state, stream events, artifacts, and
 provenance records.
 
+The visible structured catalog and the interactive shell are overlapping but
+different execution surfaces. Structured tools carry dedicated schemas,
+producer-owned parsing, compact result semantics, and optional Knowledge
+integration. The universal shell tools allow general commands inside the task's
+Kali runtime, including binaries without a dedicated tool definition; that does
+not automatically give those commands tool-specific parsing or Knowledge
+projection.
+
 ## Responsibility Boundary
 
 Owned by the tooling layer:
@@ -26,9 +34,10 @@ Owned by the tooling layer:
 - Canonical `ToolBatch` admission and per-call lifecycle.
 - HITL approval, partial approval, edit, denial, and idempotent resume handling.
 - Execution-lane and transport policy.
-- Runner tool-command dispatch for product tasks, plus local file-comm, local
-  PTY, backend-direct, and artifact-direct lanes only where explicitly allowed
-  by runtime/tool policy.
+- Runner tool-command dispatch for product tasks, provider-backed runtime
+  sessions for interactive shell tools, plus local file-comm, legacy local PTY,
+  backend-direct, and artifact-direct lanes only where explicitly allowed by
+  runtime/tool policy.
 - Result normalization, compact prompt-safe summaries, artifacts, and provenance
   links.
 
@@ -47,7 +56,15 @@ Not owned by the tooling layer:
 - `agent/tools/catalog_visibility.py`
   - Controls which tool ids are visible in model-facing catalogs.
 - `agent/tools/catalog_builder.py`
-  - Builds the bounded visible catalog for planner prompts.
+  - Builds the complete visibility-approved catalog for full-catalog planner
+    fallback.
+- `agent/tools/universal_agent_tools.py`
+  - Defines universal model-facing shell aliases appended to main-agent and
+    subagent tool profiles when their registered metadata is visible.
+- `agent/tools/shell/*`
+  - Owns the hidden shell implementation schema, the utility/assessment start
+    aliases, exact stdin schema, and command policy validation. Direct adapter
+    execution fails closed.
 - `core/prompts/builders/tool_planning.py`
   - Builds selection and parameter prompts from versioned templates.
 - `agent/reasoning/enhanced_planner_impl.py`
@@ -60,8 +77,12 @@ Not owned by the tooling layer:
   - Planner context, approval, batch admission, lane dispatch, runner command
     orchestration, result projection, and provenance helpers.
 - `agent/tool_runtime/*`
-  - Coordinator, timeout policy, command preparation, transport routing, PTY,
-    batch execution, and runtime context binding.
+  - Coordinator, timeout and output-persistence policy, command preparation,
+    transport routing, PTY/runtime-session control, batch execution, and runtime
+    context binding.
+- `backend/services/terminal/shell_session_service.py`
+  - Provider-backed shell-session lifecycle, public handles, capacity/claims,
+    bounded output, deadlines, and cleanup.
 - `agent/graph/adapters/executor_adapter.py`
   - Bridges LangGraph tool calls into local or runner execution authorities.
 - `agent/executor.py`
@@ -132,6 +153,13 @@ Catalog rules:
   not catalog visibility.
 - `render_capability_surface()` derives broad prompt-facing capability families
   from the visible tool list, not from every implemented tool.
+- `shell.utility`, `shell.assessment`, and `shell.write_stdin` are universal
+  model-facing tools. They reuse registered metadata but are composed separately
+  from mission-tool category filtering so both main agents and subagents retain
+  the shell surface.
+- `shell.exec` is the hidden implementation id behind the two start aliases.
+  `shell.script` is a separate compatibility tool and is not part of the
+  provider-backed shell-session contract.
 
 ## Prompt Injection
 
@@ -216,7 +244,7 @@ Batch admission owns:
 - max committed calls per batch
 - requested vs effective strategy
 - parallel compatibility checks
-- shell command size limits
+- rejection of a batch containing more than one shell-session start
 - tool-call budget checks
 - strategy downgrade metadata
 - rejected reason metadata
@@ -242,6 +270,7 @@ flowchart TD
     Timeout[Timeout policy]
     Lane[Lane policy]
     Local[Local authority]
+    Session[Runtime-session authority]
     Runner[Runner authority]
     Result[Result projection]
     Artifacts[Artifacts and provenance]
@@ -251,8 +280,10 @@ flowchart TD
     Approval --> Timeout
     Timeout --> Lane
     Lane --> Local
+    Lane --> Session
     Lane --> Runner
     Local --> Result
+    Session --> Result
     Runner --> Result
     Result --> Artifacts
     Result --> State
@@ -280,6 +311,7 @@ Lane policy lives in `agent/tool_runtime/backend_tool_policy.py`.
 | Lane | Tool examples | Allowed authority |
 | --- | --- | --- |
 | `container_scoped` | most CLI/runtime tools | local PTY/file-comm or runner tool-command |
+| `runtime_session_scoped` | `shell.utility`, `shell.assessment`, `shell.write_stdin` | provider-backed runtime-session control |
 | `backend_scoped` | `knowledge.cve_lookup` | backend direct |
 | `artifact_scoped` | `artifact.*` | artifact direct |
 
@@ -287,12 +319,14 @@ Important rules:
 
 - Unknown tools are treated as `container_scoped`.
 - Container-scoped tools cannot fall back to direct backend execution.
+- Runtime-session-scoped tools cannot fall back to file-comm, runner
+  `tool.command`, legacy PTY transport, or backend direct execution.
 - Backend-scoped and artifact-scoped tools do not use file-comm or PTY.
 - Runner placement supports runtime-container tools in runner image v1.
 - Runner placement rejects management artifact and knowledge tools before
   dispatch.
 
-## Local Container Transport
+## Structured Local Container Transport
 
 Local placement uses `EnhancedCommandExecutor`, `GraphToolExecutor`, and
 `agent/tool_runtime/transport_router.py`.
@@ -325,6 +359,36 @@ PTY flow:
 3. `execute_via_pty_transport()` sends the command through the terminal session
    manager.
 4. PTY output is normalized into the same command-transport result shape.
+
+This is the legacy one-shot PTY option for ordinary `container_scoped` tools.
+It is not the transport used by the universal interactive shell aliases.
+
+## Interactive Shell Session Transport
+
+`runtime_session_control` is placement-neutral at the graph boundary. Lane
+dispatch requires backend-projected tenant, task, execution-owner, workspace,
+and placement identity, then calls the runtime-shared shell service port. The
+backend implementation creates one dedicated provider terminal exec per start
+and returns a bounded `ShellSessionUpdate` with independent process, logical
+session, and interaction-boundary state.
+
+The model-facing contract is:
+
+- `shell.utility`: transient command output for navigation, inspection, and
+  intermediate work; never retained as reusable assessment evidence.
+- `shell.assessment`: command output eligible for a runtime-created transcript,
+  artifact provenance, Knowledge ingestion, and durable raw-output reads after
+  terminal provider confirmation.
+- `shell.write_stdin`: exact non-empty input or `Ctrl-C` for the public session
+  handle created by an explicitly interactive start. Waiting is an internal
+  graph/service action rather than an empty stdin call.
+
+Initial dispatch returns directly to normal synthesis when the process is
+terminal. A genuine `process_status=running` result enters the shared
+`tool_execution_session` graph, which accumulates bounded lifecycle evidence,
+waits automatically for non-interactive commands, and invokes a bounded
+interaction decision only when an interactive session needs model input. The
+aggregate is compressed once after the runtime reports a terminal state.
 
 ## Managed Runner Transport
 
@@ -386,6 +450,14 @@ Tool results are projected into several surfaces:
   - durable task/tool/execution/artifact linkage.
 - current-turn phase memory
   - structured memory used by later planner and post-tool prompts.
+
+Shell projection additionally carries bounded `process_status`,
+`session_status`, `interaction_boundary`, public `session_id`,
+`stdin_available`, output windows, truncation, stable error code, and terminal
+artifact refs. `output_persistence` distinguishes transient utility lifecycle
+from durable assessment completion. Transient rows may remain visible in the
+current tool card and bounded phase memory, but are excluded from reusable graph
+evidence, provenance artifacts, and Knowledge ingestion.
 
 Post-tool reasoning consumes the compact projection rather than raw unbounded
 tool output.
@@ -705,6 +777,17 @@ Use this sequence when graduating a tool from wrapper/backlog to finished:
 - Runner tool-command rejects secret-bearing env and runtime identity fields in
   tool params.
 - Artifact and knowledge tools are not exposed in normal LLM-facing catalogs.
+- Shell command policy defaults to permissive pentesting operation with a small
+  hard-block set for obvious environment destruction, shutdown/resource
+  exhaustion, and container-escape patterns. The structured catalog is not a
+  command allowlist, and command length alone is not an admission limit.
+- Outside explicitly disabled test mode, policy validation normalizes continued
+  lines, recursively checks supported shell wrappers, and rejects active
+  command/process substitution. Request schemas always prevent environment
+  entries from replacing runtime/transport-owned variables.
+- `scope.md` and planner constraints guide the model but do not enforce command
+  targets or network egress. Deployments needing technical target restriction
+  must provide firewall, VPN, egress, or lab segmentation controls.
 
 ## Operational Notes
 
@@ -714,8 +797,9 @@ Use this sequence when graduating a tool from wrapper/backlog to finished:
   process cache.
 - Planner cache entries are keyed from request, target, resolved tools, and
   small metadata snapshots.
-- Parallel execution uses named PTY identities when required; if identity cannot
-  be derived, PTY is disabled for that call.
+- Parallel legacy PTY execution uses named identities when required; if identity
+  cannot be derived, PTY is disabled for that call. A batch may contain at most
+  one provider-backed shell-session start.
 - Timeouts are represented as structured timeout-policy metadata and preserved
   through local and runner result paths.
 

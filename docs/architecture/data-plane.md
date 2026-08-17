@@ -141,7 +141,10 @@ Not owned by the data plane:
   placement metadata for product work, and explicit local placement metadata
   only for dev/test/diagnostic paths.
 - **Engagement ownership:** engagements and engagement-scoped knowledge/evidence.
-- **Chat continuity:** user/assistant messages, tool calls, turn events.
+- **Chat continuity:** user/assistant messages, tool calls, and turn events.
+  Interactive shell lifecycle updates use the same tool-event family; cleanup
+  can append an idempotent terminal lifecycle row for a main-agent turn so
+  refresh/replay does not leave a command shown as running.
 - **Graph continuation checkpoints:** PostgreSQL-backed state when available,
   persistent task-keyed SQLite state at
   `WORKSPACE_ROOT/<task_id>/checkpoints.db` (default
@@ -176,7 +179,10 @@ Not owned by the data plane:
   and object-key-backed payloads. Runner manifests create scoped placeholder
   rows and just-in-time upload requests. Readiness follows accepted completion
   identity plus the object metadata available from the configured store; the
-  current local-backend limitation is described below.
+  current local-backend limitation is described below. Assessment-shell
+  transcripts can join this family only after the selected runtime confirms
+  the exact workspace-relative artifact; utility-shell output remains transient
+  stream/turn context and is not reusable assessment evidence.
 - **Reporting:** task closure memos, generated engagement report artifacts,
   report jobs. Generated reports keep tenant/user ownership and source
   engagement snapshot metadata so ready report content can remain readable after

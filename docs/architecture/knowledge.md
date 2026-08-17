@@ -410,6 +410,11 @@ the client cache.
   separate from deterministic canonical fact compilation.
 - Unsupported tools can still produce archive rows and a successful ingestion
   with zero deterministic observations.
+- Assessment-shell executions are eligible for this durable ingestion path only
+  after their runtime transcript and provenance are finalized. Utility-shell
+  executions are excluded. Running a CLI through the shell does not synthesize
+  that CLI's dedicated semantic envelope, so it may archive evidence while
+  producing zero normalized facts.
 - Compact tool-output compression is not part of the Knowledge fact authority.
   Compact output hints may be recorded as bounded run metadata, but
   deterministic Knowledge facts come from semantic observations and evidence.

@@ -31,6 +31,10 @@ Owned by the management plane:
 - Tenant membership and role-derived permissions.
 - Task creation, lifecycle state transitions, admission control, product
   runtime policy resolution, and runtime provider dispatch.
+- Process-local shell-session coordination: authoritative runtime-context
+  resolution, public continuation-handle ownership, capacity/claim policy,
+  owner/task cleanup, and terminal lifecycle projection. Command execution and
+  PTY ownership remain in the selected execution runtime.
 - Task-scoped artifact provenance read APIs for execution, timeline, artifact
   metadata/catalog, bounded artifact reads, and raw-output lookup; Management
   authorizes the task boundary and delegates provenance lookup to artifact
@@ -102,6 +106,13 @@ Not owned by the management plane:
   - Shared WebSocket auth, tenant context, and task ownership policy.
 - `backend/services/runtime_provider/operations.py`
   - Converts authorized task context into provider operation envelopes.
+- `backend/services/terminal_session_manager.py`
+  - Composes `ShellSessionService`, `TerminalSessionManager`, runtime-context
+    resolution, runtime artifact confirmation, and the runtime-shared service
+    ports used by graph code.
+- `backend/services/chat/shell_session_lifecycle_projector.py`
+  - Projects eligible cleanup-driven terminal shell outcomes into canonical
+    `ChatTurnEvent` rows and matching live task-stream packets.
 
 ## Main Collaborators
 
@@ -117,6 +128,8 @@ Not owned by the management plane:
   and `backend/services/knowledge/evidence_read_service.py`
 - **Product runtime policy:** `backend/services/runtime_provider/product_policy.py`
 - **Runtime provider registry:** `backend/services/runtime_provider/registry.py`
+- **Shell session coordination:** `backend/services/terminal/shell_session_service.py`
+  and `backend/services/terminal/manager.py`
 - **Runner control:** `backend/services/runner_control/*`
 - **Streaming fanout:** `backend/services/streaming/in_memory_hub.py` and
   `backend/services/websocket/channel_handlers.py`
