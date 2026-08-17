@@ -2,7 +2,7 @@
 
 ## Current Baseline
 
-The generated audit currently finds **1,189 test files**: 1,024 pytest files, 142 Vitest files, 10 `node:test` files, and 13 Playwright files. Thirty-one files contain selections used by required PR checks and another five are selected only by the manual `main` tier. All ten `node:test` fixture contracts and the `@pr-core` browser spec run in required PR E2E CI, while the four environment-independent fixture contracts also run in the required quick release gate. Eleven `@journey` specs run after merge on `main`/`master`, with the complete browser matrix reserved for release branches and manual certification; one `@runtime-local` spec remains in nightly/manual release certification, and one isolated artifact-policy probe is owned by its fixture integration contract. Exact file-level duration evidence exists for two browser specs; aggregate scoped-suite timings remain in audit notes rather than being assigned to individual files.
+The generated audit currently finds **1,269 test files**: 1,091 pytest files, 155 Vitest files, 10 `node:test` files, and 13 Playwright files. Thirty-two files contain selections used by required PR checks and another five are selected only by the manual `main` tier. All ten `node:test` fixture contracts and the `@pr-core` browser specs run in required PR E2E CI, while the four environment-independent fixture contracts also run in the required quick release gate. Eleven `@journey` specs run after merge on `main`/`master`, with the complete browser matrix reserved for release branches and manual certification; one `@runtime-local` spec remains in nightly/manual release certification, and one isolated artifact-policy probe is owned by its fixture integration contract. Exact file-level duration evidence exists for three browser specs; aggregate scoped-suite timings remain in audit notes rather than being assigned to individual files.
 
 See [`generated/test-inventory-summary.md`](generated/test-inventory-summary.md) for generated counts and [`generated/test-inventory.csv`](generated/test-inventory.csv) for file-level records.
 
@@ -51,7 +51,7 @@ Playwright PR core is a separate required `e2e-smoke` workflow job so browser fa
 |---|---|---|
 | `npm run test:e2e:fixture-contracts:quick` | Four environment-independent `node:test` fixture/security files; required release gate | No browser, live backend, external service, or Docker daemon |
 | `npm run test:e2e:fixture-contracts` | All ten `e2e/fixtures/*.test.ts` contracts; PR E2E workflow | Chromium and loopback are available for the two integration contracts; no external LLM or credentials |
-| `npm run test:e2e:pr` | Five `@pr-core` cases, Chromium, PR workflow | Isolated deterministic app stack; excludes multi-browser and real-runtime work |
+| `npm run test:e2e:pr` | Six `@pr-core` cases, Chromium, PR workflow | Isolated deterministic app stack; excludes multi-browser and real-runtime work |
 | `npm run test:e2e:journeys:chromium` | Sixteen `@journey` cases; post-merge `main`/`master` workflow | Chromium; no external LLM, Docker, browser interception, or external credentials |
 | `npm run test:e2e:journeys:all` | Sixteen `@journey` cases per browser, 48 total; release-branch and manual certification workflow | Chromium, Firefox, WebKit; no external LLM, Docker, browser interception, or external credentials |
 | `npm run test:e2e:runtime:local` | One `@runtime-local` Chromium case; nightly/manual and explicit release-certification jobs | Supported Linux plus real Docker; missing prerequisites fail rather than skip |

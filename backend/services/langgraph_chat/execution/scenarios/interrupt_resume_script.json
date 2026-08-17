@@ -26,6 +26,18 @@
       }
     },
     {
+      "mode": "custom",
+      "chunk": {
+        "type": "reasoning_section_end",
+        "content": "reasoning_section_end",
+        "conversation_id": "conv-e2e-hitl",
+        "turn_id": "turn-e2e-hitl-1",
+        "metadata": {
+          "task_id": 1
+        }
+      }
+    },
+    {
       "mode": "values",
       "chunk": {
         "__interrupt__": [
@@ -61,6 +73,14 @@
       "chunk": {
         "type": "reasoning_delta",
         "content": "plan ready for review",
+        "metadata": {}
+      }
+    },
+    {
+      "mode": "custom",
+      "chunk": {
+        "type": "reasoning_section_end",
+        "content": "reasoning_section_end",
         "metadata": {}
       }
     },
@@ -102,6 +122,14 @@
       }
     },
     {
+      "mode": "custom",
+      "chunk": {
+        "type": "reasoning_section_end",
+        "content": "reasoning_section_end",
+        "metadata": {}
+      }
+    },
+    {
       "mode": "values",
       "chunk": {
         "__interrupt__": [
@@ -130,10 +158,16 @@
       "chunk": {
         "type": "tool_start",
         "content": "tool_start",
+        "tool_call_id": "deterministic-hitl-workspace-read-1",
+        "tool": "workspace_read",
+        "status": "running",
         "conversation_id": "conv-e2e-hitl",
         "turn_id": "turn-e2e-hitl-1",
         "metadata": {
-          "task_id": 1
+          "task_id": 1,
+          "tool_call_id": "deterministic-hitl-workspace-read-1",
+          "tool": "workspace_read",
+          "status": "running"
         }
       }
     },
@@ -142,10 +176,18 @@
       "chunk": {
         "type": "tool_end",
         "content": "tool_end",
+        "tool_call_id": "deterministic-hitl-workspace-read-1",
+        "tool": "workspace_read",
+        "status": "success",
+        "output": "Deterministic approved workspace inspection completed.",
         "conversation_id": "conv-e2e-hitl",
         "turn_id": "turn-e2e-hitl-1",
         "metadata": {
-          "task_id": 1
+          "task_id": 1,
+          "tool_call_id": "deterministic-hitl-workspace-read-1",
+          "tool": "workspace_read",
+          "status": "success",
+          "output": "Deterministic approved workspace inspection completed."
         }
       }
     },
