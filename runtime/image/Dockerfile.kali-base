@@ -67,11 +67,12 @@ RUN apt-get update \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Kali's current dnsrecon dependency chain ships limits 4.4.1 beside
-# packaging 26.2. Overlay the compatible release without replacing its
-# dpkg-owned dependencies.
+# Kali's current Python dependency chain ships limits 4.4.1 beside packaging
+# 26.2 and PyYAML metadata that pip 26 rejects. Overlay compatible wheels
+# without removing the dpkg-owned packages.
 RUN pip3 install --no-cache-dir --break-system-packages --ignore-installed --no-deps \
         limits==5.8.0 \
+        PyYAML==6.0.3 \
     && python3 -m pip check
 
 # Kali's Amass launcher downloads about 800 MB of optional libpostal data on

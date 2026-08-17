@@ -32,6 +32,8 @@ The format is based on
 
 ### Fixed
 
+- Fresh ARM64 and AMD64 runtime-image builds now remain compatible with Kali
+  rolling's Python 3.14 package set.
 - Messages sent while a subagent handoff is still running now remain queued
   behind the active parent turn, including across repeated approval pauses.
 - Distributed runner packages now install the process-inspection dependency
