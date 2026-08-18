@@ -116,6 +116,7 @@ class TestPostToolReasoningOutput:
                     "agent_handoff": "required",
                     "subagent": "pathfinder",
                     "objective": "Enumerate services on the approved target.",
+                    "skill_ids": [],
                 }
             output = PostToolReasoningOutput.model_validate(data)
             assert output.next_action == action

@@ -61,6 +61,8 @@ from core.prompts.builders.post_tool.evidence import (
     select_compact_evidence_for_reasoning,
 )
 from core.prompts.builders.subagent_runtime import SubagentRuntimePromptBuilder
+from core.prompts.builders.skill_guidance import PromptSkill
+from core.skills.registry import SkillRegistry, get_skill_registry
 
 
 logger = logging.getLogger(__name__)
@@ -91,11 +93,23 @@ async def run_subagent_model_turn(
     config: Mapping[str, Any] | None = None,
     writer: Any = None,
     llm_resolver: Callable[..., Any] | None = None,
+    skill_registry: SkillRegistry | None = None,
 ) -> dict[str, Any]:
     """Run one bounded subagent model turn and route to tools or handoff."""
 
     interactive = InteractiveState.from_mapping(state)
     subagent = subagent_state_from_graph_state(interactive, definition=definition)
+    materialized_skills = (skill_registry or get_skill_registry()).materialize(
+        subagent.resolved_skills
+    )
+    prompt_skills = tuple(
+        PromptSkill(
+            skill_id=skill.skill_id,
+            description=skill.metadata.description,
+            body=skill.body,
+        )
+        for skill in materialized_skills
+    )
 
     max_committed_calls = _max_committed_calls(definition)
     can_call_tools = (
@@ -144,6 +158,7 @@ async def run_subagent_model_turn(
         callable_tool_ids=(
             tuple(spec.tool_id for spec in tool_specs) if can_call_tools else ()
         ),
+        prompt_skills=prompt_skills,
     )
     user_prompt = prompt_builder.build_user_prompt(
         display_name=definition.display_name,
@@ -152,11 +167,6 @@ async def run_subagent_model_turn(
         working_memory=_working_memory_prompt_context(interactive.facts.safe_metadata),
         previous_tool_summary=_build_previous_tool_context(interactive),
         prior_tool_outcomes=_build_prior_tool_outcomes(interactive),
-        remaining_limits=_build_remaining_limits(
-            definition,
-            interactive,
-            max_committed_calls=max_committed_calls,
-        ),
     )
 
     async with reasoning_section(
@@ -724,25 +734,6 @@ def _remaining_iterations(
 
     completed_iterations = max(int(interactive.facts.iterations or 0), 0)
     return max(max(int(definition.max_iterations), 1) - completed_iterations, 0)
-
-
-def _build_remaining_limits(
-    definition: SubagentDefinition,
-    interactive: InteractiveState,
-    *,
-    max_committed_calls: int,
-) -> dict[str, int]:
-    """Return prompt-facing limits that bound this subagent turn."""
-
-    completed_iterations = max(int(interactive.facts.iterations or 0), 0)
-    max_iterations = max(int(definition.max_iterations), 1)
-    return {
-        "completed_iterations": completed_iterations,
-        "max_iterations": max_iterations,
-        "remaining_iterations": _remaining_iterations(definition, interactive),
-        "max_tool_calls_per_iteration": int(definition.max_tool_calls_per_iteration),
-        "remaining_tool_calls_this_iteration": int(max_committed_calls),
-    }
 
 
 def _bounded_mapping(value: Any) -> dict[str, Any]:

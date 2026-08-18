@@ -598,6 +598,7 @@ async def test_generic_worker_builds_definition_configured_graph_input_config_an
         actual_definition: SubagentDefinition,
         *,
         checkpointer: Any = None,
+        skill_registry: Any = None,
     ) -> str:
         build_calls.append((actual_definition.id, checkpointer))
         return "compiled-subagent"
@@ -681,7 +682,7 @@ async def test_generic_worker_graph_input_can_dispatch_universal_shell_tools(
     monkeypatch.setattr(
         worker_module,
         "build_subagent_graph",
-        lambda _definition, *, checkpointer=None: "compiled-subagent",
+        lambda _definition, *, checkpointer=None, skill_registry=None: "compiled-subagent",
     )
 
     worker = ProcessLocalAgentRunWorker(
@@ -818,7 +819,7 @@ async def test_generic_worker_failure_preserves_graph_usage_state(
     monkeypatch.setattr(
         worker_module,
         "build_subagent_graph",
-        lambda _definition, *, checkpointer=None: "compiled-subagent",
+        lambda _definition, *, checkpointer=None, skill_registry=None: "compiled-subagent",
     )
     worker = ProcessLocalAgentRunWorker(
         registry=registry,

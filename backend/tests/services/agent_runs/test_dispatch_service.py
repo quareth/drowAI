@@ -250,11 +250,12 @@ def _parent_outcome(
     )
 
 
-def _handoff(subagent: str, objective: str) -> dict[str, str]:
+def _handoff(subagent: str, objective: str) -> dict[str, Any]:
     return {
         "agent_handoff": "required",
         "subagent": subagent,
         "objective": objective,
+        "skill_ids": [],
     }
 
 

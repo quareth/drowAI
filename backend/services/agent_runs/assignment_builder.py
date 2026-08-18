@@ -113,6 +113,7 @@ def build_agent_assignment(
                 allowed=spec.supported_task_categories,
             )
         ),
+        requested_skill_ids=tuple(string_list(ownership.get("requested_skill_ids"))),
         scope_summary=_scope_summary(ownership.get("targets")),
         relevant_context=relevant_context,
         runtime_identity=runtime_identity,

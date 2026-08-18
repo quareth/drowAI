@@ -143,7 +143,9 @@ class DeepReasoningHandler(BaseLangGraphHandler):
                     )
                 else:
                     compiled_graph = compile_deep_reasoning_graph(
-                        checkpointer=checkpointer
+                        checkpointer=checkpointer,
+                        subagent_registry=self._subagent_registry,
+                        skill_registry=self._skill_registry,
                     )
                 logger.info(
                     f"[HANDLER] Compiled deep reasoning graph with "

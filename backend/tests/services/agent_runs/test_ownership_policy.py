@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+import pytest
+
 from backend.services.agent_runs.ownership_policy import (
     SubagentRoutingDecision,
     normalize_agent_handoff_entries,
@@ -18,6 +20,8 @@ from backend.services.langgraph_chat.contracts import (
     LangGraphRuntimeConfig,
 )
 from core.prompts.builders.post_tool.evidence import register_runtime_compact_evidence
+from core.skills.contracts import LoadedSkill, SkillActivationPolicy, SkillMetadata
+from core.skills.registry import SkillRegistry
 
 
 def _metadata(
@@ -25,13 +29,12 @@ def _metadata(
     raw_capabilities: list[str],
     targets: list[str] | None = None,
     classifier_label: str = "direct_executor",
-    agent_handoffs: list[dict[str, str]] | None = None,
+    agent_handoffs: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    return {
-        "intent_classifier_label": classifier_label,
-        "intent_classifier_raw_response": {
-            "suggested_capabilities": raw_capabilities,
-            "agent_handoffs": agent_handoffs
+    normalized_handoffs = [
+        {**entry, "skill_ids": entry.get("skill_ids", [])}
+        for entry in (
+            agent_handoffs
             if agent_handoffs is not None
             else [
                 {
@@ -39,7 +42,14 @@ def _metadata(
                     "subagent": "pathfinder",
                     "objective": "Map exposed services on the approved target.",
                 }
-            ],
+            ]
+        )
+    ]
+    return {
+        "intent_classifier_label": classifier_label,
+        "intent_classifier_raw_response": {
+            "suggested_capabilities": raw_capabilities,
+            "agent_handoffs": normalized_handoffs,
         },
         "intent_hints": {
             "classifier_label": classifier_label,
@@ -115,6 +125,7 @@ def _routing_metadata(decision: SubagentRoutingDecision) -> dict[str, object]:
                 "capabilities": list(handoff.capabilities),
                 "targets": list(handoff.targets),
                 "objective": handoff.objective,
+                "requested_skill_ids": list(handoff.requested_skill_ids),
             }
             for handoff in decision.handoffs
         ],
@@ -127,6 +138,7 @@ def test_shared_normalizer_accepts_single_three_field_mapping() -> None:
             "agent_handoff": " Required ",
             "subagent": " PathFinder ",
             "objective": "  Follow up on unresolved HTTP evidence.  ",
+            "skill_ids": ["network-reconnaissance"],
             "ignored": "not part of the contract",
         }
     )
@@ -136,9 +148,15 @@ def test_shared_normalizer_accepts_single_three_field_mapping() -> None:
             "agent_handoff": "required",
             "subagent": "pathfinder",
             "objective": "Follow up on unresolved HTTP evidence.",
+            "skill_ids": ["network-reconnaissance"],
         },
     )
-    assert set(entries[0]) == {"agent_handoff", "subagent", "objective"}
+    assert set(entries[0]) == {
+        "agent_handoff",
+        "subagent",
+        "objective",
+        "skill_ids",
+    }
 
 
 def test_policy_accepts_direct_executor_recon_capabilities_with_targets() -> None:
@@ -170,6 +188,7 @@ def test_assignment_construction_preserves_classifier_authored_objective() -> No
                     "agent_handoff": "required",
                     "subagent": "pathfinder",
                     "objective": f"  {authored_objective}  ",
+                    "skill_ids": ["network-reconnaissance"],
                 }
             ],
         )
@@ -190,6 +209,7 @@ def test_assignment_construction_preserves_classifier_authored_objective() -> No
     )
     assert assignment.targets == ("10.0.0.10",)
     assert assignment.suggested_capabilities == ("port_scanning",)
+    assert assignment.requested_skill_ids == ("network-reconnaissance",)
     assert assignment.relevant_context["ownership_reason"] == "pathfinder_owned"
 
 
@@ -304,6 +324,7 @@ def test_followup_handoff_uses_shared_policy_and_assignment_builder() -> None:
             "agent_handoff": "required",
             "subagent": "pathfinder",
             "objective": authored_objective,
+            "skill_ids": ["network-reconnaissance"],
         },
         require_direct_executor=False,
     )
@@ -545,3 +566,85 @@ def test_policy_rejects_non_direct_executor_and_active_local_run() -> None:
     assert non_direct.reason == "classifier_not_direct_executor"
     assert active.should_delegate is False
     assert active.reason == "subagent_unavailable"
+
+
+def test_policy_admits_compatible_selectable_skill_before_dispatch() -> None:
+    decision = resolve_subagent_handoff(
+        _metadata(
+            raw_capabilities=["network_scan"],
+            agent_handoffs=[
+                {
+                    "agent_handoff": "required",
+                    "subagent": "pathfinder",
+                    "objective": "Scan the approved target.",
+                    "skill_ids": ["network-reconnaissance"],
+                }
+            ],
+        ),
+        skill_registry=_skill_registry(),
+    )
+
+    assert decision.should_delegate is True
+    assert decision.handoffs[0].requested_skill_ids == ("network-reconnaissance",)
+
+
+@pytest.mark.parametrize(
+    ("skill_id", "reason"),
+    (
+        ("missing", "skill_request_unknown_skill"),
+        ("baseline", "skill_request_not_selectable"),
+        ("other-agent-skill", "skill_request_incompatible_agent"),
+    ),
+)
+def test_policy_rejects_invalid_selected_skill_before_dispatch(
+    skill_id: str,
+    reason: str,
+) -> None:
+    decision = resolve_subagent_handoff(
+        _metadata(
+            raw_capabilities=["network_scan"],
+            agent_handoffs=[
+                {
+                    "agent_handoff": "required",
+                    "subagent": "pathfinder",
+                    "objective": "Scan the approved target.",
+                    "skill_ids": [skill_id],
+                }
+            ],
+        ),
+        skill_registry=_skill_registry(),
+    )
+
+    assert decision.should_delegate is False
+    assert decision.reason == reason
+
+
+def _skill_registry() -> SkillRegistry:
+    return SkillRegistry(
+        (
+            _skill("baseline", activation="mandatory"),
+            _skill("network-reconnaissance", activation="selectable", digest="2" * 64),
+            _skill(
+                "other-agent-skill",
+                activation="selectable",
+                agent_ids=("other_agent",),
+                digest="3" * 64,
+            ),
+        )
+    )
+
+
+def _skill(
+    skill_id: str,
+    *,
+    activation: str,
+    agent_ids: tuple[str, ...] = ("pathfinder",),
+    digest: str = "1" * 64,
+) -> LoadedSkill:
+    return LoadedSkill(
+        metadata=SkillMetadata(name=skill_id, description="Test skill."),
+        activation=SkillActivationPolicy(activation=activation, agent_ids=agent_ids),
+        body="Use bounded guidance.",
+        source=f"{skill_id}/SKILL.md",
+        digest=digest,
+    )

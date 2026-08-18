@@ -122,22 +122,26 @@ def test_normalized_initial_agent_handoff_shape_is_classifier_compatible() -> No
                     "agent_handoff": " Required ",
                     "subagent": " PathFinder ",
                     "objective": "  Map exposed services on the approved target.  ",
+                    "skill_ids": [" Network-Reconnaissance "],
                     "ignored": "metadata stays out of the contract",
                 },
                 {
                     "agent_handoff": "optional",
                     "subagent": "pathfinder",
                     "objective": "Optional handoffs are not routed.",
+                    "skill_ids": [],
                 },
                 {
                     "agent_handoff": "required",
                     "subagent": "pathfinder",
                     "objective": "  Map exposed services on the approved target.  ",
+                    "skill_ids": ["network-reconnaissance"],
                 },
                 {
                     "agent_handoff": "required",
                     "subagent": "",
                     "objective": "Missing agent is ignored.",
+                    "skill_ids": [],
                 },
             ],
         }
@@ -148,9 +152,15 @@ def test_normalized_initial_agent_handoff_shape_is_classifier_compatible() -> No
             "agent_handoff": "required",
             "subagent": "pathfinder",
             "objective": "Map exposed services on the approved target.",
+            "skill_ids": ["network-reconnaissance"],
         }
     ]
-    assert set(handoffs[0]) == {"agent_handoff", "subagent", "objective"}
+    assert set(handoffs[0]) == {
+        "agent_handoff",
+        "subagent",
+        "objective",
+        "skill_ids",
+    }
 
 
 @pytest.mark.asyncio

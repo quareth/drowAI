@@ -16,6 +16,7 @@ from backend.services.langgraph_chat.checkpoint.checkpointer_service import (
 )
 from backend.services.langgraph_chat.execution.graph_executor import LangGraphExecutor
 from backend.services.langgraph_chat.streaming.adapter import LangGraphStreamingAdapter
+from core.skills.registry import SkillRegistry, get_skill_registry
 
 from .launcher import AgentRunLauncher, LifecyclePublisher
 from .parent_handoff_continuation import ParentHandoffContinuationBroker
@@ -30,6 +31,7 @@ class ProcessLocalAgentRunRuntime:
 
     registry: ProcessLocalAgentRunRegistry
     subagent_registry: SubagentRegistry
+    skill_registry: SkillRegistry
     streaming_adapter: LangGraphStreamingAdapter
     executor: LangGraphExecutor
     worker: ProcessLocalAgentRunWorker
@@ -57,6 +59,7 @@ def get_process_local_agent_run_runtime() -> ProcessLocalAgentRunRuntime:
     global _PROCESS_LOCAL_RUNTIME
     if _PROCESS_LOCAL_RUNTIME is None:
         subagent_registry = get_subagent_registry()
+        skill_registry = get_skill_registry()
         registry = ProcessLocalAgentRunRegistry()
         streaming_adapter = LangGraphStreamingAdapter()
         executor = LangGraphExecutor(streaming_adapter=streaming_adapter)
@@ -65,6 +68,7 @@ def get_process_local_agent_run_runtime() -> ProcessLocalAgentRunRuntime:
             definition_registry=subagent_registry,
             checkpointer_service=get_shared_checkpointer_service(),
             executor=executor,
+            skill_registry=skill_registry,
         )
         launcher = AgentRunLauncher(
             registry=registry,
@@ -77,6 +81,7 @@ def get_process_local_agent_run_runtime() -> ProcessLocalAgentRunRuntime:
         _PROCESS_LOCAL_RUNTIME = ProcessLocalAgentRunRuntime(
             registry=registry,
             subagent_registry=subagent_registry,
+            skill_registry=skill_registry,
             streaming_adapter=streaming_adapter,
             executor=executor,
             worker=worker,

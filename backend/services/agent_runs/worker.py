@@ -46,6 +46,8 @@ from backend.services.langgraph_chat.checkpoint.checkpointer_service import (
 from backend.services.langgraph_chat.execution.graph_executor import LangGraphExecutor
 from backend.services.langgraph_chat.hitl_constants import GRAPH_RECURSION_LIMIT
 from backend.services.langgraph_chat.streaming.adapter import LangGraphStreamingAdapter
+from backend.services.metrics.utils import safe_gauge, safe_inc
+from core.skills.registry import SkillRegistry, get_skill_registry
 from runtime_shared.shell_session_contracts import format_shell_execution_owner_id
 
 from .cancellation import AsyncCancellationProbe
@@ -63,6 +65,7 @@ class ProcessLocalAgentRunWorker:
         definition_registry: SubagentRegistry | None = None,
         checkpointer_service: CheckpointerService | None = None,
         executor: LangGraphExecutor | None = None,
+        skill_registry: SkillRegistry | None = None,
     ) -> None:
         self._registry = registry
         self._definition_registry = definition_registry or get_subagent_registry()
@@ -72,6 +75,7 @@ class ProcessLocalAgentRunWorker:
         self._executor = executor or LangGraphExecutor(
             streaming_adapter=LangGraphStreamingAdapter(),
         )
+        self._skill_registry = skill_registry or get_skill_registry()
 
     async def __call__(
         self,
@@ -95,6 +99,12 @@ class ProcessLocalAgentRunWorker:
             definition=definition,
             assignment=assignment,
             graph_thread_id=graph_thread_id,
+            skill_registry=self._skill_registry,
+        )
+        _record_skill_resolution_metrics(
+            graph_input,
+            assignment=assignment,
+            skill_registry=self._skill_registry,
         )
         config = prepare_subagent_child_config(
             runtime_config,
@@ -106,7 +116,11 @@ class ProcessLocalAgentRunWorker:
         async with self._checkpointer_service.get_checkpointer(
             assignment.task_id
         ) as checkpointer:
-            compiled = build_subagent_graph(definition, checkpointer=checkpointer)
+            compiled = build_subagent_graph(
+                definition,
+                checkpointer=checkpointer,
+                skill_registry=self._skill_registry,
+            )
             execution_result = await self._executor.stream_graph(
                 compiled,
                 graph_input,
@@ -157,6 +171,37 @@ class ProcessLocalAgentRunWorker:
             raise RuntimeError("Subagent child run is not registered")
         if entry.graph_thread_id != graph_thread_id:
             raise RuntimeError("Subagent child thread does not match registry")
+
+
+def _record_skill_resolution_metrics(
+    graph_input: Mapping[str, Any],
+    *,
+    assignment: AgentAssignment,
+    skill_registry: SkillRegistry,
+) -> None:
+    """Record bounded counters without logging skill bodies or assignment text."""
+
+    safe_inc("skill_requested", len(assignment.requested_skill_ids))
+    facts = graph_input.get("facts")
+    metadata = facts.get("metadata") if isinstance(facts, Mapping) else None
+    subagent = metadata.get("subagent") if isinstance(metadata, Mapping) else None
+    refs = subagent.get("resolved_skills") if isinstance(subagent, Mapping) else None
+    selected_skill_ids: list[str] = []
+    for ref in refs if isinstance(refs, list | tuple) else ():
+        reasons = ref.get("reasons") if isinstance(ref, Mapping) else ()
+        skill_id = ref.get("skill_id") if isinstance(ref, Mapping) else None
+        if isinstance(skill_id, str) and skill_id:
+            selected_skill_ids.append(skill_id)
+        reason_set = set(reasons) if isinstance(reasons, list | tuple) else set()
+        if "mandatory" in reason_set:
+            safe_inc("skill_selected_mandatory")
+        if "agent_selected" in reason_set:
+            safe_inc("skill_selected_requested")
+    estimated_tokens = sum(
+        (len(skill_registry.require(skill_id).body) + 3) // 4
+        for skill_id in selected_skill_ids
+    )
+    safe_gauge("skill_prompt_estimated_tokens", estimated_tokens)
 
 
 async def mark_subagent_completed_from_state(

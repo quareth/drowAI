@@ -279,6 +279,7 @@ def test_classifier_and_par_share_delegation_entry_shape() -> None:
         "agent_handoff",
         "subagent",
         "objective",
+        "skill_ids",
     ]
     assert classifier_entry["additionalProperties"] is False
     assert par_entry["additionalProperties"] is False
@@ -308,6 +309,7 @@ def test_delegation_entry_schema_rejects_empty_objective_and_invalid_subagent() 
                 "agent_handoff": "required",
                 "subagent": "pathfinder",
                 "objective": "Map exposed services on the approved target.",
+                "skill_ids": ["network-reconnaissance"],
             }
         ]
     )
@@ -317,6 +319,7 @@ def test_delegation_entry_schema_rejects_empty_objective_and_invalid_subagent() 
             "agent_handoff": "required",
             "subagent": "pathfinder",
             "objective": "Map exposed services on the approved target.",
+            "skill_ids": [],
         }
     )
 
@@ -348,6 +351,7 @@ def test_post_tool_decision_uses_portable_schema_and_runtime_pairing_validation(
         "agent_handoff": "required",
         "subagent": "pathfinder",
         "objective": "Enumerate services on the approved target.",
+        "skill_ids": ["network-reconnaissance"],
     }
 
     assert "allOf" not in schema

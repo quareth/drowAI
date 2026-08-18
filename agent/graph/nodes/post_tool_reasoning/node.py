@@ -49,7 +49,8 @@ from agent.providers.llm.core.exceptions import (
 )
 from agent.providers.llm.contracts.tool_contracts import ToolChoice
 from agent.graph.config.token_limits import LIMITS
-from agent.subagents.registry import get_subagent_registry
+from agent.subagents.registry import SubagentRegistry, get_subagent_registry
+from agent.subagents.skill_catalog import project_subagent_skill_catalogs
 from agent.tools.capability_surface import render_capability_surface
 from backend.services.metrics.utils import safe_gauge, safe_inc
 from backend.services.usage_tracking.models import ProviderUsageComponents, UsageData
@@ -58,6 +59,7 @@ from backend.services.usage_tracking.pricing import (
     calculate_cost,
     pricing_status_for_usage,
 )
+from core.skills.registry import SkillRegistry, get_skill_registry
 
 # Import models from the models submodule
 from .models import (
@@ -716,6 +718,9 @@ async def post_tool_reasoning(
     context: Optional[GraphRuntimeContext] = None,
     config: Optional[Mapping[str, Any]] = None,
     writer: Optional[StreamWriter] = None,
+    *,
+    subagent_registry: SubagentRegistry | None = None,
+    skill_registry: SkillRegistry | None = None,
 ) -> Dict[str, Any]:
     """Analyze completed outcomes and commit the matching next action.
     
@@ -913,6 +918,19 @@ async def post_tool_reasoning(
         # when transient tool evidence intentionally skips the phase ledger.
         metadata["current_ptr_phase_sequence"] = current_ptr_phase_sequence
     try:
+        resolved_subagent_registry = subagent_registry or get_subagent_registry()
+        resolved_skill_registry = skill_registry or get_skill_registry()
+        skill_catalogs = project_subagent_skill_catalogs(
+            resolved_subagent_registry.definitions(),
+            resolved_skill_registry,
+        )
+        safe_gauge(
+            "skill_catalog_entries",
+            sum(
+                len(catalog.mandatory_skills) + len(catalog.selectable_skills)
+                for catalog in skill_catalogs
+            ),
+        )
         decision_user_prompt = prompt_builder.build_user_prompt(
             interactive=interactive,
             synthesized=synthesized,
@@ -929,9 +947,11 @@ async def post_tool_reasoning(
                 if outcome_source == DIRECT_TOOL_OUTCOME_SOURCE
                 else None
             ),
+            subagent_catalog=resolved_subagent_registry.classifier_catalog(),
+            skill_catalogs=skill_catalogs,
         )
         decision_tools = [
-            build_post_tool_commit_tool(get_subagent_registry().ids())
+            build_post_tool_commit_tool(resolved_subagent_registry.ids())
         ]
         if writer is not None:
             (

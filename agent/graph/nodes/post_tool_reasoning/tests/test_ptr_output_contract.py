@@ -89,6 +89,7 @@ def test_ptr_decision_output_accepts_delegate_subagent_with_existing_entry_shape
                 "agent_handoff": "required",
                 "subagent": "pathfinder",
                 "objective": "Enumerate services on the approved target.",
+                "skill_ids": ["network-reconnaissance"],
             },
         }
     )

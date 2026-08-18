@@ -21,6 +21,9 @@ from pydantic import (
     model_validator,
 )
 
+from core.skills.contracts import MAX_REQUESTED_SKILLS
+from core.skills.identifiers import normalize_skill_id
+
 
 AgentKind: TypeAlias = Annotated[
     str,
@@ -284,6 +287,10 @@ class AgentAssignment(_StrictContract):
     objective: str
     targets: tuple[str, ...] = Field(default_factory=tuple)
     suggested_capabilities: tuple[AgentCapability, ...] = Field(default_factory=tuple)
+    requested_skill_ids: tuple[str, ...] = Field(
+        default_factory=tuple,
+        max_length=MAX_REQUESTED_SKILLS,
+    )
     scope_summary: str | None = None
     relevant_context: dict[str, Any] = Field(default_factory=dict)
     runtime_identity: AgentRuntimeIdentity
@@ -318,6 +325,33 @@ class AgentAssignment(_StrictContract):
         if not isinstance(value, list | tuple):
             return value
         return tuple(_validate_non_empty(str(item), "targets") for item in value)
+
+    @field_validator("requested_skill_ids", mode="before")
+    @classmethod
+    def _normalize_requested_skill_ids(cls, value: Any) -> tuple[str, ...]:
+        """Store only bounded canonical identifiers in stable request order."""
+
+        if value is None:
+            return ()
+        if not isinstance(value, list | tuple):
+            raise ValueError("requested_skill_ids must be a sequence")
+        if len(value) > MAX_REQUESTED_SKILLS:
+            raise ValueError(
+                "requested_skill_ids contains more than "
+                f"{MAX_REQUESTED_SKILLS} items"
+            )
+        normalized: list[str] = []
+        for item in value:
+            try:
+                skill_id = normalize_skill_id(item)
+            except ValueError as exc:
+                raise ValueError(
+                    "requested_skill_ids contains an invalid identifier"
+                ) from exc
+
+            if skill_id not in normalized:
+                normalized.append(skill_id)
+        return tuple(normalized)
 
     @field_validator("relevant_context")
     @classmethod

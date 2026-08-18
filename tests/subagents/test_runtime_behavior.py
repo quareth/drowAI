@@ -67,6 +67,8 @@ from agent.tool_runtime.batch.types import (
 from agent.tools.tool_call_specs import make_function_name_for_tool
 from core.prompts.builders.post_tool.evidence import register_runtime_compact_evidence
 from core.prompts.builders.subagent_runtime import SubagentRuntimePromptBuilder
+from core.skills.contracts import LoadedSkill, SkillActivationPolicy, SkillMetadata
+from core.skills.registry import SkillRegistry
 from runtime_shared.shell_capabilities import (
     SHELL_ASSESSMENT_TOOL_ID,
     SHELL_UTILITY_TOOL_ID,
@@ -180,6 +182,7 @@ def _assignment(
     assignment_id: str = "assign-1",
     agent_run_id: str = "run-1",
     agent_mode: str | None = "full_access",
+    requested_skill_ids: tuple[str, ...] = (),
 ) -> AgentAssignment:
     relevant_context = {"ticket": "ENG-123"}
     if agent_mode is not None:
@@ -197,6 +200,7 @@ def _assignment(
         objective="Map live hosts on the approved target.",
         targets=["10.0.0.10"],
         suggested_capabilities=["host_discovery", "port_scan"],
+        requested_skill_ids=requested_skill_ids,
         scope_summary="Approved internal test host only.",
         relevant_context=relevant_context,
         runtime_identity=_runtime_identity(),
@@ -252,12 +256,36 @@ def _profile_with_universal_shell_tools() -> SubagentToolProfile:
     )
 
 
-def _generic_state() -> dict[str, Any]:
+def _runtime_skill_registry(*, activation: str = "mandatory") -> SkillRegistry:
+    return SkillRegistry(
+        (
+            LoadedSkill(
+                metadata=SkillMetadata(
+                    name="network_reconnaissance",
+                    description="Bounded discovery fixture.",
+                ),
+                activation=SkillActivationPolicy(
+                    activation=activation,
+                    agent_ids=("pathfinder",),
+                ),
+                body="Use bounded fixture discovery and return concise evidence.",
+                source="network_reconnaissance/SKILL.md",
+                digest="3" * 64,
+            ),
+        )
+    )
+
+
+def _generic_state(
+    *,
+    skill_registry: SkillRegistry | None = None,
+) -> dict[str, Any]:
     return build_subagent_initial_state(
         definition=_pathfinder_definition(),
         assignment=_assignment(),
         graph_thread_id="child-thread-1",
         tool_profile=_profile(),
+        skill_registry=skill_registry,
     )
 
 
@@ -281,6 +309,30 @@ def _generic_state_for_assignment(
         graph_thread_id=graph_thread_id,
         tool_profile=_profile(),
     )
+
+
+def test_selected_skill_ids_and_digest_refs_survive_state_round_trip() -> None:
+    skill_registry = _runtime_skill_registry(activation="selectable")
+    state = build_subagent_initial_state(
+        definition=_pathfinder_definition(),
+        assignment=_assignment(requested_skill_ids=("network_reconnaissance",)),
+        graph_thread_id="child-thread-skill-checkpoint",
+        tool_profile=_profile(),
+        skill_registry=skill_registry,
+    )
+
+    checkpoint_state = json.loads(json.dumps(state))
+    restored = subagent_state_from_graph_state(
+        checkpoint_state,
+        definition=_pathfinder_definition(),
+    )
+
+    assert restored.assignment.requested_skill_ids == ("network_reconnaissance",)
+    assert tuple(ref.skill_id for ref in restored.resolved_skills) == (
+        "network_reconnaissance",
+    )
+    assert restored.resolved_skills[0].digest == "3" * 64
+    assert "Use bounded fixture discovery" not in json.dumps(checkpoint_state)
 
 
 def test_subagent_initial_state_restores_parent_approval_policy() -> None:
@@ -424,8 +476,10 @@ def _failed_service_iteration() -> dict[str, Any]:
 
 def _state_after_tool_iterations(
     iterations: list[dict[str, Any]],
+    *,
+    skill_registry: SkillRegistry | None = None,
 ) -> dict[str, Any]:
-    state = _generic_state()
+    state = _generic_state(skill_registry=skill_registry)
     for index, iteration in enumerate(iterations, start=1):
         state = _apply_tool_iteration_projection(state, iteration, index=index)
         state = record_subagent_observation_and_budget(
@@ -826,9 +880,9 @@ async def test_runtime_model_records_generic_route_metadata_and_call_topology() 
         "temperature": 0.1,
         "max_tokens": 5000,
     }
-    assert "Remaining Limits:" in request["user_prompt"]
-    assert '"remaining_iterations": 9' in request["user_prompt"]
-    assert '"remaining_tool_calls_this_iteration": 3' in request["user_prompt"]
+    assert "Remaining Limits:" not in request["user_prompt"]
+    assert "remaining_iterations" not in request["user_prompt"]
+    assert "remaining_tool_calls" not in request["user_prompt"]
     assert all(
         SUBAGENT_EXECUTION_STRATEGY_KEY in required
         for required in request["required"]
@@ -1407,14 +1461,10 @@ async def test_runtime_counts_real_multi_call_batch_application_as_one_iteration
     )
 
     request = _request_projection(next_llm.requests[0])
-    remaining_limits = _extract_prompt_section_json(
-        request["user_prompt"],
-        "Remaining Limits",
-    )
     assert len(tool_phase_records) == 1
     assert synced["facts"]["iterations"] == 1
-    assert remaining_limits["completed_iterations"] == 1
-    assert remaining_limits["remaining_iterations"] == 8
+    assert "Remaining Limits:" not in request["user_prompt"]
+    assert "remaining_iterations" not in request["user_prompt"]
     assert "subagent_completed_iteration_markers" not in synced["facts"]["metadata"]
     assert "subagent_observation_transcript" not in synced["facts"]["metadata"]
 
@@ -1506,16 +1556,19 @@ def test_subagent_tool_projection_uses_canonical_phase_memory_without_transcript
 
 @pytest.mark.asyncio
 async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> None:
+    skill_registry = _runtime_skill_registry()
     one_tool_state = _state_after_tool_iterations(
         [
             _host_discovery_iteration(),
-        ]
+        ],
+        skill_registry=skill_registry,
     )
     multi_iteration_state = _state_after_tool_iterations(
         [
             _host_discovery_iteration(),
             _service_enumeration_iteration(),
-        ]
+        ],
+        skill_registry=skill_registry,
     )
 
     one_tool_llm = _FakeBuilderLLM([], content="One-tool fixture handoff.")
@@ -1527,11 +1580,13 @@ async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> Non
         _pathfinder_definition(),
         one_tool_state,
         llm_resolver=lambda *_args, **_kwargs: one_tool_llm,
+        skill_registry=skill_registry,
     )
     await run_subagent_model_turn(
         _pathfinder_definition(),
         multi_iteration_state,
         llm_resolver=lambda *_args, **_kwargs: multi_iteration_llm,
+        skill_registry=skill_registry,
     )
 
     one_tool_request = one_tool_llm.requests[0]
@@ -1593,6 +1648,11 @@ async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> Non
     assert "current_turn_phase_memory" in multi_iteration_user_prompt
     assert "last_tool_result" in multi_iteration_user_prompt
     assert "Working memory snapshot" in multi_iteration_user_prompt
+    assert "Specialized Capability Guidance:" in multi_iteration_request["system_prompt"]
+    assert '<skill id="network_reconnaissance">' in multi_iteration_request[
+        "system_prompt"
+    ]
+    assert "Specialized Capability Guidance:" not in multi_iteration_user_prompt
 
     baseline = {
         "one_tool_model_calls": len(one_tool_llm.requests),
@@ -1629,10 +1689,10 @@ async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> Non
     assert baseline == {
         "one_tool_model_calls": 1,
         "multi_iteration_model_calls": 1,
-        "one_tool_serialized_state_chars": 10334,
-        "multi_iteration_serialized_state_chars": 12037,
-        "multi_iteration_prompt_chars": 15322,
-        "multi_iteration_prompt_tokens": 5473,
+        "one_tool_serialized_state_chars": 10531,
+        "multi_iteration_serialized_state_chars": 12234,
+        "multi_iteration_prompt_chars": 16051,
+        "multi_iteration_prompt_tokens": 5733,
         "bounded_parent_handoff_projection_chars": 501,
         "bounded_parent_handoff_render_chars": 281,
         "parent_handoff_projection_model_calls": 0,

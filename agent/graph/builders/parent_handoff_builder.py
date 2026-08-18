@@ -8,8 +8,9 @@ the coordinator can launch follow-up subagents or wait for active runs.
 
 from __future__ import annotations
 
+from functools import partial
 import logging
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
 from langgraph.graph import END, StateGraph
 
@@ -51,6 +52,10 @@ from .post_action_wiring import (
     wire_direct_tool_action_path,
     wire_post_action_continuation,
 )
+
+if TYPE_CHECKING:
+    from agent.subagents.registry import SubagentRegistry
+    from core.skills.registry import SkillRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +134,8 @@ def build_parent_handoff_graph(
     *,
     checkpointer: Any = None,
     build_only: bool = False,
+    subagent_registry: "SubagentRegistry | None" = None,
+    skill_registry: "SkillRegistry | None" = None,
 ) -> Any:
     """Compile the parent continuation graph for one claimed child handoff batch."""
     graph = StateGraph(dict)
@@ -151,10 +158,15 @@ def build_parent_handoff_graph(
         dispatch_tool_execution_node_fn=dispatch_tool_execution_node,
         synthesize_tool_output_fn=synthesize_tool_output,
     )
+    reasoning_node = partial(
+        post_tool_reasoning,
+        subagent_registry=subagent_registry,
+        skill_registry=skill_registry,
+    )
     add_post_action_continuation_nodes(
         graph,
         reasoning_node_name="post_action_reasoning",
-        reasoning_node=post_tool_reasoning,
+        reasoning_node=reasoning_node,
         decision_router_node=decision_router,
         think_more_node_fn=think_more_node,
         reflect_node_fn=reflect_node,

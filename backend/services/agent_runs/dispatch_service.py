@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from agent.subagents.registry import SubagentRegistry
+from core.skills.registry import SkillRegistry, get_skill_registry
 from backend.services.langgraph_chat.contracts import LangGraphRuntimeConfig
 
 from .completion import AgentRunCompletion
@@ -52,9 +53,11 @@ class SubagentDispatchService:
         launcher: AgentRunLaunchService,
         subagent_registry: SubagentRegistry,
         lifecycle_publisher: LifecyclePublisher,
+        skill_registry: SkillRegistry | None = None,
     ) -> None:
         self._registry = registry
         self._subagent_registry = subagent_registry
+        resolved_skill_registry = skill_registry or get_skill_registry()
         self._settlement = DispatchSettlement(registry=registry)
         self._batch_executor = DispatchBatchExecutor(
             registry=registry,
@@ -68,6 +71,7 @@ class SubagentDispatchService:
             subagent_registry=subagent_registry,
             batch_executor=self._batch_executor,
             active_count_reader=self._active_counts_for_plan,
+            skill_registry=resolved_skill_registry,
         )
 
     async def dispatch(

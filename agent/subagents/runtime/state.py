@@ -40,6 +40,9 @@ from agent.subagents.runtime.tool_outcomes import (
     SUBAGENT_PRIOR_TOOL_OUTCOMES_CONTEXT_KEY,
     outcome_section_payload,
 )
+from core.skills.contracts import ResolvedSkillRef
+from core.skills.registry import SkillRegistry, get_skill_registry
+from core.skills.resolver import resolve_skills
 
 
 SUBAGENT_METADATA_KEY = "subagent"
@@ -107,6 +110,7 @@ class SubagentRuntimeState(BaseModel):
     tool_profile: SubagentToolProfileState = Field(
         default_factory=SubagentToolProfileState
     )
+    resolved_skills: tuple[ResolvedSkillRef, ...] = Field(default_factory=tuple)
 
     @classmethod
     def from_assignment(
@@ -116,6 +120,7 @@ class SubagentRuntimeState(BaseModel):
         assignment: AgentAssignment,
         graph_thread_id: str,
         tool_profile: SubagentToolProfile | SubagentToolProfileState | Any | None = None,
+        resolved_skills: tuple[ResolvedSkillRef, ...] = (),
     ) -> "SubagentRuntimeState":
         """Build metadata for a child subagent graph from a validated assignment."""
 
@@ -141,6 +146,7 @@ class SubagentRuntimeState(BaseModel):
             assignment=assignment,
             graph_thread_id=graph_thread_id,
             tool_profile=profile_state,
+            resolved_skills=resolved_skills,
         )
 
     @property
@@ -201,14 +207,30 @@ def build_subagent_initial_state(
     assignment: AgentAssignment,
     graph_thread_id: str,
     tool_profile: SubagentToolProfile | SubagentToolProfileState | Any | None = None,
+    skill_registry: SkillRegistry | None = None,
 ) -> dict[str, Any]:
     """Return an initial ``InteractiveState`` mapping for a child subagent run."""
 
+    effective_profile = effective_subagent_tool_profile(
+        definition,
+        tool_profile,
+    )
+    resolution = resolve_skills(
+        (skill_registry or get_skill_registry()).skills(),
+        definition.id,
+        assignment.requested_skill_ids,
+    )
+    if resolution.rejected_requests:
+        codes = ", ".join(
+            rejection.code for rejection in resolution.rejected_requests
+        )
+        raise RuntimeError(f"invalid selected skills reached subagent runtime: {codes}")
     subagent = SubagentRuntimeState.from_assignment(
         definition=definition,
         assignment=assignment,
         graph_thread_id=graph_thread_id,
-        tool_profile=tool_profile,
+        tool_profile=effective_profile,
+        resolved_skills=resolution.selected,
     )
     metadata = _metadata_from_subagent_state(definition, subagent)
     metadata["working_memory"] = _initial_working_memory(definition, subagent)
@@ -336,6 +358,7 @@ def subagent_state_from_graph_state(
             or interactive.facts.tool_ids
             or definition.tool_ids,
         ),
+        resolved_skills=subagent.resolved_skills,
     )
 
 

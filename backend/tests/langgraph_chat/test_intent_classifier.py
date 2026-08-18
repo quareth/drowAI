@@ -119,6 +119,7 @@ def test_intent_classifier_normalizes_at_the_ownership_handoff_limit() -> None:
             "agent_handoff": "required",
             "subagent": f"agent_{index}",
             "objective": f"Objective {index}",
+            "skill_ids": [],
         }
         for index in range(MAX_AGENT_HANDOFFS + 1)
     ]
@@ -777,6 +778,7 @@ async def test_intent_classifier_prefers_structured_output_payload() -> None:
                     "agent_handoff": "required",
                     "subagent": "pathfinder",
                     "objective": "Run an Nmap scan against 10.10.10.10.",
+                    "skill_ids": ["network-reconnaissance"],
                 }
             ],
             "requested_output_format": None,
@@ -819,6 +821,7 @@ async def test_intent_classifier_prefers_structured_output_payload() -> None:
             "agent_handoff": "required",
             "subagent": "pathfinder",
             "objective": "Run an Nmap scan against 10.10.10.10.",
+            "skill_ids": ["network-reconnaissance"],
         }
     ]
     assert (

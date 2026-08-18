@@ -11,6 +11,7 @@ from collections.abc import Awaitable, Callable
 from typing import Any
 
 from agent.subagents.registry import SubagentRegistry, get_subagent_registry
+from core.skills.registry import SkillRegistry, get_skill_registry
 from backend.services.agent_runs.dispatch_contracts import AgentRunLaunchService
 from backend.services.agent_runs.dispatch_service import (
     SubagentDispatchService,
@@ -57,9 +58,11 @@ def build_subagent_handler(
     parent_handoff_guard_pool: ParentHandoffGuardPool | None = None,
     result_projector: AgentRunResultProjector | None = None,
     subagent_registry: SubagentRegistry | None = None,
+    skill_registry: SkillRegistry | None = None,
 ) -> SubagentHandler:
     """Build the subagent chat adapter and its process-local collaborators."""
     definitions = subagent_registry or get_subagent_registry()
+    skills = skill_registry or get_skill_registry()
     projector = result_projector or AgentRunResultProjector(
         registry=registry,
         subagent_registry=definitions,
@@ -71,6 +74,7 @@ def build_subagent_handler(
             definition_registry=definitions,
             checkpointer_service=checkpointer_service,
             executor=executor,
+            skill_registry=skills,
         )
         resolved_launcher = AgentRunLauncher(
             registry=registry,
@@ -84,6 +88,7 @@ def build_subagent_handler(
         launcher=resolved_launcher,
         subagent_registry=definitions,
         lifecycle_publisher=lifecycle_publisher,
+        skill_registry=skills,
     )
     handoff_coordinator = ParentHandoffCoordinator(
         registry=registry,
@@ -97,6 +102,8 @@ def build_subagent_handler(
         executor=executor,
         cancellation_checker_factory=build_cancellation_checker,
         continuation_broker=parent_handoff_continuation_broker,
+        subagent_registry=definitions,
+        skill_registry=skills,
     )
     return SubagentHandler(
         checkpointer_service,

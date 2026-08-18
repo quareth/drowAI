@@ -32,10 +32,12 @@ from backend.services.agent_runs.parent_handoff_continuation import (
     ParentHandoffContinuationBroker,
 )
 from backend.services.agent_runs.worker import mark_subagent_completed_from_state
+from backend.services.langgraph_chat.checkpoint import continuation_service
 from backend.services.langgraph_chat.checkpoint.continuation_service import (
     CheckpointContinuationService,
 )
 from backend.services.langgraph_chat.contracts import LangGraphChatResult
+from backend.services.langgraph_chat.exceptions import HITLError
 from backend.services.langgraph_chat.execution.graph_executor import (
     GraphExecutionCancelled,
     GraphExecutionResult,
@@ -48,6 +50,8 @@ from backend.tests.agent_run_test_support import (
     build_agent_assignment,
     build_runtime_identity,
 )
+from core.skills.errors import SkillRegistryError
+from core.skills.registry import SkillRegistry
 
 
 def _runtime_identity() -> AgentRuntimeIdentity:
@@ -254,9 +258,23 @@ async def test_checkpoint_continuation_compiles_subagent_graph(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     compiled = object()
+    skill_registry = SkillRegistry(())
+    received: dict[str, Any] = {}
+
+    def _build_subagent_graph(
+        definition: Any,
+        *,
+        checkpointer: Any,
+        skill_registry: SkillRegistry,
+    ) -> object:
+        received["agent_id"] = definition.id
+        received["checkpointer"] = checkpointer
+        received["skill_registry"] = skill_registry
+        return compiled
+
     monkeypatch.setattr(
         "agent.subagents.runtime.graph.build_subagent_graph",
-        lambda _definition, *, checkpointer: compiled,
+        _build_subagent_graph,
     )
     service = CheckpointContinuationService(
         checkpointer_service=object(),
@@ -268,15 +286,23 @@ async def test_checkpoint_continuation_compiles_subagent_graph(
         resolve_resume_turn_number=lambda **_kwargs: 0,
         persist_chat_message_from_container=lambda **_kwargs: None,
         build_result=lambda **_kwargs: None,
+        skill_registry=skill_registry,
     )
 
+    checkpointer = object()
     result = await service._compile_graph_for_name(
         task_id=42,
         graph_name=GRAPH_NAME_SUBAGENT,
-        checkpointer=object(),
+        checkpointer=checkpointer,
+        subagent_agent_id="pathfinder",
     )
 
     assert result is compiled
+    assert received == {
+        "agent_id": "pathfinder",
+        "checkpointer": checkpointer,
+        "skill_registry": skill_registry,
+    }
 
 
 @pytest.mark.asyncio
@@ -287,8 +313,18 @@ async def test_checkpoint_continuation_compiles_parent_handoff_graph(
     checkpointer = object()
     received: dict[str, Any] = {}
 
-    def _build_parent_handoff_graph(*, checkpointer: Any) -> object:
+    skill_registry = SkillRegistry(())
+    subagent_registry = get_subagent_registry()
+
+    def _build_parent_handoff_graph(
+        *,
+        checkpointer: Any,
+        subagent_registry: Any,
+        skill_registry: Any,
+    ) -> object:
         received["checkpointer"] = checkpointer
+        received["subagent_registry"] = subagent_registry
+        received["skill_registry"] = skill_registry
         return compiled
 
     monkeypatch.setattr(
@@ -305,6 +341,8 @@ async def test_checkpoint_continuation_compiles_parent_handoff_graph(
         resolve_resume_turn_number=lambda **_kwargs: 0,
         persist_chat_message_from_container=lambda **_kwargs: None,
         build_result=lambda **_kwargs: None,
+        subagent_registry=subagent_registry,
+        skill_registry=skill_registry,
     )
 
     result = await service._compile_graph_for_name(
@@ -314,7 +352,11 @@ async def test_checkpoint_continuation_compiles_parent_handoff_graph(
     )
 
     assert result is compiled
-    assert received == {"checkpointer": checkpointer}
+    assert received == {
+        "checkpointer": checkpointer,
+        "subagent_registry": subagent_registry,
+        "skill_registry": skill_registry,
+    }
 
 
 @pytest.mark.asyncio
@@ -774,6 +816,36 @@ async def test_resume_from_interrupt_settles_child_stop_as_cancelled(
     ]
 
 
+@pytest.mark.asyncio
+async def test_resume_digest_mismatch_emits_resume_metric(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _registry, service = await _resumable_service(
+        monkeypatch,
+        final_state=_interactive_state(),
+    )
+
+    class _DigestMismatchExecutor:
+        async def stream_graph(self, *_args: Any, **_kwargs: Any) -> Any:
+            raise SkillRegistryError("built-in skill changed after resolution")
+
+    metric_names: list[str] = []
+    service._executor = _DigestMismatchExecutor()
+    monkeypatch.setattr(continuation_service, "safe_inc", metric_names.append)
+
+    with pytest.raises(HITLError, match="changed after resolution") as raised:
+        await service.resume_from_interrupt(
+            task_id=42,
+            tenant_id=7,
+            graph_name=GRAPH_NAME_SUBAGENT,
+            interrupt_id="interrupt-1",
+            response={"approved": True},
+        )
+
+    assert isinstance(raised.value.__cause__, SkillRegistryError)
+    assert metric_names == ["skill_resume_digest_mismatch"]
+
+
 @pytest.mark.parametrize(
     ("child_cancelled", "expected_child_status"),
     ((False, "running"), (True, "cancelled")),
@@ -1009,18 +1081,23 @@ async def test_interrupt_snapshot_hydrates_matching_subagent_graph_with_two_defi
         )
     )
     compiled = _FakeCompiledGraph()
+    skill_registry = SkillRegistry(())
 
     compiled_agent_ids: list[str] = []
+    compiled_skill_registries: list[SkillRegistry] = []
     monkeypatch.setattr(
         "agent.subagents.runtime.graph.build_subagent_graph",
-        lambda definition, *, checkpointer: (
-            compiled_agent_ids.append(definition.id) or compiled
+        lambda definition, *, checkpointer, skill_registry: (
+            compiled_agent_ids.append(definition.id)
+            or compiled_skill_registries.append(skill_registry)
+            or compiled
         ),
     )
     service = InterruptStateService(
         checkpointer_service=_FakeCheckpointerService(),
         agent_run_registry=registry,
         subagent_registry=definition_registry,
+        skill_registry=skill_registry,
     )
 
     result = await service.get_pending_interrupt(
@@ -1033,6 +1110,7 @@ async def test_interrupt_snapshot_hydrates_matching_subagent_graph_with_two_defi
     assert result is not None
     assert result["graph_name"] == GRAPH_NAME_SUBAGENT
     assert result["thread_id"] == "graph-" + ("a" * 32)
+    assert compiled_skill_registries == [skill_registry]
     assert result["interrupt_id"] == "interrupt-1"
     assert result["checkpoint_id"] == "cp-1"
     assert compiled_agent_ids == ["cartographer"]

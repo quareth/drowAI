@@ -272,7 +272,15 @@ async def test_deep_reasoning_hitl_resume_has_single_parameter_generation_prompt
         }
         return interactive.as_graph_update()
 
-    async def _post_tool_reasoning(state: Dict[str, Any], context=None, config=None, writer=None):  # noqa: ANN001, ARG001
+    async def _post_tool_reasoning(  # noqa: ANN001, ARG001
+        state: Dict[str, Any],
+        context=None,
+        config=None,
+        writer=None,
+        *,
+        subagent_registry=None,
+        skill_registry=None,
+    ):
         interactive = InteractiveState.from_mapping(state)
         interactive.facts.decision_history = list(interactive.facts.decision_history or [])
         interactive.facts.decision_history.append("finalize: Goal achieved")
@@ -603,7 +611,15 @@ async def test_simple_tool_backend_hitl_resume_has_single_parameter_generation_p
         }
         return interactive.as_graph_update()
 
-    async def _post_tool_reasoning(state: Dict[str, Any], context=None, config=None, writer=None):  # noqa: ANN001, ARG001
+    async def _post_tool_reasoning(  # noqa: ANN001, ARG001
+        state: Dict[str, Any],
+        context=None,
+        config=None,
+        writer=None,
+        *,
+        subagent_registry=None,
+        skill_registry=None,
+    ):
         interactive = InteractiveState.from_mapping(state)
         interactive.facts.decision_history = list(interactive.facts.decision_history or [])
         interactive.facts.decision_history.append("finalize: Goal achieved")

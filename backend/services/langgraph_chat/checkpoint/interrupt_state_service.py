@@ -37,6 +37,7 @@ from backend.services.langgraph_chat.checkpoint.thread_identity import (
     format_graph_thread_id,
     normalize_graph_thread_id,
 )
+from core.skills.registry import SkillRegistry, get_skill_registry
 
 logger = logging.getLogger("backend.services.langgraph_chat.interrupt_state_service")
 
@@ -49,6 +50,7 @@ class InterruptStateService:
         checkpointer_service: Optional[CheckpointerService] = None,
         agent_run_registry: Optional[ProcessLocalAgentRunRegistry] = None,
         subagent_registry: SubagentRegistry | None = None,
+        skill_registry: SkillRegistry | None = None,
     ) -> None:
         """Initialize service with checkpointer dependency.
 
@@ -59,6 +61,7 @@ class InterruptStateService:
         self._checkpointer = checkpointer_service or CheckpointerService()
         self._agent_run_registry = agent_run_registry
         self._subagent_registry = subagent_registry or get_subagent_registry()
+        self._skill_registry = skill_registry or get_skill_registry()
 
     async def get_pending_interrupt(
         self,
@@ -163,9 +166,17 @@ class InterruptStateService:
             async with self._checkpointer.get_checkpointer(task_id) as checkpointer:
                 # Build graph with checkpointer to enable state query
                 if graph_name == GRAPH_NAME_DEEP_REASONING:
-                    compiled = compile_deep_reasoning_graph(checkpointer=checkpointer)
+                    compiled = compile_deep_reasoning_graph(
+                        checkpointer=checkpointer,
+                        subagent_registry=self._subagent_registry,
+                        skill_registry=self._skill_registry,
+                    )
                 elif graph_name == GRAPH_NAME_PARENT_HANDOFF:
-                    compiled = build_parent_handoff_graph(checkpointer=checkpointer)
+                    compiled = build_parent_handoff_graph(
+                        checkpointer=checkpointer,
+                        subagent_registry=self._subagent_registry,
+                        skill_registry=self._skill_registry,
+                    )
                 elif is_subagent_graph_name(graph_name):
                     agent_run_entry = await self._resolve_subagent_run_for_thread(
                         task_id=task_id,
@@ -178,9 +189,14 @@ class InterruptStateService:
                     compiled = build_subagent_graph(
                         definition,
                         checkpointer=checkpointer,
+                        skill_registry=self._skill_registry,
                     )
                 else:
-                    compiled = build_simple_tool_graph(checkpointer=checkpointer)
+                    compiled = build_simple_tool_graph(
+                        checkpointer=checkpointer,
+                        subagent_registry=self._subagent_registry,
+                        skill_registry=self._skill_registry,
+                    )
 
                 # Query current state from checkpointer
                 state_snapshot = await compiled.aget_state(config)

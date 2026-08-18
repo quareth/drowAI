@@ -426,6 +426,7 @@ class _SequentialParentHandoffExecutor:
                     "agent_handoff": "required",
                     "subagent": "pathfinder",
                     "objective": f"Complete bounded child step {parent_index + 2}.",
+                    "skill_ids": [],
                 },
             }
             final_text = f"Delegating child step {parent_index + 2}."
@@ -1424,6 +1425,7 @@ async def test_par_followup_delegation_replay_does_not_launch_duplicate() -> Non
         "agent_handoff": "required",
         "subagent": "pathfinder",
         "objective": "Check the unresolved HTTPS service evidence.",
+        "skill_ids": [],
     }
 
     first = await dispatch_service.dispatch_followup(
@@ -1477,7 +1479,10 @@ async def test_subagent_handler_default_launcher_runs_real_worker_to_completion(
 
     monkeypatch.setattr(
         "backend.services.agent_runs.worker.build_subagent_graph",
-        lambda _definition, *, checkpointer: {"compiled_with": checkpointer},
+        lambda _definition, *, checkpointer, skill_registry: {
+            "compiled_with": checkpointer,
+            "skill_registry": skill_registry,
+        },
     )
     handler = build_subagent_handler(
         _FakeCheckpointerService(),

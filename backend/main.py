@@ -81,11 +81,26 @@ from .services.task.local_placement_migration import fail_closed_active_local_pl
 from .services.langgraph_chat.checkpoint.schema_bootstrap import (
     initialize_checkpointer_schema,
 )
+from .services.metrics.utils import safe_inc
+from agent.subagents.registry import get_subagent_registry
+from agent.subagents.skill_validation import validate_skill_activation_references
+from core.skills.registry import get_skill_registry
 
 logger = logging.getLogger(__name__)
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Fail fast before serving requests when a package-owned built-in skill is invalid.
+    try:
+        validate_skill_activation_references(
+            get_skill_registry(),
+            get_subagent_registry(),
+        )
+    except Exception:
+        safe_inc("skill_registry_load_failure")
+        raise
+    safe_inc("skill_registry_load_success")
     # Fail closed when deployment profile and runtime selection are unsafe.
     profile_state = get_deployment_profile_state()
     ensure_runner_control_schema_ready()

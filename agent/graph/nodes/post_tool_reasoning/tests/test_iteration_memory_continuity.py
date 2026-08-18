@@ -395,6 +395,7 @@ class TestPtrCandidateDecisionBinding:
                 "agent_handoff": "required",
                 "subagent": "pathfinder",
                 "objective": "Complete the remaining interactive shell sequence.",
+                "skill_ids": [],
             },
         )
 
@@ -410,6 +411,7 @@ class TestPtrCandidateDecisionBinding:
             "agent_handoff": "required",
             "subagent": "pathfinder",
             "objective": "Complete the remaining interactive shell sequence.",
+            "skill_ids": [],
         }
 
 
