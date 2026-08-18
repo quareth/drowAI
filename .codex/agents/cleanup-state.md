@@ -1,12 +1,12 @@
 ---
 schema_version: 1
-status: AWAITING_PR
+status: ALL_COMPLETE
 discovery_complete: true
 current_iteration: ""
-awaiting_pr_iteration: "1"
+awaiting_pr_iteration: ""
 intent_summary: "Audit only agent/graph/tests/test_persistence.py against current wired checkpoint behavior; remove it only if every test is proven legacy-disconnected or superseded."
-last_actor: garbage-collector
-updated_at: "2026-08-18T05:07:08Z"
+last_actor: garbage-collection-workflow
+updated_at: "2026-08-18T05:08:28Z"
 campaign_stats:
   total: 1
   complete: 1
@@ -60,11 +60,11 @@ iterations:
     cleanup_notes: "Removed only the eight stale sync-backend tests targeting get_persistent_checkpointer, _POSTGRES_AVAILABLE, _SQLITE_AVAILABLE, PostgresSaver, and SqliteSaver. Preserved seven live helper/default-checkpointer tests covering PostgreSQL connection string conversion, SQLite checkpoint path resolution, and get_default_checkpointer deprecation behavior. The direct uv command failed only because uv chose Python 3.13 and tiktoken==0.6.0 needed Rust; verification succeeded with uv-managed Python 3.12."
     completed_at: "2026-08-18T05:07:08Z"
     git:
-      branch: ""
+      branch: "garbage-collection-legacy-persistence-test"
       base_branch: "main"
-      commit_sha: ""
-      pr_number: null
-      pr_url: ""
-      pr_status: "pending"
-      pr_created_at: ""
+      commit_sha: "3a48e65ef98d80a463b850ba91ea961395968747"
+      pr_number: 71
+      pr_url: "https://github.com/quareth/drowAI/pull/71"
+      pr_status: "open"
+      pr_created_at: "2026-08-18T05:08:28Z"
 ---
