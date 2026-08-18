@@ -238,8 +238,7 @@ def test_tool_parameters_system_prompt_contains_native_builder_policy() -> None:
     assert "Candidate Tools section of the current turn input" in system_prompt
     assert "POST-TOOL REASONING DIRECTIVE section" in system_prompt
     assert "Turn Execution Brief section" in system_prompt
-    assert "Tool Runbooks explain how listed tools work and what their parameters mean" in system_prompt
-    assert "not as the authority for what operation to build" in system_prompt
+    assert "Tool Runbooks" not in system_prompt
     assert "Task Context, Current Goal, and Todo Progress" in system_prompt
     assert "Execution strategy" in system_prompt
     assert "not a mandatory multi-tool todo list" in system_prompt

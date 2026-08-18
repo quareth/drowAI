@@ -365,12 +365,34 @@ def test_post_tool_builder_renders_shared_last_tool_special_sections() -> None:
     assert prompt.index(lossiness_heading) < prompt.index(output_heading)
 
 
-def test_post_tool_latest_version_is_saved_evidence_policy_v6() -> None:
+def test_skill_prompt_changes_use_successor_versions() -> None:
     from core.prompts.registry import PromptRegistry
 
     registry = PromptRegistry()
 
-    assert registry.get_latest_version("post_tool") == "v6"
+    assert registry.get_latest_version("intent") == "v12"
+    assert registry.get_latest_version("post_tool") == "v7"
+    assert registry.get_latest_version("tool_planning") == "v9"
+    assert registry.get_latest_version("subagent_runtime") == "v7"
+
+    assert "skill_ids" not in registry.loader.load(
+        "intent/v11/intent_classifier.txt"
+    )
+    assert "skill_ids" in registry.loader.load("intent/v12/intent_classifier.txt")
+    assert "skill_ids" not in registry.loader.load("post_tool/v6/system.txt")
+    assert "skill_ids" in registry.loader.load("post_tool/v7/system.txt")
+    assert "{tool_runbooks}" in registry.loader.load(
+        "tool_planning/v8/select_tools.txt"
+    )
+    assert "{tool_runbooks}" not in registry.loader.load(
+        "tool_planning/v9/select_tools.txt"
+    )
+    assert "{tool_runbooks_section}" in registry.loader.load(
+        "subagent_runtime/v4/user.txt"
+    )
+    assert "{tool_runbooks_section}" not in registry.loader.load(
+        "subagent_runtime/v5/user.txt"
+    )
 
 
 def test_post_tool_builder_injects_direct_executor_policy_only_for_direct_route() -> None:

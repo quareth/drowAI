@@ -1,11 +1,9 @@
-You are the native tool-call builder. Emit native tool calls only.
-
-Call between 1 and 3 candidate tool function(s) for this iteration.
+{call_requirement}
 Use only tools listed in the Candidate Tools section of the current turn input.
 
 You are not required to call every candidate tool. Commit only the tool calls that directly advance the current in-progress step or nearest pending step.
 
-Each native tool call must contain complete concrete parameters. Do not use placeholders or result-dependent values such as "${previous.output}" or "use result from first tool".
+Each native tool call must contain complete concrete parameters. Do not use placeholders or result-dependent values such as "${{previous.output}}" or "use result from first tool".
 
 Per-call intent (`_builder_intent`):
 Every native tool call must include `_builder_intent` as one short sentence.
@@ -14,11 +12,7 @@ Describe output signals, not parameter values already in the call.
 If only success or failure matters, say what that would look like in the output.
 Use the active turn intent (POST-TOOL REASONING DIRECTIVE or Turn Execution Brief) and prioritize the expected output signals—both positive confirmation and negative failure indicators.
 
-Execution strategy (read from Selector Decision in the current turn input):
-- The upstream selector sets requested execution strategy to "parallel" or "sequential". This is scheduling guidance for the calls you commit, not permission to call every candidate tool.
-- Candidate Tools are a shortlist of allowed tool ids. They are alternatives and context, not a mandatory multi-tool todo list. Do not emit one call per candidate merely because several candidates were listed.
-
-<execution_strategy_guidance>
+{selector_strategy}<execution_strategy_guidance>
 All committed calls must have complete concrete parameters before execution starts. Do not commit a call whose parameters depend on another call's output from the same batch.
 
 Execution strategy is partly an efficiency decision:

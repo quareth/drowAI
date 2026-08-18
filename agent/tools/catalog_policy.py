@@ -109,7 +109,7 @@ def get_tool_catalog_role(tool_id: Any) -> ToolCatalogRole:
 
 
 def is_user_configurable_tool(tool_id: Any) -> bool:
-    """Return whether user-facing catalog/runbook configuration may target a tool."""
+    """Return whether user-facing catalog metadata may target a tool."""
 
     return get_tool_catalog_role(tool_id) == ToolCatalogRole.PENTEST
 

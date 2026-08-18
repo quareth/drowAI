@@ -5,6 +5,7 @@ from __future__ import annotations
 from core.prompts.builders.subagent_runtime import (
     SubagentRuntimePromptBuilder,
 )
+from core.prompts.builders.tool_planning import ToolPlanningPromptBuilder
 from core.prompts.tests._golden import assert_golden
 
 
@@ -44,8 +45,11 @@ def test_subagent_runtime_system_prompt_uses_versioned_canonical_guidance() -> N
     assert "Use tools only when more evidence is needed" in prompt
     assert "return a concise parent handoff" in prompt
     assert "Emit native tool calls only." not in prompt
-    assert "Remaining tool budget is permission, not a requirement" in prompt
+    assert "Remaining tool budget" not in prompt
+    assert "per-turn batch boundary, not a total tool budget" in prompt
     assert "Never repeat an equivalent successful tool call" in prompt
+    assert "applicable to the assigned task" in prompt
+    assert "When no provided native tool is applicable" in prompt
     assert "When more evidence is required, call between 1 and 3" in prompt
     assert "Execute dependent commands as separate tool calls" in prompt
     assert "Never append an interactive or persistent program" in prompt
@@ -54,6 +58,33 @@ def test_subagent_runtime_system_prompt_uses_versioned_canonical_guidance() -> N
     assert prompt.count("Use shell.assessment for commands") == 1
     assert prompt.count("Leave interactive=false for ordinary commands") == 1
     assert prompt.count("never resend the originating") == 1
+
+
+def test_subagent_runtime_reuses_main_execution_strategy_guidance() -> None:
+    """All declarative subagents receive the main agent's batch semantics."""
+
+    tool_planning = ToolPlanningPromptBuilder()
+    main_prompt = tool_planning.build_tool_parameters_system_prompt(
+        max_committed_tools_per_batch=3,
+    )
+    subagent_prompt = SubagentRuntimePromptBuilder().build_system_prompt(
+        definition_id="test_agent",
+        display_name="Test Agent",
+        role_prompt="Perform one bounded assignment.",
+        definition_instructions="Return evidence to the parent.",
+        ownership_boundary="Own only the assigned objective.",
+        boundary_rules=("Stay within the assignment.",),
+        max_committed_tools_per_batch=3,
+    )
+
+    marker = "<execution_strategy_guidance>"
+    end_marker = "</execution_strategy_guidance>"
+    main_guidance = main_prompt.split(marker, 1)[1].split(end_marker, 1)[0]
+    subagent_guidance = subagent_prompt.split(marker, 1)[1].split(end_marker, 1)[0]
+
+    assert subagent_guidance == main_guidance
+    assert "Parallel execution:" in subagent_guidance
+    assert "Sequential execution:" in subagent_guidance
 
 
 def test_subagent_runtime_user_prompt_preserves_context_and_appends_outcomes() -> None:
@@ -116,13 +147,6 @@ def test_subagent_runtime_user_prompt_preserves_context_and_appends_outcomes() -
                 ],
             }
         ],
-        remaining_limits={
-            "completed_iterations": 1,
-            "max_iterations": 3,
-            "remaining_iterations": 2,
-            "max_tool_calls_per_iteration": 3,
-            "remaining_tool_calls_this_iteration": 3,
-        },
     )
 
     assert_golden("subagent_runtime__user.txt", prompt)
@@ -130,7 +154,8 @@ def test_subagent_runtime_user_prompt_preserves_context_and_appends_outcomes() -
         "Candidate Tools (complete Pathfinder runtime profile; "
         "no separate selection step):"
     ) in prompt
-    assert "Remaining Limits:" in prompt
+    assert "Remaining Limits:" not in prompt
+    assert "remaining_tool_calls" not in prompt
     assert "Bounded Prior Observations:" in prompt
     assert "Working memory snapshot" in prompt
     assert "Assignment:" in prompt

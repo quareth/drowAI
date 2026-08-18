@@ -15,9 +15,9 @@ from .enhanced_metadata_registry import (
 
 # ---------------------------------------------------------------------------
 # Kali runtime filesystem utilities (filesystem.* namespace)
-# Catalog descriptions follow the runbook shape:
+# Catalog descriptions follow the shared metadata shape:
 #   <verb> <object/scope> <input shape>; returns <evidence/output>; <boundary>.
-# See docs/runbooks/tool-catalog-description-optimization.md
+# See the tool catalog description guidance.
 # ---------------------------------------------------------------------------
 for tool_id, display_name, capability_name, capability_desc in [
     ("filesystem.read_file", "Kali Runtime Read File", "read_file",

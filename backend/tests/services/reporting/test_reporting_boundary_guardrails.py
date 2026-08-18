@@ -151,7 +151,6 @@ FORBIDDEN_IMPORT_PREFIXES_BY_BOUNDARY = {
         "backend.services.reporting.report_generator",
         "backend.services.reporting.report_render",
         "backend.services.reporting.report_renderer",
-        "core.runbooks.renderer",
     ),
 }
 
