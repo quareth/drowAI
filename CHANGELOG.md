@@ -8,6 +8,20 @@ The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Subagent handoffs now support bounded built-in skill packages with direct
+  agent compatibility, mandatory or parent-selected activation, and digest
+  verification across checkpoint resumes.
+- Webweaver can perform bounded web reconnaissance with native HTTP and FFUF
+  tools plus selectable WhatWeb and Katana guidance; task runtime images now
+  include Katana.
+
+### Removed
+
+- The legacy runbook prompt-injection framework and bundled runbook assets have
+  been retired in favor of the skill system and owning tool contracts.
+
 ### Security
 
 - Updated checkpoint storage and frontend build dependencies to versions that
