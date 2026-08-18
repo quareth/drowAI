@@ -22,14 +22,17 @@ from agent.subagents.runtime.profile import resolve_subagent_tool_profile
 
 
 def _pathfinder_definition() -> SubagentDefinition:
-    [definition] = load_subagent_definitions()
-    return definition
+    return next(
+        definition
+        for definition in load_subagent_definitions()
+        if definition.id == "pathfinder"
+    )
 
 
-def test_default_registry_loads_enabled_pathfinder_from_toml() -> None:
+def test_default_registry_loads_enabled_definitions_from_toml() -> None:
     registry = get_subagent_registry()
 
-    assert registry.ids() == ("pathfinder",)
+    assert registry.ids() == ("pathfinder", "webweaver")
     assert registry.get("PATHFINDER") == _pathfinder_definition()
     assert registry.get("unknown") is None
     assert registry.require("pathfinder").display_name == "Pathfinder"
@@ -38,7 +41,11 @@ def test_default_registry_loads_enabled_pathfinder_from_toml() -> None:
 def test_classifier_catalog_is_definition_backed_and_matches_legacy_metadata() -> None:
     registry = load_subagent_registry()
     definition = registry.require("pathfinder")
-    [catalog_projection] = [dict(entry) for entry in registry.classifier_catalog()]
+    catalog_projection = next(
+        dict(entry)
+        for entry in registry.classifier_catalog()
+        if entry["agent_id"] == "pathfinder"
+    )
 
     assert catalog_projection["name"] == "pathfinder"
     assert catalog_projection["agent_id"] == definition.id

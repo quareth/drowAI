@@ -36,6 +36,28 @@ def test_kali_base_installs_and_verifies_fping() -> None:
     assert "fping" in verification_block
 
 
+def test_kali_base_copies_pinned_multiarch_katana_binary() -> None:
+    dockerfile = build_runtime_image.DEFAULT_KALI_BASE_DOCKERFILE_PATH.read_text(
+        encoding="utf-8"
+    )
+    install_block = dockerfile.split("apt-get install", maxsplit=1)[1].split(
+        "&& apt-get clean", maxsplit=1
+    )[0]
+
+    assert (
+        "ARG KATANA_IMAGE=projectdiscovery/katana:v1.7.0@"
+        "sha256:4e9fce12c507e1ca455baf493e14b899db5f2e0ed22ba62591aa42300487a947"
+        in dockerfile
+    )
+    assert (
+        "COPY --from=katana /usr/local/bin/katana /usr/local/bin/katana"
+        in dockerfile
+    )
+    assert "musl \\" in install_block
+    assert "katana -version >/dev/null 2>&1" in dockerfile
+    assert "amass dnsrecon enum4linux-ng hydra katana nuclei whatweb" in dockerfile
+
+
 def _write_manifest(path: Path, payload: dict[str, object]) -> None:
     path.write_text(
         "# manifest\n\n```json\n" + json.dumps(payload, indent=2) + "\n```\n",

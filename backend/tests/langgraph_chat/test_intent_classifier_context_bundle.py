@@ -50,6 +50,7 @@ from backend.services.langgraph_chat.model_role_registry import (
     RoleCallSettings,
 )
 from agent.subagents.registry import get_subagent_registry
+from agent.subagents.skill_catalog import project_subagent_skill_catalogs
 from agent.providers.llm.core.exceptions import (
     LLMProfileNotFoundError,
     LLMRefusalError,
@@ -58,6 +59,7 @@ from core.prompts.builders.intent_classifier import (
     build_classifier_system_prompt,
     build_classifier_user_prompt,
 )
+from core.skills.registry import get_skill_registry
 
 
 class _CapturingClient:
@@ -237,8 +239,13 @@ async def test_classifier_sends_exact_current_request_to_selected_model(monkeypa
         environment="",
         execution_route_policy=None,
     )
+    registry = get_subagent_registry()
     assert prepared_request.system_prompt == build_classifier_system_prompt(
-        subagent_catalog=get_subagent_registry().classifier_catalog()
+        subagent_catalog=registry.classifier_catalog(),
+        skill_catalogs=project_subagent_skill_catalogs(
+            registry.definitions(),
+            get_skill_registry(),
+        ),
     )
     assert "`agent_handoffs` is the explicit routing contract" in (
         prepared_request.system_prompt
@@ -259,8 +266,12 @@ async def test_classifier_sends_exact_current_request_to_selected_model(monkeypa
         "agent_handoff",
         "subagent",
         "objective",
+        "skill_ids",
     ]
-    assert handoff_items["properties"]["subagent"]["enum"] == ["pathfinder"]
+    assert handoff_items["properties"]["subagent"]["enum"] == [
+        "pathfinder",
+        "webweaver",
+    ]
 
 
 def test_classifier_context_limit_rejects_unknown_provider_model() -> None:

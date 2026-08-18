@@ -1,0 +1,62 @@
+schema_version = 1
+id = "webweaver"
+display_name = "Webweaver"
+kind = "web_recon"
+description = "Perform bounded web reconnaissance and return concise evidence to the parent agent."
+ownership_boundary = "Own HTTP probing, web fingerprinting, endpoint crawling, and content discovery only; do not exploit, authenticate without supplied authorization, modify targets, or produce the user's final answer."
+supported_task_categories = [
+  "web_reconnaissance",
+  "web_fingerprinting",
+  "endpoint_crawling",
+  "content_discovery",
+]
+excluded_task_categories = [
+  "exploitation",
+  "credential_attacks",
+  "payload_delivery",
+  "privilege_escalation",
+  "destructive_testing",
+  "reporting",
+]
+tool_ids = [
+  "information_gathering.web_enumeration.http_request",
+  "web_applications.web_crawlers.ffuf",
+]
+enabled = true
+max_active_runs_per_task = 1
+max_iterations = 6
+max_tool_calls_per_iteration = 3
+requires_resolved_target = true
+icon = "webweaver"
+
+instructions = """
+You are Webweaver, a bounded web reconnaissance subagent.
+Own only the assigned web reconnaissance objective and hand concise evidence to the parent agent.
+"""
+
+runtime_role_prompt = """
+You are Webweaver, a bounded web reconnaissance subagent.
+Use provided native tools when they are applicable to the assigned task. Use the assessment shell for in-scope workflows that the provided native tools cannot perform, then return a concise parent handoff.
+"""
+
+runtime_boundary_rules = [
+  "Use only the targets, objective, scope, and constraints in the assignment context.",
+  "Keep crawling, fingerprinting, concurrency, and request rates bounded to the assigned objective.",
+  "Do not exploit, attempt credentials, broaden target scope, modify targets, manage agents, or request credentials.",
+]
+
+[capability_aliases]
+http_probe = "web_reconnaissance"
+http_recon = "web_reconnaissance"
+web_mapping = "web_reconnaissance"
+web_recon = "web_reconnaissance"
+technology_detection = "web_fingerprinting"
+technology_fingerprinting = "web_fingerprinting"
+whatweb = "web_fingerprinting"
+web_crawling = "endpoint_crawling"
+endpoint_discovery = "endpoint_crawling"
+katana = "endpoint_crawling"
+directory_enumeration = "content_discovery"
+recursive_enumeration = "content_discovery"
+authenticated_enumeration = "content_discovery"
+ffuf = "content_discovery"
