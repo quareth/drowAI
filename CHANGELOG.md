@@ -8,6 +8,11 @@ The format is based on
 
 ## [Unreleased]
 
+### Security
+
+- Updated checkpoint storage and frontend build dependencies to versions that
+  include upstream namespace-isolation and denial-of-service fixes.
+
 ## [0.4.0] - 2026-08-18
 
 ### Added
