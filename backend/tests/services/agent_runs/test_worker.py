@@ -243,14 +243,18 @@ class _InvalidActionLLM:
 class _ForcedFinalTextLLM:
     def __init__(self) -> None:
         self.chat_with_usage_kwargs: list[dict[str, Any]] = []
+        self.system_prompts: list[str] = []
+        self.user_prompts: list[str] = []
 
     async def chat_with_usage(
         self,
-        _system_prompt: str,
-        _user_prompt: str,
+        system_prompt: str,
+        user_prompt: str,
         **kwargs: Any,
     ) -> LLMResponse:
         self.chat_with_usage_kwargs.append(dict(kwargs))
+        self.system_prompts.append(system_prompt)
+        self.user_prompts.append(user_prompt)
         return LLMResponse(content="Pathfinder completed the bounded assignment.")
 
     async def chat_with_tools_with_usage(
@@ -291,6 +295,9 @@ async def test_exhausted_subagent_uses_plain_chat_for_final_handoff() -> None:
     assert interactive.trace.final_text == (
         "Pathfinder completed the bounded assignment."
     )
+    assert "Finalization Mode — Tool Budget Exhausted" in llm.system_prompts[0]
+    assert "Do not emit or simulate a tool call" in llm.system_prompts[0]
+    assert "Candidate Tools" not in llm.user_prompts[0]
 
 
 @pytest.mark.asyncio

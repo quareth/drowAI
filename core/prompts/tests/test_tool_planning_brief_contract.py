@@ -474,6 +474,11 @@ def test_tool_parameters_system_prompt_defines_strategy_without_dependency_chain
     assert "Pattern: parallel, same tool" in system_prompt
     assert "Pattern: sequential, different tools" in system_prompt
     assert "Pattern: dependency, not batchable" in system_prompt
+    assert "Keep each shell invocation to one logical operation" in system_prompt
+    assert "Do not bundle independent commands merely to reduce tool calls" in system_prompt
+    assert "`cat file | grep pattern` is one operation" in system_prompt
+    assert "`command-a; command-b` are separate operations" in system_prompt
+    assert "Combine multiple shell commands into one invocation only when" not in system_prompt
     assert "for example, separate nmap calls" not in system_prompt
     assert "Do not fold independent parallel work" not in system_prompt
 

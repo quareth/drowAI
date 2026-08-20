@@ -372,8 +372,8 @@ def test_skill_prompt_changes_use_successor_versions() -> None:
 
     assert registry.get_latest_version("intent") == "v12"
     assert registry.get_latest_version("post_tool") == "v7"
-    assert registry.get_latest_version("tool_planning") == "v9"
-    assert registry.get_latest_version("subagent_runtime") == "v7"
+    assert registry.get_latest_version("tool_planning") == "v10"
+    assert registry.get_latest_version("subagent_runtime") == "v10"
 
     assert "skill_ids" not in registry.loader.load(
         "intent/v11/intent_classifier.txt"
@@ -392,6 +392,15 @@ def test_skill_prompt_changes_use_successor_versions() -> None:
     )
     assert "{tool_runbooks_section}" not in registry.loader.load(
         "subagent_runtime/v5/user.txt"
+    )
+    assert "Evaluate each tool call independently" not in registry.loader.load(
+        "subagent_runtime/v8/system.txt"
+    )
+    assert "Evaluate each tool call independently" in registry.loader.load(
+        "subagent_runtime/v9/system.txt"
+    )
+    assert "Finalization Mode" in registry.loader.load(
+        "subagent_runtime/v10/budget_finalization.txt"
     )
 
 

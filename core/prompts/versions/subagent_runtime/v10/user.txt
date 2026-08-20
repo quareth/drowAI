@@ -1,0 +1,17 @@
+Current Turn Input:
+
+Turn Execution Brief:
+- Overall goal: {objective}
+- Next operational goal: {objective}
+- Success condition: {objective}
+- Targets: {targets_json}
+- Explicit constraints: {explicit_constraints_json}
+
+{tool_access_block}
+
+Bounded Prior Observations:
+- Accumulated tool context: {previous_tool_summary_json}
+- Working memory snapshot: {working_memory_json}
+
+Assignment:
+{assignment_json}

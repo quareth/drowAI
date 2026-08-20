@@ -7,8 +7,8 @@ Files:
 
 - `system.txt` - definition-bound role, instructions, runtime loop contract,
   native tool-call guidance, scheduling metadata, and boundary rules.
-- `user.txt` - bounded assignment, candidate tool profile, prior observations,
-  assignment JSON, and additive compact prior tool-batch outcomes.
+- `user.txt` - bounded assignment, candidate tool profile, assignment JSON, and
+  the canonical accumulated current-turn phase ledger.
 - `system.txt` also receives resolved built-in skill guidance between runtime
   boundaries and native tool-call guidance.
 

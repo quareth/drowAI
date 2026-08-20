@@ -54,8 +54,8 @@ from agent.subagents.runtime.tool_outcomes import (
 from agent.tool_runtime.batch.plan_view import serialized_tool_calls_from_metadata
 from agent.tool_runtime.batch.types import ToolBatch, ToolCall
 from agent.tools.builder_intent import split_builder_intent
+from agent.tools.parameter_validation import validate_tool_parameters
 from agent.tools.tool_call_specs import build_function_tool_specs_for
-from agent.tools.tool_registry import get_tool
 from core.llm import LLM_TIMEOUT_PLANNER_PARAMETER_RESOLUTION_SEC, wait_for_with_timeout
 from core.prompts.builders.post_tool.evidence import (
     select_compact_evidence_for_reasoning,
@@ -112,9 +112,11 @@ async def run_subagent_model_turn(
     )
 
     max_committed_calls = _max_committed_calls(definition)
+    remaining_iterations = _remaining_iterations(definition, interactive)
+    finalization_only = remaining_iterations <= 0
     can_call_tools = (
         bool(subagent.tool_profile.tools)
-        and _remaining_iterations(definition, interactive) > 0
+        and not finalization_only
         and max_committed_calls > 0
     )
     if can_call_tools:
@@ -159,6 +161,7 @@ async def run_subagent_model_turn(
             tuple(spec.tool_id for spec in tool_specs) if can_call_tools else ()
         ),
         prompt_skills=prompt_skills,
+        finalization_only=finalization_only,
     )
     user_prompt = prompt_builder.build_user_prompt(
         display_name=definition.display_name,
@@ -166,7 +169,7 @@ async def run_subagent_model_turn(
         tool_ids=subagent.tool_profile.tool_ids,
         working_memory=_working_memory_prompt_context(interactive.facts.safe_metadata),
         previous_tool_summary=_build_previous_tool_context(interactive),
-        prior_tool_outcomes=_build_prior_tool_outcomes(interactive),
+        finalization_only=finalization_only,
     )
 
     async with reasoning_section(
@@ -554,26 +557,26 @@ def _validate_registered_tool_parameters(
     tool_id: str,
     parameters: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Validate builder output against the registered planner schema."""
+    """Return canonical execution parameters compiled from planner output."""
 
-    tool_cls = get_tool(tool_id)
-    schema_model = tool_cls.get_planner_args_model()
-    if schema_model is None:
-        return dict(parameters)
-    allowed_fields = set(getattr(schema_model, "model_fields", {}) or {})
-    unknown_fields = sorted(set(parameters) - allowed_fields)
-    if unknown_fields:
-        raise SubagentActionSelectionError(
-            f"Subagent selected unsupported parameters for {tool_id}: {unknown_fields}"
-        )
-    try:
-        validated = schema_model.model_validate(dict(parameters))
-    except Exception as exc:
-        raise SubagentActionSelectionError(
-            f"Subagent selected invalid parameters for {tool_id}: {exc}"
-        ) from exc
-    dumped = validated.model_dump(mode="json")
-    return dumped if isinstance(dumped, dict) else dict(parameters)
+    validation = validate_tool_parameters(
+        tool_id,
+        dict(parameters),
+        validation_stage="planner",
+    )
+    if validation.valid:
+        return dict(validation.normalized_parameters)
+
+    details = "; ".join(
+        f"{error.get('field', 'arguments')}: "
+        f"{error.get('message') or error.get('error') or 'invalid value'}"
+        for error in validation.validation_errors
+    )
+    suffix = f": {details}" if details else ""
+    raise SubagentActionSelectionError(
+        f"Subagent selected invalid parameters for {tool_id} "
+        f"({validation.reason or 'validation_error'}){suffix}"
+    )
 
 
 def _apply_subagent_tool_batch(
@@ -754,9 +757,16 @@ def _working_memory_prompt_context(metadata: Mapping[str, Any]) -> dict[str, Any
 
 
 def _build_previous_tool_context(interactive: InteractiveState) -> dict[str, Any]:
-    """Return the terminal session result plus canonical phase memory."""
+    """Return canonical phase memory, falling back to the latest compact result."""
 
     metadata = interactive.facts.safe_metadata
+    phase_memory = iteration_memory.render_phase_memory_section(
+        _existing_phase_memory_prompt_metadata(metadata),
+        turn_sequence=_phase_memory_turn_sequence(metadata),
+    )
+    if phase_memory:
+        return {"current_turn_phase_memory": phase_memory}
+
     evidence, _ = select_compact_evidence_for_reasoning(metadata)
     compact = (
         dict(evidence.raw)
@@ -768,23 +778,13 @@ def _build_previous_tool_context(interactive: InteractiveState) -> dict[str, Any
         compact = _bounded_mapping(interactive.facts.last_tool_result_compact) or (
             _bounded_mapping(metadata.get("last_tool_result_compact"))
         )
-    phase_memory = iteration_memory.render_phase_memory_section(
-        _existing_phase_memory_prompt_metadata(metadata),
-        turn_sequence=_phase_memory_turn_sequence(metadata),
-    )
-
-    context: dict[str, Any] = {}
-    if compact:
-        context["last_tool_result"] = compact
-    if phase_memory:
-        context["current_turn_phase_memory"] = phase_memory
-    return context
+    return {"last_tool_result": compact} if compact else {}
 
 
 def _existing_phase_memory_prompt_metadata(
     metadata: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Exclude the separately appended subagent outcome from legacy phase text."""
+    """Return the canonical ledger without duplicate tool-outcome sections."""
 
     working_memory = metadata.get("working_memory")
     raw_records = (
@@ -797,45 +797,19 @@ def _existing_phase_memory_prompt_metadata(
         if not isinstance(raw_record, Mapping):
             continue
         record = dict(raw_record)
+        source = record.get("source")
         record["sections"] = [
             dict(section)
             for section in raw_record.get("sections") or []
             if isinstance(section, Mapping)
-            and section.get("heading") != SUBAGENT_TOOL_OUTCOME_SECTION_HEADING
+            and not (
+                source == "tool"
+                and section.get("heading")
+                == SUBAGENT_TOOL_OUTCOME_SECTION_HEADING
+            )
         ]
         records.append(record)
     return {"working_memory": {"current_turn_phases": records}}
-
-
-def _build_prior_tool_outcomes(
-    interactive: InteractiveState,
-) -> list[dict[str, Any]]:
-    """Read canonical compact outcomes from current-turn tool-phase records."""
-
-    metadata = interactive.facts.safe_metadata
-    turn_sequence = _phase_memory_turn_sequence(metadata)
-    outcomes: list[dict[str, Any]] = []
-    for record in iteration_memory.get_ledger(dict(metadata)):
-        if record.get("source") not in {"handoff", "tool"}:
-            continue
-        if turn_sequence is not None and record.get("turn_sequence") != turn_sequence:
-            continue
-        for section in record.get("sections") or []:
-            if not isinstance(section, Mapping):
-                continue
-            if section.get("heading") != SUBAGENT_TOOL_OUTCOME_SECTION_HEADING:
-                continue
-            try:
-                outcome = json.loads(str(section.get("body") or ""))
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(outcome, Mapping):
-                continue
-            projected = dict(outcome)
-            projected["phase"] = record.get("phase_sequence")
-            outcomes.append(projected)
-            break
-    return outcomes
 
 
 def _sync_completed_execution_iterations(interactive: InteractiveState) -> None:

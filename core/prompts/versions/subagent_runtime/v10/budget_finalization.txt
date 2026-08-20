@@ -1,0 +1,5 @@
+Finalization Mode — Tool Budget Exhausted:
+- Tool execution is unavailable for this turn because the runtime budget is exhausted.
+- Return the best parent handoff using only the accumulated observations and working memory.
+- Do not emit or simulate a tool call or claim that unexecuted work occurred.
+- State limitations and list any future work only as unexecuted next steps.
