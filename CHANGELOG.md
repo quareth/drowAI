@@ -17,6 +17,26 @@ The format is based on
   tools plus selectable WhatWeb and Katana guidance; task runtime images now
   include Katana.
 
+### Fixed
+
+- Subagents now receive an explicit finalization-only prompt when their tool
+  budget is exhausted, preventing unexecuted tool attempts from entering the
+  parent handoff.
+- Main agents and subagents now keep independently meaningful shell operations
+  in separate invocations while still allowing pipelines and supporting shell
+  stages.
+- Concurrent subagents now keep independent reasoning streams, preventing one
+  agent's section lifecycle from interrupting another agent in the same turn.
+- Declarative subagents now retain every accumulated compressed tool phase for
+  later reasoning and final handoff generation without a second lossy context
+  projection.
+- Invalid parameters in one batched tool call no longer prevent unrelated
+  valid calls from running, and field-level correction guidance is retained.
+- Declarative subagents now preserve successful batch results and avoid
+  equivalent retries when failures indicate connection or capability blockers.
+- Declarative subagents now compile planner-facing tool parameters through the
+  canonical validation path before execution, including split-schema tools.
+
 ### Removed
 
 - The legacy runbook prompt-injection framework and bundled runbook assets have
