@@ -172,6 +172,70 @@ class TestReasoningEventProcessing:
             != second_start["metadata"]["reasoning_section_id"]
         )
 
+    def test_concurrent_agent_reasoning_lifecycles_are_isolated(self, adapter):
+        """Interleaved child runs must not overwrite each other's reasoning state."""
+        common = {
+            "conversation_id": "conv-1",
+            "turn_id": "turn-1",
+            "producer_type": "subagent",
+        }
+        pathfinder_start = adapter.process_streaming_event(
+            {
+                **common,
+                "type": "reasoning_start",
+                "step": "pathfinder-thinking",
+                "agent_run_id": "run-pathfinder",
+            }
+        )
+        webweaver_start = adapter.process_streaming_event(
+            {
+                **common,
+                "type": "reasoning_start",
+                "step": "webweaver-thinking",
+                "agent_run_id": "run-webweaver",
+            }
+        )
+        webweaver_end = adapter.process_streaming_event(
+            {
+                **common,
+                "type": "reasoning_section_end",
+                "section_name": "webweaver-thinking",
+                "agent_run_id": "run-webweaver",
+            }
+        )
+
+        pathfinder_delta = adapter.process_streaming_event(
+            {
+                **common,
+                "type": "reasoning_delta",
+                "content": "Pathfinder is still running.",
+                "agent_run_id": "run-pathfinder",
+            }
+        )
+        pathfinder_end = adapter.process_streaming_event(
+            {
+                **common,
+                "type": "reasoning_section_end",
+                "section_name": "pathfinder-thinking",
+                "agent_run_id": "run-pathfinder",
+            }
+        )
+
+        assert pathfinder_start["metadata"]["phase_sequence"] == 0
+        assert webweaver_start["metadata"]["phase_sequence"] == 0
+        assert (
+            webweaver_end["metadata"]["reasoning_section_id"]
+            == webweaver_start["metadata"]["reasoning_section_id"]
+        )
+        assert (
+            pathfinder_delta["metadata"]["reasoning_section_id"]
+            == pathfinder_start["metadata"]["reasoning_section_id"]
+        )
+        assert (
+            pathfinder_end["metadata"]["reasoning_section_id"]
+            == pathfinder_start["metadata"]["reasoning_section_id"]
+        )
+
     def test_reasoning_snapshot_after_section_end_reuses_closed_identity(self, adapter):
         """Final reasoning snapshots belong to the section that just closed."""
         start = adapter.process_streaming_event(
