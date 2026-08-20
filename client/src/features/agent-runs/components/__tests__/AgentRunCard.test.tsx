@@ -80,4 +80,22 @@ describe("AgentRunCard", () => {
       ),
     ).not.toBeNull();
   });
+
+  it("renders the Webweaver identity asset", () => {
+    const { container } = render(
+      <AgentRunCard
+        run={runWithStatus("completed", {
+          agentId: "webweaver",
+          agentKind: "web_recon",
+          agentDisplayName: "Webweaver",
+          agentIconKey: "webweaver",
+        })}
+        onOpen={vi.fn()}
+      />,
+    );
+
+    expect(
+      container.querySelector('img[data-agent-icon-key="webweaver"]'),
+    ).not.toBeNull();
+  });
 });
