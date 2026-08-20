@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from core.skills.contracts import LoadedSkill, SkillActivationPolicy, SkillMetadata
 from core.skills.errors import SkillLoadError, SkillParseError, SkillValidationError
 from core.skills.identifiers import normalize_skill_id
+from core.skills.resolver import estimate_skill_tokens
 
 
 SKILL_ENTRYPOINT = "SKILL.md"
@@ -140,7 +141,7 @@ def _loaded_skill(
         raise ValueError("body exceeds character limit")
     if len(body.splitlines()) > MAX_SKILL_LINES:
         raise ValueError("body exceeds line limit")
-    if _estimate_tokens(body) > MAX_SKILL_ESTIMATED_TOKENS:
+    if estimate_skill_tokens(body) > MAX_SKILL_ESTIMATED_TOKENS:
         raise ValueError("body exceeds estimated token limit")
 
     raw_metadata = frontmatter.get("metadata") or {}
@@ -253,10 +254,6 @@ def _optional_bounded_string(value: Any, field_name: str) -> str | None:
     if len(text) > MAX_DESCRIPTION_CHARACTERS:
         raise ValueError(f"{field_name} exceeds 1024 characters")
     return text
-
-
-def _estimate_tokens(text: str) -> int:
-    return (len(text) + 3) // 4
 
 
 __all__ = [

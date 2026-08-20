@@ -19,7 +19,7 @@ def test_catalog_separates_compatible_mandatory_and_selectable_skills() -> None:
     definitions = get_subagent_registry()
     catalogs = project_subagent_skill_catalogs(definitions.definitions(), _skill_registry())
 
-    catalog = catalogs[0]
+    catalog = next(catalog for catalog in catalogs if catalog.agent_id == "pathfinder")
     assert catalog.agent_id == "pathfinder"
     assert tuple(skill.skill_id for skill in catalog.mandatory_skills) == ("baseline",)
     assert tuple(skill.skill_id for skill in catalog.selectable_skills) == (
@@ -62,9 +62,10 @@ def test_followup_builder_uses_the_same_catalog_renderer() -> None:
 
 def test_catalog_budget_counts_both_sections() -> None:
     definitions = get_subagent_registry()
-    catalog = project_subagent_skill_catalogs(
+    catalogs = project_subagent_skill_catalogs(
         definitions.definitions(), _many_skill_registry()
-    )[0]
+    )
+    catalog = next(catalog for catalog in catalogs if catalog.agent_id == "pathfinder")
 
     assert len(catalog.mandatory_skills) + len(catalog.selectable_skills) < 12
     assert (

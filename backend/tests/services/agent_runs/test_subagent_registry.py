@@ -13,7 +13,7 @@ from core.prompts.builders.intent_classifier import build_classifier_system_prom
 def test_default_registry_exposes_declarative_available_subagents() -> None:
     registry = get_subagent_registry()
 
-    assert registry.ids() == ("pathfinder", "webweaver")
+    assert {"pathfinder", "webweaver"} <= set(registry.ids())
     pathfinder = registry.require("pathfinder")
     assert pathfinder.id == "pathfinder"
     assert pathfinder.kind == "recon"

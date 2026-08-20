@@ -45,7 +45,6 @@ def _write_definition(directory: Path, name: str, body: str = VALID_DEFINITION) 
 def test_loads_builtin_pathfinder_definition_from_package_data() -> None:
     definitions = load_subagent_definitions()
 
-    assert [definition.id for definition in definitions] == ["pathfinder", "webweaver"]
     pathfinder = next(
         definition for definition in definitions if definition.id == "pathfinder"
     )

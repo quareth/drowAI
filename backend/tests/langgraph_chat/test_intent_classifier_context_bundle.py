@@ -268,10 +268,7 @@ async def test_classifier_sends_exact_current_request_to_selected_model(monkeypa
         "objective",
         "skill_ids",
     ]
-    assert handoff_items["properties"]["subagent"]["enum"] == [
-        "pathfinder",
-        "webweaver",
-    ]
+    assert handoff_items["properties"]["subagent"]["enum"] == list(registry.ids())
 
 
 def test_classifier_context_limit_rejects_unknown_provider_model() -> None:

@@ -22,7 +22,7 @@ from pydantic import (
 )
 
 from core.skills.contracts import MAX_REQUESTED_SKILLS
-from core.skills.identifiers import normalize_skill_id
+from core.skills.identifiers import normalize_skill_ids
 
 
 AgentKind: TypeAlias = Annotated[
@@ -340,18 +340,12 @@ class AgentAssignment(_StrictContract):
                 "requested_skill_ids contains more than "
                 f"{MAX_REQUESTED_SKILLS} items"
             )
-        normalized: list[str] = []
-        for item in value:
-            try:
-                skill_id = normalize_skill_id(item)
-            except ValueError as exc:
-                raise ValueError(
-                    "requested_skill_ids contains an invalid identifier"
-                ) from exc
-
-            if skill_id not in normalized:
-                normalized.append(skill_id)
-        return tuple(normalized)
+        try:
+            return normalize_skill_ids(value)
+        except ValueError as exc:
+            raise ValueError(
+                "requested_skill_ids contains an invalid identifier"
+            ) from exc
 
     @field_validator("relevant_context")
     @classmethod

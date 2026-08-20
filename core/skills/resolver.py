@@ -19,6 +19,12 @@ MAX_SELECTED_SKILLS = MAX_REQUESTED_SKILLS
 MAX_TOTAL_ESTIMATED_TOKENS = 12_000
 
 
+def estimate_skill_tokens(text: str) -> int:
+    """Estimate guidance tokens using the canonical four-characters heuristic."""
+
+    return (len(text) + 3) // 4
+
+
 def is_agent_compatible(skill: LoadedSkill, agent_id: str) -> bool:
     """Return whether the skill declares compatibility with the agent."""
 
@@ -82,7 +88,9 @@ def resolve_skills(
         for skill in compatible_mandatory_skills(skills, normalized_agent_id)
     ]
     selected_ids.extend(mandatory_ids)
-    mandatory_tokens = sum(_estimate_tokens(by_id[skill_id].body) for skill_id in mandatory_ids)
+    mandatory_tokens = sum(
+        estimate_skill_tokens(by_id[skill_id].body) for skill_id in mandatory_ids
+    )
     if mandatory_tokens > max_total_estimated_tokens:
         raise SkillResolutionError("mandatory skill guidance exceeds budget")
 
@@ -116,7 +124,7 @@ def resolve_skills(
             continue
 
         if skill_id not in selected_ids:
-            prospective_tokens = selected_tokens + _estimate_tokens(skill.body)
+            prospective_tokens = selected_tokens + estimate_skill_tokens(skill.body)
             if prospective_tokens > max_total_estimated_tokens:
                 rejected.append(
                     RejectedSkillRequest(
@@ -155,15 +163,12 @@ def _normalize_requested_id(value: str) -> str:
         return str(value or "").strip().lower()
 
 
-def _estimate_tokens(text: str) -> int:
-    return (len(text) + 3) // 4
-
-
 __all__ = [
     "MAX_SELECTED_SKILLS",
     "MAX_TOTAL_ESTIMATED_TOKENS",
     "compatible_mandatory_skills",
     "eligible_selectable_skills",
+    "estimate_skill_tokens",
     "is_agent_compatible",
     "resolve_skills",
 ]

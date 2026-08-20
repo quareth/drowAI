@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from typing import Any
 
 
@@ -23,9 +24,21 @@ def normalize_skill_id(value: Any) -> str:
     return skill_id
 
 
+def normalize_skill_ids(values: Iterable[Any]) -> tuple[str, ...]:
+    """Return canonical identifiers with stable first-occurrence deduplication."""
+
+    normalized: list[str] = []
+    for value in values:
+        skill_id = normalize_skill_id(value)
+        if skill_id not in normalized:
+            normalized.append(skill_id)
+    return tuple(normalized)
+
+
 __all__ = [
     "MAX_SKILL_ID_CHARACTERS",
     "SKILL_ID_PATTERN",
     "SKILL_ID_RE",
     "normalize_skill_id",
+    "normalize_skill_ids",
 ]

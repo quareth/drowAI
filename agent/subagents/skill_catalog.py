@@ -49,19 +49,10 @@ def project_subagent_skill_catalogs(
                     skill_id=skill.skill_id,
                     description=skill.metadata.description,
                 )
-                prospective = (
-                    (*mandatory_entries, entry)
-                    if destination is mandatory_entries
-                    else tuple(mandatory_entries)
-                )
-                prospective_selectable = (
-                    tuple(selectable_entries)
-                    if destination is mandatory_entries
-                    else (*selectable_entries, entry)
-                )
-                if len(render_skill_catalog(prospective, prospective_selectable)) > MAX_SKILL_CATALOG_CHARACTERS:
-                    break
                 destination.append(entry)
+                if len(render_skill_catalog(mandatory_entries, selectable_entries)) > MAX_SKILL_CATALOG_CHARACTERS:
+                    destination.pop()
+                    break
         catalogs.append(
             SubagentSkillCatalog(
                 agent_id=definition.id,

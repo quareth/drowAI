@@ -48,6 +48,7 @@ from backend.services.langgraph_chat.hitl_constants import GRAPH_RECURSION_LIMIT
 from backend.services.langgraph_chat.streaming.adapter import LangGraphStreamingAdapter
 from backend.services.metrics.utils import safe_gauge, safe_inc
 from core.skills.registry import SkillRegistry, get_skill_registry
+from core.skills.resolver import estimate_skill_tokens
 from runtime_shared.shell_session_contracts import format_shell_execution_owner_id
 
 from .cancellation import AsyncCancellationProbe
@@ -198,7 +199,7 @@ def _record_skill_resolution_metrics(
         if "agent_selected" in reason_set:
             safe_inc("skill_selected_requested")
     estimated_tokens = sum(
-        (len(skill_registry.require(skill_id).body) + 3) // 4
+        estimate_skill_tokens(skill_registry.require(skill_id).body)
         for skill_id in selected_skill_ids
     )
     safe_gauge("skill_prompt_estimated_tokens", estimated_tokens)

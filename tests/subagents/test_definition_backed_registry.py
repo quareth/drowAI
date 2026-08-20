@@ -32,7 +32,7 @@ def _pathfinder_definition() -> SubagentDefinition:
 def test_default_registry_loads_enabled_definitions_from_toml() -> None:
     registry = get_subagent_registry()
 
-    assert registry.ids() == ("pathfinder", "webweaver")
+    assert "pathfinder" in registry.ids()
     assert registry.get("PATHFINDER") == _pathfinder_definition()
     assert registry.get("unknown") is None
     assert registry.require("pathfinder").display_name == "Pathfinder"

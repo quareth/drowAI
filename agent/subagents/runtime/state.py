@@ -211,10 +211,6 @@ def build_subagent_initial_state(
 ) -> dict[str, Any]:
     """Return an initial ``InteractiveState`` mapping for a child subagent run."""
 
-    effective_profile = effective_subagent_tool_profile(
-        definition,
-        tool_profile,
-    )
     resolution = resolve_skills(
         (skill_registry or get_skill_registry()).skills(),
         definition.id,
@@ -229,7 +225,7 @@ def build_subagent_initial_state(
         definition=definition,
         assignment=assignment,
         graph_thread_id=graph_thread_id,
-        tool_profile=effective_profile,
+        tool_profile=tool_profile,
         resolved_skills=resolution.selected,
     )
     metadata = _metadata_from_subagent_state(definition, subagent)

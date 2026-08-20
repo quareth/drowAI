@@ -11,7 +11,7 @@ from core.skills.contracts import MAX_REQUESTED_SKILLS
 from core.skills.identifiers import (
     MAX_SKILL_ID_CHARACTERS,
     SKILL_ID_PATTERN,
-    normalize_skill_id,
+    normalize_skill_ids,
 )
 
 _HANDOFF_FIELDS = frozenset(
@@ -63,19 +63,12 @@ class AgentHandoffEntry(BaseModel):
             raise ValueError(
                 f"skill_ids contains more than {MAX_REQUESTED_SKILLS} items"
             )
-        normalized: list[str] = []
-        for item in value:
-            try:
-                skill_id = normalize_skill_id(item)
-            except ValueError as exc:
-                raise ValueError(
-                    "skill_ids contains a non-canonical identifier"
-                ) from exc
-
-            if skill_id in normalized:
-                continue
-            normalized.append(skill_id)
-        return tuple(normalized)
+        try:
+            return normalize_skill_ids(value)
+        except ValueError as exc:
+            raise ValueError(
+                "skill_ids contains a non-canonical identifier"
+            ) from exc
 
 
 def normalize_agent_handoff_entry(value: Any) -> dict[str, Any]:
@@ -98,15 +91,10 @@ def normalize_agent_handoff_entry(value: Any) -> dict[str, Any]:
         return {}
     if len(raw_skill_ids) > MAX_REQUESTED_SKILLS:
         return {}
-    skill_ids: list[str] = []
-    for raw_skill_id in raw_skill_ids:
-        try:
-            skill_id = normalize_skill_id(raw_skill_id)
-        except ValueError:
-            return {}
-        if skill_id in skill_ids:
-            continue
-        skill_ids.append(skill_id)
+    try:
+        skill_ids = list(normalize_skill_ids(raw_skill_ids))
+    except ValueError:
+        return {}
     return {
         "agent_handoff": "required",
         "subagent": subagent.strip().lower(),
