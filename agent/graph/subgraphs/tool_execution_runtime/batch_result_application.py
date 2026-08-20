@@ -7,13 +7,14 @@ or project raw tool outcomes.
 
 from __future__ import annotations
 
-from typing import Any, Mapping, Optional
+from typing import Any, Mapping, Optional, Sequence
 
 from agent.tool_runtime.batch.types import ToolBatch, ToolCall, ToolCallResult, ToolCallStatus
 from agent.tool_runtime.output_persistence_policy import (
     OutputPersistenceDecision,
     resolve_output_persistence,
 )
+from runtime_shared.durable_secret_masking import mask_durable_secrets
 
 from .approval_and_idempotency import _store_dispatch_cache_entry
 from .batch_runner import emit_tool_batch_end, write_compact_batch_metadata
@@ -83,6 +84,7 @@ def finish_with_batch_result(
         cached_dispatch_by_call_id=cached_dispatch_by_call_id,
         metadata_patch_by_call_id=metadata_patch_by_call_id,
         persistence_decision_by_call_id=persistence_decision_by_call_id,
+        terminal_rows=getattr(result, "call_results", ()) or (),
     )
     write_compact_batch_metadata(
         facts,
@@ -340,6 +342,7 @@ def _restore_primary_call_metadata_fields(
     cached_dispatch_by_call_id: Mapping[str, Mapping[str, Any]],
     metadata_patch_by_call_id: Mapping[str, Mapping[str, Any]],
     persistence_decision_by_call_id: Mapping[str, OutputPersistenceDecision],
+    terminal_rows: Sequence[ToolCallResult] = (),
 ) -> None:
     """Restore the first durably retained call after batch execution."""
     if not batch.tool_calls:
@@ -377,6 +380,11 @@ def _restore_primary_call_metadata_fields(
 
     primary_projection = projection_by_call_id.get(primary.tool_call_id)
     primary_decision = persistence_decision_by_call_id.get(primary.tool_call_id)
+    terminal_by_call_id = {
+        row.tool_call_id: row
+        for row in terminal_rows
+        if isinstance(getattr(row, "tool_call_id", None), str)
+    }
     if (
         isinstance(primary_projection, Mapping)
         and (primary_decision is None or primary_decision.retain_durable_output)
@@ -390,6 +398,16 @@ def _restore_primary_call_metadata_fields(
             cached.get("last_tool_result"), Mapping
         ):
             facts.metadata["last_tool_result"] = dict(cached["last_tool_result"])
+        else:
+            terminal_row = terminal_by_call_id.get(primary.tool_call_id)
+            if (
+                isinstance(terminal_row, ToolCallResult)
+                and terminal_row.status is not ToolCallStatus.SUCCESS
+            ):
+                facts.metadata["last_tool_result"] = _terminal_failure_metadata(
+                    primary,
+                    terminal_row,
+                )
     else:
         facts.metadata.pop("last_tool_result", None)
 
@@ -408,6 +426,29 @@ def _restore_primary_call_metadata_fields(
         for key in ("last_artifact_path", "workspace_path", "last_execution_id"):
             if key in primary_patch:
                 facts.metadata[key] = primary_patch[key]
+
+
+def _terminal_failure_metadata(
+    call: ToolCall,
+    row: ToolCallResult,
+) -> dict[str, Any]:
+    """Build the durable legacy result for a call that never dispatched."""
+    raw_result = dict(row.raw_result) if isinstance(row.raw_result, Mapping) else {}
+    error_message = str(row.error_message or row.failure_category or row.status.value)
+    result = {
+        **raw_result,
+        "tool": call.tool_id,
+        "tool_name": call.tool_id,
+        "status": row.status.value,
+        "success": False,
+        "failure_category": row.failure_category or row.status.value,
+        "error": error_message,
+        "message": error_message,
+        "stdout": "",
+        "stderr": error_message,
+        "exit_code": -1,
+    }
+    return mask_durable_secrets(result, source="pre_dispatch_terminal_result")
 
 
 def _persistence_decisions_for_batch(

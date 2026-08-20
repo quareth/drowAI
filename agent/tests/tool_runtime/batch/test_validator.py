@@ -64,7 +64,19 @@ def _validating_ctx(tool_ids, **overrides):
     def _validate(tool_id, params, **kwargs):
         _ = kwargs
         if params.get("invalid"):
-            return SimpleNamespace(valid=False, normalized_parameters={}, reason="invalid")
+            return SimpleNamespace(
+                valid=False,
+                normalized_parameters={},
+                reason="schema_validation_error",
+                validation_errors=[
+                    {
+                        "field": "target",
+                        "error": "Field required",
+                        "message": "Field required",
+                        "suggested_fix": "Provide target",
+                    }
+                ],
+            )
         return SimpleNamespace(valid=True, normalized_parameters=dict(params))
 
     ctx = {
@@ -314,7 +326,7 @@ def test_validator_rejects_missing_tool():
     assert result.rejected_reason == "tool_not_available"
 
 
-def test_validator_rejects_invalid_parameters():
+def test_validator_returns_single_invalid_call_as_pre_terminal_failure():
     batch = ToolBatch(
         tool_batch_id="tb_test",
         tool_calls=(
@@ -324,7 +336,55 @@ def test_validator_rejects_invalid_parameters():
     )
     result = BatchValidator().validate(batch, ctx=_validating_ctx(["tool.a"]))
     assert result.admitted is False
-    assert result.rejected_reason == "invalid_parameters:tool.a"
+    assert result.rejected_reason == "all_calls_invalid_parameters"
+    assert result.batch.tool_calls == ()
+    assert len(result.pre_terminal_results) == 1
+    failure = result.pre_terminal_results[0]
+    assert failure.tool_call_id == "tc_1"
+    assert failure.failure_category == "invalid_parameters"
+    assert failure.error_message == (
+        "schema_validation_error: target: Field required; suggested fix: Provide target"
+    )
+    assert failure.raw_result == {
+        "validation_reason": "schema_validation_error",
+        "validation_errors": [
+            {
+                "field": "target",
+                "error": "Field required",
+                "message": "Field required",
+                "suggested_fix": "Provide target",
+            }
+        ],
+    }
+
+
+def test_validator_admits_valid_calls_and_isolates_invalid_parameter_failure(monkeypatch):
+    _patch_metadata(
+        monkeypatch,
+        {"tool.a": _meta(), "tool.b": _meta(), "tool.c": _meta()},
+    )
+    batch = _batch(
+        ["tool.a", "tool.b", "tool.c"],
+        params_by_index={
+            0: {"target": "one"},
+            1: {"invalid": True},
+            2: {"target": "three"},
+        },
+    )
+
+    result = BatchValidator().validate(
+        batch,
+        ctx=_validating_ctx(["tool.a", "tool.b", "tool.c"]),
+    )
+
+    assert result.admitted is True
+    assert [call.tool_call_id for call in result.batch.tool_calls] == ["tc_0", "tc_2"]
+    assert [call.parameters for call in result.batch.tool_calls] == [
+        {"target": "one"},
+        {"target": "three"},
+    ]
+    assert [row.tool_call_id for row in result.pre_terminal_results] == ["tc_1"]
+    assert result.pre_terminal_results[0].failure_category == "invalid_parameters"
 
 
 def test_validator_rejects_placeholders_after_deserialization():

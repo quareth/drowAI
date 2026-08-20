@@ -27,7 +27,7 @@ remaining calls.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from agent.execution_strategy import ExecutionStrategy
@@ -36,7 +36,12 @@ from agent.tool_runtime.batch.compatibility import (
     CompatibilityOutcome,
     find_exclusive_conflict,
 )
-from agent.tool_runtime.batch.types import ToolBatch, ToolCall
+from agent.tool_runtime.batch.types import (
+    ToolBatch,
+    ToolCall,
+    ToolCallResult,
+    ToolCallStatus,
+)
 from agent.tool_runtime.batch.validation_helpers import looks_like_placeholder
 from runtime_shared.shell_capabilities import SHELL_SESSION_START_TOOL_IDS
 
@@ -57,10 +62,13 @@ class BatchValidationError(Exception):
 class BatchValidationResult:
     """Outcome of validating a batch (without executing it).
 
-    ``admitted`` is False when the batch must not run; ``rejected_reason``
-    carries the machine-readable failure mode in that case. When admitted,
-    ``effective_execution_strategy`` is the strategy the runtime should
-    adopt (may differ from ``requested_execution_strategy`` after a
+    ``batch`` contains the normalized calls that remain executable.
+    Call-local parameter failures are returned in ``pre_terminal_results``
+    and do not reject valid siblings. ``admitted`` is False when no call can
+    run or the surviving batch violates a batch-wide rule; ``rejected_reason``
+    carries that machine-readable failure mode. When admitted,
+    ``effective_execution_strategy`` is the strategy the runtime should adopt
+    (possibly different from ``requested_execution_strategy`` after a
     compatibility downgrade).
     """
 
@@ -71,6 +79,7 @@ class BatchValidationResult:
     strategy_downgraded: bool
     downgrade_reason: Optional[str] = None
     rejected_reason: Optional[str] = None
+    pre_terminal_results: Sequence[ToolCallResult] = field(default_factory=tuple)
 
 
 class BatchValidator:
@@ -107,13 +116,23 @@ class BatchValidator:
         if basic_rejection:
             return self._reject(batch, requested, basic_rejection)
 
-        normalized_batch, parameter_rejection = self._normalize_parameters(batch, ctx)
-        if parameter_rejection:
-            return self._reject(batch, requested, parameter_rejection)
+        normalized_batch, parameter_failures = self._normalize_parameters(batch, ctx)
+        if not normalized_batch.tool_calls:
+            return self._reject(
+                normalized_batch,
+                requested,
+                "all_calls_invalid_parameters",
+                pre_terminal_results=parameter_failures,
+            )
 
         conflict_reason = self._validate_exclusive_and_high_risk(normalized_batch, ctx)
         if conflict_reason:
-            return self._reject(normalized_batch, requested, conflict_reason)
+            return self._reject(
+                normalized_batch,
+                requested,
+                conflict_reason,
+                pre_terminal_results=parameter_failures,
+            )
 
         # Compatibility verdict (and resulting effective strategy).
         verdict = self._compatibility.check(normalized_batch)
@@ -122,6 +141,7 @@ class BatchValidator:
                 normalized_batch,
                 requested,
                 verdict.reason or "compatibility_rejected",
+                pre_terminal_results=parameter_failures,
             )
 
         downgraded = verdict.effective_strategy != requested
@@ -132,6 +152,7 @@ class BatchValidator:
             effective_execution_strategy=verdict.effective_strategy,
             strategy_downgraded=downgraded,
             downgrade_reason=verdict.reason if downgraded else None,
+            pre_terminal_results=parameter_failures,
         )
 
     def validate_after_approval(
@@ -209,6 +230,8 @@ class BatchValidator:
         batch: ToolBatch,
         requested: ExecutionStrategy,
         reason: str,
+        *,
+        pre_terminal_results: Sequence[ToolCallResult] = (),
     ) -> BatchValidationResult:
         return BatchValidationResult(
             admitted=False,
@@ -218,6 +241,7 @@ class BatchValidator:
             strategy_downgraded=False,
             downgrade_reason=None,
             rejected_reason=reason,
+            pre_terminal_results=tuple(pre_terminal_results),
         )
 
     @staticmethod
@@ -268,13 +292,14 @@ class BatchValidator:
         self,
         batch: ToolBatch,
         ctx: Mapping[str, Any],
-    ) -> tuple[ToolBatch, Optional[str]]:
+    ) -> tuple[ToolBatch, Sequence[ToolCallResult]]:
         """Validate and normalize every committed call through the shared validator."""
         validator = ctx.get("validate_tool_parameters_fn")
         if not callable(validator):
             validator = _default_validate_tool_parameters
 
         normalized_calls: list[ToolCall] = []
+        failed_rows: list[ToolCallResult] = []
         action_target = ctx.get("action_target")
         logger = ctx.get("logger")
         for call in batch.tool_calls:
@@ -285,7 +310,29 @@ class BatchValidator:
             }
             result = validator(call.tool_id, dict(call.parameters), **kwargs)
             if not getattr(result, "valid", False):
-                return batch, f"invalid_parameters:{call.tool_id}"
+                validation_errors = [
+                    dict(item)
+                    for item in (getattr(result, "validation_errors", None) or ())
+                    if isinstance(item, Mapping)
+                ]
+                reason = str(getattr(result, "reason", None) or "invalid_parameters")
+                failed_rows.append(
+                    ToolCallResult(
+                        tool_call_id=call.tool_call_id,
+                        tool_id=call.tool_id,
+                        status=ToolCallStatus.FAILED,
+                        raw_result={
+                            "validation_reason": reason,
+                            "validation_errors": validation_errors,
+                        },
+                        failure_category="invalid_parameters",
+                        error_message=_validation_failure_message(
+                            reason,
+                            validation_errors,
+                        ),
+                    )
+                )
+                continue
             normalized_calls.append(
                 ToolCall(
                     tool_call_id=call.tool_call_id,
@@ -303,7 +350,7 @@ class BatchValidator:
                 deferred_followups=batch.deferred_followups,
                 selection_rationale=batch.selection_rationale,
             ),
-            None,
+            tuple(failed_rows),
         )
 
     @staticmethod
@@ -334,6 +381,25 @@ def _coerce_string_set(value: Any) -> set[str]:
     if not isinstance(value, Iterable) or isinstance(value, (str, bytes)):
         return set()
     return {str(item) for item in value if str(item or "").strip()}
+
+
+def _validation_failure_message(
+    reason: str,
+    validation_errors: Sequence[Mapping[str, Any]],
+) -> str:
+    """Render bounded field-level repair context for compact batch summaries."""
+    details: list[str] = []
+    for error in validation_errors[:3]:
+        field_name = str(error.get("field") or "arguments").strip()
+        message = str(
+            error.get("message") or error.get("error") or "Invalid value"
+        ).strip()
+        suggested_fix = str(error.get("suggested_fix") or "").strip()
+        detail = f"{field_name}: {message}"
+        if suggested_fix:
+            detail = f"{detail}; suggested fix: {suggested_fix}"
+        details.append(detail)
+    return f"{reason}: {' | '.join(details)}" if details else reason
 
 
 def _has_multiple_shell_session_starts(calls: Sequence[ToolCall]) -> bool:

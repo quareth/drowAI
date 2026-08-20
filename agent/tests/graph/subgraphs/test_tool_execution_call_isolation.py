@@ -612,6 +612,112 @@ async def test_same_tool_batch_compresses_each_call_output_independently(
 
 
 @pytest.mark.asyncio
+async def test_invalid_parameters_fail_only_their_call_and_valid_call_executes(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Initial parameter validation must not poison unrelated batch calls."""
+    captured_raw_results: List[Dict[str, Any]] = []
+
+    patch_tool_execution_attr(
+        monkeypatch,
+        "ToolExecutionCoordinator",
+        lambda config: _PortEchoCoordinator(),
+    )
+    _patch_streamless_no_provenance(monkeypatch)
+
+    async def _compress_stub(**kwargs: Any) -> _StubCompressionResult:
+        raw_result = dict(kwargs["raw_result"])
+        captured_raw_results.append(raw_result)
+        return _StubCompressionResult(
+            _StubCompactResult(
+                tool=str(kwargs["tool_name"]),
+                summary=f"compact:{raw_result.get('stdout')}",
+            )
+        )
+
+    patch_tool_execution_attr(monkeypatch, "compress_tool_output", _compress_stub)
+
+    state = _state(ExecutionStrategy.SEQUENTIAL)
+    invalid_call = state.facts.metadata["planner_plan"]["tool_batch"]["tool_calls"][1]
+    invalid_call["parameters"] = {"ports": "443", "service_detection": True}
+
+    from agent.graph.subgraphs.tool_execution import run_tool_execution
+
+    result = await run_tool_execution(
+        state.as_graph_state(),
+        context=GraphRuntimeContext(
+            task_id=77,
+            user_id=1,
+            workspace_path=str(tmp_path),
+            api_key="key",
+            model="model",
+            turn_sequence=1,
+        ),
+    )
+
+    assert [item["tool_call_id"] for item in captured_raw_results] == ["tc_port_80"]
+    updated = InteractiveState.from_mapping(result)
+    compact_batch = updated.facts.metadata["last_tool_result_compact_batch"]
+    assert compact_batch["status"] == "completed_with_errors"
+    rows = {row["tool_call_id"]: row for row in compact_batch["results"]}
+    assert rows["tc_port_80"]["status"] == "success"
+    assert rows["tc_port_443"]["status"] == "failed"
+    assert rows["tc_port_443"]["failure_category"] == "invalid_parameters"
+    assert "target: Field required" in rows["tc_port_443"]["compact_tool_result"][
+        "summary"
+    ]
+    assert rows["tc_port_443"]["compact_tool_result"]["validation_errors"][0][
+        "field"
+    ] == "target"
+    phase_sections = updated.facts.metadata["working_memory"]["current_turn_phases"][0][
+        "sections"
+    ]
+    batch_section = next(
+        section for section in phase_sections if section["heading"] == "Batch Tool Results"
+    )
+    assert "target: Field required" in batch_section["body"]
+
+
+@pytest.mark.asyncio
+async def test_all_invalid_parameters_replace_stale_primary_result(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """An all-invalid batch must retain its error instead of stale tool output."""
+    _patch_streamless_no_provenance(monkeypatch)
+    state = _state(ExecutionStrategy.SEQUENTIAL)
+    for call in state.facts.metadata["planner_plan"]["tool_batch"]["tool_calls"]:
+        call["parameters"] = {"ports": call["parameters"]["ports"]}
+
+    from agent.graph.subgraphs.tool_execution import run_tool_execution
+
+    result = await run_tool_execution(
+        state.as_graph_state(),
+        context=GraphRuntimeContext(
+            task_id=77,
+            user_id=1,
+            workspace_path=str(tmp_path),
+            api_key="key",
+            model="model",
+            turn_sequence=1,
+        ),
+    )
+
+    updated = InteractiveState.from_mapping(result)
+    compact_batch = updated.facts.metadata["last_tool_result_compact_batch"]
+    assert compact_batch["status"] == "failed"
+    assert [row["failure_category"] for row in compact_batch["results"]] == [
+        "invalid_parameters",
+        "invalid_parameters",
+    ]
+    primary_result = updated.facts.metadata["last_tool_result"]
+    assert primary_result["failure_category"] == "invalid_parameters"
+    assert primary_result["validation_errors"][0]["field"] == "target"
+    assert "STALE_OUTPUT" not in str(primary_result)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     "strategy",
     (ExecutionStrategy.SEQUENTIAL, ExecutionStrategy.PARALLEL),

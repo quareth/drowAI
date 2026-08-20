@@ -276,11 +276,12 @@ def compact_failure_result(
     *,
     category: str,
     message: str | None = None,
+    validation_errors: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Build a compact failure envelope for rows without a coordinator result."""
     safe_category = _redact_failure_text(category) or "tool_error"
     safe_message = _redact_failure_text(message) or safe_category
-    return {
+    compact = {
         "schema_version": "2.0",
         "tool": call.tool_id,
         "status": safe_category,
@@ -288,6 +289,12 @@ def compact_failure_result(
         "summary": f"{call.tool_id} did not execute: {safe_message}",
         "errors": [safe_message],
     }
+    if validation_errors:
+        compact["validation_errors"] = mask_durable_secrets(
+            [dict(item) for item in validation_errors if isinstance(item, Mapping)],
+            source="tool_parameter_validation",
+        )
+    return compact
 
 
 def _candidate_tool_ids(facts: Any) -> list[str]:
