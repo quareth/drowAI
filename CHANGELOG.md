@@ -27,9 +27,9 @@ The format is based on
   stages.
 - Concurrent subagents now keep independent reasoning streams, preventing one
   agent's section lifecycle from interrupting another agent in the same turn.
-- Declarative subagents now retain every accumulated compressed tool phase for
-  later reasoning and final handoff generation without a second lossy context
-  projection.
+- Declarative subagents now retain bounded per-call tool outcomes for later
+  reasoning and final handoff generation while omitting the redundant batch
+  result rendering.
 - Invalid parameters in one batched tool call no longer prevent unrelated
   valid calls from running, and field-level correction guidance is retained.
 - Declarative subagents now preserve successful batch results and avoid

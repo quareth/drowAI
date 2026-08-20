@@ -47,7 +47,6 @@ from agent.subagents.runtime.state import (
     subagent_state_from_graph_state,
 )
 from agent.subagents.runtime.tool_outcomes import (
-    SUBAGENT_TOOL_OUTCOME_SECTION_HEADING,
     outcome_section_payload,
     project_tool_batch_outcome,
 )
@@ -60,6 +59,7 @@ from core.llm import LLM_TIMEOUT_PLANNER_PARAMETER_RESOLUTION_SEC, wait_for_with
 from core.prompts.builders.post_tool.evidence import (
     select_compact_evidence_for_reasoning,
 )
+from core.prompts.builders.post_tool.last_tool import LAST_TOOL_SECTION_HEADINGS
 from core.prompts.builders.subagent_runtime import SubagentRuntimePromptBuilder
 from core.prompts.builders.skill_guidance import PromptSkill
 from core.skills.registry import SkillRegistry, get_skill_registry
@@ -784,7 +784,7 @@ def _build_previous_tool_context(interactive: InteractiveState) -> dict[str, Any
 def _existing_phase_memory_prompt_metadata(
     metadata: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Return the canonical ledger without duplicate tool-outcome sections."""
+    """Return the canonical ledger without redundant batch-result sections."""
 
     working_memory = metadata.get("working_memory")
     raw_records = (
@@ -805,7 +805,7 @@ def _existing_phase_memory_prompt_metadata(
             and not (
                 source == "tool"
                 and section.get("heading")
-                == SUBAGENT_TOOL_OUTCOME_SECTION_HEADING
+                == LAST_TOOL_SECTION_HEADINGS["batch_tool_results"]
             )
         ]
         records.append(record)

@@ -32,7 +32,7 @@ class TestDetectFailure:
         assert category is not None
     
     def test_detect_failure_from_error_status(self):
-        """Verify failure detected from error status."""
+        """Generic runtime errors remain failures without parameter blame."""
         context = FailureContext(
             success_flag=None,
             status="error",
@@ -46,10 +46,10 @@ class TestDetectFailure:
         failure, category = detect_failure(context)
         
         assert failure is True
-        assert category == "invalid_params"
+        assert category == "unknown"
     
     def test_detect_failure_from_failed_status(self):
-        """Verify failure detected from failed status."""
+        """Generic failed commands remain failures without parameter blame."""
         context = FailureContext(
             success_flag=None,
             status="failed",
@@ -63,7 +63,7 @@ class TestDetectFailure:
         failure, category = detect_failure(context)
         
         assert failure is True
-        assert category == "invalid_params"
+        assert category == "unknown"
     
     def test_detect_failure_from_empty_output(self):
         """Verify failure detected from empty stdout/stderr and no synthesis."""

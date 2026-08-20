@@ -1639,6 +1639,26 @@ async def test_subagent_prompt_preserves_shared_phase_ledger_once(
                     "heading": "Key Findings",
                     "body": f"- {late_finding}",
                 },
+                {
+                    "heading": "Batch Tool Results",
+                    "body": "redundant aggregate that must not reach the subagent",
+                },
+                {
+                    "heading": "Subagent Tool Outcome",
+                    "body": json.dumps(
+                        {
+                            "calls": [
+                                {
+                                    "tool": "opaque.tool",
+                                    "status": "failed",
+                                    "failure_category": "timeout",
+                                    "summary": late_finding,
+                                }
+                            ]
+                        },
+                        sort_keys=True,
+                    ),
+                },
             ]
         },
     )
@@ -1664,8 +1684,16 @@ async def test_subagent_prompt_preserves_shared_phase_ledger_once(
     )
 
     prompt = llm.requests[0]["user_prompt"]
+    phase_memory = _extract_prompt_json(
+        prompt,
+        "Accumulated tool context",
+    )["current_turn_phase_memory"]
     assert late_finding in prompt
     assert prompt.count("Tool Output Summary") == 2
+    assert prompt.count("Subagent Tool Outcome") == 1
+    assert '"failure_category": "timeout"' in phase_memory
+    assert "Batch Tool Results" not in prompt
+    assert "redundant aggregate" not in prompt
     assert "...[truncated]" not in prompt
     assert "Prior Tool Outcomes:" not in prompt
 
@@ -1739,7 +1767,8 @@ async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> Non
     phase_memory = previous_tool_summary["current_turn_phase_memory"]
     assert "## Prior Current-Turn Phase Memory" in phase_memory
     assert "Tool Output Summary" in phase_memory
-    assert "Subagent Tool Outcome" not in phase_memory
+    assert "Subagent Tool Outcome" in phase_memory
+    assert "Batch Tool Results" not in phase_memory
     assert "Prior Tool Outcomes:" not in multi_iteration_user_prompt
     assert "current_turn_phases" not in working_memory_summary
     assert "current_turn_phase_counter" not in working_memory_summary
@@ -2186,22 +2215,26 @@ def test_subagent_context_preserves_terminal_aggregate_and_appends_outcome() -> 
     assert "RAW_START_OUTPUT" not in outcome_json
     assert "session_id" not in outcome_json
 
+    previous_tool_summary = runtime_model._build_previous_tool_context(
+        InteractiveState.from_mapping(updated)
+    )
     prompt = SubagentRuntimePromptBuilder().build_user_prompt(
         display_name="Pathfinder",
         assignment={"objective": "Complete one interactive calculator session."},
         tool_ids=[SHELL_WRITE_STDIN_TOOL_ID],
-        previous_tool_summary=runtime_model._build_previous_tool_context(
-            InteractiveState.from_mapping(updated)
-        ),
+        previous_tool_summary=previous_tool_summary,
     )
 
-    assert '"tool": "shell.utility"' in prompt
-    assert '"process_status": "completed"' in prompt
-    assert '"session_status": "closed"' in prompt
-    assert '"session_id": "shs-subagent-long"' in prompt
-    assert '"stdout": "7\\n42\\n50\\n50\\n"' in prompt
-    assert '"input": "quit\\n"' in prompt
-    assert "tc-running-11" in prompt
+    phase_memory = previous_tool_summary["current_turn_phase_memory"]
+    assert '"tool":"shell.utility"' in phase_memory
+    assert '"process_status":"completed"' in phase_memory
+    assert '"session_status":"closed"' in phase_memory
+    assert "Subagent Tool Outcome" in phase_memory
+    assert "Batch Tool Results" not in phase_memory
+    assert "shs-subagent-long" not in phase_memory
+    assert '"stdout"' not in phase_memory
+    assert '"input"' not in phase_memory
+    assert "tc-running-11" not in phase_memory
     assert "Prior Tool Outcomes:" not in prompt
 
 
