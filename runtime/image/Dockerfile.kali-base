@@ -30,6 +30,7 @@ RUN apt-get update \
         iputils-ping \
         iputils-tracepath \
         jq \
+        ldap-utils \
         less \
         lftp \
         mariadb-client \
@@ -54,9 +55,13 @@ RUN apt-get update \
         rsync \
         sqlite3 \
         smbclient \
+        snmp \
         socat \
+        ssh-audit \
         sshpass \
+        sslscan \
         sqlmap \
+        swaks \
         tcpdump \
         telnet \
         tftp-hpa \
@@ -105,5 +110,6 @@ RUN set -eu; \
         amass dnsrecon enum4linux-ng hydra katana nuclei whatweb \
         fping nmap ftp lftp tftp ssh scp sftp sshpass rsync telnet smbclient rpcclient smbget \
         nc netcat ncat socat mtr tracepath showmount rpcinfo mount.cifs tcpdump tshark \
-        file jq less zip unzip 7z php mysql psql sqlite3 redis-cli isql tsql; \
+        file jq less zip unzip 7z php mysql psql sqlite3 redis-cli isql tsql \
+        ldapsearch snmpwalk snmpcheck ssh-audit sslscan swaks; \
         do command -v "$binary" >/dev/null; done

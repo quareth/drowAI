@@ -16,6 +16,8 @@ The format is based on
 - Webweaver can perform bounded web reconnaissance with native HTTP and FFUF
   tools plus selectable WhatWeb and Katana guidance; task runtime images now
   include Katana.
+- Kali task runtime images now include LDAP, SNMP, SSH-audit, SMTP, and TLS
+  service-enumeration utilities on ARM64 and AMD64.
 
 ### Fixed
 

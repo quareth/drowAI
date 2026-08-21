@@ -36,6 +36,31 @@ def test_kali_base_installs_and_verifies_fping() -> None:
     assert "fping" in verification_block
 
 
+def test_kali_base_installs_and_verifies_delver_service_tools() -> None:
+    dockerfile = build_runtime_image.DEFAULT_KALI_BASE_DOCKERFILE_PATH.read_text(
+        encoding="utf-8"
+    )
+    install_block = dockerfile.split("apt-get install", maxsplit=1)[1].split(
+        "&& apt-get clean", maxsplit=1
+    )[0]
+    verification_block = dockerfile.split("for binary in", maxsplit=1)[1]
+
+    expected_packages = ("ldap-utils", "snmp", "ssh-audit", "swaks", "sslscan")
+    expected_binaries = (
+        "ldapsearch",
+        "snmpwalk",
+        "snmpcheck",
+        "ssh-audit",
+        "swaks",
+        "sslscan",
+    )
+
+    for package in expected_packages:
+        assert f"{package} \\" in install_block
+    for binary in expected_binaries:
+        assert binary in verification_block
+
+
 def test_kali_base_copies_pinned_multiarch_katana_binary() -> None:
     dockerfile = build_runtime_image.DEFAULT_KALI_BASE_DOCKERFILE_PATH.read_text(
         encoding="utf-8"
