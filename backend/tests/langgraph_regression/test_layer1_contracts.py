@@ -9,13 +9,15 @@ from typing import Any, Dict, Optional
 import pytest
 
 from agent.graph.nodes.simple_chat import _build_simple_chat_messages
+from agent.subagents.registry import get_subagent_registry
+from agent.subagents.skill_catalog import project_subagent_skill_catalogs
 from backend.services.langgraph_chat.contracts import ChatInputs, ExecutionMode, LangGraphRuntimeConfig
 from backend.services.langgraph_chat.intent.classifier import IntentClassifier
-from agent.subagents.registry import get_subagent_registry
 from core.prompts.builders.intent_classifier import build_classifier_system_prompt
 from core.prompts.constants import CLASSIFIER_SYSTEM_PROMPT, PROMPT_TEMPLATE
 from core.prompts.loader import TemplateLoader
 from core.prompts.registry import PromptRegistry
+from core.skills.registry import get_skill_registry
 
 pytestmark = [
     pytest.mark.regression_layer1,
@@ -107,7 +109,13 @@ async def test_intent_classifier_payload_contract_uses_rendered_prompt_template(
         '"suggested_capabilities":["direct_executor"],"risk_flags":[]}'
     )
     recording_client = _RecordingIntentClient(response)
-    classifier = IntentClassifier(client_factory=lambda call_settings: recording_client)
+    subagent_registry = get_subagent_registry()
+    skill_registry = get_skill_registry()
+    classifier = IntentClassifier(
+        client_factory=lambda call_settings: recording_client,
+        subagent_registry=subagent_registry,
+        skill_registry=skill_registry,
+    )
 
     history = [
         {"role": "user", "content": "Scan 10.0.0.5"},
@@ -153,7 +161,11 @@ async def test_intent_classifier_payload_contract_uses_rendered_prompt_template(
     assert len(recording_client.calls) == 1
     payload = recording_client.calls[0]
     assert payload["system_prompt"] == build_classifier_system_prompt(
-        subagent_catalog=get_subagent_registry().classifier_catalog()
+        subagent_catalog=subagent_registry.classifier_catalog(),
+        skill_catalogs=project_subagent_skill_catalogs(
+            subagent_registry.definitions(),
+            skill_registry,
+        ),
     )
     assert "Run targeted enumeration on 10.0.0.5." in payload["user_prompt"]
     # Shared serializer (agent/graph/context/serialization.py) renders
