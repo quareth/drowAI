@@ -13,6 +13,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from typing import Any
 
 from agent.subagents.registry import SubagentRegistry
+from core.skills.registry import SkillRegistry, get_skill_registry
 from backend.services.langgraph_chat.contracts import LangGraphRuntimeConfig
 
 from .dispatch_batch import DispatchBatchExecutor
@@ -44,11 +45,13 @@ class FollowupDispatcher:
         subagent_registry: SubagentRegistry,
         batch_executor: DispatchBatchExecutor,
         active_count_reader: ActiveCountReader,
+        skill_registry: SkillRegistry | None = None,
     ) -> None:
         self._registry = registry
         self._subagent_registry = subagent_registry
         self._batch_executor = batch_executor
         self._active_count_reader = active_count_reader
+        self._skill_registry = skill_registry or get_skill_registry()
 
     async def dispatch_followup(
         self,
@@ -76,6 +79,7 @@ class FollowupDispatcher:
             delegation_decision_id=decision_id,
             agent_id=normalized[0]["subagent"],
             objective=normalized[0]["objective"],
+            requested_skill_ids=tuple(normalized[0]["skill_ids"]),
         )
         existing = await self._registry.get(
             tenant_id=int(runtime_config.metadata["tenant_id"]),
@@ -92,6 +96,7 @@ class FollowupDispatcher:
         decision = resolve_subagent_handoff(
             runtime_config.metadata,
             registry=self._subagent_registry,
+            skill_registry=self._skill_registry,
             active_runs_by_agent_id=active_counts,
             handoff_entries=agent_handoff,
             require_direct_executor=False,

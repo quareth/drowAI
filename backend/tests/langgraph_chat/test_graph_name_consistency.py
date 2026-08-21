@@ -93,7 +93,7 @@ def test_subagent_compiler_uses_explicit_task_checkpointer(monkeypatch) -> None:
     monkeypatch.setattr(
         graph_runtime,
         "build_subagent_state_graph",
-        lambda bound_definition: FakeGraph(),
+        lambda bound_definition, *, skill_registry=None: FakeGraph(),
     )
 
     assert graph_runtime.build_subagent_graph(

@@ -187,17 +187,29 @@ class TestSimpleToolStreaming:
         sample_state,
     ):
         """Test handler calls stream_graph instead of invoke_graph."""
+        subagent_registry = object()
+        skill_registry = object()
         handler = SimpleToolHandler(
             checkpointer_service=mock_checkpointer_service,
             executor=mock_executor,
             streaming_adapter=mock_adapter,
+            subagent_registry=subagent_registry,
+            skill_registry=skill_registry,
         )
         
         # Mock stream_graph to return final state
         mock_executor.stream_graph.return_value = GraphExecutionResult(final_state=sample_state)
         
-        with patch("backend.services.langgraph_chat.handlers.simple_tool_handler.build_simple_tool_graph"):
+        with patch(
+            "backend.services.langgraph_chat.handlers.simple_tool_handler.build_simple_tool_graph"
+        ) as build_simple_tool_graph:
             result = await handler.handle(runtime_config)
+
+        build_simple_tool_graph.assert_called_once_with(
+            checkpointer=mock_checkpointer_service.get_checkpointer.return_value.__aenter__.return_value,
+            subagent_registry=subagent_registry,
+            skill_registry=skill_registry,
+        )
         
         # Verify stream_graph was called
         mock_executor.stream_graph.assert_called_once()
@@ -564,6 +576,7 @@ class TestSimpleToolStreaming:
                 "agent_handoff": "required",
                 "subagent": "pathfinder",
                 "objective": "Scan ports on 10.0.0.10.",
+                "skill_ids": [],
             },
         }
         mock_executor.stream_graph.return_value = GraphExecutionResult(

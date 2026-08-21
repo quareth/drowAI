@@ -130,7 +130,11 @@ class SimpleToolHandler(BaseLangGraphHandler):
                         task_id,
                     )
                 else:
-                    compiled_graph = build_simple_tool_graph(checkpointer=checkpointer)
+                    compiled_graph = build_simple_tool_graph(
+                        checkpointer=checkpointer,
+                        subagent_registry=self._subagent_registry,
+                        skill_registry=self._skill_registry,
+                    )
                 logger.info(
                     f"[HANDLER] Compiled simple tool graph with "
                     f"{type(checkpointer).__name__} for task {task_id}"

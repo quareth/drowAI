@@ -86,6 +86,10 @@ pip-delete-this-directory.txt
 
 # Local developer design workspace; publish completed quality-refactor records.
 /docs/devdocs/*
+!/docs/devdocs/hldd/
+!/docs/devdocs/hldd/subagent-skill-system-hld.md
+!/docs/devdocs/lldd/
+!/docs/devdocs/lldd/subagent-skill-system-lld.md
 !/docs/devdocs/refactor/
 /docs/devdocs/refactor/*
 !/docs/devdocs/refactor/quality-refactor-*.md

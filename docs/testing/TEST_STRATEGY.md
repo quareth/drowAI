@@ -131,7 +131,7 @@ Use the nearest existing test root for the production responsibility:
 - `backend/tests/` for backend control-plane behavior;
 - `agent/**/tests/` for agent graph, prompt, tool, and runtime behavior;
 - `client/src/**/__tests__/` for frontend unit/component behavior;
-- `core/**/tests/` for shared prompt, LLM, and runbook contracts;
+- `core/**/tests/` for shared prompt, LLM, and skill contracts;
 - `tests/runner/` and `tests/runtime_shared/` for runner/runtime protocol behavior;
 - `kali_executor/tests/` for in-runtime executor behavior;
 - `e2e/tests/` only for complete browser journeys.

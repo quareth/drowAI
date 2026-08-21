@@ -24,7 +24,10 @@ from agent.subagents.definition import SubagentDefinition
 from agent.subagents.registry import SubagentRegistry, get_subagent_registry
 from agent.subagents.runtime.graph import build_subagent_graph
 from agent.subagents.runtime.model import SUBAGENT_RESULT_METADATA_KEY
-from agent.subagents.runtime.state import build_subagent_initial_state
+from agent.subagents.runtime.state import (
+    build_subagent_initial_state,
+    subagent_state_from_graph_state,
+)
 from backend.services.agent_runs.contracts import AgentAssignment, AgentResult
 from backend.services.agent_runs.completion import (
     AgentRunCompletion,
@@ -46,6 +49,9 @@ from backend.services.langgraph_chat.checkpoint.checkpointer_service import (
 from backend.services.langgraph_chat.execution.graph_executor import LangGraphExecutor
 from backend.services.langgraph_chat.hitl_constants import GRAPH_RECURSION_LIMIT
 from backend.services.langgraph_chat.streaming.adapter import LangGraphStreamingAdapter
+from backend.services.metrics.utils import safe_gauge, safe_inc
+from core.skills.registry import SkillRegistry, get_skill_registry
+from core.skills.resolver import estimate_skill_tokens
 from runtime_shared.shell_session_contracts import format_shell_execution_owner_id
 
 from .cancellation import AsyncCancellationProbe
@@ -63,6 +69,7 @@ class ProcessLocalAgentRunWorker:
         definition_registry: SubagentRegistry | None = None,
         checkpointer_service: CheckpointerService | None = None,
         executor: LangGraphExecutor | None = None,
+        skill_registry: SkillRegistry | None = None,
     ) -> None:
         self._registry = registry
         self._definition_registry = definition_registry or get_subagent_registry()
@@ -72,6 +79,7 @@ class ProcessLocalAgentRunWorker:
         self._executor = executor or LangGraphExecutor(
             streaming_adapter=LangGraphStreamingAdapter(),
         )
+        self._skill_registry = skill_registry or get_skill_registry()
 
     async def __call__(
         self,
@@ -95,6 +103,13 @@ class ProcessLocalAgentRunWorker:
             definition=definition,
             assignment=assignment,
             graph_thread_id=graph_thread_id,
+            skill_registry=self._skill_registry,
+        )
+        _record_skill_resolution_metrics(
+            graph_input,
+            definition=definition,
+            assignment=assignment,
+            skill_registry=self._skill_registry,
         )
         config = prepare_subagent_child_config(
             runtime_config,
@@ -106,7 +121,11 @@ class ProcessLocalAgentRunWorker:
         async with self._checkpointer_service.get_checkpointer(
             assignment.task_id
         ) as checkpointer:
-            compiled = build_subagent_graph(definition, checkpointer=checkpointer)
+            compiled = build_subagent_graph(
+                definition,
+                checkpointer=checkpointer,
+                skill_registry=self._skill_registry,
+            )
             execution_result = await self._executor.stream_graph(
                 compiled,
                 graph_input,
@@ -157,6 +176,29 @@ class ProcessLocalAgentRunWorker:
             raise RuntimeError("Subagent child run is not registered")
         if entry.graph_thread_id != graph_thread_id:
             raise RuntimeError("Subagent child thread does not match registry")
+
+
+def _record_skill_resolution_metrics(
+    graph_input: Mapping[str, Any],
+    *,
+    definition: SubagentDefinition,
+    assignment: AgentAssignment,
+    skill_registry: SkillRegistry,
+) -> None:
+    """Record bounded counters without logging skill bodies or assignment text."""
+
+    safe_inc("skill_requested", len(assignment.requested_skill_ids))
+    subagent = subagent_state_from_graph_state(graph_input, definition=definition)
+    for ref in subagent.resolved_skills:
+        if "mandatory" in ref.reasons:
+            safe_inc("skill_selected_mandatory")
+        if "agent_selected" in ref.reasons:
+            safe_inc("skill_selected_requested")
+    estimated_tokens = sum(
+        estimate_skill_tokens(skill_registry.require(ref.skill_id).body)
+        for ref in subagent.resolved_skills
+    )
+    safe_gauge("skill_prompt_estimated_tokens", estimated_tokens)
 
 
 async def mark_subagent_completed_from_state(

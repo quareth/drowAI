@@ -19,6 +19,7 @@ from agent.graph.context.runtime_state import refresh_bundle_from_working_memory
 from agent.graph.graph_names import GRAPH_NAME_PARENT_HANDOFF
 from agent.graph.streaming import build_agent_turn_metadata
 from agent.graph.utils.event_identity import POST_ACTION_STREAM_SEQUENCE_METADATA_KEY
+from agent.subagents.registry import SubagentRegistry
 from backend.services.agent_runs.completion import (
     AgentRunCompletion,
     usage_envelopes_from_child_records,
@@ -59,6 +60,7 @@ from backend.services.langgraph_chat.handlers.turn_runtime import (
     prefill_reasoning_tokens_from,
     record_execution_metadata,
 )
+from core.skills.registry import SkillRegistry
 
 
 CancellationCheckerFactory = Callable[[int, str], Callable[[], bool]]
@@ -109,11 +111,15 @@ class SubagentParentFinalizer:
         executor: LangGraphExecutor,
         cancellation_checker_factory: CancellationCheckerFactory,
         continuation_broker: ParentHandoffContinuationBroker,
+        subagent_registry: SubagentRegistry,
+        skill_registry: SkillRegistry,
     ) -> None:
         self._checkpointer = checkpointer_service
         self._executor = executor
         self._build_cancellation_checker = cancellation_checker_factory
         self._continuation_broker = continuation_broker
+        self._subagent_registry = subagent_registry
+        self._skill_registry = skill_registry
 
     async def finalize(
         self,
@@ -177,7 +183,11 @@ class SubagentParentFinalizer:
             _ = (emitter, callback_result_holder)
             async with self._checkpointer.get_checkpointer(task_id) as checkpointer:
                 execution_result = await self._executor.stream_graph(
-                    build_parent_handoff_graph(checkpointer=checkpointer),
+                    build_parent_handoff_graph(
+                        checkpointer=checkpointer,
+                        subagent_registry=self._subagent_registry,
+                        skill_registry=self._skill_registry,
+                    ),
                     graph_input,
                     config,
                     task_id,

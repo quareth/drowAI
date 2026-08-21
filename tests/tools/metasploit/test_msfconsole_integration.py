@@ -198,6 +198,16 @@ class TestMsfRunExploitTool:
                 payload="windows/meterpreter/reverse_tcp",
             )
 
+    def test_schema_owns_retained_datastore_semantics(self) -> None:
+        properties = MsfRunExploitArgs.model_json_schema()["properties"]
+
+        assert "never the victim address" in properties["lhost"]["description"]
+        assert "not a host" in properties["target_index"]["description"]
+        assert "AutoCheck" in properties["custom_options"]["description"]
+        assert "does not replace AutoCheck" in properties["custom_options"][
+            "description"
+        ]
+
     def test_parse_output_reports_session_backed_success(
         self, tool: MsfRunExploitTool, sample_session_output: str
     ) -> None:

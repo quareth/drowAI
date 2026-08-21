@@ -8,6 +8,7 @@ import logging
 
 from agent.graph import InteractiveState
 from agent.subagents.registry import SubagentRegistry
+from core.skills.registry import SkillRegistry
 from backend.services.agent_runs.dispatch_plan import (
     routing_metadata_from_decision,
     runtime_config_with_subagent_routing,
@@ -47,6 +48,7 @@ def resolve_branch(
     simple_tool_enabled: bool,
     active_subagent_run_counts: Mapping[str, int] | None = None,
     subagent_registry: SubagentRegistry | None = None,
+    skill_registry: SkillRegistry | None = None,
 ) -> ChatBranch:
     """Resolve which branch handles this turn.
 
@@ -86,6 +88,7 @@ def resolve_branch(
         decision = resolve_subagent_handoff(
             runtime_config.metadata,
             registry=subagent_registry,
+            skill_registry=skill_registry,
             active_runs_by_agent_id=active_counts,
         )
         runtime_config.metadata["subagent_routing"] = (
@@ -108,6 +111,7 @@ def resolve_late_subagent_handoff(
     *,
     active_subagent_run_counts: Mapping[str, int] | None = None,
     subagent_registry: SubagentRegistry | None = None,
+    skill_registry: SkillRegistry | None = None,
 ) -> LangGraphRuntimeConfig | None:
     """Convert a valid PTR delegation into the canonical subagent route."""
     metadata = continuation_state.facts.safe_metadata
@@ -125,6 +129,7 @@ def resolve_late_subagent_handoff(
     decision = resolve_subagent_handoff(
         metadata,
         registry=subagent_registry,
+        skill_registry=skill_registry,
         active_runs_by_agent_id=dict(active_subagent_run_counts or {}),
         handoff_entries=control.agent_handoff,
     )

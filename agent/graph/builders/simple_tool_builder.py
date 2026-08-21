@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from functools import partial
 import logging
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from langgraph.graph import END, StateGraph
 
@@ -56,6 +57,10 @@ from .post_action_wiring import (
     wire_direct_tool_action_path,
     wire_post_action_continuation,
 )
+
+if TYPE_CHECKING:
+    from agent.subagents.registry import SubagentRegistry
+    from core.skills.registry import SkillRegistry
 
 
 # Resolve the optional backend diagnostic logger once at import time and
@@ -116,7 +121,13 @@ def _route_after_prepare_tool_plan(interactive: InteractiveState) -> str:
     return "articulation" if should_articulate else "approval_gate"
 
 
-def build_simple_tool_graph(*, checkpointer=None, build_only: bool = False) -> Any:
+def build_simple_tool_graph(
+    *,
+    checkpointer=None,
+    build_only: bool = False,
+    subagent_registry: "SubagentRegistry | None" = None,
+    skill_registry: "SkillRegistry | None" = None,
+) -> Any:
     """Construct the simple tool execution graph with LLM-powered synthesis and recovery.
 
     Note: Artifact indexing is now handled as a fire-and-forget side effect within
@@ -204,10 +215,15 @@ def build_simple_tool_graph(*, checkpointer=None, build_only: bool = False) -> A
         dispatch_tool_execution_node_fn=dispatch_tool_execution_node,
         synthesize_tool_output_fn=synthesize_tool_output,
     )
+    reasoning_node = partial(
+        post_tool_reasoning,
+        subagent_registry=subagent_registry,
+        skill_registry=skill_registry,
+    )
     add_post_action_continuation_nodes(
         graph,
         on_wrap_log=_log_node_wrapper_context,
-        reasoning_node=post_tool_reasoning,
+        reasoning_node=reasoning_node,
         decision_router_node=decision_router,
         think_more_node_fn=think_more_node,
         reflect_node_fn=reflect_node,

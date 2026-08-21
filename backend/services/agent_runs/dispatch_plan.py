@@ -155,6 +155,7 @@ def routing_metadata_from_decision(
         "capabilities": list(decision.capabilities),
         "targets": list(decision.targets),
         "objective": decision.objective,
+        "requested_skill_ids": first.get("requested_skill_ids", []),
         "delegation_source": delegation_source,
         "delegation_decision_id": delegation_decision_id,
         "assignment_id": first.get("assignment_id"),
@@ -168,12 +169,14 @@ def stable_par_assignment_identity(
     delegation_decision_id: str,
     agent_id: str,
     objective: str,
+    requested_skill_ids: tuple[str, ...] = (),
 ) -> tuple[str, str]:
     """Return replay-stable assignment and run IDs for one PAR decision."""
     identity = {
         "delegation_decision_id": delegation_decision_id,
         "agent_id": agent_id,
         "objective": objective,
+        "requested_skill_ids": list(requested_skill_ids),
     }
     digest = hashlib.sha256(
         json.dumps(identity, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -196,6 +199,7 @@ def _handoff_metadata(
         "capabilities": list(handoff.capabilities),
         "targets": list(handoff.targets),
         "objective": handoff.objective,
+        "requested_skill_ids": list(handoff.requested_skill_ids),
         "delegation_source": delegation_source,
         "delegation_decision_id": delegation_decision_id,
     }
@@ -204,6 +208,7 @@ def _handoff_metadata(
             delegation_decision_id=delegation_decision_id,
             agent_id=handoff.agent_id,
             objective=handoff.objective,
+            requested_skill_ids=handoff.requested_skill_ids,
         )
         payload["assignment_id"] = assignment_id
         payload["agent_run_id"] = agent_run_id

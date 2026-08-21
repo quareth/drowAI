@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from functools import partial
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from langgraph.graph import END, StateGraph
 
@@ -33,6 +34,10 @@ from .diagnostics import (
     log_builder_graph_build,
     make_wrapper_log_callback,
 )
+
+if TYPE_CHECKING:
+    from agent.subagents.registry import SubagentRegistry
+    from core.skills.registry import SkillRegistry
 
 GRAPH_NAME = GRAPH_NAME_DEEP_REASONING
 
@@ -108,7 +113,12 @@ def _route_after_prepare_tool_plan(interactive: InteractiveState) -> str:
     return "approval_gate"
 
 
-def build_deep_reasoning_graph(*, checkpointer=None) -> StateGraph:
+def build_deep_reasoning_graph(
+    *,
+    checkpointer=None,
+    subagent_registry: "SubagentRegistry | None" = None,
+    skill_registry: "SkillRegistry | None" = None,
+) -> StateGraph:
     """Construct the deep reasoning graph with full DR loop.
     
     Graph Structure:
@@ -295,10 +305,15 @@ def build_deep_reasoning_graph(*, checkpointer=None) -> StateGraph:
         ),
     )
     # NEW: Unified post-tool reasoning replaces observation_articulation
+    reasoning_node = partial(
+        post_tool_reasoning,
+        subagent_registry=subagent_registry,
+        skill_registry=skill_registry,
+    )
     graph.add_node(
         "post_tool_reasoning",
         wrap_with_context_async(
-            post_tool_reasoning,
+            reasoning_node,
             node_name="post_tool_reasoning",
             on_wrap_log=_log_node_wrapper_context,
         ),
@@ -484,7 +499,12 @@ def _log_dr_graph_build(graph: StateGraph, checkpointer: object) -> None:
     )
 
 
-def compile_deep_reasoning_graph(*, checkpointer=None) -> object:
+def compile_deep_reasoning_graph(
+    *,
+    checkpointer=None,
+    subagent_registry: "SubagentRegistry | None" = None,
+    skill_registry: "SkillRegistry | None" = None,
+) -> object:
     """Build and compile the deep-reasoning graph with diagnostics.
 
     Active backend execution paths compile DR graphs with a per-task
@@ -492,7 +512,10 @@ def compile_deep_reasoning_graph(*, checkpointer=None) -> object:
     compile step here preserves graph-build diagnostic parity without
     scattering builder diagnostics across backend services.
     """
-    graph = build_deep_reasoning_graph()
+    graph = build_deep_reasoning_graph(
+        subagent_registry=subagent_registry,
+        skill_registry=skill_registry,
+    )
     actual_checkpointer = checkpointer or get_default_checkpointer()
     _log_dr_graph_build(graph, actual_checkpointer)
     return graph.compile(checkpointer=actual_checkpointer)

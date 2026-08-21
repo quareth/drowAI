@@ -62,6 +62,9 @@ from backend.services.llm_provider.types import (
     CredentialNotFoundError,
     ProviderConfigurationError,
 )
+from backend.services.metrics.utils import safe_inc
+from core.skills.errors import SkillRegistryError
+from core.skills.registry import SkillRegistry, get_skill_registry
 
 if TYPE_CHECKING:
     from agent.graph import InteractiveState
@@ -136,6 +139,7 @@ class CheckpointContinuationService:
         build_result: Callable[..., LangGraphChatResult],
         agent_run_registry: Optional[ProcessLocalAgentRunRegistry] = None,
         subagent_registry: SubagentRegistry | None = None,
+        skill_registry: SkillRegistry | None = None,
         agent_run_lifecycle_publisher: Optional[
             Callable[[int, dict[str, Any]], Awaitable[None]]
         ] = None,
@@ -170,6 +174,7 @@ class CheckpointContinuationService:
         self._build_result = build_result
         self._agent_run_registry = agent_run_registry
         self._subagent_registry = subagent_registry or get_subagent_registry()
+        self._skill_registry = skill_registry or get_skill_registry()
         self._agent_run_lifecycle_publisher = agent_run_lifecycle_publisher
         self._parent_handoff_continuation_broker = (
             parent_handoff_continuation_broker
@@ -955,14 +960,18 @@ class CheckpointContinuationService:
                         task_id,
                     )
                 logger.info("[HITL] Continuing graph=%s for task %s", graph_name, task_id)
-                execution_result = await self._executor.stream_graph(
-                    compiled,
-                    graph_input,
-                    config,
-                    task_id,
-                    state_container=state_container,
-                    should_cancel=executor_should_cancel,
-                )
+                try:
+                    execution_result = await self._executor.stream_graph(
+                        compiled,
+                        graph_input,
+                        config,
+                        task_id,
+                        state_container=state_container,
+                        should_cancel=executor_should_cancel,
+                    )
+                except SkillRegistryError:
+                    safe_inc("skill_resume_digest_mismatch")
+                    raise
                 return execution_result, llm_runtime_selection, attribution
             finally:
                 if runtime_dependency_cleanup is not None:
@@ -1113,9 +1122,17 @@ class CheckpointContinuationService:
         if E2E_DETERMINISTIC_MODE or graph_name == GRAPH_NAME_INTERRUPT_RESUME:
             return get_scenario_graph(GRAPH_NAME_INTERRUPT_RESUME, checkpointer)
         if graph_name == GRAPH_NAME_DEEP_REASONING:
-            return compile_deep_reasoning_graph(checkpointer=checkpointer)
+            return compile_deep_reasoning_graph(
+                checkpointer=checkpointer,
+                subagent_registry=self._subagent_registry,
+                skill_registry=self._skill_registry,
+            )
         if graph_name == GRAPH_NAME_PARENT_HANDOFF:
-            return build_parent_handoff_graph(checkpointer=checkpointer)
+            return build_parent_handoff_graph(
+                checkpointer=checkpointer,
+                subagent_registry=self._subagent_registry,
+                skill_registry=self._skill_registry,
+            )
         if is_subagent_graph_name(graph_name):
             definition_registry = self._subagent_registry
             if subagent_agent_id is None:
@@ -1127,8 +1144,16 @@ class CheckpointContinuationService:
                 definition = definitions[0]
             else:
                 definition = definition_registry.require(subagent_agent_id)
-            return build_subagent_graph(definition, checkpointer=checkpointer)
-        return build_simple_tool_graph(checkpointer=checkpointer)
+            return build_subagent_graph(
+                definition,
+                checkpointer=checkpointer,
+                skill_registry=self._skill_registry,
+            )
+        return build_simple_tool_graph(
+            checkpointer=checkpointer,
+            subagent_registry=self._subagent_registry,
+            skill_registry=self._skill_registry,
+        )
 
     async def _prepare_subagent_resume_context(
         self,

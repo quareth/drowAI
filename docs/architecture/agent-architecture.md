@@ -89,14 +89,15 @@ Not owned by the agent layer:
     thinking/reflection nodes, and finalizer; it does not introduce a separate
     handoff reasoner.
 - `agent/subagents`
-  - Owns static TOML definition loading, registry projections, generic
-    assignment/result contracts, and the definition-configured child graph.
-    The child graph runs one bounded model/tool session using the versioned
-    `subagent_runtime` prompt family, shared approval/dispatch/synthesis nodes,
-    canonical child working/phase memory, and a bounded `AgentResultProjection`
-    parent handoff. It does not carry Pathfinder/Scout-specific Python
-    orchestration, child PTR/router reasoning, or an extra child-only LLM
-    completion stage.
+  - Owns static TOML definition loading, registry and compatible-skill catalog
+    projections, generic assignment/result contracts, and the
+    definition-configured child graph. The child graph runs one bounded
+    model/tool session using the versioned `subagent_runtime` prompt family,
+    digest-pinned built-in skill references, shared
+    approval/dispatch/synthesis nodes, canonical child working/phase memory,
+    and a bounded `AgentResultProjection` parent handoff. It does not carry
+    agent-specific Python orchestration, child PTR/router reasoning, or an
+    extra child-only LLM completion stage.
 - `agent/tool_runtime`
   - Owns tool execution policy after a tool plan exists: lane classification,
     timeout planning, transport routing, batch execution,

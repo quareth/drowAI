@@ -350,7 +350,11 @@ class TestInterruptStateServiceGraphSelection:
 
                     mock_simple.assert_called_once()
                     mock_deep.assert_called_once()
-                    mock_parent.assert_called_once_with(checkpointer=mock_checkpointer)
+                    mock_parent.assert_called_once_with(
+                        checkpointer=mock_checkpointer,
+                        subagent_registry=service._subagent_registry,
+                        skill_registry=service._skill_registry,
+                    )
 
     @pytest.mark.asyncio
     async def test_uses_deep_reasoning_graph_when_specified(self):

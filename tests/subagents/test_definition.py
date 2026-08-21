@@ -45,14 +45,15 @@ def _write_definition(directory: Path, name: str, body: str = VALID_DEFINITION) 
 def test_loads_builtin_pathfinder_definition_from_package_data() -> None:
     definitions = load_subagent_definitions()
 
-    assert [definition.id for definition in definitions] == ["pathfinder"]
-    pathfinder = definitions[0]
+    pathfinder = next(
+        definition for definition in definitions if definition.id == "pathfinder"
+    )
     assert pathfinder.schema_version == 1
     assert pathfinder.display_name == "Pathfinder"
     assert pathfinder.kind == "recon"
     assert pathfinder.enabled is True
     assert pathfinder.max_active_runs_per_task == 1
-    assert pathfinder.max_iterations == 3
+    assert pathfinder.max_iterations == 9
     assert pathfinder.max_tool_calls_per_iteration == 3
     assert pathfinder.requires_resolved_target is True
     assert pathfinder.icon == "pathfinder"

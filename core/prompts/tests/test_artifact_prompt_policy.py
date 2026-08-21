@@ -64,7 +64,7 @@ def test_tool_planning_select_prompt_omits_artifact_policy_when_not_visible() ->
     assert "Artifact Tool Policy:" not in prompt
 
 
-def test_tool_parameters_prompt_includes_filesystem_runbook_for_read_file() -> None:
+def test_tool_parameters_prompt_does_not_inject_retired_guidance_for_read_file() -> None:
     builder = ToolPlanningPromptBuilder()
     prompt = builder.build_tool_parameters_prompt(
         selected_tools=["filesystem.read_file"],
@@ -73,28 +73,11 @@ def test_tool_parameters_prompt_includes_filesystem_runbook_for_read_file() -> N
         constraints={},
     )
 
-    assert "Tool Runbooks:" in prompt
-    assert "Runbook: artifact-evidence-reading" in prompt
-    assert "# Artifact Evidence Reading" in prompt
-    assert "## Parameter Safety Rules" in prompt
-    assert "## Workflow" in prompt
-    assert "## Artifact Playbooks" in prompt
-    assert "## Bad Calls" in prompt
-    assert "not to decide whether artifact reading should happen" in prompt
-    assert "Full-file reads are allowed only when metadata shows the file is small" in prompt
-    assert "confirm presence, confirm absence, or expose the next useful slice" in prompt
-    assert "a no-match result is valid evidence" in prompt
-    assert "Nmap XML or text" in prompt
-    assert "Gobuster or ffuf output" in prompt
-    assert "Hashcat output" in prompt
-    assert "Tcpdump text" in prompt
-    assert "Do not call filesystem.read_file with read_mode=\"full\"" in prompt
-    assert "If the compact observation already answers" not in prompt
-    assert "do not read an artifact" not in prompt
-    assert "After finding candidate lines" not in prompt
+    assert "Tool Runbooks:" not in prompt
+    assert "artifact-evidence-reading" not in prompt
 
 
-def test_tool_parameters_prompt_includes_filesystem_runbook_for_search_text() -> None:
+def test_tool_parameters_prompt_does_not_inject_retired_guidance_for_search() -> None:
     builder = ToolPlanningPromptBuilder()
     prompt = builder.build_tool_parameters_prompt(
         selected_tools=["filesystem.search_text"],
@@ -103,10 +86,8 @@ def test_tool_parameters_prompt_includes_filesystem_runbook_for_search_text() ->
         constraints={},
     )
 
-    assert "Tool Runbooks:" in prompt
-    assert "Runbook: artifact-evidence-reading" in prompt
-    assert "Prefer filesystem.search_text when there is a known literal" in prompt
-    assert "to test for" in prompt
+    assert "Tool Runbooks:" not in prompt
+    assert "artifact-evidence-reading" not in prompt
 
 
 def test_tool_parameters_prompt_omits_filesystem_runbook_for_other_tools() -> None:
@@ -123,7 +104,7 @@ def test_tool_parameters_prompt_omits_filesystem_runbook_for_other_tools() -> No
     assert "# Artifact Evidence Reading" not in prompt
 
 
-def test_tool_parameters_prompt_includes_metasploit_runbook_for_split_tools() -> None:
+def test_tool_parameters_prompt_does_not_inject_retired_metasploit_guidance() -> None:
     builder = ToolPlanningPromptBuilder()
 
     for tool_id in (
@@ -138,13 +119,8 @@ def test_tool_parameters_prompt_includes_metasploit_runbook_for_split_tools() ->
             constraints={},
         )
 
-        assert "Tool Runbooks:" in prompt
-        assert "Runbook: metasploit-exploitation" in prompt
-        assert "# Metasploit Exploitation" in prompt
-        assert "Metasploit is a module console" in prompt
-        assert "Removed broad tool id: `exploitation_tools.metasploit.msfconsole`" in prompt
-        assert "Version labels such as `Drupal 7`, `Drupal 8`" in prompt
-        assert "session creation is the primary success signal" in prompt
+        assert "Tool Runbooks:" not in prompt
+        assert "metasploit-exploitation" not in prompt
 
 
 def test_tool_planning_select_prompt_never_injects_filesystem_runbook() -> None:
@@ -173,7 +149,7 @@ def test_tool_planning_select_prompt_never_injects_filesystem_runbook() -> None:
     assert "# Artifact Evidence Reading" not in prompt
 
 
-def test_tool_planning_select_prompt_injects_web_runbook_for_web_category() -> None:
+def test_tool_planning_select_prompt_does_not_inject_retired_web_guidance() -> None:
     builder = ToolPlanningPromptBuilder()
     prompt = builder.build_select_tools_prompt(
         resolved_tools=[
@@ -204,14 +180,11 @@ def test_tool_planning_select_prompt_injects_web_runbook_for_web_category() -> N
         constraints={},
     )
 
-    assert "Tool Runbooks:" in prompt
-    assert "Runbook: web-discovery" in prompt
-    assert "Choose tools by the shape of the work" in prompt
-    assert "select `web_applications.web_crawlers.ffuf` rather than only `http_request`" in prompt
-    assert "The target must contain a path fuzz marker" not in prompt
+    assert "Tool Runbooks:" not in prompt
+    assert "web-discovery" not in prompt
 
 
-def test_tool_parameters_prompt_injects_web_parameter_section_for_web_tool() -> None:
+def test_tool_parameters_prompt_does_not_inject_retired_ffuf_guidance() -> None:
     builder = ToolPlanningPromptBuilder()
     prompt = builder.build_tool_parameters_prompt(
         selected_tools=["web_applications.web_crawlers.ffuf"],
@@ -220,10 +193,8 @@ def test_tool_parameters_prompt_injects_web_parameter_section_for_web_tool() -> 
         constraints={},
     )
 
-    assert "Tool Runbooks:" in prompt
-    assert "Runbook: ffuf-crawler" in prompt
-    assert "The `FUZZ` marker must be in the URL path" in prompt
-    assert "Choose tools by the shape of the work" not in prompt
+    assert "Tool Runbooks:" not in prompt
+    assert "ffuf-crawler" not in prompt
 
 
 def test_tool_parameters_prompt_renders_artifact_file_metadata() -> None:
@@ -251,7 +222,7 @@ def test_tool_parameters_prompt_renders_artifact_file_metadata() -> None:
     assert "Artifact File Metadata:" in prompt
     assert "path=artifacts/scan.xml; status=ready; size_bytes=128; line_count=7" in prompt
     assert "path=artifacts/missing.xml; status=unavailable; reason=file does not exist" in prompt
-    assert prompt.index("Tool Runbooks:") < prompt.index("Artifact File Metadata:")
+    assert "Tool Runbooks:" not in prompt
 
 
 def test_post_tool_user_prompt_adds_selective_cve_lookup_guidance_when_visible() -> None:

@@ -9,6 +9,7 @@
 import { Circle } from "lucide-react";
 
 import pathfinderIconUrl from "@/assets/pathfinder-icon.png";
+import webweaverIconUrl from "@/assets/webweaver-icon.png";
 import { cn } from "@/lib/utils";
 
 import { resolveAgentIconKey } from "../contracts/agent-run";
@@ -23,6 +24,7 @@ interface AgentIdentityIconProps {
 
 const IMAGE_ICON_SOURCES: Record<string, string> = {
   pathfinder: pathfinderIconUrl,
+  webweaver: webweaverIconUrl,
 };
 
 export function AgentIdentityIcon({

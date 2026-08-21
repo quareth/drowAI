@@ -61,6 +61,7 @@ def test_resolve_branch_routes_pathfinder_owned_direct_executor_by_default() -> 
                         "agent_handoff": "required",
                         "subagent": pathfinder_name,
                         "objective": "Scan ports and enumerate services on 10.0.0.10.",
+                        "skill_ids": [],
                     }
                 ],
             },
@@ -102,6 +103,7 @@ def test_resolve_branch_uses_handoff_instead_of_capability_vocabulary() -> None:
                         "agent_handoff": "required",
                         "subagent": "pathfinder",
                         "objective": "Scan ports on 10.0.0.10.",
+                        "skill_ids": [],
                     }
                 ],
             },
@@ -135,6 +137,7 @@ def test_resolve_branch_rejects_active_local_pathfinder_run() -> None:
                         "agent_handoff": "required",
                         "subagent": "pathfinder",
                         "objective": "Scan ports on 10.0.0.10.",
+                        "skill_ids": [],
                     }
                 ],
             },
@@ -177,6 +180,7 @@ def _late_handoff_state(*, action: str = "delegate_subagent") -> InteractiveStat
                         "agent_handoff": "required",
                         "subagent": "pathfinder",
                         "objective": "Scan ports on 10.0.0.10.",
+                        "skill_ids": [],
                     },
                 },
             },

@@ -8,6 +8,43 @@ The format is based on
 
 ## [Unreleased]
 
+### Added
+
+- Subagent handoffs now support bounded built-in skill packages with direct
+  agent compatibility, mandatory or parent-selected activation, and digest
+  verification across checkpoint resumes.
+- Webweaver can perform bounded web reconnaissance with native HTTP and FFUF
+  tools plus selectable WhatWeb and Katana guidance; task runtime images now
+  include Katana.
+- Kali task runtime images now include LDAP, SNMP, SSH-audit, SMTP, and TLS
+  service-enumeration utilities on ARM64 and AMD64.
+
+### Fixed
+
+- Subagents now receive an explicit finalization-only prompt when their tool
+  budget is exhausted, preventing unexecuted tool attempts from entering the
+  parent handoff.
+- Main agents and subagents now keep independently meaningful shell operations
+  in separate invocations while still allowing pipelines and supporting shell
+  stages.
+- Concurrent subagents now keep independent reasoning streams, preventing one
+  agent's section lifecycle from interrupting another agent in the same turn.
+- Declarative subagents now retain bounded per-call tool outcomes for later
+  reasoning and final handoff generation while omitting the redundant batch
+  result rendering.
+- Invalid parameters in one batched tool call no longer prevent unrelated
+  valid calls from running, and field-level correction guidance is retained.
+- Declarative subagents now preserve successful batch results, avoid equivalent
+  retries for connection or capability blockers, and distinguish directly
+  observed evidence from inferred or unconfirmed leads.
+- Declarative subagents now compile planner-facing tool parameters through the
+  canonical validation path before execution, including split-schema tools.
+
+### Removed
+
+- The legacy runbook prompt-injection framework and bundled runbook assets have
+  been retired in favor of the skill system and owning tool contracts.
+
 ### Security
 
 - Updated checkpoint storage and frontend build dependencies to versions that

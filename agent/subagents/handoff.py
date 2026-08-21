@@ -7,7 +7,16 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-_HANDOFF_FIELDS = frozenset({"agent_handoff", "subagent", "objective"})
+from core.skills.contracts import MAX_REQUESTED_SKILLS
+from core.skills.identifiers import (
+    MAX_SKILL_ID_CHARACTERS,
+    SKILL_ID_PATTERN,
+    normalize_skill_ids,
+)
+
+_HANDOFF_FIELDS = frozenset(
+    {"agent_handoff", "subagent", "objective", "skill_ids"}
+)
 
 
 class AgentHandoffEntry(BaseModel):
@@ -27,6 +36,11 @@ class AgentHandoffEntry(BaseModel):
         min_length=1,
         description="Bounded natural-language assignment brief for the subagent.",
     )
+    skill_ids: tuple[str, ...] = Field(
+        ...,
+        max_length=MAX_REQUESTED_SKILLS,
+        description="Eligible selectable built-in skill identifiers for this assignment.",
+    )
 
     model_config = ConfigDict(extra="forbid")
 
@@ -38,24 +52,54 @@ class AgentHandoffEntry(BaseModel):
             raise ValueError("must not be blank")
         return value
 
+    @field_validator("skill_ids", mode="before")
+    @classmethod
+    def _normalize_skill_ids(cls, value: Any) -> tuple[str, ...]:
+        """Normalize canonical optional identifiers with stable deduplication."""
 
-def normalize_agent_handoff_entry(value: Any) -> dict[str, str]:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+            raise ValueError("skill_ids must be an array")
+        if len(value) > MAX_REQUESTED_SKILLS:
+            raise ValueError(
+                f"skill_ids contains more than {MAX_REQUESTED_SKILLS} items"
+            )
+        try:
+            return normalize_skill_ids(value)
+        except ValueError as exc:
+            raise ValueError(
+                "skill_ids contains a non-canonical identifier"
+            ) from exc
+
+
+def normalize_agent_handoff_entry(value: Any) -> dict[str, Any]:
     """Normalize one handoff at graph and backend ingestion boundaries."""
     if not isinstance(value, Mapping):
         return {}
     marker = value.get("agent_handoff")
     subagent = value.get("subagent")
     objective = value.get("objective")
+    raw_skill_ids = value.get("skill_ids")
     if not isinstance(marker, str) or marker.strip().lower() != "required":
         return {}
     if not isinstance(subagent, str) or not subagent.strip():
         return {}
     if not isinstance(objective, str) or not objective.strip():
         return {}
+    if not isinstance(raw_skill_ids, Sequence) or isinstance(
+        raw_skill_ids, (str, bytes, bytearray)
+    ):
+        return {}
+    if len(raw_skill_ids) > MAX_REQUESTED_SKILLS:
+        return {}
+    try:
+        skill_ids = list(normalize_skill_ids(raw_skill_ids))
+    except ValueError:
+        return {}
     return {
         "agent_handoff": "required",
         "subagent": subagent.strip().lower(),
         "objective": objective.strip(),
+        "skill_ids": skill_ids,
     }
 
 
@@ -64,7 +108,7 @@ def normalize_agent_handoff_entries(
     *,
     max_handoffs: int | None = None,
     reject_invalid: bool = False,
-) -> tuple[dict[str, str], ...]:
+) -> tuple[dict[str, Any], ...]:
     """Filter an ordered handoff collection with stable first-occurrence dedupe."""
     if max_handoffs is not None and max_handoffs <= 0:
         return ()
@@ -79,8 +123,8 @@ def normalize_agent_handoff_entries(
             raise ValueError("invalid_handoff_plan")
         return ()
 
-    normalized: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
+    normalized: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, tuple[str, ...]]] = set()
     for candidate in candidates:
         if reject_invalid and (
             not isinstance(candidate, Mapping)
@@ -92,7 +136,11 @@ def normalize_agent_handoff_entries(
             if reject_invalid:
                 raise ValueError("invalid_handoff_plan")
             continue
-        identity = (entry["subagent"], entry["objective"])
+        identity = (
+            entry["subagent"],
+            entry["objective"],
+            tuple(entry["skill_ids"]),
+        )
         if identity in seen:
             continue
         seen.add(identity)
@@ -129,8 +177,17 @@ def agent_handoff_entry_json_schema(
                 "type": "string",
                 "minLength": 1,
             },
+            "skill_ids": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "pattern": SKILL_ID_PATTERN,
+                    "maxLength": MAX_SKILL_ID_CHARACTERS,
+                },
+                "maxItems": MAX_REQUESTED_SKILLS,
+            },
         },
-        "required": ["agent_handoff", "subagent", "objective"],
+        "required": ["agent_handoff", "subagent", "objective", "skill_ids"],
         "additionalProperties": False,
     }
 

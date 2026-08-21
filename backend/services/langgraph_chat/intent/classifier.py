@@ -44,6 +44,7 @@ from agent.providers.llm.core.identity import (
 )
 from agent.providers.llm.profiles.registry import resolve_context_window_tokens
 from agent.subagents.registry import SubagentRegistry, get_subagent_registry
+from agent.subagents.skill_catalog import project_subagent_skill_catalogs
 from backend.services.agent_runs.ownership_policy import (
     MAX_AGENT_HANDOFFS,
     normalize_agent_handoff_entries,
@@ -69,8 +70,10 @@ from backend.services.langgraph_chat.model_role_registry import (
     ROLE_INTENT_CLASSIFIER,
     RoleCallSettings,
 )
-from backend.services.metrics.utils import safe_inc
+from backend.services.metrics.utils import safe_gauge, safe_inc
 from backend.services.llm_provider.types import LLMProviderServiceError
+from core.skills.contracts import SubagentSkillCatalog
+from core.skills.registry import SkillRegistry, get_skill_registry
 
 if TYPE_CHECKING:
     from backend.services.usage_tracking.models import UsageData
@@ -247,7 +250,7 @@ def _build_request_contract(parsed: Dict[str, Any], message: str) -> Dict[str, s
     return contract
 
 
-def _normalize_agent_handoffs(parsed: Dict[str, Any]) -> List[Dict[str, str]]:
+def _normalize_agent_handoffs(parsed: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Normalize ordered required subagent requests from classifier output."""
     return list(
         normalize_agent_handoff_entries(
@@ -697,9 +700,17 @@ def build_intent_classifier_request(
     temperature: float,
     max_tokens: int,
     subagent_registry: SubagentRegistry | None = None,
+    skill_registry: SkillRegistry | None = None,
+    skill_catalogs: tuple[SubagentSkillCatalog, ...] | None = None,
 ) -> IntentClassifierRequest:
     """Build the exact side-effect-free request consumed by the classifier."""
     registry = subagent_registry or get_subagent_registry()
+    skills = skill_registry or get_skill_registry()
+    resolved_skill_catalogs = (
+        project_subagent_skill_catalogs(registry.definitions(), skills)
+        if skill_catalogs is None
+        else skill_catalogs
+    )
     hints = _collect_hints(metadata)
     history_text = _resolve_history_text(metadata)
     llm_facing_routes = [
@@ -709,6 +720,7 @@ def build_intent_classifier_request(
         call_settings=call_settings,
         system_prompt=build_classifier_system_prompt(
             subagent_catalog=registry.classifier_catalog(),
+            skill_catalogs=resolved_skill_catalogs,
         ),
         user_prompt=build_classifier_user_prompt(
             history=history_text,
@@ -775,6 +787,7 @@ class IntentClassifier:
         client_factory: Optional[Callable[[RoleCallSettings], LLMClient]] = None,
         model_role_registry: Optional[ModelRoleRegistry] = None,
         subagent_registry: SubagentRegistry | None = None,
+        skill_registry: SkillRegistry | None = None,
     ) -> None:
         self._temperature = temperature
         self._max_tokens = (
@@ -784,6 +797,7 @@ class IntentClassifier:
         self._client_factory = client_factory
         self._model_role_registry = model_role_registry or ModelRoleRegistry()
         self._subagent_registry = subagent_registry or get_subagent_registry()
+        self._skill_registry = skill_registry or get_skill_registry()
 
     def resolve_call_settings(
         self,
@@ -823,6 +837,17 @@ class IntentClassifier:
             runtime_config.chat_inputs.task_id,
             runtime_config.metadata.get("environment_info"),
         )
+        skill_catalogs = project_subagent_skill_catalogs(
+            self._subagent_registry.definitions(),
+            self._skill_registry,
+        )
+        safe_gauge(
+            "skill_catalog_entries",
+            sum(
+                len(catalog.mandatory_skills) + len(catalog.selectable_skills)
+                for catalog in skill_catalogs
+            ),
+        )
         return build_intent_classifier_request(
             metadata=runtime_config.metadata,
             call_settings=call_settings,
@@ -833,6 +858,8 @@ class IntentClassifier:
                 self._max_tokens,
             ),
             subagent_registry=self._subagent_registry,
+            skill_registry=self._skill_registry,
+            skill_catalogs=skill_catalogs,
         )
 
     async def enrich_runtime_config(

@@ -111,8 +111,17 @@ def classify_failure_category(stderr: str, exit_code: Optional[int]) -> str:
     if "not found" in lowered_stderr or "command not found" in lowered_stderr:
         return "tool_unavailable"
     
-    # Invalid parameter errors
-    if "invalid" in lowered_stderr or "error" in lowered_stderr or "failed" in lowered_stderr:
+    # Invalid parameter errors must be explicit; generic runtime failures
+    # remain unknown.
+    if any(
+        marker in lowered_stderr
+        for marker in (
+            "invalid",
+            "validation",
+            "unknown option",
+            "unrecognized option",
+        )
+    ):
         return "invalid_params"
     
     # Empty output (no stderr but also no stdout)

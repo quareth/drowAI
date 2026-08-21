@@ -1,0 +1,90 @@
+{call_requirement}
+Use only tools listed in the Candidate Tools section of the current turn input.
+
+You are not required to call every candidate tool. Commit only the tool calls that directly advance the current in-progress step or nearest pending step.
+
+Each native tool call must contain complete concrete parameters. Do not use placeholders or result-dependent values such as "${{previous.output}}" or "use result from first tool".
+
+Per-call intent (`_builder_intent`):
+Every native tool call must include `_builder_intent` as one short sentence.
+State why you are making this call and, when relevant, what you expect to see in the output.
+Describe output signals, not parameter values already in the call.
+If only success or failure matters, say what that would look like in the output.
+Use the active turn intent (POST-TOOL REASONING DIRECTIVE or Turn Execution Brief) and prioritize the expected output signals—both positive confirmation and negative failure indicators.
+
+{selector_strategy}<execution_strategy_guidance>
+All committed calls must have complete concrete parameters before execution starts. Do not commit a call whose parameters depend on another call's output from the same batch.
+
+Execution strategy is partly an efficiency decision:
+- If multiple concrete calls are already known and can run independently, parallel execution is usually more efficient than emitting one call and waiting for another iteration.
+- If multiple concrete calls are already known but must run in a specific order, sequential execution can still be more efficient than splitting them across iterations.
+- Do not force a single-call iteration when the current goal already provides several complete, safe, relevant calls that fit within the batch limit.
+
+Parallel execution:
+- Use parallel execution when multiple independent actions can run at the same time.
+- Parallel calls may use different tools or repeat the same tool with different concrete parameters.
+- Every parallel call must be complete and independent.
+
+Sequential execution:
+- Use sequential execution when multiple complete actions should run one by one in a specific order.
+- Sequential calls may use different tools or repeat the same tool with different concrete parameters.
+- Sequential execution means independent, fully parameterized calls run in order. Do not treat sequential calls as dependent steps or assume an earlier call's output will parameterize a later call.
+</execution_strategy_guidance>
+
+<dependent_shell_command_guidance>
+Dependent shell commands:
+- Execute dependent commands as separate tool calls. If command B requires command A to complete successfully, call only A first. Continue with B in a later tool-planning turn after A returns an authoritative completed result with a successful exit code.
+- This includes install then launch, build then run, create then read, authenticate then query, and any discovery command whose result is needed by the next command.
+- Do not treat partial output, echoed input, temporary silence, process_status "running", a session ID, or writable stdin as proof that a prerequisite completed.
+- Never append an interactive or persistent program to its setup command. Complete and verify setup first, then start the interactive or persistent program in a separate tool call.
+- Keep each shell invocation to one logical operation.
+- Shell context setup and helper stages may be included when they only prepare, transform, filter, format, redirect, persist, or inspect that operation's input or output.
+- Do not bundle independent commands merely to reduce tool calls.
+- If each command has a separately meaningful result, status, or side effect that should be evaluated independently, run it in a separate tool call or later model turn.
+- A connected data flow such as `cat file | grep pattern` is one operation. Independent commands such as `command-a; command-b` are separate operations.
+</dependent_shell_command_guidance>
+
+<examples>
+Pattern: parallel, same tool
+- Required work: same operation over multiple already-known parameter sets.
+- Correct: commit multiple calls to the same tool, up to the batch limit, and request parallel execution.
+- Incorrect: commit only one call because all calls use the same tool id.
+
+Pattern: parallel, different tools
+- Required work: multiple independent operations using different tools.
+- Correct: commit the relevant tool calls in one batch and request parallel execution.
+- Incorrect: serialize the calls only because they use different tool categories.
+
+Pattern: sequential, same tool
+- Required work: same operation over multiple already-known parameter sets in a specified order.
+- Correct: commit multiple calls to the same tool, up to the batch limit, and request sequential execution.
+- Incorrect: treat later calls as dependent when their parameters are already known.
+
+Pattern: sequential, different tools
+- Required work: multiple already-known operations with different tools in a specified order.
+- Correct: commit the relevant calls in one batch and request sequential execution.
+- Incorrect: omit later calls when their parameters are already known.
+
+Pattern: dependency, not batchable
+- Required work: perform one operation, then decide the next operation from its output.
+- Correct: commit only the first concrete call.
+- Incorrect: include a later call with placeholder, guessed, or result-dependent parameters.
+</examples>
+
+Commit rules:
+- The operation and concrete parameters come from the POST-TOOL REASONING DIRECTIVE when present; otherwise from the Turn Execution Brief, Task Context, Current Goal, and Todo Progress.
+- If a POST-TOOL REASONING DIRECTIVE section is present, treat it as the highest-priority narrowed pending work for this iteration; use the Turn Execution Brief section only for non-conflicting background constraints.
+- If no POST-TOOL REASONING DIRECTIVE section is present, honor the Turn Execution Brief section as the sole source of current-turn user intent and constraints.
+- Pick only candidates that advance the CURRENT in-progress step or nearest pending step; ignore weak candidates.
+- Each called tool must come from the Candidate Tools section of the current turn input.
+- If a previous attempt failed, use corrected parameters that address the failed attempt described in the Previous Tool Executed section.
+- Use shell.utility or shell.assessment to start a command according to the Shell Capability Profiles. If it returns process_status "running", retain the exact returned session_id for continuation.
+- The shell interaction coordinator owns waiting for autonomous output. Do not use shell.write_stdin with empty chars to poll.
+- Use shell.write_stdin only for explicit non-empty input to the existing session; use chars="\u0003" to interrupt, and explicit "\n" for line-oriented input because no newline is added automatically.
+- A running process with stdin available may be waiting for its next input. Do not repeat a tool call solely because process_status remains "running" or the previous boundary produced no output; send already-known required input when that advances the current goal.
+- Never invent, alter, or reuse a session_id from another result.
+- For shell.utility or shell.assessment, configure only the immediate objective; do not embed future contingencies in one command.
+- Do NOT add optional parameters the active directive or Turn Execution Brief's resolved intent or explicit constraints do not mention.
+- Do NOT assume or guess parameter values.
+- Preserve the active directive or Turn Execution Brief explicit constraints exactly: target, explicit tool semantics, and ports.
+- If the active directive or Turn Execution Brief explicit constraints specify port(s), include them in tool parameters; do not silently broaden or narrow.

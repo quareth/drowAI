@@ -17,6 +17,9 @@ from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Callable
 
 if TYPE_CHECKING:
+    from agent.subagents.registry import SubagentRegistry
+    from core.skills.registry import SkillRegistry
+
     from ..checkpoint.checkpointer_service import CheckpointerService
     from ..contracts import LangGraphChatResult, LangGraphRuntimeConfig
     from backend.services.langgraph_chat.execution.graph_executor import LangGraphExecutor
@@ -31,6 +34,9 @@ class BaseLangGraphHandler(ABC):
         checkpointer_service: "CheckpointerService",
         executor: "LangGraphExecutor",
         streaming_adapter: "LangGraphStreamingAdapter",
+        *,
+        subagent_registry: "SubagentRegistry | None" = None,
+        skill_registry: "SkillRegistry | None" = None,
     ) -> None:
         """Initialize handler with shared services.
         
@@ -42,6 +48,8 @@ class BaseLangGraphHandler(ABC):
         self._checkpointer = checkpointer_service
         self._executor = executor
         self._adapter = streaming_adapter
+        self._subagent_registry = subagent_registry
+        self._skill_registry = skill_registry
 
     @abstractmethod
     async def handle(

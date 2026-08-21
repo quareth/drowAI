@@ -1,9 +1,14 @@
 # syntax=docker/dockerfile:1.7
 # DrowAI Kali base image: shared OS/tooling layer for architecture-specific runtime images.
 
+ARG KATANA_IMAGE=projectdiscovery/katana:v1.7.0@sha256:4e9fce12c507e1ca455baf493e14b899db5f2e0ed22ba62591aa42300487a947
+FROM ${KATANA_IMAGE} AS katana
+
 FROM kalilinux/kali-rolling:latest
 
 ENV DEBIAN_FRONTEND=noninteractive
+
+COPY --from=katana /usr/local/bin/katana /usr/local/bin/katana
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -25,11 +30,13 @@ RUN apt-get update \
         iputils-ping \
         iputils-tracepath \
         jq \
+        ldap-utils \
         less \
         lftp \
         mariadb-client \
         masscan \
         mtr-tiny \
+        musl \
         net-tools \
         netcat-traditional \
         ncat \
@@ -48,9 +55,13 @@ RUN apt-get update \
         rsync \
         sqlite3 \
         smbclient \
+        snmp \
         socat \
+        ssh-audit \
         sshpass \
+        sslscan \
         sqlmap \
+        swaks \
         tcpdump \
         telnet \
         tftp-hpa \
@@ -88,14 +99,17 @@ RUN nuclei -update-templates -no-color \
 
 RUN setcap -r /usr/lib/nmap/nmap 2>/dev/null || true
 
-RUN python3 --version \
-    && pip3 --version \
-    && nmap --version >/dev/null \
-    && openvpn --version >/dev/null \
-    && flock --version >/dev/null \
-    && for binary in \
-        amass dnsrecon enum4linux-ng hydra nuclei whatweb \
+RUN set -eu; \
+    python3 --version; \
+    pip3 --version; \
+    nmap --version >/dev/null; \
+    katana -version >/dev/null 2>&1; \
+    openvpn --version >/dev/null; \
+    flock --version >/dev/null; \
+    for binary in \
+        amass dnsrecon enum4linux-ng hydra katana nuclei whatweb \
         fping nmap ftp lftp tftp ssh scp sftp sshpass rsync telnet smbclient rpcclient smbget \
         nc netcat ncat socat mtr tracepath showmount rpcinfo mount.cifs tcpdump tshark \
-        file jq less zip unzip 7z php mysql psql sqlite3 redis-cli isql tsql; \
+        file jq less zip unzip 7z php mysql psql sqlite3 redis-cli isql tsql \
+        ldapsearch snmpwalk snmpcheck ssh-audit sslscan swaks; \
         do command -v "$binary" >/dev/null; done

@@ -810,6 +810,7 @@ async def test_delegate_subagent_control_launches_followup_and_continues_loop() 
                             "objective": (
                                 "Check the unresolved HTTPS service evidence."
                             ),
+                            "skill_ids": ["network-reconnaissance"],
                         },
                     }
                 },

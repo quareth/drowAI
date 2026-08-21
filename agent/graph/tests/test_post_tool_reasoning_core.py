@@ -325,6 +325,7 @@ class TestParseReasoningResponse:
                     "agent_handoff": "required",
                     "subagent": "pathfinder",
                     "objective": "Enumerate services on the approved target.",
+                    "skill_ids": [],
                 }
             response = json.dumps(decision_payload)
             output = _parse_reasoning_response(response)

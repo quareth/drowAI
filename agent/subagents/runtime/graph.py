@@ -54,6 +54,7 @@ from agent.subagents.runtime.state import (
     apply_subagent_state_to_interactive,
     subagent_state_from_graph_state,
 )
+from core.skills.registry import SkillRegistry, get_skill_registry
 
 
 def initialize_subagent_state(
@@ -62,12 +63,14 @@ def initialize_subagent_state(
     config: Mapping[str, Any] | None = None,
     *,
     context: GraphRuntimeContext | None = None,
+    skill_registry: SkillRegistry | None = None,
 ) -> dict[str, Any]:
     """Validate and normalize a definition-configured child graph state."""
 
     _ = context
     interactive = InteractiveState.from_mapping(state)
     subagent = subagent_state_from_graph_state(interactive, definition=definition)
+    (skill_registry or get_skill_registry()).materialize(subagent.resolved_skills)
     _validate_config_thread(config, subagent.graph_thread_id)
 
     profile = (
@@ -82,6 +85,7 @@ def initialize_subagent_state(
         assignment=subagent.assignment,
         graph_thread_id=subagent.graph_thread_id,
         tool_profile=profile,
+        resolved_skills=subagent.resolved_skills,
     )
     updated = apply_subagent_state_to_interactive(
         interactive,
@@ -112,18 +116,34 @@ def _route_after_model(interactive: InteractiveState) -> str:
     raise ValueError("Subagent model turn did not write a valid route")
 
 
-def build_subagent_state_graph(definition: SubagentDefinition) -> StateGraph:
+def build_subagent_state_graph(
+    definition: SubagentDefinition,
+    *,
+    skill_registry: SkillRegistry | None = None,
+) -> StateGraph:
     """Build the single uncompiled topology for one subagent definition."""
 
     graph = StateGraph(dict)
 
     graph.add_node(
         "initialize",
-        wrap_with_context(partial(initialize_subagent_state, definition)),
+        wrap_with_context(
+            partial(
+                initialize_subagent_state,
+                definition,
+                skill_registry=skill_registry,
+            )
+        ),
     )
     graph.add_node(
         "model",
-        wrap_with_context_async(partial(run_subagent_model_turn, definition)),
+        wrap_with_context_async(
+            partial(
+                run_subagent_model_turn,
+                definition,
+                skill_registry=skill_registry,
+            )
+        ),
     )
     graph.add_node(
         "approval_gate",
@@ -188,10 +208,14 @@ def build_subagent_graph(
     definition: SubagentDefinition,
     *,
     checkpointer: Any,
+    skill_registry: SkillRegistry | None = None,
 ) -> Any:
     """Compile the canonical topology with an explicit task checkpointer."""
 
-    return build_subagent_state_graph(definition).compile(checkpointer=checkpointer)
+    return build_subagent_state_graph(
+        definition,
+        skill_registry=skill_registry,
+    ).compile(checkpointer=checkpointer)
 
 
 def _validate_config_thread(

@@ -179,7 +179,7 @@ Selection prompt inputs:
 - referenced prior turns
 - relevant findings
 - capability surface
-- scoped runbooks
+- tool-owned planner guidance and catalog descriptions
 - policy text for special visible tools such as CVE lookup
 
 Parameter prompt inputs:
@@ -194,7 +194,18 @@ Parameter prompt inputs:
 - previous tool and compact previous-output summary
 - working memory and referenced prior turns
 - bounded artifact file metadata for filesystem planning
-- scoped tool runbooks
+
+General tool planning does not load operational runbooks. Tool selection and
+parameter semantics belong to the visible catalog, planner-facing schemas,
+validators, and focused prompt policy owned by the relevant tool surface.
+
+Subagent prompts have a separate built-in skill layer under `core/skills/`.
+Skills provide bounded operational knowledge only: compatibility comes from
+explicit agent IDs in package metadata, selected packages resolve once into
+body-free checkpoint references, and their bodies are materialized into the
+subagent system prompt. Startup separately verifies that every enabled
+subagent's declared native tools remain model-visible. Skills never add tools,
+scope, permissions, approvals, or runtime authority.
 
 Prompt builders consume already-projected context. `request_context.py` requires
 the hot-path `ConversationContextBundle`, projects it with `project_for_planner`,
@@ -716,9 +727,9 @@ Hidden tools with partial completion work already present:
 | --- | --- | --- |
 | `password_attacks.online_attacks.hydra` | Hidden from catalog; has parser and semantic observations. | Decide visibility policy, ensure planner schema/guidance is safe, add visible-catalog coverage tests before exposing, and verify supported credential facts compile through the canonical fact pipeline. |
 | `web_applications.web_application_fuzzers.ffuf` | Hidden; has parser, postprocess hook, semantic observations/evidence, and capture contract. | Decide visibility policy and verify its emitted fact families are supported by Knowledge and compact projection. |
-| `web_applications.web_crawlers.gobuster` | Hidden; has parser-owned metadata and emits canonical web-path observations from parsed Gobuster findings. | Decide visibility policy, confirm crawler scope/runbook guardrails, add visible-catalog coverage tests before exposing, and verify supported web-path facts compile through the canonical fact pipeline. |
-| `web_applications.web_vulnerability_scanners.nuclei` | Hidden; has JSONL capture, parser, semantic observations/evidence. | Decide visibility/runbook policy and verify supported finding facts compile through the canonical fact pipeline. |
-| `web_applications.web_vulnerability_scanners.sqlmap` | Hidden; has text-native parsing, semantic metadata fields, and confirmed SQL injection semantic observations. | Decide visibility/runbook policy, confirm planner schema/guidance is safe for injection testing, add visible-catalog coverage tests before exposing, and verify supported finding facts compile through the canonical fact pipeline. |
+| `web_applications.web_crawlers.gobuster` | Hidden; has parser-owned metadata and emits canonical web-path observations from parsed Gobuster findings. | Decide visibility policy, confirm crawler scope and planner guardrails, add visible-catalog coverage tests before exposing, and verify supported web-path facts compile through the canonical fact pipeline. |
+| `web_applications.web_vulnerability_scanners.nuclei` | Hidden; has JSONL capture, parser, semantic observations/evidence. | Decide visibility and planner policy, then verify supported finding facts compile through the canonical fact pipeline. |
+| `web_applications.web_vulnerability_scanners.sqlmap` | Hidden; has text-native parsing, semantic metadata fields, and confirmed SQL injection semantic observations. | Decide visibility policy, confirm planner schema and guidance are safe for injection testing, add visible-catalog coverage tests before exposing, and verify supported finding facts compile through the canonical fact pipeline. |
 | `information_gathering.network_discovery.masscan` | Hidden; has structured JSON capture, parser, and semantic observations. | Decide whether broad/high-speed scan behavior should be planner-visible and verify supported asset/service facts compile through the canonical fact pipeline. |
 
 ## How To Finish Another Tool

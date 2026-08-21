@@ -149,7 +149,7 @@ def _write_router_candidate_decision(
     }
     if normalized_action == "delegate_subagent" and agent_handoff is not None:
         if hasattr(agent_handoff, "model_dump"):
-            candidate_payload["agent_handoff"] = agent_handoff.model_dump()
+            candidate_payload["agent_handoff"] = agent_handoff.model_dump(mode="json")
         elif isinstance(agent_handoff, Mapping):
             candidate_payload["agent_handoff"] = dict(agent_handoff)
     if irrelevant_active_run_ids:

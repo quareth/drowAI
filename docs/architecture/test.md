@@ -58,7 +58,7 @@ surface:
 | `backend/tests/` | Authentication, tenancy, task lifecycle, persistence, services, routers, streaming, runtime-provider, and reporting behavior |
 | `agent/**/tests/` | LangGraph graphs, prompts, tool policy, memory, and agent runtime behavior |
 | `client/src/**/__tests__/` | React components, stores, hooks, API/session handling, and stream ingestion |
-| `core/**/tests/` | Shared prompt, LLM, runbook, and cross-layer contracts |
+| `core/**/tests/` | Shared prompt, LLM, skill, and cross-layer contracts |
 | `tests/` | Cross-system and compatibility coverage for context, tools, scripts, runtime images, E2E contracts, and runner/runtime protocols |
 | `kali_executor/tests/` | In-runtime command execution behavior |
 | `e2e/fixtures/` | Typed browser fixtures plus fixture, isolation, prerequisite, and artifact-security contracts |

@@ -17,6 +17,8 @@ from agent.subagents.definition import (
 )
 from agent.subagents.handoff import normalize_agent_handoff_entries
 from agent.subagents.registry import SubagentRegistry, get_subagent_registry
+from core.skills.registry import SkillRegistry
+from core.skills.resolver import resolve_skills
 
 from .contracts import AgentCapability
 
@@ -48,6 +50,7 @@ class SubagentPlanHandoff:
     capabilities: tuple[AgentCapability, ...]
     targets: tuple[str, ...]
     objective: str
+    requested_skill_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,6 +72,7 @@ def resolve_subagent_handoff(
     metadata: Mapping[str, Any],
     *,
     registry: SubagentRegistry | None = None,
+    skill_registry: SkillRegistry | None = None,
     active_runs_by_agent_id: Mapping[str, int] | None = None,
     handoff_entries: Any = None,
     require_direct_executor: bool = True,
@@ -91,10 +95,26 @@ def resolve_subagent_handoff(
     resolved_registry = registry or get_subagent_registry()
     targets = _assignment_targets(metadata)
     plan: list[SubagentPlanHandoff] = []
-    for agent_id, objective in requested_handoffs:
+    for agent_id, objective, requested_skill_ids in requested_handoffs:
         spec = resolved_registry.get(agent_id)
         if spec is None:
             return SubagentRoutingDecision(False, "unsupported_agent_handoff")
+
+        if skill_registry is not None:
+            skill_resolution = resolve_skills(
+                skill_registry.skills(),
+                spec.id,
+                requested_skill_ids,
+            )
+            if skill_resolution.rejected_requests:
+                return SubagentRoutingDecision(
+                    False,
+                    f"skill_request_{skill_resolution.rejected_requests[0].code}",
+                    agent_id=spec.id,
+                    agent_kind=spec.kind,
+                    dispatch_branch=SUBAGENT_DISPATCH_BRANCH,
+                    objective=objective,
+                )
 
         active_count = int((active_runs_by_agent_id or {}).get(agent_id, 0))
         if not resolved_registry.is_available(
@@ -132,6 +152,7 @@ def resolve_subagent_handoff(
                 capabilities=tuple(capabilities),
                 targets=targets,
                 objective=objective,
+                requested_skill_ids=requested_skill_ids,
             )
         )
 
@@ -153,7 +174,7 @@ def _required_agent_handoffs(
     metadata: Mapping[str, Any],
     *,
     handoff_entries: Any = None,
-) -> tuple[tuple[tuple[str, str], ...], str | None]:
+) -> tuple[tuple[tuple[str, str, tuple[str, ...]], ...], str | None]:
     """Return ordered, normalized required handoffs from shared input."""
     raw_handoffs = handoff_entries
     if raw_handoffs is None:
@@ -173,7 +194,14 @@ def _required_agent_handoffs(
     except ValueError:
         return (), "invalid_handoff_plan"
     return (
-        tuple((entry["subagent"], entry["objective"]) for entry in normalized),
+        tuple(
+            (
+                entry["subagent"],
+                entry["objective"],
+                tuple(entry["skill_ids"]),
+            )
+            for entry in normalized
+        ),
         None,
     )
 

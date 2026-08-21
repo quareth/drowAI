@@ -376,6 +376,7 @@ async def test_handoff_batch_delegate_emits_one_shared_handoff_entry() -> None:
                 "agent_handoff": "required",
                 "subagent": "pathfinder",
                 "objective": "Enumerate HTTP service on the approved target.",
+                "skill_ids": ["network-reconnaissance"],
             },
         },
         observation_chunks=[],
@@ -393,6 +394,7 @@ async def test_handoff_batch_delegate_emits_one_shared_handoff_entry() -> None:
         "agent_handoff": "required",
         "subagent": "pathfinder",
         "objective": "Enumerate HTTP service on the approved target.",
+        "skill_ids": ["network-reconnaissance"],
     }
 
 

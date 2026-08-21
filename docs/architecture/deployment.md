@@ -130,8 +130,9 @@ a product fallback in standalone or distributed deployments.
 
 Subagent ownership routing and its card/drawer UI are active by default. There
 is no backend delegation flag or frontend build-time UI gate. The deterministic
-ownership policy delegates eligible bounded Pathfinder recon turns and leaves
-non-recon or mixed-scope turns on their existing branches.
+ownership policy delegates only eligible bounded handoffs to enabled
+declarative subagents and leaves unsupported or mixed-scope turns on their
+existing branches.
 
 The current architecture has these operator constraints:
 

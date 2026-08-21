@@ -204,7 +204,7 @@ def test_pathfinder_definition_matches_current_runtime_limits() -> None:
         definition.max_tool_calls_per_iteration
         == AgentConfig().max_committed_tools_per_batch
     )
-    assert definition.max_iterations == 3
+    assert definition.max_iterations == 9
 
 
 def test_pathfinder_definition_owns_runtime_prompt_sections() -> None:

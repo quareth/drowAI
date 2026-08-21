@@ -151,6 +151,16 @@ class PromptRegistry:
             filename="user.txt",
         )
         self.register_template_id(
+            "subagent_runtime_tool_guidance",
+            family="subagent_runtime",
+            filename="tool_guidance.txt",
+        )
+        self.register_template_id(
+            "subagent_runtime_budget_finalization",
+            family="subagent_runtime",
+            filename="budget_finalization.txt",
+        )
+        self.register_template_id(
             "shell_capability_profile_utility",
             family="shell_capability_profiles",
             filename="utility.txt",

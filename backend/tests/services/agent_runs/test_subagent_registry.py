@@ -10,10 +10,10 @@ from agent.subagents.registry import SubagentRegistry, get_subagent_registry
 from core.prompts.builders.intent_classifier import build_classifier_system_prompt
 
 
-def test_default_registry_exposes_pathfinder_as_the_only_available_subagent() -> None:
+def test_default_registry_exposes_declarative_available_subagents() -> None:
     registry = get_subagent_registry()
 
-    assert registry.ids() == ("pathfinder",)
+    assert {"pathfinder", "webweaver"} <= set(registry.ids())
     pathfinder = registry.require("pathfinder")
     assert pathfinder.id == "pathfinder"
     assert pathfinder.kind == "recon"
@@ -29,8 +29,10 @@ def test_default_registry_exposes_pathfinder_as_the_only_available_subagent() ->
 def test_classifier_catalog_is_derived_from_available_registry_specs() -> None:
     registry = get_subagent_registry()
 
-    assert registry.classifier_catalog() == (
-        {
+    catalog_by_id = {
+        entry["agent_id"]: entry for entry in registry.classifier_catalog()
+    }
+    assert catalog_by_id["pathfinder"] == {
             "name": "pathfinder",
             "agent_id": "pathfinder",
             "display_name": "Pathfinder",
@@ -58,8 +60,37 @@ def test_classifier_catalog_is_derived_from_available_registry_specs() -> None:
             ),
             "max_active_runs_per_task": 1,
             "requires_resolved_target": True,
-        },
-    )
+        }
+    assert catalog_by_id["webweaver"] == {
+        "name": "webweaver",
+        "agent_id": "webweaver",
+        "display_name": "Webweaver",
+        "purpose": (
+            "Perform bounded web reconnaissance and return concise evidence "
+            "to the parent agent."
+        ),
+        "ownership_boundary": (
+            "Own HTTP probing, web fingerprinting, endpoint crawling, and content "
+            "discovery only; do not exploit, authenticate without supplied "
+            "authorization, modify targets, or produce the user's final answer."
+        ),
+        "supported_task_categories": (
+            "web_reconnaissance",
+            "web_fingerprinting",
+            "endpoint_crawling",
+            "content_discovery",
+        ),
+        "excluded_task_categories": (
+            "exploitation",
+            "credential_attacks",
+            "payload_delivery",
+            "privilege_escalation",
+            "destructive_testing",
+            "reporting",
+        ),
+        "max_active_runs_per_task": 1,
+        "requires_resolved_target": True,
+    }
 
 
 def test_registry_rejects_duplicate_names() -> None:

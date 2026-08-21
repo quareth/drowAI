@@ -8,7 +8,7 @@ import json
 import re
 from dataclasses import replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import pytest
 
@@ -67,6 +67,8 @@ from agent.tool_runtime.batch.types import (
 from agent.tools.tool_call_specs import make_function_name_for_tool
 from core.prompts.builders.post_tool.evidence import register_runtime_compact_evidence
 from core.prompts.builders.subagent_runtime import SubagentRuntimePromptBuilder
+from core.skills.contracts import LoadedSkill, SkillActivationPolicy, SkillMetadata
+from core.skills.registry import SkillRegistry
 from runtime_shared.shell_capabilities import (
     SHELL_ASSESSMENT_TOOL_ID,
     SHELL_UTILITY_TOOL_ID,
@@ -76,6 +78,7 @@ from runtime_shared.shell_capabilities import (
 
 FPING_TOOL_ID = "information_gathering.network_discovery.fping"
 NMAP_TOOL_ID = "information_gathering.network_discovery.nmap"
+FFUF_CRAWLER_TOOL_ID = "web_applications.web_crawlers.ffuf"
 class _FakeUsage:
     """Minimal usage value accepted by the shared graph usage converter."""
 
@@ -180,6 +183,7 @@ def _assignment(
     assignment_id: str = "assign-1",
     agent_run_id: str = "run-1",
     agent_mode: str | None = "full_access",
+    requested_skill_ids: tuple[str, ...] = (),
 ) -> AgentAssignment:
     relevant_context = {"ticket": "ENG-123"}
     if agent_mode is not None:
@@ -197,6 +201,7 @@ def _assignment(
         objective="Map live hosts on the approved target.",
         targets=["10.0.0.10"],
         suggested_capabilities=["host_discovery", "port_scan"],
+        requested_skill_ids=requested_skill_ids,
         scope_summary="Approved internal test host only.",
         relevant_context=relevant_context,
         runtime_identity=_runtime_identity(),
@@ -252,12 +257,36 @@ def _profile_with_universal_shell_tools() -> SubagentToolProfile:
     )
 
 
-def _generic_state() -> dict[str, Any]:
+def _runtime_skill_registry(*, activation: str = "mandatory") -> SkillRegistry:
+    return SkillRegistry(
+        (
+            LoadedSkill(
+                metadata=SkillMetadata(
+                    name="network_reconnaissance",
+                    description="Bounded discovery fixture.",
+                ),
+                activation=SkillActivationPolicy(
+                    activation=activation,
+                    agent_ids=("pathfinder",),
+                ),
+                body="Use bounded fixture discovery and return concise evidence.",
+                source="network_reconnaissance/SKILL.md",
+                digest="3" * 64,
+            ),
+        )
+    )
+
+
+def _generic_state(
+    *,
+    skill_registry: SkillRegistry | None = None,
+) -> dict[str, Any]:
     return build_subagent_initial_state(
         definition=_pathfinder_definition(),
         assignment=_assignment(),
         graph_thread_id="child-thread-1",
         tool_profile=_profile(),
+        skill_registry=skill_registry,
     )
 
 
@@ -281,6 +310,30 @@ def _generic_state_for_assignment(
         graph_thread_id=graph_thread_id,
         tool_profile=_profile(),
     )
+
+
+def test_selected_skill_ids_and_digest_refs_survive_state_round_trip() -> None:
+    skill_registry = _runtime_skill_registry(activation="selectable")
+    state = build_subagent_initial_state(
+        definition=_pathfinder_definition(),
+        assignment=_assignment(requested_skill_ids=("network_reconnaissance",)),
+        graph_thread_id="child-thread-skill-checkpoint",
+        tool_profile=_profile(),
+        skill_registry=skill_registry,
+    )
+
+    checkpoint_state = json.loads(json.dumps(state))
+    restored = subagent_state_from_graph_state(
+        checkpoint_state,
+        definition=_pathfinder_definition(),
+    )
+
+    assert restored.assignment.requested_skill_ids == ("network_reconnaissance",)
+    assert tuple(ref.skill_id for ref in restored.resolved_skills) == (
+        "network_reconnaissance",
+    )
+    assert restored.resolved_skills[0].digest == "3" * 64
+    assert "Use bounded fixture discovery" not in json.dumps(checkpoint_state)
 
 
 def test_subagent_initial_state_restores_parent_approval_policy() -> None:
@@ -334,7 +387,7 @@ def test_subagent_initial_state_seeds_parent_tool_outcome_into_phase_memory() ->
     )
     interactive = InteractiveState.from_mapping(state)
 
-    assert runtime_model._build_prior_tool_outcomes(interactive) == [
+    assert _tool_outcomes_from_ledger(interactive) == [
         {
             "phase": 0,
             "status": "failed",
@@ -356,6 +409,10 @@ def test_subagent_initial_state_seeds_parent_tool_outcome_into_phase_memory() ->
             ],
         }
     ]
+    prompt_context = runtime_model._build_previous_tool_context(interactive)
+    phase_memory = prompt_context["current_turn_phase_memory"]
+    assert "source=handoff" in phase_memory
+    assert "missing-program --check" in phase_memory
     assert interactive.facts.iterations == 0
 
 
@@ -424,8 +481,10 @@ def _failed_service_iteration() -> dict[str, Any]:
 
 def _state_after_tool_iterations(
     iterations: list[dict[str, Any]],
+    *,
+    skill_registry: SkillRegistry | None = None,
 ) -> dict[str, Any]:
-    state = _generic_state()
+    state = _generic_state(skill_registry=skill_registry)
     for index, iteration in enumerate(iterations, start=1):
         state = _apply_tool_iteration_projection(state, iteration, index=index)
         state = record_subagent_observation_and_budget(
@@ -561,14 +620,26 @@ def _extract_prompt_json(user_prompt: str, label: str) -> dict[str, Any]:
     return json.loads(match.group(1))
 
 
-def _extract_prompt_section_json(user_prompt: str, label: str) -> Any:
-    match = re.search(
-        rf"^{re.escape(label)}:\n(.+?)(?:\n\n|$)",
-        user_prompt,
-        re.MULTILINE | re.DOTALL,
-    )
-    assert match is not None
-    return json.loads(match.group(1))
+def _tool_outcomes_from_ledger(
+    state: Mapping[str, Any] | InteractiveState,
+) -> list[dict[str, Any]]:
+    """Return stored outcome sections for phase-ledger contract assertions."""
+
+    interactive = InteractiveState.from_mapping(state)
+    metadata = interactive.facts.safe_metadata
+    turn_sequence = metadata["working_memory"]["current_turn_phase_turn"]
+    outcomes: list[dict[str, Any]] = []
+    for record in iteration_memory.get_ledger(dict(metadata)):
+        if record.get("turn_sequence") != turn_sequence:
+            continue
+        for section in record.get("sections") or []:
+            if section.get("heading") != "Subagent Tool Outcome":
+                continue
+            outcome = json.loads(section["body"])
+            outcome["phase"] = record["phase_sequence"]
+            outcomes.append(outcome)
+            break
+    return outcomes
 
 
 def _assert_projection_excludes_private_state(
@@ -826,13 +897,42 @@ async def test_runtime_model_records_generic_route_metadata_and_call_topology() 
         "temperature": 0.1,
         "max_tokens": 5000,
     }
-    assert "Remaining Limits:" in request["user_prompt"]
-    assert '"remaining_iterations": 9' in request["user_prompt"]
-    assert '"remaining_tool_calls_this_iteration": 3' in request["user_prompt"]
+    assert "Remaining Limits:" not in request["user_prompt"]
+    assert "remaining_iterations" not in request["user_prompt"]
+    assert "remaining_tool_calls" not in request["user_prompt"]
     assert all(
         SUBAGENT_EXECUTION_STRATEGY_KEY in required
         for required in request["required"]
     )
+
+
+def test_runtime_model_compiles_planner_parameters_for_execution() -> None:
+    """Split-schema tools use the canonical planner compiler before dispatch."""
+
+    parameters = runtime_model._validate_registered_tool_parameters(
+        FFUF_CRAWLER_TOOL_ID,
+        {
+            "fuzz_surface": "path",
+            "target_template": "https://example.com/FUZZ",
+            "payload_source": {
+                "kind": "inline_values",
+                "values": ["admin", "robots.txt"],
+            },
+            "runtime_controls": {
+                "threads": 5,
+                "request_timeout_seconds": 10,
+            },
+            "recursion": {"enabled": False},
+        },
+    )
+
+    assert parameters["target"] == "https://example.com/FUZZ"
+    assert parameters["inline_wordlist"] == ["admin", "robots.txt"]
+    assert parameters["threads"] == 5
+    assert parameters["request_timeout"] == 10
+    assert parameters["recursion"] is False
+    assert "target_template" not in parameters
+    assert "payload_source" not in parameters
 
 
 @pytest.mark.asyncio
@@ -928,8 +1028,6 @@ async def test_runtime_model_exposes_and_commits_universal_shell_utilities() -> 
     )
     assert metadata["planner_plan"]["tool_batch"]["tool_calls"][0]["parameters"] == {
         "command": "printf ready",
-        "cwd": None,
-        "env": None,
         "interactive": False,
         "yield_time_ms": 10_000,
         "max_output_chars": 32000,
@@ -990,7 +1088,7 @@ async def test_runtime_model_blocks_empty_write_poll_after_bounded_repair() -> N
     assert len(llm.requests) == 2
     assert SHELL_WRITE_STDIN_TOOL_ID in request["tool_ids"]
     assert public_session_id in request["user_prompt"]
-    assert "Prior Tool Outcomes:\n[]" in request["user_prompt"]
+    assert "Prior Tool Outcomes:" not in request["user_prompt"]
     assert metadata[SUBAGENT_ACTION_METADATA_KEY]["route"] == "handoff"
     assert metadata[SUBAGENT_RESULT_METADATA_KEY]["outcome"] == "blocked"
 
@@ -1407,14 +1505,10 @@ async def test_runtime_counts_real_multi_call_batch_application_as_one_iteration
     )
 
     request = _request_projection(next_llm.requests[0])
-    remaining_limits = _extract_prompt_section_json(
-        request["user_prompt"],
-        "Remaining Limits",
-    )
     assert len(tool_phase_records) == 1
     assert synced["facts"]["iterations"] == 1
-    assert remaining_limits["completed_iterations"] == 1
-    assert remaining_limits["remaining_iterations"] == 8
+    assert "Remaining Limits:" not in request["user_prompt"]
+    assert "remaining_iterations" not in request["user_prompt"]
     assert "subagent_completed_iteration_markers" not in synced["facts"]["metadata"]
     assert "subagent_observation_transcript" not in synced["facts"]["metadata"]
 
@@ -1505,17 +1599,120 @@ def test_subagent_tool_projection_uses_canonical_phase_memory_without_transcript
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("definition_id", ["pathfinder", "webweaver"])
+async def test_subagent_prompt_preserves_shared_phase_ledger_once(
+    definition_id: str,
+) -> None:
+    """Every declarative subagent receives the complete compressed phase ledger."""
+
+    definition = next(
+        item for item in load_subagent_definitions() if item.id == definition_id
+    )
+    assignment_payload = _assignment().model_dump(mode="json")
+    assignment_payload.update(
+        {
+            "agent_id": definition.id,
+            "agent_kind": definition.kind,
+            "objective": "Preserve all opaque compressed evidence.",
+        }
+    )
+    state = build_subagent_initial_state(
+        definition=definition,
+        assignment=AgentAssignment.model_validate(assignment_payload),
+        graph_thread_id=f"child-thread-{definition.id}-shared-ledger",
+        tool_profile=SubagentToolProfile(tools=()),
+    )
+    metadata = state["facts"]["metadata"]
+    turn_sequence = metadata["working_memory"]["current_turn_phase_turn"]
+    late_finding = "opaque-evidence-item-after-long-compressed-summary"
+    iteration_memory.append(
+        metadata,
+        turn_sequence=turn_sequence,
+        source="tool",
+        payload={
+            "sections": [
+                {
+                    "heading": "Tool Output Summary",
+                    "body": f"{'compressed observation; ' * 80}{late_finding}",
+                },
+                {
+                    "heading": "Key Findings",
+                    "body": f"- {late_finding}",
+                },
+                {
+                    "heading": "Batch Tool Results",
+                    "body": "redundant aggregate that must not reach the subagent",
+                },
+                {
+                    "heading": "Subagent Tool Outcome",
+                    "body": json.dumps(
+                        {
+                            "calls": [
+                                {
+                                    "tool": "opaque.tool",
+                                    "status": "failed",
+                                    "failure_category": "timeout",
+                                    "summary": late_finding,
+                                }
+                            ]
+                        },
+                        sort_keys=True,
+                    ),
+                },
+            ]
+        },
+    )
+    iteration_memory.append(
+        metadata,
+        turn_sequence=turn_sequence,
+        source="tool",
+        payload={
+            "sections": [
+                {
+                    "heading": "Tool Output Summary",
+                    "body": "A later compressed tool observation.",
+                }
+            ]
+        },
+    )
+    llm = _FakeBuilderLLM([], content="Shared-ledger handoff.")
+
+    await run_subagent_model_turn(
+        definition,
+        state,
+        llm_resolver=lambda *_args, **_kwargs: llm,
+    )
+
+    prompt = llm.requests[0]["user_prompt"]
+    phase_memory = _extract_prompt_json(
+        prompt,
+        "Accumulated tool context",
+    )["current_turn_phase_memory"]
+    assert late_finding in prompt
+    assert prompt.count("Tool Output Summary") == 2
+    assert prompt.count("Subagent Tool Outcome") == 1
+    assert '"failure_category": "timeout"' in phase_memory
+    assert "Batch Tool Results" not in prompt
+    assert "redundant aggregate" not in prompt
+    assert "...[truncated]" not in prompt
+    assert "Prior Tool Outcomes:" not in prompt
+
+
+@pytest.mark.asyncio
 async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> None:
+    skill_registry = _runtime_skill_registry()
     one_tool_state = _state_after_tool_iterations(
         [
             _host_discovery_iteration(),
-        ]
+        ],
+        skill_registry=skill_registry,
     )
     multi_iteration_state = _state_after_tool_iterations(
         [
             _host_discovery_iteration(),
             _service_enumeration_iteration(),
-        ]
+        ],
+        skill_registry=skill_registry,
     )
 
     one_tool_llm = _FakeBuilderLLM([], content="One-tool fixture handoff.")
@@ -1527,11 +1724,13 @@ async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> Non
         _pathfinder_definition(),
         one_tool_state,
         llm_resolver=lambda *_args, **_kwargs: one_tool_llm,
+        skill_registry=skill_registry,
     )
     await run_subagent_model_turn(
         _pathfinder_definition(),
         multi_iteration_state,
         llm_resolver=lambda *_args, **_kwargs: multi_iteration_llm,
+        skill_registry=skill_registry,
     )
 
     one_tool_request = one_tool_llm.requests[0]
@@ -1546,20 +1745,13 @@ async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> Non
         provider="baseline",
         model="subagent-characterization",
     )
-    prior_tool_outcomes = _extract_prompt_section_json(
-        multi_iteration_user_prompt,
-        "Prior Tool Outcomes",
-    )
     previous_tool_summary = _extract_prompt_json(
         multi_iteration_user_prompt,
-        "Previous tool executed",
+        "Accumulated tool context",
     )
     working_memory_summary = _extract_prompt_json(
         multi_iteration_user_prompt,
         "Working memory snapshot",
-    )
-    expected_tool_outcomes = runtime_model._build_prior_tool_outcomes(
-        InteractiveState.from_mapping(multi_iteration_state)
     )
     completed_for_parent_handoff = complete_subagent_result(
         _pathfinder_definition(),
@@ -1572,15 +1764,12 @@ async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> Non
         {"completed_agent_results": [parent_handoff_projection]}
     )
 
-    assert prior_tool_outcomes == expected_tool_outcomes
-    assert [outcome["phase"] for outcome in prior_tool_outcomes] == [0, 1]
-    assert previous_tool_summary["last_tool_result"] == multi_iteration_state[
-        "facts"
-    ]["last_tool_result_compact"]
     phase_memory = previous_tool_summary["current_turn_phase_memory"]
     assert "## Prior Current-Turn Phase Memory" in phase_memory
     assert "Tool Output Summary" in phase_memory
-    assert "Subagent Tool Outcome" not in phase_memory
+    assert "Subagent Tool Outcome" in phase_memory
+    assert "Batch Tool Results" not in phase_memory
+    assert "Prior Tool Outcomes:" not in multi_iteration_user_prompt
     assert "current_turn_phases" not in working_memory_summary
     assert "current_turn_phase_counter" not in working_memory_summary
     assert "current_turn_phase_turn" not in working_memory_summary
@@ -1591,60 +1780,45 @@ async def test_subagent_prompt_state_and_model_call_efficiency_baseline() -> Non
     assert "subagent_observation_transcript" not in multi_iteration_user_prompt
     assert "subagent_observations" not in multi_iteration_user_prompt
     assert "current_turn_phase_memory" in multi_iteration_user_prompt
-    assert "last_tool_result" in multi_iteration_user_prompt
+    assert "last_tool_result" not in multi_iteration_user_prompt
     assert "Working memory snapshot" in multi_iteration_user_prompt
+    assert "Specialized Capability Guidance:" in multi_iteration_request["system_prompt"]
+    assert '<skill id="network_reconnaissance">' in multi_iteration_request[
+        "system_prompt"
+    ]
+    assert "Specialized Capability Guidance:" not in multi_iteration_user_prompt
 
-    baseline = {
-        "one_tool_model_calls": len(one_tool_llm.requests),
-        "multi_iteration_model_calls": len(multi_iteration_llm.requests),
-        "one_tool_serialized_state_chars": _stable_json_size(one_tool_state),
-        "multi_iteration_serialized_state_chars": _stable_json_size(
-            multi_iteration_state
-        ),
-        "multi_iteration_prompt_chars": len(combined_multi_prompt),
-        "multi_iteration_prompt_tokens": token_estimate.tokens,
-        "bounded_parent_handoff_projection_chars": _stable_json_size(
-            parent_handoff_projection
-        ),
-        "bounded_parent_handoff_render_chars": len(parent_handoff_section),
-        "parent_handoff_projection_model_calls": 0,
-        "token_estimator": {
-            "provider": token_estimate.provider,
-            "model": token_estimate.model,
-            "strategy": token_estimate.strategy,
-            "precision": token_estimate.precision,
-        },
-        "phase_record_count": len(
-            multi_iteration_state["facts"]["metadata"]["working_memory"][
-                "current_turn_phases"
-            ]
-        ),
-        "subagent_observation_transcript_present": (
-            "subagent_observation_transcript"
-            in multi_iteration_state["facts"]["metadata"]
-        ),
-    }
-    # Serialized state includes canonical turn/phase metadata for bounded
-    # parent handoff identity; prompt size and model-call counts remain fixed.
-    assert baseline == {
-        "one_tool_model_calls": 1,
-        "multi_iteration_model_calls": 1,
-        "one_tool_serialized_state_chars": 10334,
-        "multi_iteration_serialized_state_chars": 12037,
-        "multi_iteration_prompt_chars": 15322,
-        "multi_iteration_prompt_tokens": 5473,
-        "bounded_parent_handoff_projection_chars": 501,
-        "bounded_parent_handoff_render_chars": 281,
-        "parent_handoff_projection_model_calls": 0,
-        "token_estimator": {
-            "provider": "baseline",
-            "model": "subagent-characterization",
-            "strategy": "provider_agnostic_char_heuristic",
-            "precision": "heuristic",
-        },
-        "phase_record_count": 2,
-        "subagent_observation_transcript_present": False,
-    }
+    one_tool_state_chars = _stable_json_size(one_tool_state)
+    multi_iteration_state_chars = _stable_json_size(multi_iteration_state)
+    handoff_projection_chars = _stable_json_size(parent_handoff_projection)
+    handoff_render_chars = len(parent_handoff_section)
+
+    assert len(one_tool_llm.requests) == 1
+    assert len(multi_iteration_llm.requests) == 1
+    assert len(
+        multi_iteration_state["facts"]["metadata"]["working_memory"][
+            "current_turn_phases"
+        ]
+    ) == 2
+    assert "subagent_observation_transcript" not in multi_iteration_state["facts"][
+        "metadata"
+    ]
+    assert token_estimate.provider == "baseline"
+    assert token_estimate.model == "subagent-characterization"
+    assert token_estimate.strategy == "provider_agnostic_char_heuristic"
+    assert token_estimate.precision == "heuristic"
+
+    max_state_chars = 20_000
+    max_prompt_chars = 20_000
+    max_prompt_tokens = 7_000
+    max_handoff_projection_chars = 1_000
+    max_handoff_render_chars = 500
+    assert one_tool_state_chars < multi_iteration_state_chars <= max_state_chars
+    assert len(combined_multi_prompt) <= max_prompt_chars
+    assert token_estimate.tokens <= max_prompt_tokens
+    assert handoff_projection_chars <= max_handoff_projection_chars
+    assert handoff_render_chars <= max_handoff_render_chars
+    assert handoff_render_chars < handoff_projection_chars
 
 
 def test_runtime_completion_projects_generic_result_metadata() -> None:
@@ -2013,9 +2187,7 @@ def test_subagent_context_preserves_terminal_aggregate_and_appends_outcome() -> 
         _pathfinder_definition(),
         interactive,
     )
-    outcomes = runtime_model._build_prior_tool_outcomes(
-        InteractiveState.from_mapping(updated)
-    )
+    outcomes = _tool_outcomes_from_ledger(updated)
 
     assert outcomes == [
         {
@@ -2043,24 +2215,27 @@ def test_subagent_context_preserves_terminal_aggregate_and_appends_outcome() -> 
     assert "RAW_START_OUTPUT" not in outcome_json
     assert "session_id" not in outcome_json
 
+    previous_tool_summary = runtime_model._build_previous_tool_context(
+        InteractiveState.from_mapping(updated)
+    )
     prompt = SubagentRuntimePromptBuilder().build_user_prompt(
         display_name="Pathfinder",
         assignment={"objective": "Complete one interactive calculator session."},
         tool_ids=[SHELL_WRITE_STDIN_TOOL_ID],
-        previous_tool_summary=runtime_model._build_previous_tool_context(
-            InteractiveState.from_mapping(updated)
-        ),
-        prior_tool_outcomes=outcomes,
+        previous_tool_summary=previous_tool_summary,
     )
 
-    assert '"tool": "shell.utility"' in prompt
-    assert '"process_status": "completed"' in prompt
-    assert '"session_status": "closed"' in prompt
-    assert '"session_id": "shs-subagent-long"' in prompt
-    assert '"stdout": "7\\n42\\n50\\n50\\n"' in prompt
-    assert '"input": "quit\\n"' in prompt
-    assert "tc-running-11" in prompt
-    assert "Prior Tool Outcomes:" in prompt
+    phase_memory = previous_tool_summary["current_turn_phase_memory"]
+    assert '"tool":"shell.utility"' in phase_memory
+    assert '"process_status":"completed"' in phase_memory
+    assert '"session_status":"closed"' in phase_memory
+    assert "Subagent Tool Outcome" in phase_memory
+    assert "Batch Tool Results" not in phase_memory
+    assert "shs-subagent-long" not in phase_memory
+    assert '"stdout"' not in phase_memory
+    assert '"input"' not in phase_memory
+    assert "tc-running-11" not in phase_memory
+    assert "Prior Tool Outcomes:" not in prompt
 
 
 def test_subagent_tool_outcomes_preserve_mixed_multi_call_batch() -> None:
@@ -2109,9 +2284,7 @@ def test_subagent_tool_outcomes_preserve_mixed_multi_call_batch() -> None:
         _pathfinder_definition(),
         interactive,
     )
-    outcomes = runtime_model._build_prior_tool_outcomes(
-        InteractiveState.from_mapping(updated)
-    )
+    outcomes = _tool_outcomes_from_ledger(updated)
 
     assert outcomes == [
         {
@@ -2212,7 +2385,7 @@ def test_subagent_tool_outcomes_retain_failed_then_successful_recovery_once() ->
         completed_state,
     )
     final = InteractiveState.from_mapping(replayed_state)
-    outcomes = runtime_model._build_prior_tool_outcomes(final)
+    outcomes = _tool_outcomes_from_ledger(final)
 
     assert final.facts.iterations == 2
     assert [outcome["phase"] for outcome in outcomes] == [0, 1]
@@ -2283,9 +2456,7 @@ def test_subagent_tool_outcome_includes_shell_invocation_from_planner_batch(
         _pathfinder_definition(),
         interactive,
     )
-    outcomes = runtime_model._build_prior_tool_outcomes(
-        InteractiveState.from_mapping(updated)
-    )
+    outcomes = _tool_outcomes_from_ledger(updated)
 
     assert outcomes[0]["calls"][0]["invocation"] == {
         "command": "bc",

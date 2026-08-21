@@ -18,13 +18,10 @@ from core.prompts.builders.shell_capability_profiles import (
 )
 from core.prompts.constants import render_intent_brief_block
 from core.prompts.loader import TemplateLoader
-from core.runbooks.models import RunbookStage
-from core.runbooks.service import RunbookService
 
 
 _VERSIONS_ROOT = Path(__file__).resolve().parents[1] / "versions"
 _LOADER = TemplateLoader(_VERSIONS_ROOT)
-_RUNBOOK_SERVICE = RunbookService()
 _ARTIFACT_SEARCH_TOOL_ID = "artifact.search"
 _ARTIFACT_READ_TOOL_ID = "artifact.read"
 _CVE_LOOKUP_TOOL_ID = "knowledge.cve_lookup"
@@ -36,8 +33,10 @@ _MAIN_NATIVE_TOOL_CALL_REQUIREMENT = (
 _SUBAGENT_NATIVE_TOOL_CALL_REQUIREMENT = (
     "When more evidence is required, call between 1 and "
     "{max_committed_tools_per_batch} candidate tool function(s) for this "
-    "iteration. When the assignment is complete, emit no tool call and "
-    "return the concise parent handoff instead."
+    "model turn. This is a per-turn batch boundary, not a total tool budget; "
+    "later model turns may call additional tools when needed. When the "
+    "assignment is complete, emit no tool call and return the concise parent "
+    "handoff instead."
 )
 _MAIN_SELECTOR_STRATEGY_GUIDANCE = (
     "Execution strategy (read from Selector Decision in the current turn input):\n"
@@ -263,30 +262,6 @@ def _build_artifact_parameter_policy(selected_tools: Sequence[str]) -> str:
     """
     _ = selected_tools
     return ""
-
-
-def _build_tool_runbooks_section(selected_tools: Sequence[str]) -> str:
-    """Return scoped tool runbooks for the native parameter builder."""
-
-    runbooks = _RUNBOOK_SERVICE.render_for_tools(
-        selected_tools=selected_tools,
-        stage=RunbookStage.TOOL_PARAMETERS,
-    )
-    if not runbooks:
-        return ""
-    return f"\n{runbooks}"
-
-
-def _build_tool_selection_runbooks_section(selected_categories: Sequence[str]) -> str:
-    """Return scoped tool runbooks for candidate tool selection."""
-
-    runbooks = _RUNBOOK_SERVICE.render_for_categories(
-        selected_categories=selected_categories,
-        stage=RunbookStage.TOOL_SELECTION,
-    )
-    if not runbooks:
-        return ""
-    return f"\n\n{runbooks}"
 
 
 def _format_artifact_file_metadata(
@@ -574,9 +549,6 @@ class ToolPlanningPromptBuilder:
             ) or _extract_tool_ids(visible_catalog)
         artifact_policy = _build_artifact_policy_text(visible_tool_ids)
         cve_lookup_policy = _build_cve_lookup_policy_text(visible_tool_ids)
-        tool_runbooks = _build_tool_selection_runbooks_section(
-            list(selected_categories or [])
-        )
         relevant_findings_section = _build_relevant_findings_section(relevant_findings)
         working_memory_snapshot_block = _build_optional_context_block(
             "Working Memory Snapshot",
@@ -632,7 +604,6 @@ class ToolPlanningPromptBuilder:
             referenced_prior_turns_block=referenced_prior_turns_block,
             artifact_policy=artifact_policy,
             cve_lookup_policy=cve_lookup_policy,
-            tool_runbooks=tool_runbooks,
             relevant_findings_section=relevant_findings_section,
             max_tools_per_action=cap_value,
             max_committed_tools_per_batch=committed_cap_value,
@@ -709,7 +680,6 @@ class ToolPlanningPromptBuilder:
             todo_list=todo_list,
         )
         artifact_parameter_policy = _build_artifact_parameter_policy(selected_tools)
-        tool_runbooks = _build_tool_runbooks_section(selected_tools)
         artifact_file_metadata_text = _format_artifact_file_metadata(artifact_file_metadata)
         relevant_findings_section = _build_relevant_findings_section(relevant_findings)
         working_memory_snapshot_block = _build_optional_context_block(
@@ -748,7 +718,6 @@ class ToolPlanningPromptBuilder:
             working_memory_snapshot_block=working_memory_snapshot_block,
             referenced_prior_turns_block=referenced_prior_turns_block,
             artifact_parameter_policy=artifact_parameter_policy,
-            tool_runbooks=tool_runbooks,
             artifact_file_metadata=artifact_file_metadata_text,
             relevant_findings_section=relevant_findings_section,
             max_committed_tools_per_batch=cap_value,

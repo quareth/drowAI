@@ -48,14 +48,28 @@ class MessageReasoningEventProcessor:
         metric_inc: Optional[Callable[[str, int], None]] = None,
     ) -> None:
         self._metric_inc = metric_inc or safe_inc
-        self._local_phase_sequence_by_turn: Dict[tuple[str, str], int] = {}
-        self._local_active_reasoning_by_turn: Dict[tuple[str, str], Dict[str, Any]] = {}
-        self._local_closed_reasoning_by_turn: Dict[tuple[str, str], Dict[str, Any]] = {}
+        self._local_phase_sequence_by_turn: Dict[tuple[str, str, str], int] = {}
+        self._local_active_reasoning_by_turn: Dict[tuple[str, str, str], Dict[str, Any]] = {}
+        self._local_closed_reasoning_by_turn: Dict[tuple[str, str, str], Dict[str, Any]] = {}
 
     @staticmethod
-    def _turn_key(conversation_id: str, turn_id: str) -> tuple[str, str]:
-        """Return the in-memory lifecycle key for one chat turn."""
-        return (conversation_id or "", turn_id or "")
+    def _turn_key(
+        conversation_id: str,
+        turn_id: str,
+        agent_run_id: str,
+    ) -> tuple[str, str, str]:
+        """Return the in-memory lifecycle key for one execution within a turn."""
+        return (conversation_id or "", turn_id or "", agent_run_id or "")
+
+    @staticmethod
+    def _agent_run_id(event: Mapping[str, Any]) -> str:
+        """Return the child-run scope carried by a raw graph event, if present."""
+        value = event.get("agent_run_id")
+        if value is None:
+            metadata = event.get("metadata")
+            if isinstance(metadata, Mapping):
+                value = metadata.get("agent_run_id")
+        return value.strip() if isinstance(value, str) else ""
 
     @staticmethod
     def _build_unique_reasoning_section_id(*, turn_id: str) -> str:
@@ -63,9 +77,15 @@ class MessageReasoningEventProcessor:
         scope = turn_id or "turn"
         return f"{scope}:reasoning:{uuid4().hex}"
 
-    def _claim_local_phase_sequence(self, *, conversation_id: str, turn_id: str) -> int:
+    def _claim_local_phase_sequence(
+        self,
+        *,
+        conversation_id: str,
+        turn_id: str,
+        agent_run_id: str,
+    ) -> int:
         """Claim the next processor-local phase sequence for a turn."""
-        key = self._turn_key(conversation_id, turn_id)
+        key = self._turn_key(conversation_id, turn_id, agent_run_id)
         phase_sequence = self._local_phase_sequence_by_turn.get(key, 0)
         self._local_phase_sequence_by_turn[key] = phase_sequence + 1
         return phase_sequence
@@ -75,12 +95,13 @@ class MessageReasoningEventProcessor:
         *,
         conversation_id: str,
         turn_id: str,
+        agent_run_id: str,
         phase_sequence: Any,
     ) -> None:
         """Advance the local counter past an externally claimed phase."""
         if not isinstance(phase_sequence, int) or phase_sequence < 0:
             return
-        key = self._turn_key(conversation_id, turn_id)
+        key = self._turn_key(conversation_id, turn_id, agent_run_id)
         current = self._local_phase_sequence_by_turn.get(key, 0)
         if phase_sequence >= current:
             self._local_phase_sequence_by_turn[key] = phase_sequence + 1
@@ -90,6 +111,7 @@ class MessageReasoningEventProcessor:
         *,
         conversation_id: str,
         turn_id: str,
+        agent_run_id: str,
         section_name: str,
         sub_turn_index: Any,
         event_timestamp: Any,
@@ -99,6 +121,7 @@ class MessageReasoningEventProcessor:
         phase_sequence = self._claim_local_phase_sequence(
             conversation_id=conversation_id,
             turn_id=turn_id,
+            agent_run_id=agent_run_id,
         )
         reasoning_section_id = self._build_unique_reasoning_section_id(turn_id=turn_id)
         if state_container is not None:
@@ -120,9 +143,11 @@ class MessageReasoningEventProcessor:
         self._observe_phase_sequence(
             conversation_id=conversation_id,
             turn_id=turn_id,
+            agent_run_id=agent_run_id,
             phase_sequence=identity.get("phase_sequence"),
         )
-        self._local_active_reasoning_by_turn[self._turn_key(conversation_id, turn_id)] = dict(identity)
+        key = self._turn_key(conversation_id, turn_id, agent_run_id)
+        self._local_active_reasoning_by_turn[key] = dict(identity)
         return dict(identity)
 
     def _require_active_reasoning_identity(
@@ -130,6 +155,7 @@ class MessageReasoningEventProcessor:
         *,
         conversation_id: str,
         turn_id: str,
+        agent_run_id: str,
         state_container: Optional["ChatStateContainer"],
         allow_closed_snapshot: bool = False,
     ) -> Dict[str, Any]:
@@ -141,11 +167,11 @@ class MessageReasoningEventProcessor:
                 identity = dict(current)
         if identity is None:
             identity = self._local_active_reasoning_by_turn.get(
-                self._turn_key(conversation_id, turn_id)
+                self._turn_key(conversation_id, turn_id, agent_run_id)
             )
         if identity is None and allow_closed_snapshot:
             identity = self._local_closed_reasoning_by_turn.get(
-                self._turn_key(conversation_id, turn_id)
+                self._turn_key(conversation_id, turn_id, agent_run_id)
             )
         if identity is None:
             raise ValueError("reasoning event missing active reasoning_section_id")
@@ -156,6 +182,7 @@ class MessageReasoningEventProcessor:
         *,
         conversation_id: str,
         turn_id: str,
+        agent_run_id: str,
         sub_turn_index: Any,
         event_timestamp: Any,
         state_container: Optional["ChatStateContainer"],
@@ -164,6 +191,7 @@ class MessageReasoningEventProcessor:
         identity = self._require_active_reasoning_identity(
             conversation_id=conversation_id,
             turn_id=turn_id,
+            agent_run_id=agent_run_id,
             state_container=state_container,
         )
         if state_container is not None:
@@ -173,7 +201,7 @@ class MessageReasoningEventProcessor:
             )
             if closed is not None:
                 identity = dict(closed)
-        key = self._turn_key(conversation_id, turn_id)
+        key = self._turn_key(conversation_id, turn_id, agent_run_id)
         self._local_active_reasoning_by_turn.pop(key, None)
         self._local_closed_reasoning_by_turn[key] = dict(identity)
         return identity
@@ -302,6 +330,7 @@ class MessageReasoningEventProcessor:
         """
         conversation_id = event.get("conversation_id", "")
         turn_id = event.get("turn_id", "")
+        agent_run_id = self._agent_run_id(event)
         step = event.get("step", "thinking")
         ind = event.get("ind")
         section_name = event.get("section_name", step)
@@ -311,6 +340,7 @@ class MessageReasoningEventProcessor:
         identity = self._start_reasoning_identity(
             conversation_id=conversation_id,
             turn_id=turn_id,
+            agent_run_id=agent_run_id,
             section_name=section_name,
             sub_turn_index=sub_turn_index,
             event_timestamp=event_timestamp,
@@ -353,11 +383,13 @@ class MessageReasoningEventProcessor:
         content = event["content"]
         conversation_id = event.get("conversation_id", "")
         turn_id = event.get("turn_id", "")
+        agent_run_id = self._agent_run_id(event)
         ind = event.get("ind")
         is_snapshot = bool(event.get("snapshot"))
         identity = self._require_active_reasoning_identity(
             conversation_id=conversation_id,
             turn_id=turn_id,
+            agent_run_id=agent_run_id,
             state_container=state_container,
             allow_closed_snapshot=is_snapshot,
         )
@@ -400,6 +432,7 @@ class MessageReasoningEventProcessor:
         section_name = event.get("section_name", "thinking")
         conversation_id = event.get("conversation_id", "")
         turn_id = event.get("turn_id", "")
+        agent_run_id = self._agent_run_id(event)
         ind = event.get("ind")
         sub_turn_index = event.get("sub_turn_index")
         event_timestamp = event.get("timestamp", time.time())
@@ -407,6 +440,7 @@ class MessageReasoningEventProcessor:
         identity = self._end_reasoning_identity(
             conversation_id=conversation_id,
             turn_id=turn_id,
+            agent_run_id=agent_run_id,
             sub_turn_index=sub_turn_index,
             event_timestamp=event_timestamp,
             state_container=state_container,

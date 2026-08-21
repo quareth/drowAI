@@ -26,6 +26,7 @@ from backend.services.agent_runs.result_projection import (
     attach_active_agent_runs_to_context,
     attach_completed_agent_results_to_context,
 )
+from core.skills.registry import SkillRegistry
 from backend.services.agent_runs.registry import ProcessLocalAgentRunRegistry
 from backend.services.agent_runs.registry_contracts import ACTIVE_AGENT_RUN_STATUSES
 from backend.services.agent_runs.parent_handoff_coordinator import (
@@ -147,6 +148,7 @@ class LangGraphChatFacade:
             Callable[[Any], ConversationHistoryReader]
         ] = None,
         subagent_registry: Optional[SubagentRegistry] = None,
+        skill_registry: SkillRegistry | None = None,
     ) -> None:
         """Initialize facade with injected dependencies."""
         self._checkpointer_service = (
@@ -164,12 +166,15 @@ class LangGraphChatFacade:
         self._intent_phase_streamer = IntentPhaseStreamer(self._streaming_adapter)
         self._context_builder = context_builder or LangGraphContextBuilder()
         using_shared_subagent_registry = subagent_registry is None
+        using_shared_skill_registry = skill_registry is None
         self._subagent_registry = (
             subagent_registry or process_local_runtime.subagent_registry
         )
+        self._skill_registry = skill_registry or process_local_runtime.skill_registry
         self._intent_classifier = intent_classifier or IntentClassifier(
             client_timeout=LLM_TIMEOUT_INTENT_CLASSIFIER_SEC,
             subagent_registry=self._subagent_registry,
+            skill_registry=self._skill_registry,
         )
         self._turn_compression_service = turn_compression_service
         self._prior_turn_reference_materializer = (
@@ -182,7 +187,7 @@ class LangGraphChatFacade:
                 agent_run_launcher
                 or (
                     process_local_runtime.launcher
-                    if using_shared_subagent_registry
+                    if using_shared_subagent_registry and using_shared_skill_registry
                     else None
                 )
             )
@@ -233,16 +238,25 @@ class LangGraphChatFacade:
             ),
             result_projector=self._agent_run_result_projector,
             subagent_registry=self._subagent_registry,
+            skill_registry=self._skill_registry,
         )
         self._handlers = {
             ChatBranch.NORMAL_CHAT: NormalChatHandler(
                 self._checkpointer_service, self._executor, self._streaming_adapter
             ),
             ChatBranch.DEEP_REASONING: DeepReasoningHandler(
-                self._checkpointer_service, self._executor, self._streaming_adapter
+                self._checkpointer_service,
+                self._executor,
+                self._streaming_adapter,
+                subagent_registry=self._subagent_registry,
+                skill_registry=self._skill_registry,
             ),
             ChatBranch.SIMPLE_TOOL: SimpleToolHandler(
-                self._checkpointer_service, self._executor, self._streaming_adapter
+                self._checkpointer_service,
+                self._executor,
+                self._streaming_adapter,
+                subagent_registry=self._subagent_registry,
+                skill_registry=self._skill_registry,
             ),
             ChatBranch.SUBAGENT: subagent_handler,
         }
@@ -261,6 +275,7 @@ class LangGraphChatFacade:
             build_result=facade_helpers.build_result,
             agent_run_registry=self._agent_run_registry,
             subagent_registry=self._subagent_registry,
+            skill_registry=self._skill_registry,
             agent_run_lifecycle_publisher=resolved_agent_run_lifecycle_publisher,
             parent_handoff_continuation_broker=(
                 resolved_parent_handoff_continuation_broker
@@ -486,6 +501,7 @@ class LangGraphChatFacade:
                 runtime_config
             ),
             subagent_registry=self._subagent_registry,
+            skill_registry=self._skill_registry,
         )
 
         handler = self._handlers.get(branch)
@@ -508,6 +524,7 @@ class LangGraphChatFacade:
                     runtime_config
                 ),
                 subagent_registry=self._subagent_registry,
+                skill_registry=self._skill_registry,
             )
             if late_runtime_config is not None:
                 logger.info(

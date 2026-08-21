@@ -43,7 +43,11 @@ Dependent shell commands:
 - This includes install then launch, build then run, create then read, authenticate then query, and any discovery command whose result is needed by the next command.
 - Do not treat partial output, echoed input, temporary silence, process_status "running", a session ID, or writable stdin as proof that a prerequisite completed.
 - Never append an interactive or persistent program to its setup command. Complete and verify setup first, then start the interactive or persistent program in a separate tool call.
-- Combine multiple shell commands into one invocation only when they are independent, non-interactive, and no command requires another command's result, success, output, or state.
+- Keep each shell invocation to one logical operation.
+- Shell context setup and helper stages may be included when they only prepare, transform, filter, format, redirect, persist, or inspect that operation's input or output.
+- Do not bundle independent commands merely to reduce tool calls.
+- If each command has a separately meaningful result, status, or side effect that should be evaluated independently, run it in a separate tool call or later model turn.
+- A connected data flow such as `cat file | grep pattern` is one operation. Independent commands such as `command-a; command-b` are separate operations.
 </dependent_shell_command_guidance>
 
 <examples>
@@ -74,7 +78,6 @@ Pattern: dependency, not batchable
 </examples>
 
 Commit rules:
-- Tool Runbooks explain how listed tools work and what their parameters mean. Use them as tool semantics reference, not as the authority for what operation to build.
 - The operation and concrete parameters come from the POST-TOOL REASONING DIRECTIVE when present; otherwise from the Turn Execution Brief, Task Context, Current Goal, and Todo Progress.
 - If a POST-TOOL REASONING DIRECTIVE section is present, treat it as the highest-priority narrowed pending work for this iteration; use the Turn Execution Brief section only for non-conflicting background constraints.
 - If no POST-TOOL REASONING DIRECTIVE section is present, honor the Turn Execution Brief section as the sole source of current-turn user intent and constraints.

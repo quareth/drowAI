@@ -50,6 +50,7 @@ def test_delegate_control_normalizes_handoff_and_preserves_identity() -> None:
                     "agent_handoff": "required",
                     "subagent": "pathfinder",
                     "objective": "Inspect the unresolved HTTPS evidence.",
+                    "skill_ids": ["network-reconnaissance"],
                 },
             }
         },

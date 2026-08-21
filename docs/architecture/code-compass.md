@@ -113,7 +113,7 @@ add new cross-boundary imports.
 | `backend/` | FastAPI control plane, persistence, application services, runtime dispatch | Backend product behavior starts here |
 | `agent/` | Agent contracts, LangGraph graphs, planning, tools, and tool runtime | Does not own SaaS authorization or runner registration |
 | `client/` | React/TypeScript product UI | Browser-only behavior and public API contracts |
-| `core/` | Canonical prompts, LLM role policy, runbooks, and tool taxonomies shared by backend/agent call sites | Not a general dumping ground; some current modules are not dependency-free |
+| `core/` | Canonical prompts, LLM role policy, built-in skills, and tool taxonomies shared by backend/agent call sites | Not a general dumping ground; some current modules are not dependency-free |
 | `drowai_runner/` | Managed execution-site process | Backend-free runner implementation |
 | `kali_executor/` | Daemon copied into the Kali task runtime | Executes prepared commands; does not decide authorization or placement |
 | `runtime_shared/` | Backend-free contracts and the shared Docker task-network adapter used across processes | Lowest backend-free runtime boundary; pure contract modules remain provider-SDK-free |
@@ -382,13 +382,13 @@ framework root.
 | `core/prompts/loader.py` | Versioned template loading and rendering |
 | `core/prompts/builders/` | Prompt construction by reasoning/reporting stage |
 | `core/prompts/versions/` | Versioned prompt text selected through `latest.txt` manifests |
-| `core/runbooks/` | Runbook discovery, validation, resolution, and rendering used by tool-planning prompts |
+| `core/skills/` | Built-in skill package loading, immutable lookup, eligibility, and deterministic resolution |
 | `core/memory/` | Pure shared memory formatting helpers |
 | `core/tool_category_taxonomy.py` | Canonical selectable tool categories |
 | `core/tool_capability_taxonomy.py` | Canonical prompt-facing capability families |
 
 Do not place a helper in `core/` merely because both backend and agent use it.
-First decide whether it is prompt policy, LLM policy, runbook behavior, memory
+First decide whether it is prompt policy, LLM policy, skill behavior, memory
 formatting, or a tool taxonomy. If it is a cross-process runtime contract, it
 belongs in `runtime_shared/` instead.
 

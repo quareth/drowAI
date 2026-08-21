@@ -75,7 +75,8 @@ def _stub_recon_classifier() -> IntentClassifier:
         '"reasoning": "stub", '
         '"suggested_capabilities": ["port scanning"], '
         '"agent_handoffs": [{"agent_handoff": "required", '
-        '"subagent": "pathfinder", "objective": "Scan ports on 10.0.0.10."}], '
+        '"subagent": "pathfinder", "objective": "Scan ports on 10.0.0.10.", '
+        '"skill_ids": []}], '
         '"risk_flags": [], '
         '"target_status": "resolved", '
         '"target_source": "explicit_current_message", '
@@ -255,6 +256,7 @@ async def test_late_ptr_handoff_reuses_subagent_handler_with_parent_state() -> N
                 "agent_handoff": "required",
                 "subagent": "pathfinder",
                 "objective": "Scan ports on 10.0.0.10.",
+                "skill_ids": [],
             },
         }
         state = InteractiveState(

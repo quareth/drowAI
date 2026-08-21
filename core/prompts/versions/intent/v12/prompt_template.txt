@@ -1,0 +1,9 @@
+Conversation (oldest -> newest, act on the turn tagged latest=true):
+{history}
+
+Heuristic Hints:
+Tool hints: {tool_hints}
+Targets: {targets}
+Eligible routes: {eligible_routes}
+Risk flags: {risk_flags}
+{environment}{route_policy_section}

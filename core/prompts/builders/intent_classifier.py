@@ -28,6 +28,8 @@ from collections.abc import Sequence
 from typing import Any, Mapping, Optional
 
 from core.prompts.registry import PromptRegistry
+from core.prompts.builders.subagent_catalog import render_subagent_catalog_section
+from core.skills.contracts import SubagentSkillCatalog
 
 
 _registry = PromptRegistry()
@@ -108,70 +110,17 @@ def render_route_policy_section(
     return "\n\n" + "\n".join(lines)
 
 
-def render_subagent_catalog_section(
-    subagent_catalog: Sequence[Mapping[str, Any]],
-) -> str:
-    """Render classifier-visible subagent specs supplied by the control plane."""
-    lines = [
-        "Registered Subagent Catalog:",
-        (
-            "- Select only a subagent listed below. The catalog is the authority "
-            "for names and ownership boundaries."
-        ),
-    ]
-    if not subagent_catalog:
-        lines.append("- No subagents are currently available; return no handoffs.")
-        return "\n".join(lines)
-
-    for entry in subagent_catalog:
-        name = str(entry.get("name") or "").strip()
-        purpose = str(entry.get("purpose") or "").strip()
-        ownership = str(entry.get("ownership_boundary") or "").strip()
-        supported = _string_sequence(entry.get("supported_task_categories"))
-        excluded = _string_sequence(entry.get("excluded_task_categories"))
-        maximum = entry.get("max_active_runs_per_task")
-        requires_target = bool(entry.get("requires_resolved_target"))
-        if not name or not purpose or not ownership:
-            raise ValueError("subagent catalog contains an incomplete specification")
-
-        lines.extend(
-            [
-                f"- Name: {name}",
-                f"  Purpose: {purpose}",
-                f"  Ownership boundary: {ownership}",
-                (
-                    "  Supported task categories: "
-                    + (", ".join(supported) if supported else "none")
-                ),
-                (
-                    "  Excluded task categories: "
-                    + (", ".join(excluded) if excluded else "none")
-                ),
-                f"  Maximum active runs per task: {maximum}",
-                f"  Requires a resolved target: {'yes' if requires_target else 'no'}",
-            ]
-        )
-    return "\n".join(lines)
-
-
-def _string_sequence(value: Any) -> tuple[str, ...]:
-    """Return non-empty prompt tokens from one catalog sequence."""
-    if not isinstance(value, Sequence) or isinstance(value, str):
-        return ()
-    return tuple(
-        normalized
-        for item in value
-        if (normalized := str(item or "").strip())
-    )
-
-
 def build_classifier_system_prompt(
     *,
     subagent_catalog: Sequence[Mapping[str, Any]] = (),
+    skill_catalogs: Sequence[SubagentSkillCatalog] = (),
 ) -> str:
     """Return the classifier prompt plus the runtime subagent catalog."""
     template = _registry.get_template("intent_classifier").rstrip()
-    catalog_section = render_subagent_catalog_section(subagent_catalog)
+    catalog_section = render_subagent_catalog_section(
+        subagent_catalog,
+        skill_catalogs,
+    )
     return f"{template}\n\n{catalog_section}\n"
 
 

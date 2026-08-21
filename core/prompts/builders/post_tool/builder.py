@@ -6,6 +6,7 @@ while delegating formatting and section rendering to focused helpers.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any, List, Mapping, Optional
 
 from agent.graph.memory.findings import format_relevant_findings
@@ -13,6 +14,8 @@ from agent.graph.utils import iteration_memory as _iteration_memory
 from agent.graph.utils.todo_stall_guard import render_todo_stall_prompt_section
 from core.prompts.builders._text import derive_user_input_and_goal
 from core.prompts.route_labels import llm_facing_route_label
+from core.prompts.builders.subagent_catalog import render_subagent_catalog_section
+from core.skills.contracts import SubagentSkillCatalog
 
 from ._formatting import (
     as_mapping,
@@ -78,6 +81,8 @@ class PostToolReasoningPromptBuilder:
         current_ptr_phase_sequence: Optional[int] = None,
         latest_recorded_phase_sequence: Optional[int] = None,
         evidence: Optional[EvidenceView] = None,
+        subagent_catalog: Sequence[Mapping[str, Any]] = (),
+        skill_catalogs: Sequence[SubagentSkillCatalog] = (),
     ) -> str:
         """Build the user prompt with full context.
 
@@ -270,6 +275,12 @@ class PostToolReasoningPromptBuilder:
 
         if scope_hint:
             prompt_sections.append(f"## Scope Hints\n{scope_hint}")
+
+        if subagent_catalog:
+            prompt_sections.append(
+                "## Available Subagent Handoffs\n"
+                + render_subagent_catalog_section(subagent_catalog, skill_catalogs)
+            )
 
         prompt_sections.append("## Your Task\n" + TASK_INSTRUCTION_PROMPT)
         return "\n\n".join(section for section in prompt_sections if section.strip())

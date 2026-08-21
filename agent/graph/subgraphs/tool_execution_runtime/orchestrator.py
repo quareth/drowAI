@@ -12,7 +12,7 @@ old single-tool-shaped planner fields are not accepted as execution input.
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional
+from typing import TYPE_CHECKING, Any, Dict, Mapping, Optional, Sequence
 
 if TYPE_CHECKING:
     from langgraph.types import StreamWriter
@@ -196,7 +196,6 @@ async def run_tool_execution_orchestrator(
     # single-tool-shaped fields cannot become execution authority.
     tool_batch = _require_canonical_tool_batch(facts.metadata, stage="tool_execution")
     batch_validation = validate_batch(tool_batch, config=coordinator_config, facts=facts)
-    tool_batch = batch_validation.batch
     batch_emit_lifecycle = should_emit_batch_lifecycle(tool_batch, config=coordinator_config)
     metadata["tool_batch_id"] = tool_batch.tool_batch_id
     metadata["tool_batch_validation"] = {
@@ -206,6 +205,7 @@ async def run_tool_execution_orchestrator(
         "strategy_downgraded": batch_validation.strategy_downgraded,
         "downgrade_reason": batch_validation.downgrade_reason,
         "rejected_reason": batch_validation.rejected_reason,
+        "pre_terminal_failure_count": len(batch_validation.pre_terminal_results),
     }
     facts.metadata = metadata
     return await _run_batch_tool_execution(
@@ -325,19 +325,48 @@ async def _run_batch_tool_execution(
         "emitter": emitter,
     }
 
+    pre_terminal_rows: list[ToolCallResult] = list(
+        getattr(batch_validation, "pre_terminal_results", ()) or ()
+    )
+    for row in pre_terminal_rows:
+        failed_call = _call_by_id(tool_batch, row.tool_call_id)
+        if failed_call is None:
+            continue
+        validation_errors = (
+            row.raw_result.get("validation_errors")
+            if isinstance(row.raw_result, Mapping)
+            else None
+        )
+        compact_by_call_id[row.tool_call_id] = compact_failure_result(
+            failed_call,
+            category=row.failure_category or "invalid_parameters",
+            message=row.error_message,
+            validation_errors=(
+                validation_errors
+                if isinstance(validation_errors, Sequence)
+                and not isinstance(validation_errors, (str, bytes))
+                else None
+            ),
+        )
+
     if not batch_validation.admitted:
         reason = str(batch_validation.rejected_reason or "batch_validation_rejected")
-        result = build_terminal_batch_result(
-            tool_batch,
+        survivor_result = build_terminal_batch_result(
+            batch_validation.batch,
             status=ToolCallStatus.FAILED,
             failure_category=reason,
             effective_strategy=batch_validation.effective_execution_strategy,
         )
-        compact_by_call_id.update(
-            {
-                call.tool_call_id: compact_failure_result(call, category=reason)
-                for call in tool_batch.tool_calls
-            }
+        for call in batch_validation.batch.tool_calls:
+            compact_by_call_id[call.tool_call_id] = compact_failure_result(
+                call,
+                category=reason,
+            )
+        result = merge_batch_call_results(
+            tool_batch,
+            executed=survivor_result.call_results,
+            pre_terminal=pre_terminal_rows,
+            effective_strategy=batch_validation.effective_execution_strategy,
         )
         return finish_with_batch_result(
             result=result,
@@ -347,7 +376,6 @@ async def _run_batch_tool_execution(
 
     execution_batch = batch_validation.batch
     effective_strategy = _effective_batch_strategy(batch_validation, coordinator_config)
-    pre_terminal_rows: list[ToolCallResult] = []
 
     try:
         runtime_placement_mode = _resolve_required_runtime_placement_mode(
@@ -356,20 +384,22 @@ async def _run_batch_tool_execution(
             coordinator_config=coordinator_config,
         )
     except ValueError:
-        result = build_terminal_batch_result(
-            tool_batch,
+        survivor_result = build_terminal_batch_result(
+            execution_batch,
             status=ToolCallStatus.FAILED,
             failure_category="missing_runtime_placement",
             effective_strategy=effective_strategy,
         )
-        compact_by_call_id.update(
-            {
-                call.tool_call_id: compact_failure_result(
-                    call,
-                    category="missing_runtime_placement",
-                )
-                for call in tool_batch.tool_calls
-            }
+        for call in execution_batch.tool_calls:
+            compact_by_call_id[call.tool_call_id] = compact_failure_result(
+                call,
+                category="missing_runtime_placement",
+            )
+        result = merge_batch_call_results(
+            tool_batch,
+            executed=survivor_result.call_results,
+            pre_terminal=pre_terminal_rows,
+            effective_strategy=effective_strategy,
         )
         return finish_with_batch_result(
             result=result,

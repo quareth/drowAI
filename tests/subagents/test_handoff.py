@@ -21,6 +21,7 @@ def test_model_preserves_authored_non_blank_values() -> None:
         agent_handoff="required",
         subagent=" Pathfinder ",
         objective=" Enumerate the approved target. ",
+        skill_ids=("network_reconnaissance",),
     )
 
     assert entry.subagent == " Pathfinder "
@@ -63,11 +64,13 @@ def test_single_entry_normalizer_trims_and_lowercases_boundary_values() -> None:
             "agent_handoff": " Required ",
             "subagent": " PathFinder ",
             "objective": "  Enumerate the approved target.  ",
+            "skill_ids": [" Network_Reconnaissance ", "network_reconnaissance"],
         }
     ) == {
         "agent_handoff": "required",
         "subagent": "pathfinder",
         "objective": "Enumerate the approved target.",
+        "skill_ids": ["network_reconnaissance"],
     }
 
 
@@ -85,6 +88,35 @@ def test_single_entry_normalizer_rejects_malformed_values(value: object) -> None
     assert normalize_agent_handoff_entry(value) == {}
 
 
+def test_skill_id_limit_applies_before_deduplication() -> None:
+    payload = {
+        "agent_handoff": "required",
+        "subagent": "pathfinder",
+        "objective": "Enumerate the approved target.",
+        "skill_ids": ["same", "same", "same", "same", "same", "same"],
+    }
+
+    assert normalize_agent_handoff_entry(payload) == {}
+    with pytest.raises(ValidationError):
+        AgentHandoffEntry.model_validate(payload)
+
+
+@pytest.mark.parametrize("skill_id", ("a" * 65, "network-", "network--recon"))
+def test_skill_ids_reject_noncanonical_length_and_hyphen_placement(
+    skill_id: str,
+) -> None:
+    payload = {
+        "agent_handoff": "required",
+        "subagent": "pathfinder",
+        "objective": "Enumerate the approved target.",
+        "skill_ids": [skill_id],
+    }
+
+    assert normalize_agent_handoff_entry(payload) == {}
+    with pytest.raises(ValidationError):
+        AgentHandoffEntry.model_validate(payload)
+
+
 def test_collection_normalizer_preserves_order_deduplicates_and_bounds() -> None:
     entries = normalize_agent_handoff_entries(
         [
@@ -92,21 +124,25 @@ def test_collection_normalizer_preserves_order_deduplicates_and_bounds() -> None
                 "agent_handoff": "required",
                 "subagent": " Pathfinder ",
                 "objective": " First objective. ",
+                "skill_ids": [],
             },
             {
                 "agent_handoff": "required",
                 "subagent": "pathfinder",
                 "objective": "First objective.",
+                "skill_ids": [],
             },
             {
                 "agent_handoff": "required",
                 "subagent": "cartographer",
                 "objective": "Second objective.",
+                "skill_ids": ["network_reconnaissance"],
             },
             {
                 "agent_handoff": "required",
                 "subagent": "reviewer",
                 "objective": "Third objective.",
+                "skill_ids": [],
             },
         ],
         max_handoffs=2,
@@ -117,11 +153,13 @@ def test_collection_normalizer_preserves_order_deduplicates_and_bounds() -> None
             "agent_handoff": "required",
             "subagent": "pathfinder",
             "objective": "First objective.",
+            "skill_ids": [],
         },
         {
             "agent_handoff": "required",
             "subagent": "cartographer",
             "objective": "Second objective.",
+            "skill_ids": ["network_reconnaissance"],
         },
     )
 
@@ -130,7 +168,12 @@ def test_collection_normalizer_filters_invalid_entries_in_best_effort_mode() -> 
     entries = normalize_agent_handoff_entries(
         [
             {"agent_handoff": "optional", "subagent": "pathfinder", "objective": "x"},
-            {"agent_handoff": "required", "subagent": "pathfinder", "objective": "ok"},
+            {
+                "agent_handoff": "required",
+                "subagent": "pathfinder",
+                "objective": "ok",
+                "skill_ids": [],
+            },
             "malformed",
         ]
     )
@@ -140,6 +183,7 @@ def test_collection_normalizer_filters_invalid_entries_in_best_effort_mode() -> 
             "agent_handoff": "required",
             "subagent": "pathfinder",
             "objective": "ok",
+            "skill_ids": [],
         },
     )
 
@@ -172,7 +216,12 @@ def test_schema_matches_model_shape_and_registry_enumeration() -> None:
     )
 
     assert schema["type"] == "object"
-    assert schema["required"] == ["agent_handoff", "subagent", "objective"]
+    assert schema["required"] == [
+        "agent_handoff",
+        "subagent",
+        "objective",
+        "skill_ids",
+    ]
     assert schema["additionalProperties"] is False
     assert schema["properties"]["agent_handoff"] == {
         "type": "string",
@@ -187,3 +236,10 @@ def test_schema_matches_model_shape_and_registry_enumeration() -> None:
         "type": "string",
         "minLength": 1,
     }
+    assert schema["properties"]["skill_ids"]["maxItems"] == 5
+    skill_id_schema = schema["properties"]["skill_ids"]["items"]
+    assert skill_id_schema["maxLength"] == 64
+    assert all(
+        operator not in skill_id_schema["pattern"]
+        for operator in ("(?=", "(?!", "(?<=", "(?<!")
+    )

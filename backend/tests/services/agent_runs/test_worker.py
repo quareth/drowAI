@@ -63,6 +63,8 @@ from backend.tests.agent_run_test_support import (
     build_agent_result,
     build_runtime_identity,
 )
+from core.skills.contracts import LoadedSkill, SkillActivationPolicy, SkillMetadata
+from core.skills.registry import SkillRegistry
 from runtime_shared import shell_session_port
 from runtime_shared.shell_session_contracts import (
     ShellExecRequest,
@@ -208,6 +210,79 @@ def test_resumed_subagent_state_reasserts_agent_run_execution_owner() -> None:
     assert graph_context["execution_owner_id"] != "main:stale-parent-turn"
 
 
+def test_worker_records_metrics_from_canonical_subagent_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import backend.services.agent_runs.worker as worker_module
+
+    definition = _pathfinder_definition()
+    assignment = _assignment().model_copy(
+        update={"requested_skill_ids": ("selectable-skill",)}
+    )
+    skill_registry = SkillRegistry(
+        (
+            LoadedSkill(
+                metadata=SkillMetadata(
+                    name="mandatory-skill",
+                    description="Mandatory fixture.",
+                ),
+                activation=SkillActivationPolicy(
+                    activation="mandatory",
+                    agent_ids=(definition.id,),
+                ),
+                body="12345678",
+                source="mandatory-skill/SKILL.md",
+                digest="1" * 64,
+            ),
+            LoadedSkill(
+                metadata=SkillMetadata(
+                    name="selectable-skill",
+                    description="Selectable fixture.",
+                ),
+                activation=SkillActivationPolicy(
+                    activation="selectable",
+                    agent_ids=(definition.id,),
+                ),
+                body="123456789",
+                source="selectable-skill/SKILL.md",
+                digest="2" * 64,
+            ),
+        )
+    )
+    graph_input = build_subagent_initial_state(
+        definition=definition,
+        assignment=assignment,
+        graph_thread_id="child-thread-1",
+        skill_registry=skill_registry,
+    )
+    counters: list[tuple[str, int]] = []
+    gauges: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        worker_module,
+        "safe_inc",
+        lambda name, value=1: counters.append((name, value)),
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "safe_gauge",
+        lambda name, value: gauges.append((name, value)),
+    )
+
+    worker_module._record_skill_resolution_metrics(
+        graph_input,
+        definition=definition,
+        assignment=assignment,
+        skill_registry=skill_registry,
+    )
+
+    assert counters == [
+        ("skill_requested", 1),
+        ("skill_selected_mandatory", 1),
+        ("skill_selected_requested", 1),
+    ]
+    assert gauges == [("skill_prompt_estimated_tokens", 5)]
+
+
 def test_single_native_call_may_reuse_sequential_strategy_default() -> None:
     parameters: dict[str, Any] = {}
 
@@ -243,14 +318,18 @@ class _InvalidActionLLM:
 class _ForcedFinalTextLLM:
     def __init__(self) -> None:
         self.chat_with_usage_kwargs: list[dict[str, Any]] = []
+        self.system_prompts: list[str] = []
+        self.user_prompts: list[str] = []
 
     async def chat_with_usage(
         self,
-        _system_prompt: str,
-        _user_prompt: str,
+        system_prompt: str,
+        user_prompt: str,
         **kwargs: Any,
     ) -> LLMResponse:
         self.chat_with_usage_kwargs.append(dict(kwargs))
+        self.system_prompts.append(system_prompt)
+        self.user_prompts.append(user_prompt)
         return LLMResponse(content="Pathfinder completed the bounded assignment.")
 
     async def chat_with_tools_with_usage(
@@ -291,6 +370,9 @@ async def test_exhausted_subagent_uses_plain_chat_for_final_handoff() -> None:
     assert interactive.trace.final_text == (
         "Pathfinder completed the bounded assignment."
     )
+    assert "Finalization Mode — Tool Budget Exhausted" in llm.system_prompts[0]
+    assert "Do not emit or simulate a tool call" in llm.system_prompts[0]
+    assert "Candidate Tools" not in llm.user_prompts[0]
 
 
 @pytest.mark.asyncio
@@ -598,6 +680,7 @@ async def test_generic_worker_builds_definition_configured_graph_input_config_an
         actual_definition: SubagentDefinition,
         *,
         checkpointer: Any = None,
+        skill_registry: Any = None,
     ) -> str:
         build_calls.append((actual_definition.id, checkpointer))
         return "compiled-subagent"
@@ -681,7 +764,7 @@ async def test_generic_worker_graph_input_can_dispatch_universal_shell_tools(
     monkeypatch.setattr(
         worker_module,
         "build_subagent_graph",
-        lambda _definition, *, checkpointer=None: "compiled-subagent",
+        lambda _definition, *, checkpointer=None, skill_registry=None: "compiled-subagent",
     )
 
     worker = ProcessLocalAgentRunWorker(
@@ -818,7 +901,7 @@ async def test_generic_worker_failure_preserves_graph_usage_state(
     monkeypatch.setattr(
         worker_module,
         "build_subagent_graph",
-        lambda _definition, *, checkpointer=None: "compiled-subagent",
+        lambda _definition, *, checkpointer=None, skill_registry=None: "compiled-subagent",
     )
     worker = ProcessLocalAgentRunWorker(
         registry=registry,
