@@ -63,6 +63,8 @@ from backend.tests.agent_run_test_support import (
     build_agent_result,
     build_runtime_identity,
 )
+from core.skills.contracts import LoadedSkill, SkillActivationPolicy, SkillMetadata
+from core.skills.registry import SkillRegistry
 from runtime_shared import shell_session_port
 from runtime_shared.shell_session_contracts import (
     ShellExecRequest,
@@ -206,6 +208,79 @@ def test_resumed_subagent_state_reasserts_agent_run_execution_owner() -> None:
     graph_context = refreshed.facts.metadata["graph_runtime_context"]
     assert graph_context["execution_owner_id"] == "subagent:run-1"
     assert graph_context["execution_owner_id"] != "main:stale-parent-turn"
+
+
+def test_worker_records_metrics_from_canonical_subagent_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import backend.services.agent_runs.worker as worker_module
+
+    definition = _pathfinder_definition()
+    assignment = _assignment().model_copy(
+        update={"requested_skill_ids": ("selectable-skill",)}
+    )
+    skill_registry = SkillRegistry(
+        (
+            LoadedSkill(
+                metadata=SkillMetadata(
+                    name="mandatory-skill",
+                    description="Mandatory fixture.",
+                ),
+                activation=SkillActivationPolicy(
+                    activation="mandatory",
+                    agent_ids=(definition.id,),
+                ),
+                body="12345678",
+                source="mandatory-skill/SKILL.md",
+                digest="1" * 64,
+            ),
+            LoadedSkill(
+                metadata=SkillMetadata(
+                    name="selectable-skill",
+                    description="Selectable fixture.",
+                ),
+                activation=SkillActivationPolicy(
+                    activation="selectable",
+                    agent_ids=(definition.id,),
+                ),
+                body="123456789",
+                source="selectable-skill/SKILL.md",
+                digest="2" * 64,
+            ),
+        )
+    )
+    graph_input = build_subagent_initial_state(
+        definition=definition,
+        assignment=assignment,
+        graph_thread_id="child-thread-1",
+        skill_registry=skill_registry,
+    )
+    counters: list[tuple[str, int]] = []
+    gauges: list[tuple[str, int]] = []
+    monkeypatch.setattr(
+        worker_module,
+        "safe_inc",
+        lambda name, value=1: counters.append((name, value)),
+    )
+    monkeypatch.setattr(
+        worker_module,
+        "safe_gauge",
+        lambda name, value: gauges.append((name, value)),
+    )
+
+    worker_module._record_skill_resolution_metrics(
+        graph_input,
+        definition=definition,
+        assignment=assignment,
+        skill_registry=skill_registry,
+    )
+
+    assert counters == [
+        ("skill_requested", 1),
+        ("skill_selected_mandatory", 1),
+        ("skill_selected_requested", 1),
+    ]
+    assert gauges == [("skill_prompt_estimated_tokens", 5)]
 
 
 def test_single_native_call_may_reuse_sequential_strategy_default() -> None:

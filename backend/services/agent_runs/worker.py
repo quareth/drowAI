@@ -24,7 +24,10 @@ from agent.subagents.definition import SubagentDefinition
 from agent.subagents.registry import SubagentRegistry, get_subagent_registry
 from agent.subagents.runtime.graph import build_subagent_graph
 from agent.subagents.runtime.model import SUBAGENT_RESULT_METADATA_KEY
-from agent.subagents.runtime.state import build_subagent_initial_state
+from agent.subagents.runtime.state import (
+    build_subagent_initial_state,
+    subagent_state_from_graph_state,
+)
 from backend.services.agent_runs.contracts import AgentAssignment, AgentResult
 from backend.services.agent_runs.completion import (
     AgentRunCompletion,
@@ -104,6 +107,7 @@ class ProcessLocalAgentRunWorker:
         )
         _record_skill_resolution_metrics(
             graph_input,
+            definition=definition,
             assignment=assignment,
             skill_registry=self._skill_registry,
         )
@@ -177,30 +181,22 @@ class ProcessLocalAgentRunWorker:
 def _record_skill_resolution_metrics(
     graph_input: Mapping[str, Any],
     *,
+    definition: SubagentDefinition,
     assignment: AgentAssignment,
     skill_registry: SkillRegistry,
 ) -> None:
     """Record bounded counters without logging skill bodies or assignment text."""
 
     safe_inc("skill_requested", len(assignment.requested_skill_ids))
-    facts = graph_input.get("facts")
-    metadata = facts.get("metadata") if isinstance(facts, Mapping) else None
-    subagent = metadata.get("subagent") if isinstance(metadata, Mapping) else None
-    refs = subagent.get("resolved_skills") if isinstance(subagent, Mapping) else None
-    selected_skill_ids: list[str] = []
-    for ref in refs if isinstance(refs, list | tuple) else ():
-        reasons = ref.get("reasons") if isinstance(ref, Mapping) else ()
-        skill_id = ref.get("skill_id") if isinstance(ref, Mapping) else None
-        if isinstance(skill_id, str) and skill_id:
-            selected_skill_ids.append(skill_id)
-        reason_set = set(reasons) if isinstance(reasons, list | tuple) else set()
-        if "mandatory" in reason_set:
+    subagent = subagent_state_from_graph_state(graph_input, definition=definition)
+    for ref in subagent.resolved_skills:
+        if "mandatory" in ref.reasons:
             safe_inc("skill_selected_mandatory")
-        if "agent_selected" in reason_set:
+        if "agent_selected" in ref.reasons:
             safe_inc("skill_selected_requested")
     estimated_tokens = sum(
-        estimate_skill_tokens(skill_registry.require(skill_id).body)
-        for skill_id in selected_skill_ids
+        estimate_skill_tokens(skill_registry.require(ref.skill_id).body)
+        for ref in subagent.resolved_skills
     )
     safe_gauge("skill_prompt_estimated_tokens", estimated_tokens)
 
