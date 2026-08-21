@@ -157,7 +157,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="DrowAI Red Team Platform",
     description="Pre-v1 platform for task-isolated AI security workflows",
-    version="0.4.0",
+    version="0.5.0",
     lifespan=lifespan
 )
 
