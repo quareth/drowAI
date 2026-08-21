@@ -2,16 +2,16 @@
 
 Runs before any per-call execution. Owns the full decision matrix: enforces
 the validator commit cap (``AgentConfig.max_committed_tools_per_batch``),
-the per-turn tool-call budget pre-check (``FactsState.budgets.max_tool_calls
-- FactsState.tool_calls_used``), and delegates compatibility decisions to
-:class:`BatchCompatibilityChecker`. Records both ``requested`` and
-``effective`` execution strategies plus a ``downgrade_reason`` (when the
-two differ) for telemetry.
+the per-turn executable tool-call budget check
+(``FactsState.budgets.max_tool_calls - FactsState.tool_calls_used``), and
+delegates compatibility decisions to :class:`BatchCompatibilityChecker`.
+Records both ``requested`` and ``effective`` execution strategies plus a
+``downgrade_reason`` (when the two differ) for telemetry.
 
 The validator does **not** decrement the budget — that happens per-call in
-the orchestrator loop (Phase 5 Task 5.4). Pre-check semantics: reject the
-batch upfront if it would not fit; the runtime never partially executes a
-batch it cannot afford to finish.
+the orchestrator loop (Phase 5 Task 5.4). Budget semantics: isolate invalid
+parameters, then reject the executable batch upfront if it would not fit;
+the runtime never partially executes a batch it cannot afford to finish.
 
 The cap value comes from the caller via ``ctx`` so no numeric literal lives
 in this file.
@@ -108,10 +108,6 @@ class BatchValidator:
             if len(batch.tool_calls) > max_committed:
                 return self._reject(batch, requested, "tool_calls_above_max")
 
-        budget_remaining = self._compute_budget_remaining(ctx)
-        if budget_remaining is not None and len(batch.tool_calls) > budget_remaining:
-            return self._reject(batch, requested, "tool_call_budget_exceeded")
-
         basic_rejection = self._validate_admission_authority(batch, ctx)
         if basic_rejection:
             return self._reject(batch, requested, basic_rejection)
@@ -122,6 +118,18 @@ class BatchValidator:
                 normalized_batch,
                 requested,
                 "all_calls_invalid_parameters",
+                pre_terminal_results=parameter_failures,
+            )
+
+        budget_remaining = self._compute_budget_remaining(ctx)
+        if (
+            budget_remaining is not None
+            and len(normalized_batch.tool_calls) > budget_remaining
+        ):
+            return self._reject(
+                normalized_batch,
+                requested,
+                "tool_call_budget_exceeded",
                 pre_terminal_results=parameter_failures,
             )
 
