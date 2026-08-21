@@ -32,8 +32,9 @@ The format is based on
   result rendering.
 - Invalid parameters in one batched tool call no longer prevent unrelated
   valid calls from running, and field-level correction guidance is retained.
-- Declarative subagents now preserve successful batch results and avoid
-  equivalent retries when failures indicate connection or capability blockers.
+- Declarative subagents now preserve successful batch results, avoid equivalent
+  retries for connection or capability blockers, and distinguish directly
+  observed evidence from inferred or unconfirmed leads.
 - Declarative subagents now compile planner-facing tool parameters through the
   canonical validation path before execution, including split-schema tools.
 

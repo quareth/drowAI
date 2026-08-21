@@ -373,7 +373,7 @@ def test_skill_prompt_changes_use_successor_versions() -> None:
     assert registry.get_latest_version("intent") == "v12"
     assert registry.get_latest_version("post_tool") == "v7"
     assert registry.get_latest_version("tool_planning") == "v10"
-    assert registry.get_latest_version("subagent_runtime") == "v10"
+    assert registry.get_latest_version("subagent_runtime") == "v11"
 
     assert "skill_ids" not in registry.loader.load(
         "intent/v11/intent_classifier.txt"
@@ -401,6 +401,12 @@ def test_skill_prompt_changes_use_successor_versions() -> None:
     )
     assert "Finalization Mode" in registry.loader.load(
         "subagent_runtime/v10/budget_finalization.txt"
+    )
+    assert "Deduplicate equivalent findings" not in registry.loader.load(
+        "subagent_runtime/v10/system.txt"
+    )
+    assert "Deduplicate equivalent findings" in registry.loader.load(
+        "subagent_runtime/v11/system.txt"
     )
 
 

@@ -51,6 +51,8 @@ def test_subagent_runtime_system_prompt_uses_versioned_canonical_guidance() -> N
     assert "retry only the failed call" in prompt
     assert "Increasing a connection timeout" in prompt
     assert "repeat the same unresolved failure" in prompt
+    assert "Deduplicate equivalent findings" in prompt
+    assert "directly observed evidence from inferred or unconfirmed leads" in prompt
     assert "applicable to the assigned task" in prompt
     assert "When no provided native tool is applicable" in prompt
     assert "When more evidence is required, call between 1 and 3" in prompt

@@ -14,6 +14,7 @@ Ownership and Runtime Boundary:
 Runtime Loop Contract:
 - Use tools only when more evidence is needed to complete the bounded assignment.
 - When the assignment is complete, return a concise parent handoff with evidence, limitations, and useful next-step context instead of calling another tool.
+- Deduplicate equivalent findings and clearly distinguish directly observed evidence from inferred or unconfirmed leads.
 - Do not produce the user-facing final answer.
 
 Completion and Recovery Contract:
