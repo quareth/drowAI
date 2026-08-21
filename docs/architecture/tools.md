@@ -200,10 +200,12 @@ parameter semantics belong to the visible catalog, planner-facing schemas,
 validators, and focused prompt policy owned by the relevant tool surface.
 
 Subagent prompts have a separate built-in skill layer under `core/skills/`.
-Skills provide bounded operational knowledge only: they are matched against the
-effective subagent tool profile, resolved once into body-free checkpoint
-references, and materialized into the subagent system prompt. Skills never add
-tools, scope, permissions, approvals, or runtime authority.
+Skills provide bounded operational knowledge only: compatibility comes from
+explicit agent IDs in package metadata, selected packages resolve once into
+body-free checkpoint references, and their bodies are materialized into the
+subagent system prompt. Startup separately verifies that every enabled
+subagent's declared native tools remain model-visible. Skills never add tools,
+scope, permissions, approvals, or runtime authority.
 
 Prompt builders consume already-projected context. `request_context.py` requires
 the hot-path `ConversationContextBundle`, projects it with `project_for_planner`,

@@ -8,7 +8,7 @@
 | --- | --- |
 | Status | Implemented |
 | Design type | Internal subagent skill architecture |
-| Code baseline verified | 2026-08-18 |
+| Code baseline verified | 2026-08-21 |
 | Low-level design | [Subagent Skill System - Low-Level Design](../lldd/subagent-skill-system-lld.md) |
 
 This document describes the implemented architecture. Wired code remains the
@@ -166,9 +166,9 @@ flowchart LR
 
 1. Normalize the canonical handoff shape.
 2. Validate the selected subagent through the existing ownership path.
-3. Validate every selected skill ID against that subagent before dispatch.
-4. Reject unknown, mandatory-only, incompatible, duplicate beyond contract, or
-   over-budget selected IDs with stable reasons.
+3. Normalize and stably deduplicate selected IDs at the shared handoff boundary.
+4. Reject unknown, mandatory-only, incompatible, raw over-limit, or over-budget
+   selected IDs with stable reasons before dispatch.
 5. Preserve normalized selected IDs in the assignment only after admission
    succeeds.
 

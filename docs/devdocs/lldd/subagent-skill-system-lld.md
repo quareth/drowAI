@@ -8,7 +8,7 @@
 | --- | --- |
 | Status | Implemented |
 | Design type | Built-in skill registry, catalog projection, handoff admission, and prompt injection |
-| Code baseline verified | 2026-08-18 |
+| Code baseline verified | 2026-08-21 |
 | Parent design | [Subagent Skill System - High-Level Design](../hldd/subagent-skill-system-hld.md) |
 
 This document describes the implemented contracts. Code in wired paths remains
@@ -267,9 +267,12 @@ Rules:
 - Selected IDs are assignment requests, not resolved skill references.
 
 Admission validates selected IDs against the chosen subagent before dispatch.
-Unknown, mandatory-only, incompatible, duplicate beyond the contract, and
-over-budget selected skills reject the handoff with stable reasons. Invalid
-selected IDs must not be silently dropped after the child starts.
+Unknown, mandatory-only, incompatible, raw over-limit, and over-budget selected
+skills reject the handoff with stable reasons. Duplicate IDs within the raw
+handoff limit are stably deduplicated at the shared boundary; direct resolver
+callers still receive `duplicate_request` diagnostics when duplicates reach
+that lower-level policy. Invalid selected IDs must not be silently dropped
+after the child starts.
 
 Assignment builders copy admitted requested IDs only. They do not import the
 skill registry, load skill bodies, resolve prompts, or inspect package content.

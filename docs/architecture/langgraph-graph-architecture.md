@@ -11,7 +11,7 @@ into one of four graph branches:
 - normal chat
 - simple tool execution
 - deep reasoning
-- subagent handoff (currently Pathfinder recon)
+- subagent handoff through enabled declarative definitions
 
 The backend facade owns branch selection. Graph builders own node topology.
 Graph nodes own local state transitions and emitted stream events.
@@ -136,9 +136,9 @@ Route policy:
   mode for approval behavior.
 - Agent/full-access without plan mode can route through classifier-derived
   execution mode.
-- A direct-executor turn with supported required Pathfinder handoff entries
-  routes to the generic subagent handler. `suggested_capabilities` remains
-  advisory assignment context and is not delegation authority.
+- A direct-executor turn with supported required registry-backed handoff
+  entries routes to the generic subagent handler. `suggested_capabilities`
+  remains advisory assignment context and is not delegation authority.
 - If direct execution is already running when post-tool reasoning emits a valid
   `delegate_subagent` control, the simple-tool graph stops at the backend
   boundary. The facade validates that handoff through the same ownership policy
@@ -154,6 +154,11 @@ Route policy:
   and fails closed when the name, live availability, or target requirements do
   not match. Valid plans dispatch through the single generic `subagent` facade
   branch.
+- Intent Classification and Post-Tool Reasoning also receive one shared
+  mandatory/selectable skill-catalog projection. Each handoff carries a
+  bounded `skill_ids` list, and the ownership path validates compatible
+  parent-selected skills before child launch. Skills provide prompt guidance;
+  they do not expand the definition-owned tool profile or runtime authority.
 - Because the registry is currently small and process-static, the classifier
   receives direct catalog enumeration. Tool-based agent discovery is reserved
   for a materially larger or dynamically managed registry.
@@ -449,7 +454,8 @@ Important boundaries:
 
 - `initialize` normalizes declarative definition metadata, assignment identity,
   graph thread identity, and the definition-owned tool profile.
-- `model` builds the versioned `subagent_runtime` prompt, binds all
+- `model` materializes digest-pinned skill references, builds the versioned
+  `subagent_runtime` prompt with that subordinate guidance, binds all
   definition-visible native tools with runtime scheduling metadata, and routes
   either to shared tool execution or directly to handoff text.
 - The model node requests parallel native tool calls only when the resolved
