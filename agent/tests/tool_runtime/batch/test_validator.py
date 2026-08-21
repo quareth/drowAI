@@ -169,6 +169,56 @@ def test_validator_admits_when_batch_fits_remaining_tool_call_budget(monkeypatch
     assert result.admitted is True
 
 
+def test_validator_applies_budget_after_isolating_invalid_parameters(monkeypatch):
+    _patch_metadata(
+        monkeypatch,
+        {"tool.a": _meta(), "tool.b": _meta(), "tool.c": _meta()},
+    )
+    result = BatchValidator().validate(
+        _batch(
+            ["tool.a", "tool.b", "tool.c"],
+            params_by_index={
+                0: {"target": "one"},
+                1: {"invalid": True},
+                2: {"target": "three"},
+            },
+        ),
+        ctx={
+            **_validating_ctx(["tool.a", "tool.b", "tool.c"]),
+            "max_tool_calls": 10,
+            "tool_calls_used": 8,  # two executable calls remain after isolation.
+        },
+    )
+
+    assert result.admitted is True
+    assert [call.tool_call_id for call in result.batch.tool_calls] == ["tc_0", "tc_2"]
+    assert [row.tool_call_id for row in result.pre_terminal_results] == ["tc_1"]
+    assert result.pre_terminal_results[0].failure_category == "invalid_parameters"
+
+
+def test_validator_rejects_survivors_that_still_exceed_budget(monkeypatch):
+    _patch_metadata(
+        monkeypatch,
+        {"tool.a": _meta(), "tool.b": _meta(), "tool.c": _meta()},
+    )
+    result = BatchValidator().validate(
+        _batch(
+            ["tool.a", "tool.b", "tool.c"],
+            params_by_index={1: {"invalid": True}},
+        ),
+        ctx={
+            **_validating_ctx(["tool.a", "tool.b", "tool.c"]),
+            "max_tool_calls": 10,
+            "tool_calls_used": 9,  # one slot cannot admit two survivors.
+        },
+    )
+
+    assert result.admitted is False
+    assert result.rejected_reason == "tool_call_budget_exceeded"
+    assert [call.tool_call_id for call in result.batch.tool_calls] == ["tc_0", "tc_2"]
+    assert [row.tool_call_id for row in result.pre_terminal_results] == ["tc_1"]
+
+
 def test_validator_rejects_when_batch_exceeds_commit_cap(monkeypatch):
     _patch_metadata(
         monkeypatch,
